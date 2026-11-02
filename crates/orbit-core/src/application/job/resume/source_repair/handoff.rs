@@ -360,6 +360,7 @@ impl OrbitRuntime {
                 base_branch,
                 number,
                 allow_missing_branch: true,
+                certified_tip: None,
             },
         )?;
         if field(output, "pr_url")? != result.2.pull_request_url

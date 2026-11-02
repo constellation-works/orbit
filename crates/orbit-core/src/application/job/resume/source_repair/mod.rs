@@ -2,6 +2,7 @@
 
 mod admission;
 mod adoption;
+mod certified_rebase;
 mod completion;
 mod escalated_publication;
 mod handoff;

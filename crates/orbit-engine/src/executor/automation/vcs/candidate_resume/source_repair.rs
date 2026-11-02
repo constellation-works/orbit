@@ -71,10 +71,13 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     {
         return Err(refused("PR identity or merge intent changed"));
     }
+    // The remote and PR stay bound to the published head; the candidate is
+    // the certified local tip when the binding carries one, and the push step
+    // publishes it under a lease on the published head (`reused_head_sha`).
     let candidate = Candidate {
         run_id: binding.source_run_id.clone(),
         branch: binding.branch.clone(),
-        head_sha: binding.head_sha.clone(),
+        head_sha: binding.candidate_head().into(),
         durable_ref: None,
         failed_step_id: "operator_source_repair".into(),
         needs_review_repair: false,
@@ -88,7 +91,7 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
         evidence_findings: None,
     };
     // A refusal never falls back to a new branch/PR or a fresh implementation.
-    match adopt_published_branch(workspace, &task.id, &candidate)? {
+    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }
@@ -156,7 +159,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
     let candidate = Candidate {
         run_id: binding.source_run_id.clone(),
         branch: binding.branch.clone(),
-        head_sha: binding.head_sha.clone(),
+        head_sha: binding.candidate_head().into(),
         durable_ref: None,
         failed_step_id: "complete_pr".into(),
         needs_review_repair: false,
@@ -181,7 +184,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
         }
         Applied::Refused(reason) => return Err(refused(&reason)),
     };
-    match adopt_published_branch(workspace, &task.id, &candidate)? {
+    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }

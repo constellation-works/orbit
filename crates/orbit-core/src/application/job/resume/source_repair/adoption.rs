@@ -94,7 +94,7 @@ impl OrbitRuntime {
             || adopted.get("implement").and_then(Value::as_bool) != Some(true)
             || field(adopted, "source_run_id")? != binding.source_run_id
             || field(adopted, "source_branch")? != binding.branch
-            || field(adopted, "source_sha")? != binding.head_sha
+            || field(adopted, "source_sha")? != binding.candidate_head()
             || adopted
                 .get("source_machine_id")
                 .is_none_or(|value| !value.is_null())

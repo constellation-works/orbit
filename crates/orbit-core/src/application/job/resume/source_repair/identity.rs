@@ -8,6 +8,9 @@ pub(super) struct PublicationIdentity<'a> {
     pub(super) base_branch: &'a str,
     pub(super) number: &'a str,
     pub(super) allow_missing_branch: bool,
+    /// The unpublished tip the source's certified chases carried `head` to:
+    /// the only other local branch tip binding accepts.
+    pub(super) certified_tip: Option<&'a super::certified_rebase::CertifiedRebaseTip>,
 }
 
 impl OrbitRuntime {
@@ -26,6 +29,7 @@ impl OrbitRuntime {
             base_branch,
             number,
             allow_missing_branch,
+            certified_tip,
         } = identity;
         let repo = &self.paths().repo_root;
         let git = |args: &[&str]| -> Result<String, OrbitError> {
@@ -52,12 +56,29 @@ impl OrbitRuntime {
             }
         }
         let local_ref = format!("refs/heads/{branch}");
-        match git2::Repository::open(repo)
+        let candidate_head = match git2::Repository::open(repo)
             .and_then(|r| r.find_reference(&local_ref).map(|r| r.target()))
         {
-            Ok(Some(oid)) if oid.to_string() == head => {}
-            Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => {}
+            Ok(Some(oid)) if oid.to_string() == head => None,
+            // The published head P stays the remote and PR identity below;
+            // the local tip T is adopted only as the end of the source's
+            // certified chase chain from P, and only while it still contains
+            // the base the last chase landed it on.
+            Ok(Some(oid)) if certified_tip.is_some_and(|tip| oid.to_string() == tip.head) => {
+                certified_tip
+            }
+            Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => None,
             _ => return Err(refuse("retained local branch moved")),
+        };
+        if let Some(tip) = candidate_head
+            && (git(&["rev-parse", "--verify", &format!("{}^{{commit}}", tip.head)])? != tip.head
+                || !run_git(
+                    repo,
+                    &["merge-base", "--is-ancestor", &tip.target_base, &tip.head],
+                )?
+                .success)
+        {
+            return Err(refuse("retained local branch moved"));
         }
         if git(&[
             "ls-remote",
@@ -119,6 +140,7 @@ impl OrbitRuntime {
             base_branch: base_branch.into(),
             superseded: None,
             checkpoint_owner: None,
+            candidate_head_sha: candidate_head.map(|tip| tip.head.clone()),
         };
         Ok((source, task, binding))
     }

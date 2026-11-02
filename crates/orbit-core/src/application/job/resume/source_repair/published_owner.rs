@@ -777,7 +777,7 @@ impl OrbitRuntime {
                 Some("resumed_carried" | "resumed_repaired")
             )
             || output["source_branch"] != binding.branch
-            || output["source_sha"] != binding.head_sha
+            || output["source_sha"] != binding.candidate_head()
             || output["base_sha"] != state.pipeline["worktree"]["base_sha"]
             || output["prior_pull_request_head"] != binding.branch
             || output["reused_branch"] != binding.branch

@@ -84,6 +84,7 @@ impl OrbitRuntime {
                 base_branch: &proof.base_branch,
                 number: &proof.number,
                 allow_missing_branch: false,
+                certified_tip: proof.certified_tip.as_ref(),
             },
         )?;
         if proof
