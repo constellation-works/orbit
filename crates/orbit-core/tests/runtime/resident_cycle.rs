@@ -15,7 +15,7 @@ use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_store::contracts::{JobRunStoreBackend, KeyedJobRunAdmission};
-use orbit_types::task::TaskArtifact;
+use orbit_types::task::{TaskArtifact, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, ResidentComment, RoutineDefinition};
 use serde_json::{Value, json};
@@ -831,6 +831,94 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     fx.checkpoint(&brief, &run);
     let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
+}
+
+#[test]
+fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 4");
+    let mandate = fx.mandate(&watched);
+    fx.runtime
+        .update_task_as_human(
+            &mandate,
+            TaskUpdateParams {
+                plan: Some("Run resident cycles until stopped.".into()),
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+
+    // A cycle is live when the mandate is stopped: the stop defers to its
+    // finalizer.
+    let run = fx.cycle_run(&mandate, "resident-cycle-stopped");
+    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    let dead_cycle = brief["cycle"].as_str().unwrap().to_string();
+    let stopped = call(
+        &fx.runtime,
+        "orbit.resident.control",
+        json!({"task_id": mandate, "action": "stop", "reason": "Work is done for now"}),
+        McpCapability::Operator,
+    )
+    .unwrap();
+    assert_eq!(stopped["handoff"], "cycle_live", "{stopped}");
+    assert_eq!(
+        fx.runtime.get_task(&mandate).unwrap().status,
+        TaskStatus::InProgress
+    );
+
+    // Killed before finalization: no checkpoint, no finalize.
+    fx.stop_run(&run, JobRunState::Failed);
+
+    // The next observe for the mandate starts no agent cycle, but recovers
+    // the handoff.
+    let recovery_run = fx.cycle_run(&mandate, "resident-cycle-recovery");
+    let recovered = fx
+        .runtime
+        .begin_resident_cycle(&recovery_run, Utc::now() + Duration::minutes(11))
+        .unwrap();
+    assert_eq!(recovered["cycle_count"], 0, "{recovered}");
+    assert_eq!(
+        recovered["skip_reason"], "mandate_not_active",
+        "{recovered}"
+    );
+    assert_eq!(recovered["handoff"], "review", "{recovered}");
+    assert_eq!(
+        fx.runtime.get_task(&mandate).unwrap().status,
+        TaskStatus::Review,
+        "the stopped assignment reaches review"
+    );
+
+    // The dead cycle has its synthesized final checkpoint, and no
+    // checkpoint (or cycle) was started for the recovery run.
+    let checkpoints: Vec<_> = fx
+        .runtime
+        .get_task_comments(&mandate)
+        .unwrap()
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(record) => Some(*record),
+                _ => None,
+            },
+        )
+        .collect();
+    let synthesized = checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.cycle == dead_cycle)
+        .expect("the dead stopped cycle has a synthesized checkpoint");
+    assert_eq!(synthesized.outcome, "incomplete");
+    assert!(synthesized.error.is_some());
+    assert!(
+        checkpoints
+            .iter()
+            .all(|checkpoint| checkpoint.cycle != format!("rcy-{recovery_run}")),
+        "no new agent cycle was started: {checkpoints:?}"
+    );
+    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    assert!(shown["live_cycle"].is_null(), "{shown}");
 }
 
 #[test]

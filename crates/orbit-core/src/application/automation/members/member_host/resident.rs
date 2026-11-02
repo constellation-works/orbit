@@ -28,6 +28,13 @@ impl Host<'_> {
         let view = self.runtime.resident_view(task.clone(), &history)?;
         let (state, reason) = view.state();
         if state != ResidentMandateState::Active {
+            // A stopped mandate is never a cycle member, but on a real
+            // (non-preview) tick recover its handoff when its live cycle
+            // died before finalizing, so it reaches review without
+            // waiting for a cycle that will never be admitted.
+            if state == ResidentMandateState::Ended && !self.dry_run {
+                self.runtime.hand_off_stopped_resident_at(&task.id, now)?;
+            }
             return Ok(MandateDue::NotMember(reason.unwrap_or_else(|| {
                 format!(
                     "mandate_{}",
