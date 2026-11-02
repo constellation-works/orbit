@@ -157,6 +157,13 @@ impl OrbitRuntime {
         for criterion in params.acceptance_criteria.iter_mut() {
             *criterion = redact_all(criterion);
         }
+        if params
+            .comment
+            .as_deref()
+            .is_some_and(orbit_types::workflow::ResidentComment::is_resident_comment)
+        {
+            return Err(OrbitError::InvalidInput("resident records require an existing mandate assignment; append them after creating the task".into()));
+        }
         params.comment = params.comment.map(|comment| redact_all(&comment));
 
         let normalized_tags = normalize_task_tags(params.tags.clone());

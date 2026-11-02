@@ -1621,6 +1621,21 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.resident.checkpoint",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.resident.grant",
     "required_any": [
       "agent",

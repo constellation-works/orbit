@@ -650,6 +650,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.notice.post", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
     // Listed only by a server that enables the opt-in `resident` toolset.
+    ("orbit.resident.checkpoint", Placement::Advertised),
     ("orbit.resident.grant", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     // Script grants are reached via `orbit script grant|revoke`; phase 1
@@ -754,7 +755,7 @@ fn authorization_matrix_matches_live_registry() {
     {
         if operation.id.starts_with("orbit.lease.")
             || operation.id.starts_with("orbit.notice.")
-            || operation.id == "orbit.resident.grant"
+            || operation.id.starts_with("orbit.resident.")
         {
             // Interactive agents coordinate their own paths, post their own
             // notices and relay or narrow a resident's authority. That

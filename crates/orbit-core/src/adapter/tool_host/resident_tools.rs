@@ -36,6 +36,14 @@ pub(super) fn dispatch(
             serde_json::to_value(outcome)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))
         }
+        ResidentVerb::Checkpoint => runtime.append_resident_checkpoint(
+            &input.required_string("task_id")?,
+            input.as_value()["record"].clone(),
+            agent.map(ToOwned::to_owned),
+            input
+                .optional_string("model")?
+                .or_else(|| model.map(ToOwned::to_owned)),
+        ),
         ResidentVerb::Show => runtime.show_resident_mandate(&input.required_string("task_id")?),
         ResidentVerb::List => {
             runtime.list_resident_mandates(input.optional_bool("include_ended")?.unwrap_or(false))

@@ -129,6 +129,14 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        self.validate_resident_comment_write(
+            &task,
+            params.comment.as_deref(),
+            operator_decision_authority
+                && canonical_agent.is_none()
+                && canonical_model.is_none()
+                && !agent_context_declared(),
+        )?;
         let comment_only = params.is_comment_only();
         // Gate records are certificates and authority, not agent claims.
         // Only the trusted system entry point may write them; an actor label

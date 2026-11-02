@@ -81,6 +81,44 @@ Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reac
 not write a second checkpoint; it stops and leaves the rest to the next cycle. Bounded cycles are
 the point.
 
+### Implemented write and read boundary
+
+`orbit.resident.checkpoint` takes `{task_id, record}`. `record` is the complete checkpoint
+object above, including `kind` and `schema`; the CLI equivalent is
+`orbit resident checkpoint <task> --record '<json>'`. It returns `{task_id, checkpoint}`.
+The operation is a governed write available in the opt-in `resident` toolset. Its caller must
+be identified as an agent, operator or runner; identification alone cannot bypass validation.
+
+Core applies the same admission to `orbit.task.update` comments whose JSON `kind` is one of
+these three shapes. Write `resident.request` and `resident.answer` using that comment surface;
+the manager `relay` operation is a later slice. A relay answer must include `source` and
+`relayed_by`; only a human operator write without agent attribution may omit relay attribution. The quote's whitespace is
+preserved. A record containing sensitive text that requires redaction is refused, so redaction
+cannot silently change a verbatim quote. Unknown fields, including nested fields, are refused.
+Records cannot be initial task-creation comments: they need an existing, usable mandate.
+Dedicated start/approval/rejection transitions require a separate comment-only update for resident
+records, so their specialized lifecycle writers cannot bypass resident admission.
+
+`orbit resident show <task> --json` includes `latest_checkpoint` as the complete parsed object
+(or null), alongside `live_cycle`. Ordinary comments and request/answer records do not obscure
+the latest checkpoint. The text output includes its cycle, outcome and notes.
+Recovery checkpoints may also list action keys from `recovery_of`, since retrying a dead cycle's
+action must reuse its original key. Other cycles' action keys are refused.
+
+The deterministic observer/finalizer integration is `OrbitRuntime::set_resident_live_cycle`.
+After acquiring its cycle lease, observe publishes `{cycle, run_id, expires_at}` in a
+`resident_cycle_changed` history entry. It supplies the previous cycle id as a compare-and-set
+precondition (null when none). Finalize clears the state with its own id as that precondition;
+a stale finalizer cannot erase a newer cycle. Cycle ids cannot be reused. There is no tool or
+CLI for publishing cycle state. Cycle firing and lease acquisition remain the later cycle slice.
+Until observe publishes a live cycle, checkpoint and request writes fail closed.
+
+The assignment write lock covers the live-cycle read, validation, duplicate check and append.
+A missing, expired or different cycle, or a checkpoint with a different `run_id`, is refused as
+`resident_cycle_stale` without changing task state. A second checkpoint for the same cycle is
+refused as `resident_checkpoint_exists`. The same stale-cycle rule covers requests; answers
+can arrive between cycles. The reported checkpoint authority never changes actual authority.
+
 ### Synthesized checkpoint
 
 When the agent wrote no valid checkpoint, `resident_finalize` writes one with `outcome:

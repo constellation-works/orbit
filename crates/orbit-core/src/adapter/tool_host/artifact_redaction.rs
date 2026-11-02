@@ -104,6 +104,14 @@ pub(super) fn sanitize_tool_input(
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<(Value, ArtifactRedactionReport), OrbitError> {
+    if let Some(comment) = input.get("comment").and_then(Value::as_str)
+        && orbit_types::workflow::ResidentComment::is_resident_comment(comment)
+        && (redact_all(comment) != comment
+            || redact_sensitive_env_text(comment) != comment
+            || redact_home_dir(comment) != comment)
+    {
+        return Err(OrbitError::InvalidInput("resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim".into()));
+    }
     let policy = policy_for_action(action);
     let Value::Object(mut object) = input else {
         return Ok((input, ArtifactRedactionReport::default()));

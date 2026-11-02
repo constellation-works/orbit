@@ -9,8 +9,10 @@
 //! turns anyone else's into a `resident_authority` decision request, and
 //! applies any task writer's narrowing; the decision answer path applies a
 //! human's `grant` through `OrbitRuntime::apply_resident_grant_answer`.
-//! Firing, cycles and tool scoping come in later slices.
+//! Cycle firing and tool scoping come in later slices.
 
+mod comments;
+mod cycle;
 mod grant;
 
 use orbit_common::OrbitError;
@@ -18,7 +20,8 @@ use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::workflow::{
-    RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG, ResidentAuthority, ResidentMandate, ResidentRight,
+    RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG, ResidentAuthority, ResidentComment, ResidentMandate,
+    ResidentRight,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -174,17 +177,35 @@ impl OrbitRuntime {
     }
 
     /// `orbit.resident.show`: the mandate, its effective authority, the
-    /// authority record with its grant history, open grant requests and the
-    /// mandate's state.
+    /// authority record with its grant history, open grant requests, live
+    /// cycle, latest parsed checkpoint and the mandate's state.
     pub fn show_resident_mandate(&self, task_id: &str) -> Result<Value, OrbitError> {
         let task = self.get_task(task_id.trim())?;
         let history = self.get_task_history(&task.id)?;
         let view = self.resident_view(task, &history)?;
+        let latest_checkpoint = self
+            .get_task_comments(&view.task.id)?
+            .iter()
+            .rev()
+            .find_map(
+                |comment| match ResidentComment::parse(&comment.message).ok()? {
+                    record @ ResidentComment::Checkpoint(_)
+                        if record.mandate() == view.task.id.as_str() =>
+                    {
+                        Some(to_json(&record))
+                    }
+                    _ => None,
+                },
+            );
+        let live_cycle = cycle::live_cycle_from_history(&history)?
+            .filter(|live| live.expires_at > chrono::Utc::now());
         let (state, reason) = view.state();
         let mut value = json!({
             "task_id": view.task.id,
             "title": view.task.title,
             "status": view.task.status,
+            "latest_checkpoint": latest_checkpoint,
+            "live_cycle": live_cycle,
             "state": state,
             "mandate": view.mandate.as_ref().ok().map(to_json),
             "effective_authority": to_json(&view.effective()),

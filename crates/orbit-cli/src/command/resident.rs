@@ -27,6 +27,10 @@ impl Execute for ResidentCommand {
         let Invocation { spec, input } = self.command;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
+            ResidentVerb::Checkpoint => vec![Block::text(format!(
+                "Checkpoint recorded for cycle {}.",
+                text(&value["checkpoint"]["cycle"])
+            ))],
             ResidentVerb::Grant => vec![Block::text(grant_text(&value))],
             ResidentVerb::Show => vec![Block::text(show_text(&value))],
             ResidentVerb::List => vec![Block::table(list_table(&value))],
@@ -127,6 +131,16 @@ fn show_text(value: &Value) -> String {
     );
     if let Some(reason) = value["state_reason"].as_str() {
         let _ = writeln!(out, "Not due: {reason}");
+    }
+    if !value["latest_checkpoint"].is_null() {
+        let checkpoint = &value["latest_checkpoint"];
+        let _ = writeln!(
+            out,
+            "Latest checkpoint: {} [{}]\n{}",
+            text(&checkpoint["cycle"]),
+            text(&checkpoint["outcome"]),
+            text(&checkpoint["notes"])
+        );
     }
     let mandate = &value["mandate"];
     if !mandate.is_null() {

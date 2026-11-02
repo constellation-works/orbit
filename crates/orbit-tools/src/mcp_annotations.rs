@@ -60,7 +60,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.notice.close" => A::additive(true),
 
         // A task edit can append a note or comment, so a repeat is not a no-op.
-        "orbit.task.update" => A::additive(false),
+        "orbit.task.update" | "orbit.resident.checkpoint" => A::additive(false),
 
         // Removes or replaces existing data.
         // A friction edit with `rehome_to` moves the record and resolves the

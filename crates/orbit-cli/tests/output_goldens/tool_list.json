@@ -2374,6 +2374,41 @@
     "mcp_toolset": "local"
   },
   {
+    "name": "orbit.resident.checkpoint",
+    "description": "Append one validated resident.checkpoint v1 JSON comment to the mandate's assignment task. Requires the mandate's live, unexpired cycle and matching run_id. Malformed records, stale cycles and a second checkpoint for the same cycle are refused without writes. Returns {task_id, checkpoint}. Observed authority in the record grants no rights.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "task_id",
+        "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "record",
+        "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 note characters. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "name": "orchestrator",
+        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
     "name": "orbit.resident.grant",
     "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Widening (add, workspaces) is the human's: from an operator it applies at once; from any other caller it changes nothing and raises one resident_authority decision request that quotes `quote` verbatim and names your session, and the authority changes only if a human answers grant. An open request for the same addition is returned, not duplicated; any authority change supersedes it. Narrowing (remove, drop_workspaces, a shorter deadline) applies at once for any caller that can write the assignment and is recorded with that caller. A call may not widen and narrow at once. Output {outcome, authority, request?} with outcome granted, requested or narrowed.",
     "enabled": true,
@@ -2469,7 +2504,7 @@
   },
   {
     "name": "orbit.resident.show",
-    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     "enabled": true,
     "active": true,
     "status": "active",

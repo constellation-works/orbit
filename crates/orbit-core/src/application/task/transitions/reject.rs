@@ -34,6 +34,12 @@ impl OrbitRuntime {
             ));
         }
         let reason = redact_all(reason);
+        if comment
+            .as_deref()
+            .is_some_and(orbit_types::workflow::ResidentComment::is_resident_comment)
+        {
+            return Err(OrbitError::InvalidInput("append resident records using a comment-only task update, separately from lifecycle transitions".into()));
+        }
         let comment = comment.map(|value| redact_all(&value));
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
