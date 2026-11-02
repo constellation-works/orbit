@@ -54,6 +54,9 @@ impl AttentionKind {
         "blocked",
         "decision_open",
         "review_waiting",
+        "run_failed",
+        "run_stuck",
+        "claim_stale",
         "notice_open",
     ];
     /// Kinds read when a call names none: the kinds this build derives.
@@ -65,6 +68,9 @@ impl AttentionKind {
         "blocked",
         "decision_open",
         "review_waiting",
+        "run_failed",
+        "run_stuck",
+        "claim_stale",
         "host_unhealthy",
         "notice_open",
     ];

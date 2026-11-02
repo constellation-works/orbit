@@ -41,9 +41,9 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `blocked` | task | `triage_candidacy` in `task/blocked_recovery/triage.rs`, over `current_block` and the final-recovery escalation | status is `blocked` and the block episode awaits a human: final recovery escalated, or its backstop is silent. A block that final recovery is still resolving mechanically is not an item | the time the task moved to `blocked` (`blocked_at`) |
 | `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision.list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, no review run is active, and the task waits on an approval or on an exhausted review budget (`detail.waiting_on`: `approval` or `review_budget`) | the time the review settled |
-| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.workflow.run.list`) | the newest terminal run of a job (per task when it has one) is `failed`, `timeout` or `orphaned`, falls inside `run_window`, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
-| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile has marked it orphaned, or it has run past `run_stuck_after` | `started_at` (or `scheduled_at` when pending) |
-| `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | a live claim has an expired reservation, a bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
+| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.workflow.run.list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside `run_window_hours`, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
+| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past `run_stuck_after_minutes` | `started_at` (or `scheduled_at` when pending) |
+| `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's completion time |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
@@ -78,7 +78,20 @@ Notes that bind implementations:
   to it and `next` points at that task instead of suggesting another filing.
 - **No source, no kind.** The pilot found no durable "last activity" heartbeat on job runs.
   `run_stuck` is therefore the liveness check above plus a wall-clock bound, not a heartbeat
-  stall; slice 2 confirms the pid check on each platform before claiming it.
+  stall; slice 2 documents the existing process probe on each platform.
+
+### Runtime liveness and locality
+
+`run_stuck` reuses `run_owner_liveness`, without reconciliation or signalling. On Linux the
+stable start token comes from `/proc` with PID-namespace fencing; on macOS libproc
+`proc_pidinfo(PROC_PIDTBSDINFO)` supplies start identity, with bounded UTC/C-locale `ps`
+fallback. Unix uses `kill(pid, 0)` as a presence fallback. Missing or mismatched owners are
+stopped; probe unavailability with a present PID is not death; foreign PID namespaces and
+non-Unix platforms are unknown. A pending run with no recorded pid waits for the age bound.
+The wall-clock bound applies even when identity is unknown, and active rows are not cut by
+`run_window_hours` (that setting bounds failure history). Host-local rows alone are probed;
+a remote bound run missing locally is not a stale-claim diagnostic. See the design's
+[platform details](../2_design.md#7-concerns--honest-limitations).
 
 ## Item schema
 
@@ -130,11 +143,22 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `review_waiting` | `orbit task update <id> --approve` for `approval`; `orbit.task.review_reset` (needs `lineage`, `reason`) for `review_budget` |
 | `run_failed` | `orbit.workflow.run.resume` when the run is resumable, else `orbit.workflow.run.show`; `also`: run logs |
 | `run_stuck` | `orbit.workflow.run.show`; `also`: `orbit run cancel` |
-| `claim_stale` | `orbit.task.recover_claim` (needs `reason`, `request`, observed `phase`); `also`: the claim inspection |
+| `claim_stale` | `orbit.task.recover_claim` (needs exact tool keys `reason`, `request_key`, `expected_phase`, `status`; CLI flags `--reason`, `--request`, `--phase`, `--status`); `also`: the claim inspection |
 | `ci_red` | the repair task's `orbit.task.show` when one exists, else `github.run.view` on the failing run |
 | `friction_untriaged` | `orbit.friction.update` with `status: triaged` (the operator edits tags or body first when needed) |
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
+
+For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
+`detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
+`request_key`, a reason and target `status` (`blocked` or `backlog`). Runtime items carry exact
+run ids; resume uses `orbit job resume`, inspection `orbit run show`, and logs `orbit run logs`.
+Read-only derivation never invokes resume, cancel or claim recovery, including during validation.
+
+`run_failed` fingerprints run id and state. `run_stuck` fingerprints run id and cause
+(`dead_owner` or `wall_clock_bound`, with dead owner taking precedence). `claim_stale`
+fingerprints claim id, phase and sorted diagnostics. Severity is included by the shared
+fingerprint rule; clock ticks and last-event timestamp alone do not change a fingerprint.
 
 `next` is a suggestion with the right shape, never an action the tool takes. Choosing among
 `also` answers, supplying `needs`, and running the call are the operator's.
@@ -167,7 +191,7 @@ and are not waiting on a single task.
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
 | `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
-The thresholds and `run_window`, `run_stuck_after`, `ci_cache_seconds`, `source_timeout_seconds`
+The thresholds and `run_window_hours`, `run_stuck_after_minutes`, `ci_cache_seconds`, `source_timeout_seconds`
 and `per_workspace_item_cap` live in an `[attention]` config table with the defaults named
 here. Severity is part of the fingerprint, so an item that ages from medium to high re-surfaces
 once in a delta feed ([attention-cursor](./attention-cursor.md)).
