@@ -49,7 +49,7 @@ producing forty notices.
 | `updated_at` | RFC 3339, required | Last post that changed content or expiry. |
 | `revision` | integer, required | Starts at 1; each post that changes a content field (`title`, `body`, `kind`, `evidence`, `hosts`, `scope`) increments it. An expiry change alone does not. The brief records `id@revision` ([notice-delivery](./notice-delivery.md#delivery-record)). |
 | `reports` | object, required | `{count, last_at}`: matching posts on this open notice, including the first, except [repeats](#retries). Each bumping post increments `count` and sets `last_at`. A corroborating post bumps it without changing content. |
-| `closed` | object | Present once closed: `{at, by, reason, cause}`. `by` has the `author` shape; `cause` is `manual` or `linked_task_done`. `reason` is at most 240 characters. |
+| `closed` | object | Present once closed: `{at, by, cause}` plus `reason` for manual closes. `cause` is `manual` or `linked_task_done`. For `cause: manual`, `by` has the `author` shape and `reason` is required, 1–240 characters (supplied to `orbit.notice.close`). For `cause: linked_task_done`, `by` is exactly `{class: "system"}` — not an `author` value, carrying none of the author fields (`crew`, `model`, `task_id`, `run_id`, `machine_id`) and never valid as a poster class — and `reason` is absent; readers render `linked task done` from `cause`. |
 | `status` | enum, required in output | The effective state, below. Never stored as `expired`. |
 
 The owner store keeps the stored fields in a new table added by a store migration in slice 1
@@ -63,8 +63,8 @@ Computed per read, in this order:
 
 1. `closed` is set → **closed**.
 2. `linked_task` is set, `close_on_linked_done` is true and the linked task's status is `done`
-   → **closed**, with `closed.cause: linked_task_done`, `closed.at` the task's `done` time and
-   `closed.by` `{class: "system"}`. The read reports it; the [materializer](#materializing-closure)
+   → **closed**, with `closed.cause: linked_task_done`, `closed.at` the task's `done` time,
+   `closed.by` `{class: "system"}` and no `closed.reason`. The read reports it; the [materializer](#materializing-closure)
    persists it.
 3. `now >= expires_at` → **expired**.
 4. Otherwise → **open**.
