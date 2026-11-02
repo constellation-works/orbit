@@ -198,22 +198,26 @@ fn parse_json_envelope(
     let envelope = deserialize_envelope(candidate)?;
     let trace = synthesize_trace_from_parsed(exec_result, parsed);
 
+    // Parser-side mirror of the provider schema's status/error correlation
+    // (protocol_schema.rs), for transports that emit no schema-constrained
+    // output. The schema is the first layer; this remains the second.
     let state = match envelope.status.as_str() {
-        "success" => AgentResponseStatus::Success,
-        "failed" => {
-            let Some(error) = &envelope.error else {
+        "success" => {
+            if envelope.error.is_some() {
                 return Err(OrbitError::AgentProtocolViolation(
-                    "failed status requires error object".to_string(),
-                ));
-            };
-            if error.code.trim().is_empty() {
-                return Err(OrbitError::AgentProtocolViolation(
-                    "failed status requires non-empty error.code".to_string(),
+                    "success status must not carry error object".to_string(),
                 ));
             }
+            AgentResponseStatus::Success
+        }
+        "failed" => {
+            require_status_error(&envelope, "failed")?;
             AgentResponseStatus::Failed
         }
-        "timeout" => AgentResponseStatus::Timeout,
+        "timeout" => {
+            require_status_error(&envelope, "timeout")?;
+            AgentResponseStatus::Timeout
+        }
         other => {
             return Err(OrbitError::AgentProtocolViolation(format!(
                 "unknown status: {other}"
@@ -223,6 +227,25 @@ fn parse_json_envelope(
 
     validate_exit_alignment(exec_result, &envelope)?;
     Ok((envelope, state, trace))
+}
+
+fn require_status_error(envelope: &AgentResponseEnvelope, status: &str) -> Result<(), OrbitError> {
+    let Some(error) = &envelope.error else {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires error object"
+        )));
+    };
+    if error.code.trim().is_empty() {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires non-empty error.code"
+        )));
+    }
+    if error.message.trim().is_empty() {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires non-empty error.message"
+        )));
+    }
+    Ok(())
 }
 
 fn synthesize_from_parsed(

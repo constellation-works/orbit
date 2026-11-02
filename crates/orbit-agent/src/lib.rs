@@ -33,5 +33,6 @@ pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{
     DeclaredResponseFailure, ParsedStdout, provider_authentication_failure,
     provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
-    provider_usage_limit, provider_usage_limit_details,
+    provider_usage_limit, provider_usage_limit_details, response_envelope_json_schema,
+    response_envelope_json_schema_arg,
 };

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 pub use envelope::{DeclaredResponseFailure, ParsedStdout};
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
-pub use protocol_schema::response_envelope_json_schema_arg;
+pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};
 pub(crate) use usage::request_usage;
 
 pub(crate) fn tool_calls_in_documents(documents: &[Value]) -> Vec<ToolCallTrace> {
