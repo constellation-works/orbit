@@ -69,8 +69,8 @@ which notices are open.
 ## 3. Surfaces
 
 - **Tools**: `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list`, `orbit.notice.show`
-  ([notice-tools](./specs/notice-tools.md)). `post` and `close` are idempotent by design; `list`
-  and `show` are read-only.
+  ([notice-tools](./specs/notice-tools.md)). `post` is idempotent for a repeat of its latest write
+  and `close` for a repeat close; `list` and `show` are read-only.
 - **MCP**: advertised only with the opt-in `notice` toolset (`orbit mcp serve --toolset notice`,
   or `machine.mcp.toolsets = ["notice"]`, or `all`), like `leases` and `experiments`. The default
   toolset is unchanged.

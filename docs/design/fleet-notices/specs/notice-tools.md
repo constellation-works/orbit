@@ -47,7 +47,8 @@ because brief delivery and orchestrator posting have to work wherever the work r
 
 ## `orbit.notice.post`
 
-Effect: write. MCP scope: workspace required (the home workspace). Idempotent by dedupe key.
+Effect: write. MCP scope: workspace required (the home workspace). Idempotent for a
+[repeat](./notice-record.md#retries) of the open notice's latest write, which covers a lost-reply retry.
 
 | Input | Type | Notes |
 |---|---|---|
@@ -70,9 +71,11 @@ There is no field for the author class, the author's task or run, `status`, `rev
 mistaken for an accepted assertion.
 
 Output: `{notice, outcome}` with `outcome` one of `created`, `updated`, `corroborated`
-([notice-record](./notice-record.md#dedupe)). A lost reply is safe to retry with the same input:
-the retry matches the open key and returns `updated` (same content, no revision bump when nothing
-changed) or `corroborated`. A post that changes nothing does not bump `revision`.
+([notice-record](./notice-record.md#dedupe)). A lost reply may be retried with the same input. The
+retry matches the open key; when it is a [repeat](./notice-record.md#retries) (same poster, same
+request, and no later write by anyone else) it returns `updated` (the poster may edit the notice) or
+`corroborated` (it may not), changes no content, `revision` or `reports`, and is never refused by a
+limit. A post that changes no content field does not bump `revision`.
 
 ## `orbit.notice.close`
 
@@ -130,7 +133,9 @@ stands alone: no source paths and no internal task ids.
 
 Refusal codes are listed in [notice-authority](./notice-authority.md#refusals). Every write (and
 every refused write) is an audit row with target `notice` and the notice id, carrying the resolved
-poster class. Reads write nothing.
+poster class and the post's fingerprint, which the repeat check reads
+([notice-record](./notice-record.md#retries)). A repeat that moves no stored field writes no row.
+Reads write nothing.
 
 ## Agent Signature
 

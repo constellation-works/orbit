@@ -48,7 +48,8 @@ A managed agent on a follower posts through its worker binding's owner route, as
 owner resolves the poster class from that binding ([notice-authority](./notice-authority.md#poster-classes)).
 
 A post that times out after dispatch is `outcome_unknown`, as for any routed write. Re-sending the
-same input is safe: the dedupe key makes it `updated` or `corroborated`, never a duplicate.
+same input is safe: the dedupe key makes it `updated` or `corroborated`, never a duplicate, and a
+repeat of the notice's latest write is not counted twice ([notice-record](./notice-record.md#retries)).
 
 ## Reads
 

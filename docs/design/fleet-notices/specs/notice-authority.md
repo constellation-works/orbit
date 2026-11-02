@@ -77,6 +77,9 @@ A post whose dedupe key matches an open notice ([notice-record](./notice-record.
 - **updates** when the poster has "update" right on the matched notice per the table above;
 - otherwise **corroborates**: the content is untouched and only `reports` changes.
 
+A [repeat](./notice-record.md#retries) of the notice's latest write is handled before these rules and
+changes nothing they would change.
+
 An update may widen `scope` from `workspace` to `global` only if the updater may post global; it
 may never narrow a `global` notice another class authored. An update may change `kind` only within
 the updater's allowed kinds. This is how an orchestrator promotes an agent-reported incident to a
@@ -96,12 +99,12 @@ All values are `[notice]` configuration with these defaults; exceeding one refus
 | `max_open_per_workspace` | 20 | effective-open notices with this home workspace, all classes |
 | `max_open_global_per_owner` | 10 | effective-open `global` notices across one owner host's workspaces |
 | `max_open_per_agent_task` | 2 | effective-open notices authored by one bound task |
-| `agent_posts_per_task_per_day` | 5 | posts (including corroborations) by one bound task in 24 h |
-| `orchestrator_posts_per_hour` | 30 | posts by one orchestrator crew per owner host |
+| `agent_posts_per_task_per_day` | 5 | posts (including corroborations, excluding [repeats](./notice-record.md#retries)) by one bound task in 24 h |
+| `orchestrator_posts_per_hour` | 30 | posts by one orchestrator crew per owner host, excluding [repeats](./notice-record.md#retries) |
 
 Operators are bounded by the open counts and sizes but have no post rate. Counts are computed in the
 posting transaction against effective state, so an expired notice frees its slot without a write.
-Closing is not rate-limited.
+A repeat counts against no limit and is never refused by one. Closing is not rate-limited.
 
 ## Refusals
 
