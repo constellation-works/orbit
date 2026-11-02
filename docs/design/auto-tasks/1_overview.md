@@ -77,6 +77,18 @@ becomes just the first definition.
   and reasons, plus `load_errors_total` and `load_errors_truncated`; these
   diagnostics are independent of item pagination and `cursor_state_error`.
   If no definition loads and any fails, the list fails closed.
+- **Listing documents** — `application/auto_tasks/projection.rs` owns the
+  ordinary tool, CLI marker, bounded MCP and HTTP row profiles. These preserve
+  each surface's existing field set: ordinary rows serialize the full definition;
+  CLI rows add default inactive/skip markers after the audited tool call;
+  bounded rows omit the template and condition diagnostics; HTTP rows include
+  summaries and a partial template using the request's batched task metadata.
+  Only bounded description and target text is redacted and capped at 4096
+  UTF-8-safe bytes, with ` [display truncated]` appended when capped and no
+  whitespace trimming. Condition diagnostics are omitted on ordinary/CLI
+  non-condition rows and all bounded rows; HTTP always names `condition`, using
+  `null` for a non-condition schedule. Listing-state evaluation and request
+  costs remain separate from the row profiles.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a

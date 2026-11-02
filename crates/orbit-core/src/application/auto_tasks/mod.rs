@@ -31,6 +31,8 @@
 //!   and the dashboard schedule editor are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
+//! - [`projection`] — list-row documents for the ordinary tool, CLI markers,
+//!   bounded MCP and HTTP, preserving each surface's field and text contract.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
 //! - [`settings`] — operator settings layered over bundled bodies, and the
 //!   sync migration of settings-only forks.
@@ -44,6 +46,7 @@ pub mod delete;
 pub(crate) mod demoted;
 pub(crate) mod job_step;
 pub mod listing;
+pub mod projection;
 mod read;
 pub(crate) mod retired;
 pub use orbit_automation::auto_tasks::loader;

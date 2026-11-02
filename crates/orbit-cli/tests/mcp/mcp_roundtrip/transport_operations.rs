@@ -51,6 +51,8 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     );
 }
 
+// Keep the auto-task public contract independently selectable from drain controls.
+#[test]
 fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -83,6 +85,82 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         .unwrap();
     assert_eq!(chore["description"], "Updated over stdio");
     assert_eq!(chore["enabled"], false);
+    assert!(chore.get("schemaVersion").is_some(), "{chore}");
+    assert_eq!(
+        chore["template"]["acceptance_criteria"],
+        json!(["Persisted"])
+    );
+    assert!(chore.get("plugin_inactive").is_none());
+    assert!(chore.get("condition").is_none());
+    assert!(chore["last_fire"].is_null());
+    let bounded = client.call_tool_ok(
+        "orbit_auto_task_list",
+        json!({"workspace":selector,"view":"bounded","limit":50}),
+    );
+    let bounded_chore = bounded["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "stdio-chore")
+        .unwrap();
+    assert_eq!(bounded_chore["description"], "Updated over stdio");
+    assert_eq!(bounded_chore["target"], "Wire chore");
+    assert_eq!(bounded_chore["state"], "disabled");
+    for field in [
+        "template",
+        "schemaVersion",
+        "condition",
+        "last_fire",
+        "plugin_inactive",
+        "inactive_plugin",
+        "skipped_reason",
+    ] {
+        assert!(bounded_chore.get(field).is_none(), "{bounded_chore}");
+    }
+    let secret = format!("ghp_{}", "a".repeat(36));
+    let raw = format!("  {secret} {}", "π".repeat(2200));
+    client.call_tool_ok("orbit_auto_task_add", json!({"workspace":selector,"name":"stdio-profile","description":raw,"schedule":{"every_minutes":60},"template":{"title":raw,"description":"Retained ordinary body"},"dedupe":"always"}));
+    client.call_tool_ok("orbit_auto_task_add", json!({"workspace":selector,"name":"stdio-condition","schedule":{"condition":{"scope":"task","when":"'wire-profile' in task.tags"}},"template":{"title":"Wire condition"}}));
+    let ordinary = client.call_tool_ok("orbit_auto_task_list", json!({"workspace":selector}));
+    let bounded = client.call_tool_ok(
+        "orbit_auto_task_list",
+        json!({"workspace":selector,"view":"bounded","limit":50}),
+    );
+    for name in ["stdio-profile", "stdio-condition"] {
+        let ordinary_row = ordinary["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        let bounded_row = bounded["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        if name == "stdio-profile" {
+            // Tool mutation redacts before persistence. Ordinary listing keeps
+            // that entire stored text; only the bounded row applies a byte cap.
+            let stored = format!("  [REDACTED_SECRET] {}", "π".repeat(2200));
+            assert_eq!(ordinary_row["description"], stored);
+            assert_eq!(ordinary_row["template"]["title"], stored);
+            for field in ["description", "target"] {
+                let text = bounded_row[field].as_str().unwrap();
+                assert!(text.starts_with("  [REDACTED_SECRET] "));
+                assert!(!text.contains(&secret));
+                let prefix = text.strip_suffix(" [display truncated]").unwrap();
+                assert!((4095..=4096).contains(&prefix.len()));
+                assert!(prefix.ends_with('π'));
+            }
+        } else {
+            assert!(ordinary_row["condition"].is_object(), "{ordinary_row}");
+        }
+        assert!(bounded_row.get("condition").is_none());
+        assert!(bounded_row.get("template").is_none());
+        assert_eq!(bounded_row["schedule"], ordinary_row["schedule"]);
+        assert_eq!(bounded_row["dedupe"], ordinary_row["dedupe"]);
+    }
     client.call_tool_err(
         "orbit_auto_task_update",
         json!({"workspace":"ws_missing","name":"stdio-chore","description":"Wrong workspace"}),
@@ -1316,10 +1394,6 @@ fn artifact_and_auto_task_stdio_contracts() {
         (
             "stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape",
             stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape as fn(),
-        ),
-        (
-            "stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state",
-            stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state as fn(),
         ),
         (
             "stdio_drain_and_ship_starts_report_their_notices",

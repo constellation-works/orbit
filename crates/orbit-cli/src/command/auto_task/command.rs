@@ -36,6 +36,12 @@ impl Execute for AutoTaskCommand {
             .unwrap_or_default()
             .to_string();
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value = if spec.verb == AutoTaskVerb::List {
+            orbit_core::application::auto_tasks::projection::AutoTaskListingProfile::Cli
+                .project_auto_task_tool_document(value)
+        } else {
+            value
+        };
         render(spec.verb, &name, value, filter)
     }
 }

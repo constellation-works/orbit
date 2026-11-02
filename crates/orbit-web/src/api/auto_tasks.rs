@@ -12,13 +12,12 @@ use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
     DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
+use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
 use orbit_core::application::auto_tasks::{
-    AutoTaskDeleteParams, AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome,
-    AutoTaskToggleProfile,
+    AutoTaskDeleteParams, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
 };
 use orbit_core::{OrbitRuntime, Task};
-use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
+use orbit_types::workflow::auto_task_tag;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -90,7 +89,7 @@ pub(super) async fn list_auto_tasks(
                     generated_at,
                     state.operator_session(),
                     include_inactive_plugins,
-                ),
+                )?,
                 Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
             })
         }
@@ -557,7 +556,7 @@ fn list_json(
     generated_at: DateTime<Utc>,
     operator_session: bool,
     include_inactive_plugins: bool,
-) -> Value {
+) -> Result<Value, orbit_core::OrbitError> {
     let now = Utc::now();
     let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
     // One freshness pass for the request, with no task-body hydration. The
@@ -584,18 +583,19 @@ fn list_json(
         .rows
         .iter()
         .map(|row| {
-            definition_json(
-                runtime,
+            runtime.project_auto_task_listing_row(
                 row,
-                tasks.as_ref().map(|_| {
-                    instances
-                        .get(&auto_task_tag(&row.listed.definition.name))
-                        .map_or(&[][..], Vec::as_slice)
-                }),
-                now,
+                AutoTaskListingProfile::Http {
+                    minted: tasks.as_ref().map(|_| {
+                        instances
+                            .get(&auto_task_tag(&row.listed.definition.name))
+                            .map_or(&[][..], Vec::as_slice)
+                    }),
+                    now,
+                },
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let role_refusal = runtime
         .coordination_task_write_refusal()
         .map(|error| error.to_string());
@@ -619,7 +619,7 @@ fn list_json(
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
         && role_refusal.is_none();
-    json!({
+    Ok(json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
@@ -640,166 +640,5 @@ fn list_json(
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
         })).collect::<Vec<_>>(),
-    })
-}
-
-fn definition_json(
-    runtime: &OrbitRuntime,
-    row: &AutoTaskListingRow,
-    minted: Result<&[&Task], &orbit_core::OrbitError>,
-    now: DateTime<Utc>,
-) -> Value {
-    let listed = &row.listed;
-    let definition = &listed.definition;
-    let cursor = row.cursor.as_ref();
-    let open_duplicate = minted.as_ref().is_ok_and(|tasks| {
-        open_auto_task_instances_from_tasks(tasks.iter().copied())
-            .next()
-            .is_some()
-    });
-    let automation = match &definition.schedule {
-        AutoTaskSchedule::Deliveries { .. } => Some(
-            if let Err(error) = minted
-                && definition.dedupe == DedupePolicy::SkipIfOpen
-            {
-                json!({"reason":"state_unavailable","error":error.to_string()})
-            } else {
-                match orbit_core::application::automation::inspect_auto_task_with_open_instance(
-                    runtime,
-                    definition,
-                    now,
-                    open_duplicate,
-                ) {
-                    Ok(diagnostic) => super::automation::summary(&json!(diagnostic)),
-                    Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
-                }
-            },
-        ),
-        _ => None,
-    };
-    let last_minted = minted.ok().and_then(|tasks| tasks.first());
-    let last_minted_task_id = last_minted
-        .map(|task| task.id.to_string())
-        .or_else(|| cursor.and_then(|cursor| cursor.last_task_id.clone()));
-    let last_minted_task_status = last_minted.map(|task| task.status);
-    json!({
-        "name": definition.name,
-        "description": definition.description,
-        "enabled": definition.enabled,
-        "effective_enabled": row.effective_enabled,
-        "schedule": definition.schedule,
-        "schedule_summary": schedule_summary(&definition.schedule),
-        "automation": automation,
-        // A condition definition's ownership, arm counts, stall and last
-        // fire and skip.
-        "condition": match runtime.auto_task_condition_listing(definition) {
-            Ok(listing) => json!(listing),
-            Err(error) => json!({"unavailable": error.to_string()}),
-        },
-        "template_summary": template_summary(&definition.template),
-        "template": {
-            "title": definition.template.title,
-            "crew": definition.template.crew,
-            "status": definition.template.status,
-            "priority": definition.template.priority,
-            "complexity": definition.template.complexity,
-            "required_tools": definition.template.required_tools,
-        },
-        "dedupe": match definition.dedupe {
-            DedupePolicy::SkipIfOpen => "skip_if_open",
-            DedupePolicy::Always => "always",
-        },
-        "last_evaluation": cursor.map(|cursor| json!({
-            "kind": if cursor.last_fired_at.is_some() { "fired" } else { "baselined" },
-            "baseline_at": cursor.baseline_at,
-            "last_slot": cursor.last_slot,
-            "last_fired_at": cursor.last_fired_at,
-            "last_task_id": cursor.last_task_id,
-            "pending": cursor.pending.as_ref().map(|pending| json!({
-                "slot": pending.slot,
-                "task_id": pending.task_id,
-            })),
-            // Why a due definition minted nothing, so a quiet panel is
-            // explained rather than merely empty [ORB-12698].
-            "last_skip": cursor.last_skip.as_ref().map(|skip| json!({
-                "at": skip.at,
-                "slot": skip.slot,
-                "reason": skip.reason,
-                "ref": skip.reference,
-                "cursor_sha": skip.cursor_sha,
-                "tip_sha": skip.tip_sha,
-                "cursor_task_id": skip.cursor_task_id,
-                "detail": skip.detail,
-            })),
-        })),
-        "last_minted_task_id": last_minted_task_id,
-        "last_minted_task_status": last_minted_task_status,
-        "next_evaluation": next_evaluation_projection(row, automation.as_ref()),
-        "open_duplicate": open_duplicate,
-        "may_create_open_duplicate": open_duplicate,
-        "plugin_inactive": listed.inactive_plugin.is_some(),
-        "inactive_plugin": listed.inactive_plugin,
-        "skipped_reason": row.skipped_reason,
-    })
-}
-
-fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
-    let base = match schedule {
-        AutoTaskSchedule::Deliveries {
-            deliveries_landed: t,
-            ..
-        } => format!(
-            "{} deliveries on {} ({})",
-            t.threshold, t.branch, t.coverage
-        ),
-        AutoTaskSchedule::Cron { cron, .. } => format!("cron {cron}"),
-        AutoTaskSchedule::Interval { every_minutes, .. } if *every_minutes == 1 => {
-            "every 1 minute".to_string()
-        }
-        AutoTaskSchedule::Interval { every_minutes, .. } => {
-            format!("every {every_minutes} minutes")
-        }
-        AutoTaskSchedule::Condition { condition } => {
-            format!("{} condition: {}", condition.scope.as_str(), condition.when)
-        }
-    };
-    match schedule.guard().and_then(|guard| guard.when.as_deref()) {
-        Some(when) => format!("{base}, when {when}"),
-        None => base,
-    }
-}
-
-fn template_summary(template: &AutoTaskTemplate) -> String {
-    let title = if template.title.starts_with("[auto-task] ") {
-        template.title.clone()
-    } else {
-        format!("[auto-task] {}", template.title)
-    };
-    let mut parts = vec![title];
-    if let Some(crew) = template.crew.as_deref() {
-        parts.push(format!("crew {crew}"));
-    }
-    parts.push(format!("status {}", template.status));
-    parts.push(format!("priority {}", template.priority));
-    parts.push(format!(
-        "complexity {}",
-        template
-            .complexity
-            .map_or("unassessed", |value| value.as_str())
-    ));
-    parts.join(" · ")
-}
-
-/// The shared schedule state, with a delivery trigger whose state the panel's
-/// inspection could not read labelled unavailable.
-fn next_evaluation_projection(row: &AutoTaskListingRow, automation: Option<&Value>) -> Value {
-    let (state, at) = row.schedule_with_trigger(!automation_unavailable(automation));
-    state.next_evaluation(at.map(|slot| slot.to_rfc3339()))
-}
-
-fn automation_unavailable(automation: Option<&Value>) -> bool {
-    automation
-        .and_then(|value| value.get("reason"))
-        .and_then(Value::as_str)
-        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
+    }))
 }

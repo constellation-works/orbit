@@ -142,23 +142,20 @@ fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
 ) -> Result<AutoTaskProjection, OrbitError> {
-    use crate::application::auto_tasks::AutoTaskSkip;
-    use crate::application::routines::ScheduleDisplayState;
+    use crate::application::auto_tasks::projection::AutoTaskListingProfile;
     let listing = runtime.auto_task_listing_state(true, Utc::now())?;
-    let rows = listing.rows.iter().map(|row|{
-        let d=&row.listed.definition;
-        let plugin_inactive=row.skip==Some(AutoTaskSkip::PluginInactive);
-        let state=if plugin_inactive{"plugin_inactive"}else{row.schedule_state.as_str()};
-        let next_due=(!plugin_inactive && row.schedule_state==ScheduleDisplayState::Scheduled).then_some(row.next_slot).flatten();
-        json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
-            "state":state,"next_due":next_due,
-            "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":row.skipped_reason,
-            "effective_enabled":row.effective_enabled,
-            "toggle_available":!plugin_inactive && coordination_refusal.is_none(),
-            "mint_available":!plugin_inactive && coordination_refusal.is_none(),
-            "control_reason":coordination_refusal,
-            "updated_at":d.updated_at})
-    }).collect();
+    let rows = listing
+        .rows
+        .iter()
+        .map(|row| {
+            runtime.project_auto_task_listing_row(
+                row,
+                AutoTaskListingProfile::BoundedMcp {
+                    coordination_refusal,
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let total = listing.load_errors.len();
     let errors = listing
         .load_errors
