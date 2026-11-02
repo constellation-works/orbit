@@ -61,6 +61,14 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "a decision request id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.evolution.decline",
+        "an evolution record id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.evolution.show",
+        "an evolution record id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.experiment.update",
         "an experiment id is workspace-local and carries no host prefix",
     ),
