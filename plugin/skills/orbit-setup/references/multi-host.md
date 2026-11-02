@@ -48,6 +48,31 @@ do not delete registry or identity files to get past them.
 A second host gets the shipped definitions from `orbit workspace init`, not from
 Git. Copy any local edits across deliberately.
 
+## Upgrading a workspace together
+
+In version 0.43.0, layout version 8 stores script output files and parallel
+script-branch checkpoints as durable run artifacts. Once a workspace has been
+upgraded to version 8, older Orbit binaries refuse to open it. Before any host
+opens or migrates that workspace to version 8, update the Orbit binary on every
+host that can access it, including replicas. Plan one coordinated rollout:
+
+1. Inventory the owner and every host with a checkout that can open the
+   workspace. Stop active Orbit clients as required by the [upgrade
+   procedure](maintenance.md#persistent-mcp-clients-during-upgrades).
+2. Update Orbit on each host while clients remain stopped. Check each installed
+   version with `orbit --version`; `orbit update --check` reports release
+   availability, not workspace compatibility.
+3. After every host is on a compatible binary, use `orbit migrate` to inspect
+   pending changes and apply them with `orbit migrate --confirm` when needed.
+   Do not let an older host open a workspace after it reaches layout version 8.
+4. Run `orbit doctor` on each host and `orbit migrate` to confirm the workspace
+   opens cleanly and no migration remains pending. Reconnect clients only after
+   all hosts pass these checks.
+
+If the rollout is interrupted before migration, keep clients stopped until all
+hosts are updated. If any host still has an older binary after migration, update
+it before allowing it to open the workspace again.
+
 Task publications are the supported explicit snapshot path; ordinary source
 Git sync is not live task replication. Publication inspection preserves the
 snapshot's authority/freshness labels and does not import records.
