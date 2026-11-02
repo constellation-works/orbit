@@ -884,10 +884,7 @@ spec:
       and for every other task, return null.
     - `adr_conflicts`: only concrete conflicts with current code or a current
       contract; a historical ADR alone is no reason to block or reshape work.
-    - `contract_conflicts`: `{"criterion":N,"evidence":"..."}` for each
-      criterion that contradicts the pinned code or contract (see Contract
-      contradiction above). Every entry holds promotion and carries no
-      `holds_promotion` field; leave it empty for a matching criterion.
+    - `contract_conflicts`: follow Contract contradiction above.
     - `adr_conflicts` is an array of strings combining each current conflict and
       its citation, for example `Current module still exports Bar (path:line at
       source_revision)`; each entry holds promotion. Keep `blocked_by` as
@@ -902,8 +899,7 @@ spec:
       present, leave `duplicate_of` and `already_landed` null and return
       selectors for the current repair.
 
-    A criterion contradicting the pinned code or contract goes in
-    `contract_conflicts`, never here. Set `holds_promotion: true` only for a hard blocker, one that makes correct
+    Set `holds_promotion: true` only for a hard blocker, one that makes correct
     delivery as written impossible: criteria that contradict each other; criteria the lane cannot satisfy or validate on
     its own host (every finding from Tool feasibility, Sandbox deferral, Owner
     machine and the Native OS tag conflict); authority or tools the lane cannot
