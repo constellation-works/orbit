@@ -120,6 +120,16 @@ export async function check(ctx) {
       return true;
     }
 
+    // Only a px or unitless line-height gives the used line height exactly.
+    // `normal` depends on font metrics this measurement does not read, so a
+    // scrolled position cannot be placed on a line boundary from it.
+    function lineHeightEstablished(style) {
+      if (style.lineHeight.endsWith("px")) return H.px(style.lineHeight) > 0.5;
+      if (style.lineHeight === "normal") return false;
+      const factor = Number(style.lineHeight);
+      return Number.isFinite(factor) && factor > 0;
+    }
+
     // A closed select and a text input centre one line. A textarea always
     // stacks lines from the top, and so does a select shown as a list.
     function multilineField(el) {
@@ -137,8 +147,7 @@ export async function check(ctx) {
 
     // Native fields and graphics have no author text node for a single line.
     // A single-line field centres that line. A multiline field's first line
-    // starts at the content top and moves with scrollTop; a graphic starts
-    // at its border box.
+    // starts at the content top; a graphic starts at its border box.
     function replacedStart(el) {
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -150,16 +159,42 @@ export async function check(ctx) {
       let top = rect.top;
       if (FIELD.has(el.tagName)) {
         if (multilineField(el)) {
-          const measured = measuredFieldLine(el, rect);
-          if (measured) {
-            top = measured.top;
-          } else if (el.tagName === "TEXTAREA" && lineBoxMeasurable(style) && Number.isFinite(el.scrollTop)) {
-            // getClientRects on a scrolled text block shifts the first line by
-            // scrollTop. A textarea does not expose those rects, so apply the
-            // same shift from the content top.
-            top = rect.top + borderTop + padTop - el.scrollTop;
+          if (el.tagName === "TEXTAREA") {
+            // A textarea does not expose line rects. Its original first line
+            // is hidden above the clip once scrolled, so measuring it (the
+            // content top minus all of scrollTop) invents a start nothing
+            // paints. Measure instead the first line wholly inside the
+            // content clip: after a whole number of lines that line sits at
+            // the content top again, whatever scrollTop is.
+            if (!lineBoxMeasurable(style) || !Number.isFinite(el.scrollTop)) {
+              return { unavailable: true, element: el, reason: "content geometry unavailable" };
+            }
+            const contentTop = rect.top + borderTop + padTop;
+            const scrollTop = Math.max(0, el.scrollTop);
+            if (scrollTop <= 0) {
+              top = contentTop;
+            } else {
+              if (!lineHeightEstablished(style)) {
+                return { unavailable: true, element: el, reason: "content geometry unavailable" };
+              }
+              const line = usedLine(style);
+              const contentHeight = Math.max(0, rect.height - borderTop - borderBottom - padTop - padBottom);
+              if (!(line > 0.5) || contentHeight <= 0.5) {
+                return { unavailable: true, element: el, reason: "content geometry unavailable" };
+              }
+              const offset = (line - (scrollTop % line)) % line;
+              if (offset >= contentHeight) {
+                return { unavailable: true, element: el, reason: "content geometry unavailable" };
+              }
+              top = contentTop + offset;
+            }
           } else {
-            return { unavailable: true, element: el, reason: "content geometry unavailable" };
+            const measured = measuredFieldLine(el, rect);
+            if (measured) {
+              top = measured.top;
+            } else {
+              return { unavailable: true, element: el, reason: "content geometry unavailable" };
+            }
           }
         } else {
           const contentTop = rect.top + borderTop + padTop;
