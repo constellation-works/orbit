@@ -17,7 +17,7 @@ spec:
     highest severity first; results below ux_rules.file_at and for disabled
     rules are recorded in the output only. The filer is surface-agnostic: it
     reads rule ids, targets, statuses, severities, measurements, evidence
-    and fingerprints, and nothing specific to any UI or CLI. Optional defect {version, key} declarations group observations before the cap. Every known member must appear and pass for a repair comment; a missing, skipped or errored member earns none. All member evidence is retained on new and existing open owners. Matching open legacy owners bind deterministically and other open matches are listed as legacy_duplicates; matching terminal tasks are listed read-only as historical_references and never own, reopen or suppress a finding. Workspace-scoped serialization makes repeat and concurrent filing idempotent. Declared raw observation archives are checked against the producer's outputs and summarized, never inflated.
+    and fingerprints, and nothing specific to any UI or CLI. Optional defect {version, key} declarations group observations before the cap. Every known member must appear and pass for a repair comment; a missing, skipped or errored member earns none. All member evidence is retained on new and existing open owners; evidence an interrupted earlier filing named that neither the report nor the owner holds is listed in evidence_gaps and the current evidence is attached. Once an owner tracks a group, only that group's own result can post its repair comment, never an ungrouped aggregate pass on the shared fingerprint. Matching open legacy owners bind deterministically and other open matches are listed as legacy_duplicates; matching terminal tasks are listed read-only as historical_references and never own, reopen or suppress a finding. Workspace-scoped serialization makes repeat and concurrent filing idempotent. Declared raw observation archives are checked against the producer's outputs and summarized, never inflated.
   input_schema_json:
     type: object
     properties:
@@ -96,8 +96,12 @@ spec:
         type: array
       skipped_over_cap:
         type: array
+      evidence_gaps:
+        type: array
+        description: Per owner, earlier evidence names that are missing from both the report and the owner; dropped from the attached registry.
       recorded_only:
         type: array
+        description: Failures recorded without filing (disabled rule, below file_at, or covered_by_group when a failing group result already reports that fingerprint).
       max_new_tasks:
         type: number
       file_at:

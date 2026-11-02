@@ -24,6 +24,6 @@ spec:
         type: number
       groups:
         type: array
-        description: One entry per open owner's defect group, ordered by group fingerprint.
+        description: One entry per open owner's defect group, ordered by group fingerprint, with members listing the aggregate fingerprints its observations were recorded under.
   action: prepare_rule_findings
   config: {}

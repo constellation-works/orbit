@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeFile } from "node:fs/promises";
 
-import { expandUiObservations } from "./lib/ui-observations.mjs";
+import { declaredUiObservations, expandUiObservations } from "./lib/ui-observations.mjs";
 import { filingDocument, writeObservationArchive } from "./lib/filing-report.mjs";
 import { createCliContext, resultOf } from "./lib/cli-context.mjs";
 import { loadManifest } from "./lib/manifest.mjs";
@@ -392,8 +392,13 @@ async function main() {
     target: reportTarget,
   };
   const outDir = path.resolve(args.out);
+  // The archive keeps each aggregate's declared observations before member
+  // deduplication, so repeated failures of one identity are not lost.
   const archive = await writeObservationArchive(outDir, {
-    ...header, results, aggregates, summary: summarize(results),
+    ...header,
+    results,
+    aggregates: aggregates.map((aggregate) => ({ ...aggregate, observations: declaredUiObservations(aggregate) })),
+    summary: summarize(results),
   });
   const filing = filingDocument({ surface: args.surface, results, aggregates, ownerContext });
   const report = { ...header, results: filing.results, summary: filing.summary, archive };

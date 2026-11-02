@@ -363,6 +363,19 @@ pub(crate) fn file_rule_findings(
     let mut commented: Vec<Value> = Vec::new();
     let mut recorded_only: Vec<Value> = Vec::new();
     let mut skipped_existing: Vec<Value> = Vec::new();
+    let mut evidence_gaps: Vec<Value> = Vec::new();
+    // Producer failures without a cause identity stay on their aggregate
+    // fingerprint, which a bound legacy group can share.
+    let ungrouped_failing: BTreeSet<String> = results
+        .iter()
+        .filter(|result| result.get("defect").is_none() && field(result, "status") == "fail")
+        .map(|result| field(result, "fingerprint").to_string())
+        .collect();
+    let group_failing: BTreeSet<String> = results
+        .iter()
+        .filter(|result| result.get("defect").is_some() && field(result, "status") == "fail")
+        .map(|result| field(result, "fingerprint").to_string())
+        .collect();
 
     // Even an unchanged or unmeasured grouped observation can introduce new
     // evidence. Reconcile attachments once, without manufacturing a comment.
@@ -383,6 +396,7 @@ pub(crate) fn file_rule_findings(
                 result,
                 &evidence,
                 prepared.states.get(field(result, "fingerprint")),
+                &mut evidence_gaps,
             )?;
             if !artifacts.is_empty() {
                 runtime.update_task(
@@ -426,14 +440,17 @@ pub(crate) fn file_rule_findings(
         let Some(owner) = owners.get(fingerprint) else {
             continue;
         };
-        // An old aggregate pass cannot certify a cause group after that
-        // legacy owner has been bound to specific member observations.
-        if !prepared.states.contains_key(fingerprint)
-            && runtime
-                .get_task_artifact_manifest(&owner.id)?
-                .iter()
-                .any(|entry| entry.path == rule_groups::STATE_PATH)
+        // An ungrouped pass (an old aggregate sharing the bound fingerprint
+        // included) cannot certify a cause group once the owner tracks
+        // member observations; only the group's own result can.
+        if result.get("defect").is_none()
+            && (prepared.states.contains_key(fingerprint)
+                || rule_groups::read_state(runtime, owner)?.is_some())
         {
+            continue;
+        }
+        // Nor does a group pass while its fingerprint holds ambiguous failures.
+        if ungrouped_failing.contains(fingerprint) {
             continue;
         }
         if settings
@@ -561,6 +578,15 @@ pub(crate) fn file_rule_findings(
             recorded_only.push(json!({
                 "fingerprint": fingerprint, "rule": rule, "severity": severity,
                 "reason": "below_file_at",
+            }));
+            continue;
+        }
+        // The failing group result already reports this owner's state; a
+        // second, different measurement on the shared fingerprint would make
+        // every run look changed.
+        if result.get("defect").is_none() && group_failing.contains(&fingerprint) {
+            recorded_only.push(json!({
+                "fingerprint": fingerprint, "rule": rule, "reason": "covered_by_group",
             }));
             continue;
         }
@@ -714,6 +740,7 @@ pub(crate) fn file_rule_findings(
             &result,
             &evidence,
             prepared.states.get(&fingerprint),
+            &mut evidence_gaps,
         )?;
         if !artifacts.is_empty() {
             runtime.update_task(
@@ -766,6 +793,7 @@ pub(crate) fn file_rule_findings(
         "commented": commented,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
+        "evidence_gaps": evidence_gaps,
         "recorded_only": recorded_only,
         "max_new_tasks": settings.max_new_tasks,
         "file_at": settings.file_at,
@@ -774,26 +802,37 @@ pub(crate) fn file_rule_findings(
 
 /// Compare manifests before materializing attachments. An interrupted initial
 /// update is repaired on replay, while identical runs leave no new revisions.
+/// Evidence named by an earlier, interrupted run that neither this report nor
+/// the owner holds is reported in `gaps` for that owner and dropped from the
+/// attached registry; the current evidence is still attached.
 fn finding_artifacts(
     runtime: &OrbitRuntime,
     task_id: &str,
     result: &Value,
     evidence: &BTreeMap<String, orbit_types::task::TaskArtifact>,
     state: Option<&Value>,
+    gaps: &mut Vec<Value>,
 ) -> Result<Vec<orbit_types::task::TaskArtifact>, OrbitError> {
     let manifest = runtime.get_task_artifact_manifest(task_id)?;
     let mut artifacts: BTreeMap<String, orbit_types::task::TaskArtifact> = BTreeMap::new();
+    let mut missing: BTreeSet<String> = BTreeSet::new();
     for name in string_list(result.get("evidence")) {
         if let Some(artifact) = evidence.get(&name) {
             artifacts.insert(artifact.path.clone(), artifact.clone());
         } else if !manifest.iter().any(|entry| entry.path == name) {
-            return Err(OrbitError::InvalidInput(format!(
-                "rule group evidence {name:?} is missing from both the report and the owner; replay the complete producer output"
-            )));
+            missing.insert(name);
         }
     }
+    if !missing.is_empty() {
+        gaps.push(json!({
+            "task_id": task_id,
+            "fingerprint": field(result, "fingerprint"),
+            "missing_evidence": missing,
+        }));
+    }
     if let Some(state) = state {
-        let artifact = rule_groups::state_artifact(state)?;
+        let artifact =
+            rule_groups::state_artifact(&rule_groups::without_evidence(state, &missing))?;
         artifacts.insert(artifact.path.clone(), artifact);
     }
     artifacts.retain(|path, artifact| {

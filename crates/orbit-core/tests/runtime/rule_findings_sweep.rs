@@ -9,6 +9,7 @@ use evidence::{
     repeated_evidence_is_attached_once_after_selection,
 };
 use grouping::{
+    bound_legacy_owner_ignores_aggregate_pass, fresh_evidence_rerun_after_interrupted_attach,
     group_cap_files_one_whole_group, grouped_existing_owner_receives_new_variant_evidence,
     grouped_independent_processes_share_owner, grouped_legacy_owner_reuse_excludes_terminal_tasks,
     grouped_reruns_reconcile_only_all_known_variants,
@@ -710,6 +711,8 @@ fn mixed_surface_results_keep_their_filing_surface() {
 
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
+    bound_legacy_owner_ignores_aggregate_pass,
+    fresh_evidence_rerun_after_interrupted_attach,
     replay_repairs_interrupted_group_attachments,
     owner_context_lists_open_owner_groups,
     group_cap_files_one_whole_group,

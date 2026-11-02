@@ -53,6 +53,16 @@ pub(super) fn owner_context(runtime: &OrbitRuntime) -> Result<Value, OrbitError>
             )));
         }
         let first = first.unwrap_or(&Value::Null);
+        // The aggregates the members were observed under let the producer
+        // credit a cause it can prove absent there.
+        let members: BTreeSet<&str> = state
+            .get("observations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|entry| field(entry, "original_fingerprint"))
+            .filter(|fingerprint| !fingerprint.is_empty())
+            .collect();
         groups.entry(group.to_string()).or_insert_with(|| {
             json!({
                 "group_fingerprint": group,
@@ -60,6 +70,7 @@ pub(super) fn owner_context(runtime: &OrbitRuntime) -> Result<Value, OrbitError>
                 "surface": field(first, "surface"),
                 "rule": field(first, "rule"),
                 "defect": defect,
+                "members": members,
             })
         });
     }
@@ -95,7 +106,7 @@ fn observation_id(value: &Value) -> String {
     identity(&json!([value.get("fingerprint"), value.get("target")]))
 }
 
-fn read_state(runtime: &OrbitRuntime, task: &Task) -> Result<Option<Value>, OrbitError> {
+pub(super) fn read_state(runtime: &OrbitRuntime, task: &Task) -> Result<Option<Value>, OrbitError> {
     if let Some(artifact) = runtime.get_task_artifact(&task.id, STATE_PATH)? {
         return serde_json::from_slice(&artifact.content)
             .map(Some)
@@ -113,6 +124,25 @@ fn read_state(runtime: &OrbitRuntime, task: &Task) -> Result<Option<Value>, Orbi
         .split_once(STATE_MARKER)
         .and_then(|(_, tail)| tail.lines().next())
         .and_then(|line| serde_json::from_str(line).ok()))
+}
+
+/// The registry with evidence names that were never attached removed from
+/// every observation, so a lost interrupted attachment is not re-requested.
+pub(super) fn without_evidence(state: &Value, missing: &BTreeSet<String>) -> Value {
+    let mut state = state.clone();
+    if missing.is_empty() {
+        return state;
+    }
+    if let Some(observations) = state.get_mut("observations").and_then(Value::as_array_mut) {
+        for entry in observations {
+            let kept: Vec<String> = string_list(entry.get("evidence"))
+                .into_iter()
+                .filter(|name| !missing.contains(name))
+                .collect();
+            entry["evidence"] = json!(kept);
+        }
+    }
+    state
 }
 
 pub(super) fn state_description(state: &Value) -> String {

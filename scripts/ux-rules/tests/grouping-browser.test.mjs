@@ -27,6 +27,14 @@ async function fixture(t) {
     } else if (url.pathname.startsWith("/api/")) {
       response.writeHead(state.repaired ? 200 : 503, { "Content-Type": "application/json" });
       response.end('{}');
+    } else if (url.pathname === "/boom.js") {
+      response.setHeader("Content-Type", "text/javascript");
+      response.end(state.repaired ? "void 0;" : 'function explode(){throw new Error("fixture exploded");} explode();');
+    } else if (url.pathname === "/errors") {
+      response.end('<!doctype html><body id="ready">Error fixture<script src="/boom.js"></script></body>');
+    } else if (url.pathname === "/ambiguous") {
+      // No id or data-key anywhere: the elements have no stable identity.
+      response.end('<!doctype html><style>p{font-size:9px}</style><div id="ready">Ambiguous fixture</div><section><p>first unanchored label</p><p>second unanchored label</p></section>');
     } else if (url.pathname.startsWith("/console")) {
       response.end(`<!doctype html><body id="ready">Console fixture${state.unknown ? '<script>console.error("503 Service Unavailable")</script>' : '<script src="/shared.js"></script>'}</body>`);
     } else {
@@ -125,4 +133,49 @@ test("public runner attributes two independent 503 endpoints to shared initiator
   const unknownFailures = unknown.report.results.filter((result) => result.status === "fail");
   assert.equal(unknownFailures.length, 4);
   assert.equal(new Set(unknownFailures.map((result) => result.defect.key)).size, 4, "generic status text without source evidence stays target scoped");
+});
+
+test("public runner keeps failures without a stable element identity on their aggregate fingerprint and archives them", { skip: !enabled, timeout: 120000 }, async (t) => {
+  const { run } = await fixture(t);
+  const first = await run("ambiguous-before", "ui.undersized-text", [["ambiguous", "/ambiguous"]]);
+  const failing = first.report.results.filter((result) => result.status === "fail");
+  assert.ok(failing.length > 0, JSON.stringify(first.report.summary));
+  for (const result of failing) {
+    assert.equal(result.defect, undefined);
+    assert.equal(result.original_fingerprint, undefined, "no per-member task identity from DOM order");
+    assert.equal(result.fingerprint, `ui.undersized-text|ambiguous|dark|${result.target.width}|default`);
+    assert.ok(result.measurements.ambiguous_failures > 0);
+  }
+  assert.equal(first.report.summary.ambiguous_failures, failing.reduce((sum, result) => sum + result.measurements.ambiguous_failures, 0));
+  const raw = JSON.parse(gunzipSync(Buffer.concat(await Promise.all(first.report.archive.parts.map((part) => readFile(path.join(first.out, part.path)))))));
+  assert.equal(raw.results.filter((result) => result.status === "fail" && !result.defect).length, first.report.summary.ambiguous_failures);
+  assert.ok(raw.aggregates.every((aggregate) => Array.isArray(aggregate.observations)), "declared observations are archived before deduplication");
+  const again = await run("ambiguous-again", "ui.undersized-text", [["ambiguous", "/ambiguous"]]);
+  assert.deepEqual(again.report.results.map((result) => [result.fingerprint, result.status, result.measurements]),
+    first.report.results.map((result) => [result.fingerprint, result.status, result.measurements]));
+});
+
+test("public runner credits a tracked page-error cause once its page's console scope completes clean", { skip: !enabled, timeout: 120000 }, async (t) => {
+  const { run, state } = await fixture(t);
+  const views = [["errors", "/errors"]];
+  const first = await run("errors-before", "ui.console-clean", views);
+  const failures = first.report.results.filter((result) => result.status === "fail");
+  assert.ok(failures.length > 0 && failures.every((result) => result.measurements.observation.kind === "page-error" && result.defect), JSON.stringify(failures));
+  const groups = Map.groupBy(failures, (result) => result.defect.key);
+  const context = path.join(path.dirname(first.out), "errors-owner-context.json");
+  await writeFile(context, JSON.stringify({ schema_version: 1, groups: [...groups.values()].map((members) => ({
+    surface: "ui", rule: "ui.console-clean", defect: members[0].defect, members: members.map((member) => member.original_fingerprint),
+  })) }));
+  state.repaired = true;
+  const untracked = await run("errors-untracked", "ui.console-clean", views);
+  assert.equal(untracked.report.summary.absence_credits, 0);
+  const after = await run("errors-after", "ui.console-clean", views, ["--owner-context", context]);
+  assert.equal(after.report.summary.fail, 0);
+  for (const before of failures) {
+    const credit = after.report.results.find((result) => result.fingerprint === before.fingerprint);
+    assert.equal(credit?.status, "pass", `${before.fingerprint} needs a pass with its own identity`);
+    assert.deepEqual(credit.target, before.target);
+    assert.deepEqual(credit.defect, before.defect);
+  }
+  assert.equal(after.report.summary.absence_credits, failures.length);
 });

@@ -255,9 +255,14 @@ it only counts untracked passing members. The complete raw report is kept lossle
 parts of at most 1 MiB among the script's declared outputs, sharing the 64-output grant with
 screenshots. Core checks the parts against the producer's persisted outputs and never
 inflates them. Budgets are not raised and nothing is truncated: a document that cannot fit
-refuses the step. Successful HTTP responses are counted, not recorded as diagnostics, so
-static resources cannot exhaust the bounded request context; a genuine overflow is still a
-`diagnostic-limit` error with no pass credit.
+refuses the step. Successful HTTP responses are passing cause observations, never
+diagnostics, so static resources cannot exhaust the bounded request context; a genuine
+overflow is still a `diagnostic-limit` error with no pass credit. A failure with no stable
+cause identity stays on its aggregate fingerprint (and with its legacy owner) instead of
+minting per-member tasks. A tracked console or page-error cause is credited a pass on a page
+whose console scope completes clean; element rules make no absence claim. Once an owner
+tracks a group, only the group's own result can post its repair comment, and evidence an
+interrupted filing lost is reported per owner instead of failing the whole filing.
 
 ### Filing
 

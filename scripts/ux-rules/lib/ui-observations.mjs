@@ -4,6 +4,11 @@ import { createHash } from "node:crypto";
 const declared = new WeakMap();
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+// The declared observations before member deduplication, for the raw archive.
+export function declaredUiObservations(result) {
+  return declared.get(result) ?? [];
+}
+
 export function declareUiObservations(result, observations) {
   if (observations.length) declared.set(result, observations);
   return result;
@@ -14,14 +19,14 @@ export function elementObservations(result, rows, failures, discriminators = ["c
   for (const row of rows) {
     if (!row?.element?.key) continue;
     for (const discriminator of row.discriminators ?? discriminators) {
-      const failure = failures.find((item) => item.element?.key === row.element.key &&
+      const identity = [row.element.scope === "shared" ? "shared-component" : result.target.view,
+        result.target.theme, result.target.state, row.element.key, discriminator];
+      const matched = failures.filter((item) => item.element?.key === row.element.key &&
         (item.discriminator ?? "constraint") === discriminator);
-      observations.push({
-        status: failure ? "fail" : "pass",
-        identity: [row.element.scope === "shared" ? "shared-component" : result.target.view,
-          result.target.theme, result.target.state, row.element.key, discriminator],
-        measurement: failure ?? row,
-      });
+      // Every repeated failure is declared, so the raw archive keeps it; the
+      // filing member keeps the first one.
+      if (!matched.length) observations.push({ status: "pass", identity, measurement: row });
+      for (const failure of matched) observations.push({ status: "fail", identity, measurement: failure });
     }
   }
   // One ambiguous row must not erase proven identities on the same page.
@@ -74,7 +79,7 @@ export function expandUiObservations(result) {
     };
     // Repeated measurements of one known cause do not create duplicate members.
     const previous = unique.get(key);
-    if (!previous || member.status === "fail") unique.set(key, member);
+    if (!previous || (member.status === "fail" && previous.status !== "fail")) unique.set(key, member);
   }
   return [...unique.values()];
 }

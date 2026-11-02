@@ -523,6 +523,123 @@ pub(super) fn replay_repairs_interrupted_group_attachments() {
     );
 }
 
+/// A legacy aggregate owner bound to a group is repaired only by the group:
+/// the old aggregate passing while another width still fails posts nothing.
+pub(super) fn bound_legacy_owner_ignores_aggregate_pass() {
+    let (_root, runtime) = fixture("");
+    let aggregate = |status: &str| {
+        let mut value = result(status, "high", "original-1440", json!({"width": 1440}));
+        value["rule"] = json!("ui.layout");
+        value["target"] = json!({"id": "view-1440", "width": 1440, "theme": "dark"});
+        value
+    };
+    let legacy = file(&runtime, ui(vec![aggregate("fail")]), json!({}));
+    let id = legacy["filed"][0]["task_id"].as_str().unwrap().to_string();
+    let bound = file(
+        &runtime,
+        ui(vec![
+            variant(1440, "fail", "one"),
+            variant(375, "fail", "one"),
+        ]),
+        json!({}),
+    );
+    assert_eq!(bound["filed_count"], 0, "{bound}");
+    assert!(state(&runtime, &id).contains("view-375"));
+    let repaired_wide = || {
+        ui(vec![
+            aggregate("pass"),
+            variant(1440, "pass", "one"),
+            variant(375, "fail", "one"),
+        ])
+    };
+    let third = file(&runtime, repaired_wide(), json!({}));
+    assert_eq!(comments(&third, "pass"), 0, "{third}");
+    let fourth = file(&runtime, repaired_wide(), json!({}));
+    assert_eq!(comments(&fourth, "pass"), 0, "{fourth}");
+    assert_eq!(fourth["commented"].as_array().unwrap().len(), 0, "{fourth}");
+    assert_eq!(fourth["filed_count"], 0, "{fourth}");
+}
+
+/// An interrupted attach whose screenshots a later run re-rendered under
+/// new names reports the lost evidence and attaches the current evidence.
+pub(super) fn fresh_evidence_rerun_after_interrupted_attach() {
+    let (root, runtime) = fixture("");
+    let (_reference_root, reference) = fixture("");
+    let reference_repo = _reference_root.path().join("repo");
+    std::fs::write(reference_repo.join("wide.png"), b"\x89PNG\r\n\x1a\nwide").unwrap();
+    let mut wide = variant(1440, "fail", "one");
+    wide["evidence"] = json!(["wide.png"]);
+    let reference_path = reference_repo.join("results.json");
+    std::fs::write(
+        &reference_path,
+        serde_json::to_vec(&ui(vec![wide, variant(375, "fail", "one")])).unwrap(),
+    )
+    .unwrap();
+    let filed = reference
+        .run_deterministic(
+            "file_rule_findings",
+            &json!({}),
+            &json!({"results_file": reference_path}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    let created = reference
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    let task = runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: created.title.clone(),
+            description: created.description.clone(),
+            tags: created.tags.clone(),
+            status: Some(TaskStatus::Proposed),
+            system_created: true,
+            rule_fingerprint: created.rule_fingerprint.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+    let repo = root.path().join("repo");
+    std::fs::write(repo.join("fresh.png"), b"\x89PNG\r\n\x1a\nfresh").unwrap();
+    let mut rerendered = variant(1440, "fail", "one");
+    rerendered["evidence"] = json!(["fresh.png"]);
+    let path = repo.join("results.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&ui(vec![rerendered, variant(375, "fail", "one")])).unwrap(),
+    )
+    .unwrap();
+    let run = || {
+        runtime
+            .run_deterministic(
+                "file_rule_findings",
+                &json!({}),
+                &json!({"results_file": path}),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    let rerun = run();
+    assert_eq!(rerun["filed_count"], 0, "{rerun}");
+    assert_eq!(
+        rerun["evidence_gaps"],
+        json!([{"task_id": task.id, "fingerprint": created.rule_fingerprint, "missing_evidence": ["wide.png"]}]),
+        "{rerun}"
+    );
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, "fresh.png")
+            .unwrap()
+            .is_some()
+    );
+    let registry = state(&runtime, &task.id);
+    assert!(
+        registry.contains("fresh.png") && !registry.contains("wide.png"),
+        "{registry}"
+    );
+    let again = run();
+    assert_eq!(again["evidence_gaps"], json!([]), "{again}");
+    assert_eq!(again["filed_count"], 0, "{again}");
+}
+
 /// The producer's owner context lists only open owners' groups, read-only.
 pub(super) fn owner_context_lists_open_owner_groups() {
     let (_root, runtime) = fixture("");
