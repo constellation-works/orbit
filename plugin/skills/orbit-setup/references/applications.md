@@ -213,9 +213,10 @@ scope name and index, whether the call matched exactly or by constraints
 `bindings` (identity and digest values only), `text_digests` (sha256 and
 length, never the text) and `predicate` (the task state admission read). Each
 callback row sets `entry_execution_id` to the entry row's execution id, and
-`orbit audit show` of that entry lists those callbacks. A constrained refusal
-adds `refused` with the scope name, the field and the constraint kind, and no
-values from the call. The attempted tool remains the call's own audit context;
+`orbit audit show` of that entry lists those callbacks, newest 100 at most. When
+an entry has more, the list is headed `incomplete` and the older callbacks are
+not listed. A constrained refusal adds `refused` with the scope name, the field
+and the constraint kind, and no values from the call. The attempted tool remains the call's own audit context;
 call arguments are not copied into the application object. Unauthenticated
 labels never populate this object. MCP client attribution stays in
 `self_reported_actor`; it is not an authenticated app identity. Credential
