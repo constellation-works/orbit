@@ -1,9 +1,12 @@
 //! Built-in operations reached only after application consent admitted the call.
 
+use crate::application::auto_tasks::crud::{self, AutoTaskAddParams, AutoTaskUpdateParams};
 use crate::{OrbitRuntime, application::task::TaskUpdateParams};
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use serde::Deserialize;
 use serde_json::Value;
 
 impl OrbitRuntime {
@@ -100,7 +103,95 @@ impl OrbitRuntime {
                     &request,
                 )))
             }
+            "orbit.auto_task.add" => {
+                let parsed: ApplicationAutoTaskAdd = parse_application_input(input)?;
+                // Admitted by the ceiling and already checked. Not stored.
+                let _workspace = parsed.workspace;
+                let warnings = self.validate_required_tools(&parsed.template.required_tools)?;
+                let definition = {
+                    let _actor = crud::record_write_actor(actor);
+                    self.auto_task_add(AutoTaskAddParams {
+                        name: parsed.name,
+                        description: parsed.description,
+                        schedule: parsed.schedule,
+                        template: parsed.template,
+                        dedupe: parsed.dedupe,
+                    })?
+                };
+                Ok(Some(auto_task_output(&definition, warnings)?))
+            }
+            "orbit.auto_task.update" => {
+                let parsed: ApplicationAutoTaskUpdate = parse_application_input(input)?;
+                // Admitted by the ceiling and already checked. Not stored.
+                let _workspace = parsed.workspace;
+                let definition = {
+                    let _actor = crud::record_write_actor(actor);
+                    self.auto_task_update(
+                        &parsed.name,
+                        AutoTaskUpdateParams {
+                            enabled: parsed.enabled,
+                            ..AutoTaskUpdateParams::default()
+                        },
+                    )?
+                };
+                let warnings = self.auto_task_update_tool_warnings(&definition, false)?;
+                let mut output = auto_task_output(&definition, warnings)?;
+                output["effective_enabled"] =
+                    serde_json::json!(self.auto_task_enabled(&definition));
+                Ok(Some(output))
+            }
             _ => Ok(None),
         }
     }
+}
+
+/// Admitted `orbit.auto_task.add` input. `workspace` is a ceiling field and
+/// is not part of the definition. Any other key is refused before a write.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationAutoTaskAdd {
+    name: String,
+    #[serde(default)]
+    description: String,
+    schedule: AutoTaskSchedule,
+    template: AutoTaskTemplate,
+    #[serde(default)]
+    dedupe: DedupePolicy,
+    #[serde(default)]
+    workspace: Option<Value>,
+}
+
+/// Admitted `orbit.auto_task.update` input. Only the approved name and
+/// enabled state are applied. `workspace` is ignored. `expected_enabled`
+/// and every other key are refused before a write.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationAutoTaskUpdate {
+    name: String,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    workspace: Option<Value>,
+}
+
+fn parse_application_input<T: serde::de::DeserializeOwned>(input: &Value) -> Result<T, OrbitError> {
+    serde_json::from_value(input.clone()).map_err(|_| {
+        OrbitError::InvalidInput(
+            "application auto-task input does not match the approved operation".into(),
+        )
+    })
+}
+
+fn auto_task_output(
+    definition: &AutoTaskDefinition,
+    warnings: Vec<String>,
+) -> Result<Value, OrbitError> {
+    let mut output = serde_json::to_value(definition)
+        .map_err(|error| OrbitError::Io(format!("encode auto-task: {error}")))?;
+    if !warnings.is_empty()
+        && let Some(object) = output.as_object_mut()
+    {
+        object.insert("warnings".to_string(), serde_json::json!(warnings));
+    }
+    Ok(output)
 }

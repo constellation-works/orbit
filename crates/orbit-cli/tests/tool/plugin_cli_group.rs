@@ -2305,3 +2305,7 @@ mod application_admission;
 #[cfg(unix)]
 #[path = "application_callbacks.rs"]
 mod application_callbacks;
+
+#[cfg(unix)]
+#[path = "application_auto_tasks.rs"]
+mod application_auto_tasks;

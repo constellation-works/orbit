@@ -39,6 +39,15 @@ pub trait ApplicationPort: Send + Sync {
         id: &str,
         path: &str,
     ) -> Result<Option<String>, OrbitError>;
+    /// Stored bytes of a task artifact, the same bytes [`Self::task_artifact_sha256`]
+    /// hashes, read through the inline size bound. `None` when the task has no
+    /// artifact at `path`.
+    fn task_artifact_bytes(
+        &self,
+        kernel: &RuntimeKernel,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError>;
     fn get_task_history(
         &self,
         kernel: &RuntimeKernel,
@@ -170,6 +179,14 @@ impl RuntimeKernel {
         path: &str,
     ) -> Result<Option<String>, OrbitError> {
         self.application.task_artifact_sha256(self, id, path)
+    }
+
+    pub(crate) fn task_artifact_bytes(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        self.application.task_artifact_bytes(self, id, path)
     }
 
     pub(crate) fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
