@@ -1958,6 +1958,7 @@ version = "0.43.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "jsonschema",
  "orbit-common",
  "orbit-types",
  "serde",

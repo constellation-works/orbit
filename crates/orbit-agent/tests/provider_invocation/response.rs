@@ -4,8 +4,10 @@ mod envelope;
 mod projection;
 
 use orbit_agent::{
-    AgentResponseStatus, ParsedStdout, assign_recorded_tool_calls, normalize_cli_stdout,
-    project_cli_response, provider_long_prompt_requests,
+    Agent, AgentConfig, AgentRequest, AgentResponseStatus, ParsedStdout,
+    assign_recorded_tool_calls, normalize_cli_stdout, project_cli_response,
+    provider_long_prompt_requests, response_envelope_json_schema,
+    response_envelope_json_schema_arg,
 };
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
@@ -1174,6 +1176,138 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
             .all(|call| call.result_payload.is_none())
     );
     assert!(!format!("{:?}", trace.tool_calls).contains(patch));
+}
+
+/// The serialized provider schema itself enforces the status/error
+/// correlation, the Claude CLI argv carries that same schema, and the
+/// parser keeps enforcing the correlation for schema-less transports.
+#[test]
+fn provider_schema_enforces_status_error_correlation() {
+    let schema = response_envelope_json_schema();
+    let arg = response_envelope_json_schema_arg();
+    assert_eq!(
+        serde_json::from_str::<Value>(&arg).unwrap(),
+        schema,
+        "the CLI argument must be the serialized response schema"
+    );
+
+    // Claude structured-output subset: no top-level conditional and none of
+    // the constraint keywords that subset rejects with a 400 error.
+    assert!(
+        schema.get("anyOf").is_none(),
+        "anyOf must stay nested: {schema}"
+    );
+    assert!(
+        schema.get("oneOf").is_none(),
+        "oneOf must stay nested: {schema}"
+    );
+    fn assert_supported_keywords(value: &Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, nested) in map {
+                    assert!(
+                        !matches!(
+                            key.as_str(),
+                            "minLength" | "maxLength" | "minimum" | "maximum" | "multipleOf"
+                        ),
+                        "Claude structured outputs reject {key}: {value}"
+                    );
+                    assert_supported_keywords(nested);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(assert_supported_keywords),
+            _ => {}
+        }
+    }
+    assert_supported_keywords(&schema);
+
+    // The Claude invocation boundary receives this schema as --json-schema.
+    let cfg = AgentConfig::cli("claude").expect("claude provider config");
+    let (spec, _) = Agent::new(&cfg)
+        .expect("claude provider adapter")
+        .invoke(AgentRequest::activity(
+            "fixture",
+            br#"{"prompt":"fixture"}"#.to_vec(),
+        ))
+        .expect("claude invocation spec");
+    let cli_schema = spec
+        .args
+        .windows(2)
+        .find(|pair| pair[0] == "--json-schema")
+        .map(|pair| pair[1].clone())
+        .expect("claude invocation must carry --json-schema");
+    assert_eq!(cli_schema, arg);
+
+    let validator = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+    let valid = [
+        json!({"schemaVersion": 1, "status": "success", "result": {}}),
+        json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null}),
+        json!({"schemaVersion": 1, "status": "success", "result": {}, "durationMs": 12}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "FAILURE", "message": "work failed"}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "FAILURE", "message": "work failed", "details": null}}),
+        json!({"schemaVersion": 1, "status": "timeout", "result": {},
+               "error": {"code": "AGENT_TIMEOUT", "message": "agent timed out"}}),
+    ];
+    for instance in &valid {
+        assert!(
+            validator.is_valid(instance),
+            "schema must accept {instance}"
+        );
+    }
+    let invalid = [
+        json!({"schemaVersion": 1, "status": "success", "result": {},
+               "error": {"code": "FAILURE", "message": "work failed"}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {}, "error": null}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "", "message": "work failed"}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "  ", "message": "work failed"}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "FAILURE", "message": ""}}),
+        json!({"schemaVersion": 1, "status": "failed", "result": {},
+               "error": {"code": "FAILURE"}}),
+        json!({"schemaVersion": 1, "status": "timeout", "result": {}}),
+        json!({"schemaVersion": 1, "status": "timeout", "result": {}, "error": null}),
+        json!({"schemaVersion": 1, "status": "timeout", "result": {},
+               "error": {"code": "", "message": "agent timed out"}}),
+    ];
+    for instance in &invalid {
+        assert!(
+            !validator.is_valid(instance),
+            "schema must reject {instance}"
+        );
+    }
+
+    // Parser-side validation remains the second layer.
+    for (stdout, exit_code) in [
+        (
+            json!({"schemaVersion": 1, "status": "success", "result": {},
+                   "error": {"code": "FAILURE", "message": "work failed"}})
+            .to_string(),
+            Some(0),
+        ),
+        (
+            json!({"schemaVersion": 1, "status": "failed", "result": {}}).to_string(),
+            Some(1),
+        ),
+        (
+            json!({"schemaVersion": 1, "status": "timeout", "result": {}}).to_string(),
+            Some(1),
+        ),
+    ] {
+        let mut exec = execution(stdout.clone());
+        exec.exit_code = exit_code;
+        exec.success = exit_code == Some(0);
+        assert!(
+            ParsedStdout::parse(&stdout)
+                .parse_and_validate(&exec)
+                .is_err(),
+            "parser must reject schema-violating envelope: {stdout}"
+        );
+    }
 }
 
 fn execution(stdout: String) -> ExecutionResult {
