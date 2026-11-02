@@ -55,9 +55,10 @@ table is read from the host file and never from a probe.
 `orbit.task.review_reset`, `orbit.task.reconcile_review`, `orbit.task.repilot`,
 `orbit.task.requeue`, `orbit.visual.capture` and `orbit.visual.accept_dispute`.
 
-The set is a static list in code. A test fails when a tool whose input schema has a required
-task `id` and an optional `workspace` is neither on the list nor explicitly excluded with a
-reason. Workspace-scoped tools without an id target are never prefix-routed. `orbit.task.add`,
+Each builtin declares its route at its definition site, in `OperationSpec::id_route` or
+`Tool::declared_id_route` for hand-written tools. The registry's MCP definition build rejects
+unclassified or misdeclared tools, and a boundary test checks builtin classifications.
+Workspace-scoped tools without an id target are never prefix-routed. `orbit.task.add`,
 `list`, `eligible`, `lint`, `pull` and `locks*` keep their selector behavior.
 
 For an id-routed tool:

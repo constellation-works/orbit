@@ -52,14 +52,13 @@ records what this doc used to leave open:
    *default* route shape per effect (GET for `Read`, POST for `Write`),
    overridable per noun — might capture most of the value without pretending
    HTTP is generated. Untested.
-4. **Is ID-addressed routing a spec field?** *Answered by phase 3a
-   ([ORB-15937]): no, for now.* ID routing stays keyed by tool name in the MCP
-   rule tables (`ID_ROUTED_TASK_TOOLS`, `NOT_ID_ROUTED_TOOLS`) and
-   `ID_RESOLVED_WORKSPACE_TOOLS`, and the migrated task verbs' CLI derives its
-   owner binding and host preflight from them; see
-   [ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](./4_decisions.md#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec).
+4. **Is ID-addressed routing a spec field?** Yes. Builtin operations declare
+   routing in `OperationSpec::id_route`; hand-written tools declare it through
+   `Tool::declared_id_route`. The registry resolves these declarations and
+   rejects unclassified or misdeclared tools when building MCP definitions;
+   a boundary test checks builtin classifications. The separate
+   `ID_RESOLVED_WORKSPACE_TOOLS` list controls owner binding for selected calls.
    Run IDs are host-local and friction IDs workspace-local, so neither routes.
-   The question reopens when the last task-ID tool has a spec.
 5. **Does the split table survive bearing 2?** Bearing 2 of the north-star
    decision (knowledge/execution split) would move the knowledge nouns' handlers
    away from the current `OrbitRuntime`. If handlers end up in a crate that can
