@@ -523,8 +523,9 @@ true`, and prints `{ok: false, errors}` with exit 2. It does not emit a readout
 for that dataset. A model or precedent label on a request raised before
 `window_start` is outside the holdout and does not by itself refuse the score,
 even when it carries `provenance: recorded_human_decision`; `score` counts it as
-`outside_window`. `validate` without `--targets` has no window and checks every
-recorded label.
+`outside_window`. Only the actor check is waived there: a pre-window recorded label
+with `relabelled: true`, or without `decided_by`, `answered_at` or `channel`, is still
+refused. `validate` without `--targets` has no window and checks every recorded label.
 Synthetic provenance is mechanics only. A synthetic label with
 `human_ground_truth: true` is refused. `check-split` accepts an in-window case
 only when its provenance is an eligible `recorded_human_decision`.

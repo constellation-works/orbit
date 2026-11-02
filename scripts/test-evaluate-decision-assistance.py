@@ -917,4 +917,31 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(any("ar-correct-a" in e and "model actor" in e for e in errors), errors)
         self.assertFalse(any("ar-dev-model" in e for e in errors), errors)
 
+    def test_precedent_pre_window_recorded_label_still_refuses_relabel_and_missing_fields(self):
+        v4 = ("--format-version", "decision-assistance-eval/4")
+        ds = json.loads(self._run("seed", *v4).stdout)
+        ans = self._dump("p-ans.json", json.loads(self._run("seed", *v4, "--answers").stdout))
+        tgt = self._dump("p-tgt.json", json.loads(self._run("seed", *v4, "--targets").stdout))
+        case = next(c for c in ds["cases"] if c["case_id"] == "ar-dev-model")  # raised before the window
+        base = dict(case["label"])
+        base.update(provenance="recorded_human_decision", answered_by="model")
+        broken = {
+            "relabelled": ({"relabelled": True}, "relabelled"),
+            "decided_by": ({"decided_by": None}, "decided_by"),
+            "answered_at": ({"answered_at": None}, "answered_at"),
+            "channel": ({"channel": None}, "channel"),
+        }
+        for name, (change, needle) in broken.items():
+            with self.subTest(field=name):
+                case["label"] = {**base, **change}
+                path = str(self._dump("p-ds.json", ds))
+                for args in (("score", "--dataset", path, "--answers", str(ans), "--targets", str(tgt)),
+                             ("validate", "--dataset", path, "--answers", str(ans), "--targets", str(tgt))):
+                    result = self._run(*args)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    errors = json.loads(result.stdout)["errors"]
+                    self.assertTrue(any("ar-dev-model" in e and needle in e for e in errors), errors)
+                unwindowed = self._run("validate", "--dataset", path, "--answers", str(ans))
+                self.assertEqual(unwindowed.returncode, 2, unwindowed.stdout)
+
 if __name__ == "__main__": unittest.main()
