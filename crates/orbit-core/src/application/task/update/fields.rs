@@ -160,6 +160,9 @@ impl OrbitRuntime {
                      or an operator update sets it"
                 )));
             }
+            // [ORB-21238] `no-pilot` on an assessed or preparing task
+            // bypasses the pilot gate: an operator decision.
+            self.refuse_unauthorized_pilot_skip(task, &tags, writer)?;
             params.tags = Some(tags);
         }
         // [granted-tools §1] An unchanged grant is no change, so it needs no

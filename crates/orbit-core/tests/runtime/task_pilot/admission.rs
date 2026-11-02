@@ -1889,6 +1889,280 @@ crate::scenario_table!(
     resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold
 );
 
+/// The stale-hold detail the drain records for `task`.
+fn stale_detail(workspace: &Workspace, task: &Task) -> String {
+    let output = workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}));
+    output["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == task.id)
+        .and_then(|entry| entry["detail"].as_str())
+        .unwrap_or_else(|| panic!("no exclusion for {}: {output}", task.id))
+        .to_string()
+}
+
+fn set_tags(workspace: &Workspace, task: &Task, tags: &[&str]) {
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .unwrap();
+}
+
+/// A backlog task whose description an operator rewrote after its pilot.
+fn stale_backlog_task(workspace: &Workspace) -> Task {
+    let task = backlog_task(workspace);
+    assess(workspace, &task, None);
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                description: Some("Repair the README fixture, as settled by the operator.".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert_admission(workspace, &task, Some("pilot_assessment_stale"));
+    task
+}
+
+/// [ORB-21238] An operator's `no-pilot` skip admits a stale task through the
+/// drain, wave classification, readiness and ship admission; removing it
+/// restores the hold, and the hold names both remedies.
+fn no_pilot_admits_a_stale_assessment_until_the_tag_is_removed() {
+    let workspace = Workspace::new();
+    let task = stale_backlog_task(&workspace);
+    let detail = stale_detail(&workspace, &task);
+    assert!(
+        detail.contains(&format!("orbit task repilot {}", task.id)),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(&format!("orbit task update {} --tag no-pilot", task.id)),
+        "{detail}"
+    );
+    set_tags(&workspace, &task, &["no-pilot"]);
+    assert_admission(&workspace, &task, None);
+    set_tags(&workspace, &task, &[]);
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+    set_tags(&workspace, &task, &["no-pilot"]);
+    assert_admission(&workspace, &task, None);
+    assert_eq!(
+        orbit_engine::RuntimeHost::admit_task_for_workflow(
+            &workspace.runtime,
+            &task.id,
+            "worktree_setup"
+        )
+        .unwrap()
+        .status,
+        TaskStatus::InProgress
+    );
+}
+
+/// [ORB-21238] Only an operator adds `no-pilot` to an assessed task. The
+/// agent's write is refused whole, and the operator's records who skipped
+/// and the requirements it dispatches without assessment.
+fn only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited() {
+    let workspace = Workspace::new();
+    let task = stale_backlog_task(&workspace);
+    let refused = workspace
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "model": "codex", "tags": ["no-pilot"], "priority": "high"}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("only an operator can add `no-pilot`"),
+        "{refused}"
+    );
+    let stored = workspace.runtime.get_task(&task.id).unwrap();
+    assert!(stored.tags.is_empty(), "the refused write must not apply");
+    assert_eq!(stored.priority, task.priority);
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+
+    set_tags(&workspace, &task, &["no-pilot"]);
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    let skips = history
+        .iter()
+        .filter(|entry| entry.event == "pilot_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skips.len(), 1, "{history:?}");
+    assert_eq!(skips[0].by, "human:operator");
+    let note: serde_json::Value = serde_json::from_str(skips[0].note.as_deref().unwrap()).unwrap();
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let (operation_id, audit) = comments
+        .iter()
+        .rev()
+        .find_map(|comment| {
+            let receipt = comment.receipt()?;
+            Some((
+                receipt.operation_id.to_string(),
+                serde_json::from_str::<serde_json::Value>(receipt.body).ok()?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(note["pilot_operation_id"], operation_id, "{note}");
+    assert_eq!(
+        note["assessed_requirements"], audit["assessed_requirements"],
+        "{note}"
+    );
+    let digest = note["requirements_digest"].as_str().unwrap();
+    assert_eq!(digest.len(), 64, "{note}");
+    assert_ne!(
+        json!(digest),
+        audit["assessed_requirements"],
+        "the skip covers the edited requirements"
+    );
+
+    // Keeping the tag is no new skip, and a never-piloted task stays open to
+    // every writer, as filing with the tag is.
+    workspace
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "model": "codex", "tags": ["no-pilot", "docs"]}),
+        )
+        .unwrap();
+    let fresh = backlog_task(&workspace);
+    workspace
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": fresh.id, "model": "codex", "tags": ["no-pilot"]}),
+        )
+        .unwrap();
+    for id in [&task.id, &fresh.id] {
+        let skips = workspace
+            .runtime
+            .get_task_history(id)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == "pilot_skipped")
+            .count();
+        assert_eq!(skips, usize::from(*id == task.id));
+    }
+}
+
+/// [ORB-21238] `no-pilot` lifts only pilot state: dependencies, context
+/// locks and readiness gaps still keep the task waiting.
+fn no_pilot_keeps_every_other_admission_rule() {
+    let workspace = Workspace::new();
+    let task = stale_backlog_task(&workspace);
+    set_tags(&workspace, &task, &["no-pilot"]);
+    let readiness_reason = |task: &Task| {
+        let readiness = workspace
+            .runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let entry = readiness["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == task.id)
+            .cloned()
+            .unwrap_or_else(|| panic!("task missing from readiness: {readiness}"));
+        assert_eq!(entry["eligible"], false, "{entry}");
+        entry["reason"].as_str().unwrap_or_default().to_string()
+    };
+    let unready = |task: &Task| {
+        let output = workspace.action("list_backlog_tasks", json!({}));
+        assert!(
+            !output["task_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(task.id)),
+            "{output}"
+        );
+    };
+
+    let blocker = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Prerequisite".into(),
+            description: "Land first.".into(),
+            acceptance_criteria: vec!["The prerequisite is observable.".into()],
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:docs/other.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![blocker.id.to_string()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    unready(&task);
+    assert_eq!(readiness_reason(&task), "unmet_dependency");
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                dependencies: Some(Vec::new()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let admitted = workspace.action("list_backlog_tasks", json!({}));
+    assert!(
+        admitted["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "{admitted}"
+    );
+
+    workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Holds the README lock".into(),
+            description: "Running work on the same file.".into(),
+            acceptance_criteria: vec!["The holder is observable.".into()],
+            status: Some(TaskStatus::InProgress),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:README.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    unready(&task);
+    assert_eq!(readiness_reason(&task), "context_lock_conflict");
+
+    let unassessed = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Unassessed skip".into(),
+            description: "Filed without a size.".into(),
+            acceptance_criteria: vec!["The repair is observable.".into()],
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Unassessed,
+            tags: vec!["no-pilot".into()],
+            context_files: vec!["file:docs/unassessed.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    unready(&unassessed);
+    readiness_reason(&unassessed);
+}
+
 crate::scenario_table!(
     host_operational_holds_human_approved_work_until_a_current_operator_decision_scenarios,
     host_operational_holds_human_approved_work_until_a_current_operator_decision,
@@ -1911,4 +2185,11 @@ crate::scenario_table!(
     an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions_scenarios,
     an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions,
     an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
+);
+
+crate::scenario_table!(
+    no_pilot_skip_scenarios,
+    no_pilot_admits_a_stale_assessment_until_the_tag_is_removed,
+    only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited,
+    no_pilot_keeps_every_other_admission_rule
 );

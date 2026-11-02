@@ -63,6 +63,7 @@ mod post_deploy;
 mod prepare;
 mod promotion;
 mod recheck;
+mod skip;
 pub(crate) mod source;
 mod validation_tools;
 

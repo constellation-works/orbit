@@ -331,7 +331,7 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
     rows.push(buildRelationRow(key, label, visible, context));
   }
   const readiness = taskReadiness.readinessOf(task);
-  if (readiness || drain) rows.push(row("readiness", "Readiness", taskReadiness.buildReadinessBlock(readiness, drain, task.workspace_id)));
+  if (readiness || drain) rows.push(row("readiness", "Readiness", taskReadiness.buildReadinessBlock(readiness, drain, task.workspace_id, task, context)));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.

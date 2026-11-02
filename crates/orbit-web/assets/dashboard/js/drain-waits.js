@@ -256,6 +256,17 @@ export function setDrainReadiness(payload) {
   if (changed) for (const listener of listeners) listener();
 }
 
+// Replace one task's snapshot entry with a fresher read, as after an operator
+// write that changes its admission, so the row dot and the Readiness card show
+// the new state before the next poll.
+export function replaceDrainReadinessEntry(entry) {
+  if (typeof entry?.task_id !== "string" || !entry.task_id) return;
+  waits.set(entry.task_id, { entry, view: drainReadinessView(entry) });
+  readinessErrors.delete(entry.task_id);
+  signature = [...waits].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
+  for (const listener of listeners) listener();
+}
+
 export function setDrainReadinessFailure(taskId, error) {
   if (typeof taskId !== "string" || !taskId) return;
   const message = typeof error === "string" && error.trim() ? error : "readiness unavailable";

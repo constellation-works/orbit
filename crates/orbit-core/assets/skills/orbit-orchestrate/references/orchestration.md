@@ -424,6 +424,19 @@ holds the task, or on a replica. A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite. Existing
 `orbit run task-pilot <id>` remains an explicit assessment command.
 
+**Skipping a stale pilot.** When an operator has settled a task's edited
+requirements, admission's `pilot_assessment_stale` hold need not wait for a new
+assessment: adding `no-pilot` (the dashboard Readiness card's "Skip pilot", or
+`orbit task update <id> --tag <current tags>,no-pilot`, since `--tag` replaces
+the list) makes drain, `orbit run ship` and pull admission ignore pilot
+assessment state. Unverified review findings, readiness gaps, context locks,
+dependencies and delivery holds still apply; removing the tag restores the
+gate. On a task with a pilot receipt or a pending pilot this is operator
+authority: a managed agent's `orbit.task.update` adding the tag is refused, and
+the operator's write records `pilot_skipped` in history with the requirements
+digest it dispatched without assessment. Never add it from a managed run to get
+past your own gate.
+
 **Re-check and full modes.** An explicit re-pilot of a task whose latest
 assessment holds promotion runs as a *re-check*. The pilot receives the prior
 assessment, its holding findings (each with an id such as `blocked_by[0]` or

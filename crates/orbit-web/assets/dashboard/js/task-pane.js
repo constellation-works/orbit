@@ -43,7 +43,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   if (!drain) return;
   const signature = taskDrainSignature(drain);
   if (current.dataset.drainSignature !== signature) {
-    const replacement = taskReadiness.buildReadinessBlock(taskReadiness.readinessOf(readinessTask), drain, readinessTask.workspace_id);
+    const replacement = taskReadiness.buildReadinessBlock(taskReadiness.readinessOf(readinessTask), drain, readinessTask.workspace_id, readinessTask, context);
     replacement.dataset.drainSignature = signature;
     const parent = current.parentNode;
     if (!parent) return;
