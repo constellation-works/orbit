@@ -691,6 +691,140 @@ refusals included, is listed by `orbit run show` and `orbit script
 history <name>` with the script's digest, grant, argv, exit, duration
 and its capped, redacted log.
 
+### Output files
+
+A manifest can return files as well as JSON. It declares output caps under
+`spec.files.outputs`:
+
+```yaml
+spec:
+  files:
+    outputs:
+      # Both caps are optional. max_files: 1 to 64.
+      # max_file_bytes: 1 to 67108864 (64 MiB).
+      max_files: 4
+      max_file_bytes: 262144
+```
+
+Setting either cap declares outputs. A cap you leave out takes the grant's
+value, and a manifest that sets neither cap declares no outputs. A value
+outside those ranges fails the manifest when it loads, with the manifest file
+named.
+
+The script writes its files directly inside `out/`, which is
+`/orbit-script/out` in the sandbox or `$ORBIT_SCRIPT_OUT`. Subdirectories are
+not output.
+
+The grant sets the most a manifest may ask for. A grant without the output
+flags allows the defaults: 8 files, each at most 1048576 bytes (1 MiB). To
+allow more, grant the script with the flags it needs:
+
+```bash
+orbit script grant package --output-max-files 4 --output-max-file-bytes 262144
+```
+
+`--output-max-files` accepts up to 64, and `--output-max-file-bytes` accepts up
+to 67108864. A set's total is bounded by files times bytes and never exceeds
+256 MiB. Each grant states its limits again, so a re-grant without the flags
+returns to the defaults. A manifest that asks for more than its grant allows is
+refused before anything runs, with `grant_insufficient`, and the message names
+the flag to add. `orbit script show <name>` reports the requested and granted
+output limits.
+
+Output files apply where script steps run, which is Linux in this build. Orbit
+keeps them only when the attempt exits 0 and its stdout passes the JSON rules
+above. A nonzero exit, a signal, a timeout, a scratch breach or a manifest with
+no output caps keeps nothing. For a manifest without caps, `out/` is discarded
+with the scratch directory, and the step's output is its JSON alone.
+
+When an accepted attempt's manifest declares outputs, Orbit checks the whole
+`out/` directory. If any check fails, the step fails and keeps none of its
+files:
+
+- Every entry in `out/` must be a regular file directly inside it. A symlink, a
+  directory or another special entry fails with `script_outputs_invalid`.
+- A file name is 1 to 128 bytes of ASCII letters, digits, `.`, `_` and `-`, and
+  does not start with `.`. Any other name fails with `script_outputs_invalid`.
+- The set may hold at most `max_files` files, each at most `max_file_bytes`
+  bytes, and a total no larger than files times bytes, capped at 256 MiB.
+  Exceeding any of these fails with `script_outputs_over_cap`.
+- An empty `out/` keeps an empty set.
+
+Each kept file is copied byte for byte and recorded with its size, SHA-256 and
+a media type from its extension. `.png` gives `image/png` and `.json` gives
+`application/json`; an unknown extension gives `application/octet-stream`. The
+set is published whole, so a later step sees all of its files or none. A later
+step reads the set as `steps.<id>.files`, a list of entries with `name`,
+`bytes`, `media_type` and `sha256`. If the set cannot be stored, the step fails
+with `script_outputs_unavailable`.
+
+#### Attach output files to a task
+
+The shipped `attach_script_files` activity attaches a script step's kept files
+to a task as task artifacts, so the task holds the exact bytes the script
+produced. Run it from a later step of the same job:
+
+```yaml
+schemaVersion: 2
+kind: Job
+metadata:
+  name: publish_report
+spec:
+  state: enabled
+  max_active_runs: 1
+  kind: workflow
+  steps:
+    - id: render
+      target: script:render_report
+    - id: attach
+      target: activity:attach_script_files
+      default_input:
+        task_id: "{{ input.task_id }}"
+        step: render
+        files: ["report.pdf", "summary.json"]
+        path_prefix: "report-outputs/"
+```
+
+The `render_report` manifest must declare `files.outputs`. Without it, the
+attach step refuses because the producer kept no files. The activity's inputs
+are:
+
+- `task_id`, required: the task that receives the artifacts.
+- `step`, required: the id of the script step that kept the files. It must be a
+  direct, earlier step of the same job, and it must have succeeded. Loop,
+  fan-out and parallel steps cannot be producers.
+- `files`, optional: the file names to attach. Each name must be in the set.
+  Without this list, every file of the set attaches.
+- `path_prefix`, optional: text placed before each file name to form its
+  artifact path. It is used as written, so include the trailing `/`.
+
+The activity finds the set in its own run's checkpoint for `step`, never in its
+input. A set counts only for the run that produced it or a run that resumes it.
+Before attaching, Orbit checks that the stored producer record matches the set
+and that every file still has its recorded size and SHA-256. Each artifact is
+written from those verified bytes.
+
+Artifacts follow the task artifact rules:
+
+- Each file must be at most 1048576 bytes (1 MiB), the task artifact limit.
+- The artifact path, including any `path_prefix`, must be a relative path with
+  no `..` segments.
+- Orbit's own writers keep some paths: `mocks/`, `visual/`,
+  `mutation-proposals/`, `mutation-receipts/`, `explore-brief.json`, and any
+  name that starts with `review-` in any case. The one exception is
+  `review-report.json`, which must parse as a review report.
+
+The activity is atomic. Orbit reads and checks every selected file before it
+writes anything, then writes all the artifacts in one task update. If any file
+is refused, the step fails with the reason and attaches nothing. A re-run
+writes its artifacts again at the same paths, replacing any with those names.
+
+The step's output carries `task_id`, `step`, `set_id` and `attached`, which has
+one entry per artifact with `name`, `path`, `bytes`, `media_type` and `sha256`.
+For how artifacts are stored and read, see
+[Task artifacts](../../concepts/tasks/#task-artifacts). For the `orbit script`
+commands, see the [CLI reference](../cli/).
+
 ## Auto-task steps
 
 A step may name an auto-task definition: `target: auto-task:<name>`. Such
