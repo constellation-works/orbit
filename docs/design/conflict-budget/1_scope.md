@@ -1,11 +1,11 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-10-31
+last_updated: 2026-11-02
 last_validated: 2026-10-31
 status: Draft
 stage: designing
-next: "Settle the open questions (sum vs max, where weights live), then file phase 1"
+next: "Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1"
 feature: conflict-budget
 doc_role: scope
 type: design
@@ -181,21 +181,66 @@ be explained later.
   the minutes tasks waited on it.
 - `orbit run show` reports the conflict records of a run's synchronization.
 
-### 5. Symbol-level locking, as an experiment
+### 5. Optimistic, symbol-level admission
 
-Finer locks — distinct functions in one file never conflict — are a separate bet, and the replay
-comes first. For landed task pairs that were serialized on a file, a plugin (not core: AST parsing
-is language-specific, and [orbit-graph](https://github.com/constellation-works/orbit-graph) is
-the natural home) computes whether their actual diffs touched intersecting symbols or call
-edges, and whether the pair would have conflicted or broken the build had it run together. A
-`symbol:` granularity is worth proposing only if that replay shows a lot of parallelism that broke
-nothing. Footprints are declared before the work, and a finer declaration is wrong more often.
+Daniel (2026-11-02) asked for optimistic locking: "since now we are locking at file and symbol
+level, as long as no two symbols are overlapping or that symbol hasn't been updated in any of the
+tasks in "review state"". He asked for it to be recorded here and parked: "we don't have to
+implement this now. something to pick up on when we have free time".
+
+**Today's lock is pessimistic, and file-grained even for symbols.** Admission defers any candidate
+whose footprint overlaps a held claim, reservation or wave member. A `symbol:` selector locks its
+whole file: `symbol:a.rs#one:function` overlaps `symbol:a.rs#two:function`
+([`selector.rs`](../../../crates/orbit-common/src/fs/selector.rs), `overlaps`). Two tasks editing
+different functions of one file therefore run one after the other.
+
+**Landing is already optimistic.** Landing rebases onto the moved base. `pr_conflict_recovery`
+repairs text conflicts, and candidate validation re-runs on the rebased tree. What is missing is
+admitting work on that assumption. The proposal treats three kinds of other task differently:
+
+| Other task's state | What its footprint is | Rule |
+|---|---|---|
+| `review` (a candidate diff exists) | **Actual**: the symbols its candidate changed | Pessimistic. Defer a candidate whose declared symbols intersect them. |
+| `in-progress` / claimed | **Declared**: its `context_files`, a prediction | Optimistic. Admit when the declared `symbol:` selectors are disjoint, and verify at landing. |
+| Landed since the candidate's base | **Actual** | Verified at landing (below). |
+
+- **Symbol-granular overlap.** A file stops being a single lock only when every selector on both
+  sides of it is a `symbol:` that resolves to a source range. Any `file:`/`dir:` selector, or an
+  unresolvable symbol, falls back to today's file lock. Symbol resolution is language-specific,
+  so it lives in a plugin (orbit-graph or the [symbol-risk-index](../symbol-risk-index/1_scope.md)
+  parser), never in core.
+- **Verify actual diffs at landing, not declarations.** Pilot-declared footprints are predictions,
+  and implementing agents routinely edit beyond them (imports, `mod.rs`, shared helpers, tests).
+  At landing, compute the symbols the candidate actually changed and intersect them with the
+  symbols landed since its base. On an intersection, take the normal rebase and recovery path,
+  and record the outcome as a conflict record (Shape §1) tagged `optimistic`.
+- **Price it with this budget.** An optimistic admission is an overlap at file level with zero
+  symbol overlap, so it enters `overlap_risk` with its own risk term: the measured rate at which
+  symbol-disjoint pairs still conflicted or broke the build, times the repair cost. A budget of
+  `0` keeps it off.
+
+**Risks this must answer:**
+
+- **Clean merges can still break the build.** If task A changes a signature and task B adds a
+  caller in a different symbol, git merges cleanly and the build breaks. Post-rebase validation
+  catches it, but the cost is a re-run, not a rebase. Call-edge overlap from the symbol index
+  narrows this risk without removing it.
+- **Wasted runs cost more than rebases.** A failed optimistic bet can discard a top-tier crew's
+  whole run. The repair cost should be weighted by the crew and complexity that would be redone,
+  not by recovery agent-minutes alone.
+- **Declarations get finer and wronger.** The finer the declared lock, the more often it is wrong,
+  so the landing check must stay authoritative.
+
+**Gate.** First run the replay: for landed task pairs that were serialized on a file, measure
+whether their actual diffs touched intersecting symbols or call edges, and whether running them
+together would have conflicted or broken the build. Build this only if the replay shows a lot of
+parallelism that broke nothing.
 
 ## Non-goals
 
 - **Changing landing or conflict recovery.** The budget only decides what runs at the same time;
   recovery keeps its crews, rounds and generated-path regeneration.
-- **Language-aware locking in core.** Symbol and call-graph analysis stays in a plugin (Shape §5),
+- **Language-aware locking in core.** Symbol resolution and call-graph analysis stay in a plugin (Shape §5),
   per Orbit's generic-core rule.
 - **An agent in the admission path.** Scores come from recorded facts and an optional durable
   weights artifact; admission never waits on, or trusts, an agent's answer.
@@ -234,7 +279,11 @@ nothing. Footprints are declared before the work, and a finer declaration is wro
    number, default `0`, and `exclusive_context_paths`.
 3. **Schedule.** Budget windows and the `--conflict-budget` drain override.
 4. **Complexity weights (optional).** The low-pool auto-task and its weights artifact.
-5. **Symbol replay (research).** Shape §5, in a plugin; a proposal only if the numbers earn it.
+5. **Symbol replay (research).** The Shape §5 gate, in a plugin; continue only if the numbers earn it.
+6. **Optimistic symbol-level admission.** Shape §5: symbol-granular overlap; actual-diff
+   footprints for tasks in `review`; disjoint declared symbols admitted beside `in-progress`
+   work and verified at landing; outcomes recorded as `optimistic` conflict records and priced by
+   the budget.
 
 ## Open questions
 
@@ -249,6 +298,10 @@ nothing. Footprints are declared before the work, and a finer declaration is wro
    setting here uses `unlocked_context_paths` globs (`**/mod.rs` already covers every `mod.rs`);
    one pattern syntax across settings is proposed, and this budget would layer on the landed
    `workflow.lock_modes` rather than replace it.
+
+5. **Optimistic admission and the budget.** Should an optimistic (symbol-disjoint) admission
+   always spend budget, or be a separate switch that is on by day and off at night? Spending
+   budget keeps one dial, and a separate switch makes failures easier to attribute.
 
 ## Acceptance (feature level)
 
