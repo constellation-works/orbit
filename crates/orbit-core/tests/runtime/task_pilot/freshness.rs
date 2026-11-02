@@ -327,6 +327,13 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
         let workspace = Workspace::new();
         workspace.install_pilot_job();
         let task = workspace.task("explicit repilot request");
+        workspace
+            .runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task.id, "tags": ["no-pilot"], "model": "codex"}),
+            )
+            .unwrap();
         assess(&workspace, &task, true);
         let tool = if update {
             "orbit.task.update"

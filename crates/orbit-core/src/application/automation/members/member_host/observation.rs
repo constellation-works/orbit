@@ -169,7 +169,16 @@ impl Host<'_> {
                     }
                     if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
                     {
-                        withheld.insert(task.id, "task_ineligible".into());
+                        let reason = self
+                            .eligibility()
+                            .exclude_tags
+                            .iter()
+                            .find(|tag| task.tags.contains(tag))
+                            .map_or_else(
+                                || "task_ineligible".to_string(),
+                                |tag| format!("excluded_tag: {tag}"),
+                            );
+                        withheld.insert(task.id, reason);
                         continue;
                     }
                     if let Some(run_ids) = active_preparations.get(&task.id) {

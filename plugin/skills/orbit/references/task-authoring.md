@@ -499,6 +499,14 @@ where it names the missing file lock;
 `unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
 
+### When to skip the pilot
+
+Add `no-pilot` when filing a task only if its `context_files` footprint is exact,
+its complexity is assessed, its acceptance criteria are testable, and no dedupe
+question remains open. Leave the tag off when any of these is a guess. The tag
+opts out of the automatic pilot, not readiness checks or diff delivery; an
+operator can still request an explicit pilot.
+
 Put read-only designs, conventions and examples in prose links. A design document
 belongs in the footprint only if this task will change it. Cross-workspace edits
 need separate tasks in their owning workspaces, with explicit dependencies when

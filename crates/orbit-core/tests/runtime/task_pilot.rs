@@ -681,6 +681,37 @@ fn preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends() {
     assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
 }
 
+fn no_pilot_excludes_automatic_preparation_and_explains_the_tag() {
+    let workspace = Workspace::new();
+    let template = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/routines/task_pilot.yaml"),
+    )
+    .unwrap()
+    .replace("__ORBIT_ROUTINE_NAME__", "fixture-shipped-pilot")
+    .replace("__ORBIT_OWNER_MACHINE__", "fixture-machine")
+    .replace("__ORBIT_BASE_BRANCH__", "main")
+    .replace("enabled: false", "enabled: true");
+    let shipped: RoutineDefinition = serde_yaml::from_str(&template).unwrap();
+    let routines = [pilot_routine(), shipped];
+    for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
+        let task = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: format!("no pilot {status:?}"),
+                status: Some(status),
+                tags: vec!["no-pilot".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        for routine in &routines {
+            let observed = evaluate_routine(&workspace.runtime, routine, true, Utc::now()).unwrap();
+            let members = observed.state.unwrap().members.unwrap();
+            assert!(!members.pending.contains_key(&task.id));
+            assert_eq!(members.withheld[&task.id], "excluded_tag: no-pilot");
+        }
+    }
+}
+
 /// A retained pending member can be off the next page when a targeted pilot
 /// acquires its hold. Admission must suppress it even without re-observation.
 fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
@@ -1392,6 +1423,7 @@ crate::scenario_table!(
     all_held_pilot_run_succeeds_and_retains_every_holder_skip,
     mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks,
     preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends,
+    no_pilot_excludes_automatic_preparation_and_explains_the_tag,
     preparation_routine_admission_withholds_a_held_member_off_the_scan_page,
     routine_attempt_pins_are_released_once_the_attempt_settles_or_fails,
     routine_attempt_pin_stays_for_a_legacy_assessment,

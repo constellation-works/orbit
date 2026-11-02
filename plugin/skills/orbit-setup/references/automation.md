@@ -550,7 +550,7 @@ trigger:
     deadline_minutes: 90
     eligibility:
       statuses: [proposed, backlog]  # non-empty subset of these two
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []               # every listed tag must be present
       task_types: []                 # empty admits every type
 ```

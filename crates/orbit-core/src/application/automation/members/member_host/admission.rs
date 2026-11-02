@@ -46,7 +46,16 @@ impl Host<'_> {
                     Err(error) => return Err(error.into()),
                 };
                 if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
-                    return Ok(MemberAdmission::Retire("task_ineligible".into()));
+                    let reason = self
+                        .eligibility()
+                        .exclude_tags
+                        .iter()
+                        .find(|tag| task.tags.contains(tag))
+                        .map_or_else(
+                            || "task_ineligible".to_string(),
+                            |tag| format!("excluded_tag: {tag}"),
+                        );
+                    return Ok(MemberAdmission::Retire(reason));
                 }
                 if let Some(run_ids) = active_preparations.get(id) {
                     return Ok(MemberAdmission::Withhold(already_preparing(run_ids)));
