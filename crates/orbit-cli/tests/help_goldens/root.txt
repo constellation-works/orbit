@@ -17,6 +17,7 @@ Knowledge:
   visual       Capture the working tree beside a task's mocks for comparison
   decision     List, show and answer human decision requests on held work
   friction     Report, list, and triage friction records
+  evolution    Record and inspect capability gaps and their measured costs
   search       Search tasks and frictions
 
 Operate:

@@ -10,6 +10,7 @@ pub mod config;
 pub mod crew;
 pub mod decision;
 pub mod doctor;
+pub mod evolution;
 pub mod experiment;
 pub mod friction;
 pub mod gc;
@@ -104,6 +105,7 @@ Knowledge:
   visual       Capture the working tree beside a task's mocks for comparison
   decision     List, show and answer human decision requests on held work
   friction     Report, list, and triage friction records
+  evolution    Record and inspect capability gaps and their measured costs
   search       Search tasks and frictions
 
 Operate:
@@ -178,6 +180,7 @@ pub enum Commands {
     Visual(visual::VisualCommand),
     Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
+    Evolution(evolution::EvolutionCommand),
     Search(search::SearchCommand),
 
     // ── Operate ──

@@ -79,6 +79,45 @@ A new record kind, stored by the workspace owner beside friction but not as fric
   (`--workspace`, `--state`, `--since`, sorted by summed cost), `orbit.evolution.show`. CLI
   `orbit evolution add|list|show`. No delete; an operator may set `declined`.
 
+### Implemented ledger boundary
+
+The owner stores evolution records and all cost occurrences in separate SQLite tables. A
+checkpoint's comment remains its recovery source. Both `orbit.resident.checkpoint` and a
+`resident.checkpoint` written through `orbit.task.update` ingest every cost after the comment
+commits. The key `(mandate, cycle, cost index)` makes ingestion replay idempotent, even for
+unsigned events. `OrbitRuntime::reconcile_evolution_checkpoint` repairs an interrupted ingestion explicitly.
+Refused checkpoint submissions leave both the assignment and the ledger unchanged.
+Signature keys are validated as normalized kebab-case; invalid keys are refused rather than
+silently grouped under a different key. Concurrent writers corroborate a signature under one
+immediate transaction and a unique non-terminal `(workspace, signature)` index.
+
+The interactive tool takes `{event, mandate?, cycle?}`; `event` is the cost shape above. The CLI
+uses the same tool:
+
+```sh
+orbit evolution add --event '{"kind":"manual_step","what":"Checked CI by hand","minutes":4,"retries":0,"slot_minutes":0,"wished":"Automatic CI recheck","signature":"manual-ci-recheck"}'
+orbit evolution list --state open --since 2026-11-01T00:00:00Z --json
+orbit evolution show <evolution-id> --json
+orbit evolution decline <evolution-id> --days 30
+```
+
+Add returns `{event, record}` (`record: null` for unsigned costs). List returns `{count, records}`,
+sorted by minutes plus slot minutes; each record includes `occurrence_count`, `distinct_cycles`,
+`distinct_mandates`, `cycle_count`, `mandate_count`, `minutes`, `retries` and `slot_minutes`.
+List's `since` bounds aggregates without dropping the retained occurrence history. Omitting it
+returns all-time aggregates. The global `--workspace` selector binds the owner and workspace as
+for other commands. These three MCP tools belong to the opt-in `resident` toolset.
+
+Decline is operator-only and is not advertised over MCP. It captures the current window cost
+(minutes plus slot minutes) as `cost_at_decline`, with the default 14-day window and 30-day
+suppression. Zero cost must gain positive cost to reopen early. The runtime's
+`propose_evolution_record` operation checks suppression inside the write transaction before
+linking a non-terminal proposal task. Reads derive resolution from a done proposal and decline
+from a rejected proposal's actual transition time; subsequent cost writes materialize that state.
+A resolved signature's next event starts a new record. No `resolves` relation handles evolution.
+The scheduled ranking/proposal pass, configuration of its thresholds and manager digest remain
+slice 8; this ledger does not file tasks by itself.
+
 ## Evolution pass
 
 Seeded, default-disabled routine `evolution-pass-<workspace>`, weekly (Mondays 05:17 host-local), job

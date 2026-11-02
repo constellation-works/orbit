@@ -1,0 +1,21 @@
+Suppress proposals for a signature (operator only)
+
+Usage: orbit evolution decline [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Evolution record identifier
+
+Options:
+      --days <DAYS>
+          Suppression days (default 30)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

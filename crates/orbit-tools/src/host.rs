@@ -151,6 +151,8 @@ pub enum OrbitBuiltinAction {
     Notice(NoticeVerb),
     /// Resident mandates: authority grants and mandate reads.
     Resident(ResidentVerb),
+    /// Capability-gap costs and evolution records.
+    Evolution(orbit_common::governance::evolution::EvolutionVerb),
     /// Visual capture verbs: the implementer's mock self-check.
     Visual(VisualVerb),
 }
@@ -332,5 +334,11 @@ pub trait OrbitToolHost: Send + Sync {
 impl From<SearchVerb> for OrbitBuiltinAction {
     fn from(verb: SearchVerb) -> Self {
         Self::Search(verb)
+    }
+}
+
+impl From<orbit_common::governance::evolution::EvolutionVerb> for OrbitBuiltinAction {
+    fn from(verb: orbit_common::governance::evolution::EvolutionVerb) -> Self {
+        Self::Evolution(verb)
     }
 }

@@ -403,30 +403,38 @@ impl ResidentCheckpoint {
             task_id(&request.task, "requests.task")?;
         }
         for cost in &self.costs {
-            member(
-                &cost.kind,
-                &["workaround", "manual_step", "retry", "wait"],
-                "costs.kind",
-            )?;
-            one_line(&cost.what, "costs.what")?;
-            if ["workaround", "manual_step"].contains(&cost.kind.as_str()) {
-                one_line(cost.wished.as_deref().unwrap_or_default(), "costs.wished")?;
-            } else if let Some(wished) = &cost.wished {
-                one_line(wished, "costs.wished")?;
-            }
-            if let Some(signature) = &cost.signature
-                && (!(3..=64).contains(&signature.len())
-                    || signature.split('-').any(|word| {
-                        word.is_empty()
-                            || !word
-                                .bytes()
-                                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-                    }))
-            {
-                return Err(invalid(
-                    "`costs.signature` must be a kebab-case key of 3-64 characters",
-                ));
-            }
+            cost.validate_cost_event()?;
+        }
+        Ok(())
+    }
+}
+
+impl ResidentCostEvent {
+    /// Validate the cost shape shared by checkpoints and interactive sessions.
+    pub fn validate_cost_event(&self) -> Result<(), ResidentCommentError> {
+        member(
+            &self.kind,
+            &["workaround", "manual_step", "retry", "wait"],
+            "costs.kind",
+        )?;
+        one_line(&self.what, "costs.what")?;
+        if ["workaround", "manual_step"].contains(&self.kind.as_str()) {
+            one_line(self.wished.as_deref().unwrap_or_default(), "costs.wished")?;
+        } else if let Some(wished) = &self.wished {
+            one_line(wished, "costs.wished")?;
+        }
+        if let Some(signature) = &self.signature
+            && (!(3..=64).contains(&signature.len())
+                || signature.split('-').any(|word| {
+                    word.is_empty()
+                        || !word
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                }))
+        {
+            return Err(invalid(
+                "`costs.signature` must be a kebab-case key of 3-64 characters",
+            ));
         }
         Ok(())
     }

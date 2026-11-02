@@ -532,6 +532,7 @@ fn legacy_db_adopts_versioned_ledger() {
                 "landed_diff_reviewable_lines".to_string()
             ),
             ("migration.v0085".to_string(), "notices".to_string()),
+            ("migration.v0086".to_string(), "evolution".to_string()),
         ]
     );
 }

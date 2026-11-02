@@ -206,6 +206,9 @@ fn execute_admitted(
             input,
             model.as_deref(),
         ),
+        OrbitBuiltinAction::Evolution(verb) => {
+            super::evolution_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
             runtime,
             session_context,

@@ -765,6 +765,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         ],
         rationale: "resident memory is a governed task write; core validates the record and fences it against the mandate's live cycle",
     },
+    GovernedOperation {
+        id: "orbit.evolution.decline",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "suppressing evolution proposals is an operator decision",
+    },
     // Resident authority: an identification floor. Core applies a widening
     // only for an operator caller; any other caller's widening becomes a
     // resident_authority decision request a human must answer.

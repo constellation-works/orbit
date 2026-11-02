@@ -29,6 +29,7 @@ pub mod contracts;
 pub mod crew_ladder;
 pub mod delivery_quality;
 pub mod distributed;
+pub mod evolution;
 pub(crate) mod executor;
 pub(crate) mod executor_host_os;
 pub mod experiment;

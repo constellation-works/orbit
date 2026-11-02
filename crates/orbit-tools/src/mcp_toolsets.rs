@@ -55,7 +55,9 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         "orbit.agent.invoke" => T::AgentInvoke,
         _ if name.starts_with("orbit.lease.") => T::Leases,
         _ if name.starts_with("orbit.notice.") => T::Notice,
-        _ if name.starts_with("orbit.resident.") => T::Resident,
+        _ if name.starts_with("orbit.resident.") || name.starts_with("orbit.evolution.") => {
+            T::Resident
+        }
         _ if name.starts_with("orbit.experiment.") => T::Experiments,
         _ if name.starts_with("orbit.agents.")
             || name.starts_with("orbit.crew.")

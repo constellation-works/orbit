@@ -49,6 +49,7 @@ pub fn register(registry: &mut ToolRegistry) {
     // Resident mandates: the governed authority grant and the mandate reads,
     // in the opt-in `resident` toolset the manager and resident roles serve.
     operation::register_noun(registry, &RESIDENT);
+    operation::register_noun(registry, &orbit_common::governance::evolution::EVOLUTION);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives. Its
     // toolset is opt-in: a managed run offered explorer delegation enables
