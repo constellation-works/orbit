@@ -57,7 +57,14 @@ impl Execute for AttentionCommand {
                 text(&item["severity"]),
                 text(&item["kind"]),
                 text(&item["workspace"]["name"]),
-                text(&item["refs"]["task_id"]),
+                {
+                    let task = text(&item["refs"]["task_id"]);
+                    if task.is_empty() {
+                        text(&item["refs"]["notice_id"])
+                    } else {
+                        task
+                    }
+                },
                 item["age_seconds"]
                     .as_u64()
                     .map(|age| format!("{}h", age / 3600))

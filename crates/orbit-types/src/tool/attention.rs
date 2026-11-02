@@ -28,6 +28,8 @@ pub enum AttentionKind {
     FrictionUntriaged,
     /// The `host_unhealthy` source condition.
     HostUnhealthy,
+    /// The `notice_open` source condition: an effective-open fleet notice.
+    NoticeOpen,
 }
 impl AttentionKind {
     /// Stable wire names, including kinds implemented by later source slices.
@@ -43,6 +45,16 @@ impl AttentionKind {
         "ci_red",
         "friction_untriaged",
         "host_unhealthy",
+        "notice_open",
+    ];
+    /// Kinds derived by this host today; later slices' kinds degrade.
+    pub const IMPLEMENTED: &'static [&'static str] = &[
+        "pilot_warning",
+        "pilot_hold",
+        "blocked",
+        "decision_open",
+        "review_waiting",
+        "notice_open",
     ];
     /// Stable wire name.
     pub fn as_str(self) -> &'static str {
@@ -58,6 +70,7 @@ impl AttentionKind {
             Self::CiRed => "ci_red",
             Self::FrictionUntriaged => "friction_untriaged",
             Self::HostUnhealthy => "host_unhealthy",
+            Self::NoticeOpen => "notice_open",
         }
     }
 }

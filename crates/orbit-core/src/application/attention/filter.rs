@@ -48,7 +48,7 @@ impl AttentionFilter {
         let kinds = AttentionKind::NAMES
             .iter()
             .filter(|kind| {
-                ((requested.is_empty() && AttentionKind::NAMES[..5].contains(kind))
+                ((requested.is_empty() && AttentionKind::IMPLEMENTED.contains(kind))
                     || requested.iter().any(|v| v == **kind))
                     && !excluded.iter().any(|v| v == **kind)
             })

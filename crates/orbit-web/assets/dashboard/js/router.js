@@ -46,7 +46,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 
 // Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "notices", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -81,6 +81,7 @@ const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
   leases: "Leases",
+  notices: "Notices",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",

@@ -66,6 +66,11 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/tasks/{id}",
             get(tasks::get_task).patch(tasks::update_task_action),
         )
+        .route(
+            "/notices",
+            get(notices::list_notices).post(notices::post_notice),
+        )
+        .route("/notices/{id}/close", post(notices::close_notice))
         .route("/crews", get(crews::list_crews))
         // Config inspection and editing [ORB-12724]. Workspace-scoped like the
         // rest of the API: `?workspace=` selects which `.orbit/config.toml`

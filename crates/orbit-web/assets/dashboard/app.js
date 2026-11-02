@@ -35,6 +35,7 @@ import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } fro
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
+import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -1559,6 +1560,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // The chips also read every 5 s on their own (initHostResources), so the
   // Tasks page's tick leaves them to that.
   if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources().catch(error => console.error(error));
+  void fetchAndRenderNoticeBanner().catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   if (slowReads) void peekDoctor().catch(error => console.error(error));
@@ -1679,6 +1681,11 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
     // so a refused notice read (a replica checkout) leaves the leases shown.
     add("Leases", fetchAndRenderLeases());
     add("Leases › Landings", fetchAndRenderLeaseLandings());
+    return jobs;
+  }
+
+  if (activeTab === "notices") {
+    add("Notices", fetchAndRenderNotices());
     return jobs;
   }
 

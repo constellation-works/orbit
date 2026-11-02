@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_config::AttentionSettings;
 use orbit_types::{
+    record::{EffectiveStatus, Notice, NoticeKind},
     task::{
         DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
         TaskStatus,
@@ -452,6 +453,120 @@ fn derive_subject_kind(
     )))
 }
 
+fn notice_attention_severity(notice: &Notice, now: DateTime<Utc>) -> AttentionSeverity {
+    use AttentionSeverity as S;
+    let base = match notice.kind {
+        NoticeKind::Incident => S::High,
+        NoticeKind::Maintenance => S::Medium,
+        NoticeKind::Info => S::Low,
+    };
+    let linked_terminal_not_done = notice
+        .linked_task
+        .as_ref()
+        .is_some_and(|linked| matches!(linked.status.as_deref(), Some("rejected" | "archived")));
+    let expiring_soon = (notice.expires_at - now).num_seconds() <= 2 * 3600;
+    if linked_terminal_not_done || expiring_soon {
+        match base {
+            S::Low => S::Medium,
+            S::Medium => S::High,
+            S::High | S::Critical => S::Critical,
+        }
+    } else {
+        base
+    }
+}
+
+fn notice_attention_items(
+    runtime: &OrbitRuntime,
+    workspace: &AttentionWorkspace,
+    host: &AttentionHost,
+    now: DateTime<Utc>,
+) -> Result<Vec<AttentionItem>, OrbitError> {
+    use crate::application::notice::NoticeListFilter;
+    let listing = runtime.list_notices(&NoticeListFilter::default())?;
+    let mut items = Vec::new();
+    for notice in &listing.notices {
+        if notice.status != EffectiveStatus::Open || notice.workspace.id != workspace.id {
+            continue;
+        }
+        let severity = notice_attention_severity(notice, now);
+        let mut refs = json!({"notice_id": notice.id});
+        let task = notice.linked_task.as_ref().and_then(|linked| {
+            refs["task_id"] = json!(linked.id);
+            runtime
+                .notice_linked_task(&linked.id)
+                .map(|task| AttentionTask {
+                    status: task.status,
+                    tags: task.tags.clone(),
+                    crew: task.crew.clone(),
+                    orchestrator: task.orchestrator.clone(),
+                    title: task.title.clone(),
+                })
+        });
+        let ws = workspace.id.replace('\'', "'\\''");
+        let show = AttentionNext {
+            summary: "Show the notice".into(),
+            tool: Some("orbit.notice.show".into()),
+            input: Some(json!({"id": notice.id})),
+            command: format!("orbit --workspace '{ws}' notice show {}", notice.id),
+            needs: Vec::new(),
+            also: vec![AttentionNext {
+                summary: "Close the notice".into(),
+                tool: Some("orbit.notice.close".into()),
+                input: Some(json!({"id": notice.id})),
+                command: format!(
+                    "orbit --workspace '{ws}' notice close {} --reason '<reason>'",
+                    notice.id
+                ),
+                needs: vec!["reason".into()],
+                also: Vec::new(),
+            }],
+        };
+        let mut item = AttentionItem {
+            id: format!(
+                "att_notice_open_{}",
+                cursor::attention_digest(
+                    json!([
+                        AttentionKind::NoticeOpen,
+                        host.machine_id,
+                        notice.workspace.id,
+                        notice.id
+                    ])
+                    .to_string()
+                    .as_bytes()
+                )
+            ),
+            kind: AttentionKind::NoticeOpen,
+            severity,
+            workspace: workspace.clone(),
+            host: host.clone(),
+            refs,
+            task,
+            since: Some(notice.opened_at),
+            age_seconds: Some((now - notice.opened_at).num_seconds().max(0) as u64),
+            expires_at: None,
+            reason: attention_reason(&notice.title),
+            detail: json!({
+                "notice_kind": notice.kind,
+                "scope": notice.scope,
+                "expires_at": notice.expires_at,
+            }),
+            next: show,
+            fingerprint: String::new(),
+        };
+        item.fingerprint = cursor::attention_fingerprint(
+            &item,
+            json!({
+                "revision": notice.revision,
+                "status": notice.status,
+                "severity": severity,
+            }),
+        );
+        items.push(item);
+    }
+    Ok(items)
+}
+
 pub(super) fn read_attention_sources(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -469,7 +584,7 @@ pub(super) fn read_attention_sources(
     for kind in filter
         .kinds
         .iter()
-        .filter(|kind| !AttentionKind::NAMES[..5].contains(&kind.as_str()))
+        .filter(|kind| !AttentionKind::IMPLEMENTED.contains(&kind.as_str()))
     {
         result.degraded.push(AttentionDegraded {
             scope: format!("workspace:{}", workspace.id),
@@ -483,12 +598,45 @@ pub(super) fn read_attention_sources(
     if !filter
         .kinds
         .iter()
-        .any(|kind| AttentionKind::NAMES[..5].contains(&kind.as_str()))
+        .any(|kind| AttentionKind::IMPLEMENTED.contains(&kind.as_str()))
     {
         return Ok(result);
     }
+    // notice_open is derived only on the home owner: a replica's notice
+    // store is not authoritative, so it degrades like the task kinds.
+    if filter.selected(K::NoticeOpen) {
+        let started = Instant::now();
+        if runtime.coordination_task_reads_visible() {
+            match notice_attention_items(runtime, workspace, host, now) {
+                Ok(items) => result.items.extend(items),
+                Err(error) => result.degraded.push(AttentionDegraded {
+                    scope: format!("workspace:{}", workspace.id),
+                    kind: K::NoticeOpen.as_str().into(),
+                    code: "source_unavailable".into(),
+                    message: error.to_string(),
+                }),
+            }
+        } else {
+            result.degraded.push(AttentionDegraded {
+                scope: format!("workspace:{}", workspace.id),
+                kind: K::NoticeOpen.as_str().into(),
+                code: "source_unavailable".into(),
+                message: "Notices on a replica are not authoritative; read the workspace owner"
+                    .into(),
+            });
+        }
+        result
+            .timings
+            .insert("notice_open".into(), started.elapsed().as_micros());
+    }
+    let task_kinds_selected = filter.kinds.iter().any(|kind| {
+        kind.as_str() != "notice_open" && AttentionKind::IMPLEMENTED.contains(&kind.as_str())
+    });
+    if !task_kinds_selected {
+        return Ok(result);
+    }
     if !runtime.coordination_task_reads_visible() {
-        for kind in &filter.kinds {
+        for kind in filter.kinds.iter().filter(|kind| **kind != K::NoticeOpen) {
             result.degraded.push(AttentionDegraded {
                 scope: format!("workspace:{}", workspace.id),
                 kind: kind.as_str().into(),

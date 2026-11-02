@@ -68,6 +68,7 @@
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
           <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span><span class="rail-count alert" id="rail-count-jobs-failing" hidden></span></button>
           <button class="tab" data-tab="leases" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="9" width="10" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span class="rail-label">Leases</span></button>
+          <button class="tab" data-tab="notices" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5.5 2 6H3c.5-.5 2-2 2-6M8.5 17a1.5 1.5 0 0 0 3 0"/></svg><span class="rail-label">Notices</span><span class="rail-count" id="rail-count-notices"></span></button>
           </div>
 
           <div class="rail-group">
@@ -145,6 +146,7 @@
              host on another version or protocol keeps a non-blocking banner. -->
         <div class="host-banner" id="host-skew" role="status" hidden></div>
         <div class="host-banner host-read-only" id="host-read-only" role="status" hidden></div>
+        <div class="notice-banner" id="notice-banner" role="status" hidden></div>
         <section class="host-state" id="host-state" aria-labelledby="host-state-title" hidden></section>
         <div class="visually-hidden" id="host-announcer" role="status" aria-live="polite"></div>
 
@@ -827,6 +829,26 @@
           <div class="body" id="lease-landings-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="notices" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <main class="notices-layout">
+        <section class="panel" id="notices-panel">
+          <header>
+            <span>Notices</span>
+            <span class="count" id="notices-count">-</span>
+          </header>
+          <p class="leases-explainer">
+            Open fleet notices in the shown workspaces, then notices that closed or expired in the last 24 hours.
+            Posting and closing use the same notice operations as the CLI; an operator session is required to write.
+          </p>
+          <div class="body" id="notices-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
             </div>
           </div>
         </section>
