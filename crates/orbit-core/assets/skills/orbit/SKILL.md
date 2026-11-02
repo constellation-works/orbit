@@ -71,6 +71,7 @@ plugin or passing protocol test alone does not prove rendering/context delivery.
 | Find prior tasks or frictions | [Search](references/search.md) |
 | Run and interpret task-flow analytics | [Task-flow analytics](references/concepts.md#task-flow-analytics) |
 | Record a concrete recurring obstacle | [Friction](references/friction.md) |
+| Record and inspect repeated capability costs | [Evolution records](references/tool-surface.md#evolution-records) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
 | Understand Orbit nouns | [Concepts](references/concepts.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](references/setup/distributed-drain.md) |
