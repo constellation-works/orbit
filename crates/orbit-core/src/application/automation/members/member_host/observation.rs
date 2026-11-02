@@ -14,6 +14,7 @@ use super::super::Host;
 use super::host::{already_preparing, already_triaging, already_verifying, incident_crew};
 use crate::application::automation::SourceCache;
 use crate::application::task::escalation_triage_steps::PilotWarningCandidacy;
+use crate::application::task::pilot;
 use crate::application::task::{finding_fingerprint, needs_verification};
 
 /// Statuses the shared per-request snapshot carries: every status any state
@@ -154,6 +155,11 @@ impl Host<'_> {
         let provider_hold = (self.trigger.kind == StateTriggerKind::PreparationEligible)
             .then(|| self.pilot_provider_withhold(now))
             .flatten();
+        let execution_claims = if self.trigger.kind == StateTriggerKind::PreparationEligible {
+            pilot::live_execution_claim_tasks(self.runtime)?
+        } else {
+            BTreeSet::new()
+        };
 
         for envelope in tasks.items {
             let task = match self.inspection_cache {
@@ -186,6 +192,12 @@ impl Host<'_> {
                     }
                     if let Some(run_ids) = active_preparations.get(&task.id) {
                         withheld.insert(task.id, already_preparing(run_ids));
+                        continue;
+                    }
+                    // Withhold instead of reusing an accepted receipt: receipt
+                    // reuse retires failed inputs, which execution must preserve.
+                    if execution_claims.contains(&task.id) {
+                        withheld.insert(task.id, "execution_claim_active".into());
                         continue;
                     }
                     if let Some(reason) = &provider_hold {

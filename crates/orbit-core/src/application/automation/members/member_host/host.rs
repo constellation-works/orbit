@@ -205,7 +205,7 @@ impl MemberHost for Host<'_> {
             return Ok(None);
         };
         self.runtime
-            .task_pilot_scheduling_assessment(task_id)
+            .task_pilot_preparation_assessment(task_id)
             .map_err(Into::into)
     }
 

@@ -842,11 +842,10 @@ the block existed. Explicit task-ID runs do not consult it.
 
 `freshness` [ORB-13638] selects the material checked for drift during pilot
 preparation and apply. Eligibility selects never-assessed tasks for their first
-automatic pilot. Once a task has an applied assessment, no material or policy
-edit makes it automatically due again through the routine; the drain and
-scheduled discovery do queue a fresh pilot when the description or criteria
-changed after the applied assessment and no live execution claim holds the
-task, and a failed repilot holds it until its meaning changes again or an
+automatic pilot. Once a task has an applied assessment, unrelated material or
+policy edits leave it settled. The routine, drain and scheduled discovery
+queue a fresh pilot when the description or criteria changed after the applied
+assessment and no live execution claim holds the task, and a failed repilot holds it until its meaning changes again or an
 operator acts. Request another pilot explicitly with
 `orbit task repilot <id>`, `orbit.task.repilot`, task update `repilot: true`, or a
 decision option action `re_pilot`. Description/criteria edits hold dispatch as
@@ -867,8 +866,10 @@ readiness and `pilot_fingerprint` resolve the same value for a consumer, and
 a non-default one is folded into the fingerprint. Pilots still pin and record
 the source revision they assessed against, whichever mode applies.
 
-An accepted atomic task receipt settles automatic preparation even when its
-material or consumer policy changes. Legacy member receipts can retain their
+An accepted atomic task receipt settles automatic preparation across unrelated
+material or consumer policy changes; description/criteria edits make an eligible
+proposed or backlog task due for reassessment when no live execution claim or
+unresolved failed pilot holds it. Legacy member receipts can retain their
 `material_v1` source pin for carry-forward; replacing their assessment lets doctor
 cleanup release the unused pin. Scheduling reuse does not certify edited
 requirements for dispatch: new receipts seal description/criteria independently
@@ -876,7 +877,7 @@ of configurable fingerprints, and older recorded component hashes are compared
 when available. Future requirement edits to older receipts that lack those hashes
 record a receipt-scoped stale marker in the same task mutation, including
 desktop edits. Unchanged legacy task receipts remain usable across upgrades;
-request a new assessment explicitly when their requirements need review.
+requirement edits queue reassessment through the same automatic path.
 
 Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are

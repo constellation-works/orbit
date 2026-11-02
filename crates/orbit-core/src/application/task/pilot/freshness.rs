@@ -17,6 +17,25 @@ impl OrbitRuntime {
         &self,
         task_id: &str,
     ) -> Result<Option<bool>, OrbitError> {
+        self.task_pilot_applied_assessment(task_id, false)
+    }
+
+    /// Reuse applied evidence for preparation unless edited requirements need
+    /// another pilot. Unresolved pilots keep their holds; the preparation host
+    /// withholds live execution claims before consulting this evidence.
+    /// Unrelated material or consumer-policy changes never queue a repilot.
+    pub(crate) fn task_pilot_preparation_assessment(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<bool>, OrbitError> {
+        self.task_pilot_applied_assessment(task_id, true)
+    }
+
+    fn task_pilot_applied_assessment(
+        &self,
+        task_id: &str,
+        reassess_requirements: bool,
+    ) -> Result<Option<bool>, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
         for (_, receipt) in super::pilot_receipts(&comments) {
             if !super::is_operation_id(receipt.operation_id) {
@@ -32,6 +51,28 @@ impl OrbitRuntime {
             let Some(assessment) = audit.get("assessment").filter(|value| value.is_object()) else {
                 return Ok(None);
             };
+            if reassess_requirements
+                && pilot_requirements_stale(
+                    &self.get_task(task_id)?,
+                    &audit,
+                    receipt.operation_id,
+                    &|| self.get_task_history(task_id),
+                )?
+            {
+                let history = self.get_task_history(task_id)?;
+                let latest_applied = history
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.event == "task_pilot_applied")
+                    .map(|entry| entry.at);
+                let unresolved = history.iter().any(|entry| {
+                    entry.event == "task_pilot_unresolved"
+                        && latest_applied.is_none_or(|applied| entry.at > applied)
+                });
+                if !unresolved {
+                    return Ok(None);
+                }
+            }
             return Ok(Some(super::member_ready(assessment)));
         }
         Ok(None)

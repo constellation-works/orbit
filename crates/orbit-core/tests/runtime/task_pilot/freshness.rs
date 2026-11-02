@@ -7,7 +7,7 @@ use orbit_types::workflow::automation::members::SourceSensitivity;
 use super::races::apply_input;
 use super::*;
 
-fn assess(workspace: &Workspace, task: &Task, warning: bool) {
+pub(super) fn apply_explicit_pilot_assessment(workspace: &Workspace, task: &Task, warning: bool) {
     let prepared = workspace.prepare(&[&task.id]);
     assert_eq!(prepared["task_ids"], json!([task.id]));
     let mut input = apply_input(workspace, &prepared);
@@ -26,7 +26,11 @@ fn assess(workspace: &Workspace, task: &Task, warning: bool) {
     assert_eq!(applied["status"], "succeeded", "{applied}");
 }
 
-fn assert_fresh(workspace: &Workspace, routine: &RoutineDefinition, reason: &str) {
+fn assert_pilot_routine_stays_fresh(
+    workspace: &Workspace,
+    routine: &RoutineDefinition,
+    reason: &str,
+) {
     // Both real evaluations exceed the debounce/max-wait windows. Fresh
     // evidence must never reach provider admission, even on the next tick.
     for minutes in [3, 15] {
@@ -57,7 +61,7 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
     let workspace = Workspace::new();
     let task = workspace.task("fresh explicit assessment");
     assert!(task.context_files.is_empty());
-    assess(&workspace, &task, false);
+    apply_explicit_pilot_assessment(&workspace, &task, false);
     let stored = workspace.runtime.get_task(&task.id).unwrap();
     assert_eq!(stored.context_files, ["file:README.md"]);
     assert_eq!(stored.status, TaskStatus::Proposed);
@@ -73,7 +77,7 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
         )
         .unwrap();
     let routine = pilot_routine();
-    assert_fresh(&workspace, &routine, "fresh");
+    assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
     workspace
         .runtime
         .run_tool(
@@ -89,7 +93,7 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
         "fn unrelated() {}\n",
         "unrelated source move",
     );
-    assert_fresh(&workspace, &routine, "fresh");
+    assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
 
     let readiness = workspace
         .runtime
@@ -112,11 +116,11 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
         .run_tool(
             "orbit.task.update",
             json!({
-                "id": task.id, "model": "codex", "description": "Materially changed requirements.",
+                "id": task.id, "model": "codex", "title": "Changed administrative title.",
             }),
         )
         .unwrap();
-    assert_fresh(&workspace, &routine, "fresh");
+    assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
 }
 
 fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
@@ -131,15 +135,15 @@ fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
             &workspace.repo.join(".orbit"),
         );
         let task = workspace.task(change);
-        assess(&workspace, &task, false);
+        apply_explicit_pilot_assessment(&workspace, &task, false);
         let mut routine = pilot_routine();
-        assert_fresh(&workspace, &routine, "fresh");
+        assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
         workspace.commit_file(
             "unrelated.rs",
             "fn unrelated() {}\n",
             "unrelated source move",
         );
-        assert_fresh(&workspace, &routine, "fresh");
+        assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
         match change {
             "material" => {
                 workspace
@@ -169,7 +173,7 @@ fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
             }
             _ => unreachable!(),
         }
-        assert_fresh(&workspace, &routine, "fresh");
+        assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
     }
 }
 
@@ -177,10 +181,10 @@ fn newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds
     let workspace = Workspace::new();
     let task = workspace.task("fresh unready verdict");
     let routine = pilot_routine();
-    assess(&workspace, &task, false);
-    assert_fresh(&workspace, &routine, "fresh");
-    assess(&workspace, &task, true);
-    assert_fresh(&workspace, &routine, "fresh_unready");
+    apply_explicit_pilot_assessment(&workspace, &task, false);
+    assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
+    apply_explicit_pilot_assessment(&workspace, &task, true);
+    assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh_unready");
     let holder = workspace.hold(&[&task.id]);
     let held = evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
     assert_eq!(held.reason, "work_withheld");
@@ -228,7 +232,7 @@ fn admission_reuses_an_explicit_assessment_off_the_scan_page() {
     let members = observed.state.unwrap().members.unwrap();
     assert!(members.pending.contains_key(&task.id));
     assert!(members.scan_after.is_some());
-    assess(&workspace, &task, false);
+    apply_explicit_pilot_assessment(&workspace, &task, false);
     let skipped = evaluate_routine(
         &workspace.runtime,
         &routine,
@@ -259,7 +263,7 @@ fn automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit() 
         )
     };
     assert_eq!(discover()["task_ids"], json!([task.id]));
-    assess(&workspace, &task, true);
+    apply_explicit_pilot_assessment(&workspace, &task, true);
     // Fresh: the applied assessment still certifies the task, so automatic
     // discovery leaves it alone.
     assert_eq!(discover()["task_ids"], json!([]));
@@ -278,53 +282,6 @@ fn automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit() 
     assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
 }
 
-fn edited_assessment_blocks_dispatch_until_explicit_repilot() {
-    let workspace = Workspace::new();
-    let task = workspace.task("stale dispatch guard");
-    assess(&workspace, &task, false);
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Backlog),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
-    workspace
-        .runtime
-        .run_tool(
-            "orbit.task.update",
-            json!({
-                "id": task.id, "model": "codex", "description": "Changed requirements."
-            }),
-        )
-        .unwrap();
-    let selected = workspace.action("list_backlog_tasks", json!({}));
-    assert_eq!(selected["task_ids"], json!([]), "{selected}");
-    assert!(
-        selected.to_string().contains("orbit task repilot"),
-        "{selected}"
-    );
-    assert_fresh(&workspace, &pilot_routine(), "fresh");
-    assess(&workspace, &task, false);
-    let selected = workspace.action("list_backlog_tasks", json!({}));
-    assert_eq!(selected["task_ids"], json!([task.id]), "{selected}");
-    workspace.runtime.run_tool("orbit.task.update", json!({
-        "id": task.id, "model": "codex", "acceptance_criteria": ["Changed acceptance criterion."]
-    })).unwrap();
-    let selected = workspace.action("list_backlog_tasks", json!({}));
-    assert_eq!(selected["task_ids"], json!([]), "{selected}");
-    assert_fresh(&workspace, &pilot_routine(), "fresh");
-    assess(&workspace, &task, false);
-    assert_eq!(
-        workspace.action("list_backlog_tasks", json!({}))["task_ids"],
-        json!([task.id])
-    );
-}
-
 #[cfg(unix)]
 fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exec sleep 30"]);
@@ -339,7 +296,7 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
                 json!({"id": task.id, "tags": ["no-pilot"], "model": "codex"}),
             )
             .unwrap();
-        assess(&workspace, &task, true);
+        apply_explicit_pilot_assessment(&workspace, &task, true);
         let tool = if update {
             "orbit.task.update"
         } else {
@@ -448,7 +405,7 @@ fn held_warning_keeps_one_decision_until_explicit_decision_repilot() {
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("held warning stays quiet");
-    assess(&workspace, &task, true);
+    apply_explicit_pilot_assessment(&workspace, &task, true);
     workspace.runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
         task_id: task.id.clone(), requested_by: "codex".into(),
         decision: PilotWarningDecision::Propose {
@@ -548,8 +505,7 @@ crate::scenario_table!(
     routine_reuse_obeys_configured_material_source_and_consumer_policy,
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
     admission_reuses_an_explicit_assessment_off_the_scan_page,
-    automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit,
-    edited_assessment_blocks_dispatch_until_explicit_repilot
+    automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit
 );
 
 // The inert substitute worker uses the same Unix shell fixture as other

@@ -25,6 +25,8 @@ use tempfile::TempDir;
 
 mod admission;
 mod artifact_attachment;
+#[cfg(unix)]
+mod backlog_repilot;
 mod blockers;
 mod ci_sweep_races;
 mod creation;

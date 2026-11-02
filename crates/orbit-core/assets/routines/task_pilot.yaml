@@ -12,9 +12,11 @@
 # crew its own partitions of at most five tasks [ORB-16839, ORB-12746]. A
 # hand-assembled `orbit run task-pilot` list that mixes crews is still
 # refused. A fresh assessment, including an unready verdict, never
-# re-dispatches; a material edit creates new work. Nothing fires while the
-# backlog is unchanged. Preparation never
-# promotes or dispatches the assessed task.
+# re-dispatches unless its description or acceptance criteria change. Such
+# requirements edits create new work when no live execution claim or unresolved
+# failed pilot holds the task; unrelated material/policy changes stay settled.
+# Nothing fires while the backlog is unchanged. Preparation never promotes or
+# dispatches the assessed task.
 #
 # What is material is `[workflow.task_pilot_freshness]` in config.toml
 # [ORB-13638]: by default only the title, description, acceptance criteria,
@@ -27,8 +29,8 @@
 #       material_fields: [title, description, criteria, plan, selectors, tags]
 #       source_sensitivity: context_files   # ignore | context_files | any
 #
-# Changing the resolved freshness invalidates assessments accepted under the
-# old one.
+# The resolved freshness guards drift during prepare/apply; changing it alone
+# does not queue another pilot after an applied task assessment.
 #
 # `eligibility` is optional and defaults to the values shown: proposed or
 # backlog tasks not tagged `no-diff-expected` / `no-diff-needed` / `no-pilot`, of any type,
@@ -53,7 +55,7 @@ schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
   Preflight proposed/backlog tasks whose material fingerprint has no fresh
-  task-pilot assessment. State-triggered: fires on creation or material edit
+  task-pilot assessment. State-triggered: fires on creation or requirements edit
   and stays quiet otherwise. Disabled by default; set enabled to true in this
   versioned definition to opt this workspace into scheduled task preflight.
 enabled: false
