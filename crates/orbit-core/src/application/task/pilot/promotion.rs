@@ -91,11 +91,11 @@ pub(super) fn promotion_task_ids(assessment: &Value) -> BTreeSet<String> {
 }
 
 /// Whether one `blocked_by` finding withholds promotion. A prerequisite
-/// already enforced as a dependency edge (or already `done` in this
-/// workspace) holds nothing: the dependency graph gates admission instead.
-/// Prose naming no task, a missing or other-workspace task, or an unfinished
-/// task that is not a recorded dependency still holds, because no edge
-/// enforces it.
+/// already enforced as a dependency edge (or already `done`, as `is_done`
+/// reports it through the registered workspaces) holds nothing: the
+/// dependency graph gates admission instead. Prose naming no task, a
+/// missing task, or an unfinished task that is not a recorded dependency
+/// still holds, because no edge enforces it.
 pub(super) fn blocked_by_holds_promotion(
     finding: &Value,
     dependencies: &[String],

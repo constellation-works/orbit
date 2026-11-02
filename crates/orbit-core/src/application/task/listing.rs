@@ -150,12 +150,7 @@ fn query_task_store(
             let task_id = task.id.clone();
             let status = task.status;
             let dependencies = metadata_task(task).dependencies();
-            let is_done = |id: &str| {
-                matches!(
-                    runtime.get_task(id),
-                    Ok(found) if found.status == TaskStatus::Done
-                )
-            };
+            let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
             if !super::task_pilot_warnings(status, &comments, &dependencies, &is_done).is_empty() {
                 ids.insert(task_id);
             }

@@ -265,10 +265,7 @@ impl TaskListProjection {
                 task.status,
                 &row.comments,
                 &task.dependencies(),
-                &|id: &str| matches!(
-                    runtime.get_task(id),
-                    Ok(found) if found.status == TaskStatus::Done
-                ),
+                &|id: &str| runtime.warning_prerequisite_is_done(id),
             )),
         );
         self.os_readout

@@ -239,20 +239,44 @@ impl Workspace {
             .task
     }
 
+    /// The runtime of the other workspace registered under the same
+    /// global root.
+    fn foreign_runtime(&self) -> OrbitRuntime {
+        let root = self.repo.parent().unwrap().join("foreign");
+        std::fs::create_dir_all(root.join(".orbit")).unwrap();
+        if !root.join(".orbit/config.toml").exists() {
+            std::fs::copy(
+                self.repo.join(".orbit/config.toml"),
+                root.join(".orbit/config.toml"),
+            )
+            .unwrap();
+        }
+        OrbitRuntime::from_roots(&self.runtime.global_root(), &root.join(".orbit"))
+            .unwrap()
+            .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
+            .with_automation_machine_identity(Some("fixture-machine".into()))
+    }
+
+    /// Mark a foreign task `done` in its own registered workspace.
+    fn complete_foreign_task(&self, task: &Task) {
+        self.foreign_runtime()
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Done),
+                    execution_summary: Some("Foreign prerequisite completed.".into()),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+    }
+
     /// A task owned by another workspace registered under the same global
     /// root, as a cross-workspace dependency target is.
     fn foreign_task(&self, title: &str, status: TaskStatus) -> Task {
-        let root = self.repo.parent().unwrap().join("foreign");
-        std::fs::create_dir_all(root.join(".orbit")).unwrap();
-        std::fs::copy(
-            self.repo.join(".orbit/config.toml"),
-            root.join(".orbit/config.toml"),
-        )
-        .unwrap();
-        let runtime = OrbitRuntime::from_roots(&self.runtime.global_root(), &root.join(".orbit"))
-            .unwrap()
-            .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
-            .with_automation_machine_identity(Some("fixture-machine".into()));
+        let runtime = self.foreign_runtime();
         runtime
             .add_task(TaskAddParams {
                 title: title.into(),

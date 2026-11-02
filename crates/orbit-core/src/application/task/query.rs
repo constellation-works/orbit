@@ -82,6 +82,18 @@ impl OrbitRuntime {
         self.stores().tasks().registered_task(id)
     }
 
+    /// Whether a prerequisite named in pilot-warning prose is `done`,
+    /// resolved registry-aware like admission: this workspace's store
+    /// first, then the registered owner of a foreign task. Missing and
+    /// unfinished targets are not done.
+    pub fn warning_prerequisite_is_done(&self, id: &str) -> bool {
+        matches!(self.get_task(id), Ok(found) if found.status == TaskStatus::Done)
+            || matches!(
+                self.get_dependency_task(id),
+                Ok(Some(found)) if found.status == TaskStatus::Done
+            )
+    }
+
     /// A dependency's body through its registered owner, or `None` when no
     /// workspace registered on this machine owns it.
     pub fn get_dependency_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {

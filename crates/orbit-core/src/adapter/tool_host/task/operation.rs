@@ -521,10 +521,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                         row.task.status,
                         &row.comments,
                         &row.task.dependencies(),
-                        &|id: &str| matches!(
-                            runtime.get_task(id),
-                            Ok(found) if found.status == TaskStatus::Done
-                        ),
+                        &|id: &str| runtime.warning_prerequisite_is_done(id),
                     )),
                 );
                 Ok(Value::Object(object))
