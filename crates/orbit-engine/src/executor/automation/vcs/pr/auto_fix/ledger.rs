@@ -1,7 +1,11 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::PrAutoFixBlocker;
+use orbit_types::task::TaskDecision;
+use orbit_types::workflow::{
+    PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBlocker, PrAutoFixReadDeferral,
+};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -111,13 +115,42 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
     event: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    let note = serde_json::to_string(evidence)
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    append_history_note(host, auto_fix, event, &history_note(evidence)?, None)
+}
+
+/// Record one throttled-read wait. The note stays the record's JSON; the
+/// decision is that record. An identical note is not written again, so a
+/// resume does not rewrite a decision-less history entry.
+pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    deferral: &PrAutoFixReadDeferral,
+) -> Result<(), OrbitError> {
+    append_history_note(
+        host,
+        auto_fix,
+        PR_AUTO_FIX_READ_DEFERRED_EVENT,
+        &history_note(deferral)?,
+        Some(TaskDecision::PrAutoFixReadDeferred(deferral.clone())),
+    )
+}
+
+fn history_note(value: &impl Serialize) -> Result<String, OrbitError> {
+    serde_json::to_string(value).map_err(|error| OrbitError::Execution(error.to_string()))
+}
+
+fn append_history_note<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    event: &str,
+    note: &str,
+    decision: Option<TaskDecision>,
+) -> Result<(), OrbitError> {
     for task in &auto_fix.task_ids {
         if host
             .get_task_history(task)?
             .iter()
-            .any(|entry| entry.event == event && entry.note.as_deref() == Some(&note))
+            .any(|entry| entry.event == event && entry.note.as_deref() == Some(note))
         {
             continue;
         }
@@ -128,11 +161,11 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
                     at: chrono::Utc::now(),
                     by: "system".into(),
                     event: event.into(),
-                    note: Some(note.clone()),
+                    note: Some(note.to_owned()),
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: decision.clone(),
                 }],
                 ..TaskAutomationUpdate::default()
             },

@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::task::TaskHistoryEntry;
+use crate::task::{TaskDecision, TaskHistoryEntry};
 
 /// Repairs one pull request may receive across every head, run and restart.
 /// Exhausting it stops the watcher with diagnostics; nothing escalates.
@@ -171,6 +171,103 @@ pub fn decide_pr_auto_fix(
         crew: crew.to_string(),
         crew_source: crew_source.to_string(),
     })
+}
+
+/// History event recording one bounded wait for a throttled log read.
+pub const PR_AUTO_FIX_READ_DEFERRED_EVENT: &str = "pr_auto_fix_read_deferred";
+
+/// Where a throttled read's not-before came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PrAutoFixReadReset {
+    /// The provider named `Retry-After` or a rate-limit reset.
+    Provider,
+    /// The provider named neither, so the wait is a conservative backoff.
+    #[default]
+    Unknown,
+}
+
+/// One bounded wait for a throttled pull-request log read.
+///
+/// The history note stays this record's JSON. New entries also store it as
+/// [`TaskDecision::PrAutoFixReadDeferred`]. A note written before that
+/// decision still parses through [`Self::from_entry`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixReadDeferral {
+    pub execution: String,
+    pub pr: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub repository: Option<String>,
+    pub run_id: u64,
+    pub job_id: u64,
+    /// Absent when the provider's job did not name a run attempt.
+    #[serde(default)]
+    pub run_attempt: Option<u64>,
+    #[serde(default)]
+    pub attempt: u64,
+    #[serde(default)]
+    pub observed_at_ms: u64,
+    /// Absent on a legacy note that recorded no not-before. Readers treat
+    /// that as a wait that does not fit a deadline.
+    #[serde(default)]
+    pub not_before_ms: Option<u64>,
+    #[serde(default)]
+    pub deadline_ms: u64,
+    #[serde(default)]
+    pub reset: PrAutoFixReadReset,
+    #[serde(default)]
+    pub retry_after_seconds: Option<u64>,
+    #[serde(default)]
+    pub reset_epoch_seconds: Option<u64>,
+    #[serde(default)]
+    pub resource: String,
+    #[serde(default)]
+    pub principal: String,
+    #[serde(default)]
+    pub request_id: String,
+    /// Absent on a legacy note that recorded no diagnostic.
+    #[serde(default)]
+    pub diagnostic: Option<String>,
+}
+
+impl PrAutoFixReadDeferral {
+    /// Not-before instant in milliseconds, or [`u64::MAX`] when a legacy
+    /// note omitted it.
+    #[must_use]
+    pub fn effective_not_before_ms(&self) -> u64 {
+        self.not_before_ms.unwrap_or(u64::MAX)
+    }
+
+    /// Diagnostic recorded for the wait. A legacy note that omitted one
+    /// still surfaces the historical placeholder.
+    #[must_use]
+    pub fn diagnostic_text(&self) -> &str {
+        self.diagnostic.as_deref().unwrap_or("a throttled log read")
+    }
+
+    /// The deferral a `pr_auto_fix_read_deferred` entry records.
+    ///
+    /// A matching decision is authoritative, including when its note
+    /// disagrees. An entry with no decision is read from its note. A
+    /// decision of another kind is not that note.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_READ_DEFERRED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixReadDeferred(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+    }
+
+    /// Isolated compatibility reader for a note written before the typed
+    /// decision. The note is the record's JSON and nothing else.
+    fn from_legacy_note(note: &str) -> Option<Self> {
+        serde_json::from_str(note).ok()
+    }
 }
 
 /// Whether a step failure is the watcher's handoff of an admitted check

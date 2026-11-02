@@ -8,9 +8,10 @@ mod infrastructure;
 
 pub use auto_fix::{
     PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CHECK_REPAIR_MARKER,
-    PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker,
-    PrAutoFixClaim, PrAutoFixDecision, PrAutoFixPush, decide_pr_auto_fix,
-    is_pr_auto_fix_check_repair, pr_auto_fix_attempts, pr_auto_fix_pushes,
+    PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_PUSHED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT,
+    PrAutoFixAttempt, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, PrAutoFixPush,
+    PrAutoFixReadDeferral, PrAutoFixReadReset, decide_pr_auto_fix, is_pr_auto_fix_check_repair,
+    pr_auto_fix_attempts, pr_auto_fix_pushes,
 };
 pub use base_update::{
     PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
