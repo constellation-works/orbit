@@ -42,16 +42,20 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use base64::Engine as _;
+use bytes::BytesMut;
 use orbit_common::OrbitError;
 use orbit_common::fs::generation;
 use rmcp::ServiceExt;
 use rmcp::model::{
-    ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams,
+    ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, InitializeRequestParams,
+    ServerJsonRpcMessage,
 };
+use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
+use tokio_util::codec::Decoder as _;
 
 use crate::adapter::OrbitToolServer;
 
@@ -87,7 +91,6 @@ fn lifecycle_interval() -> Duration {
 const MAX_CARRYOVER: usize = 32 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 /// Match rmcp's stream limit, including the terminating newline.
-#[cfg(unix)]
 const MAX_STDIO_LINE: usize = rmcp::transport::async_rw::DEFAULT_MAX_LINE_LENGTH;
 
 /// How a stdio session ended.
@@ -236,6 +239,45 @@ fn messages(message: Value) -> Vec<Value> {
     }
 }
 
+/// A line rmcp's `AsyncRwTransport::receive` would answer with an id-less
+/// `-32600` after consuming it. Broken JSON and the non-standard
+/// notification compatibility path are excluded: rmcp writes nothing for
+/// those, and answering them would steal the next read.
+///
+/// Classification goes through rmcp's public line codec, which already
+/// decides the compatibility path. A copied method list would drift.
+fn rmcp_receive_would_reject(line: &[u8]) -> bool {
+    let mut codec = JsonRpcMessageCodec::<ClientJsonRpcMessage>::new();
+    let mut buffer = BytesMut::from(line);
+    match codec.decode(&mut buffer) {
+        Err(JsonRpcMessageCodecError::Serde(error)) => matches!(
+            error.classify(),
+            serde_json::error::Category::Data | serde_json::error::Category::Io
+        ),
+        _ => false,
+    }
+}
+
+/// Same bytes `ErrorData::invalid_request("Invalid request", None)`
+/// serializes to. The write shares [`write_complete_stdout_frame`] with
+/// service responses and runs to completion on this task, outside the
+/// service `select!` that cancels `receive`.
+async fn write_stdio_invalid_request() -> bool {
+    let message =
+        ServerJsonRpcMessage::error(ErrorData::invalid_request("Invalid request", None), None);
+    let Ok(mut line) = serde_json::to_vec(&message) else {
+        return false;
+    };
+    line.push(b'\n');
+    tracing::debug!(
+        target: "orbit.mcp",
+        "answering an undecodable stdio line before the transport reads it"
+    );
+    tokio::task::spawn_blocking(move || write_complete_stdout_frame(&line).is_ok())
+        .await
+        .unwrap_or(false)
+}
+
 /// Serve `server` over stdio until the client leaves or the session is
 /// handed over. `resumed` replays a session handed over by a previous image.
 pub(crate) async fn serve(
@@ -264,7 +306,8 @@ pub fn stdin_supports_handover() -> bool {
 }
 
 /// Without a pollable stdin (a regular file, `/dev/null`) the session is
-/// served as-is and never handed over.
+/// never handed over. It still reads stdin line by line itself, so a line
+/// rmcp would reject is answered before rmcp can consume and drop it.
 async fn serve_plain(
     server: OrbitToolServer,
     resumed: Option<Resumed>,
@@ -274,25 +317,114 @@ async fn serve_plain(
         Some(resumed) => (resumed.carryover, resumed.initialize),
         None => (Vec::new(), None),
     };
-    let reader = std::io::Cursor::new(carryover).chain(tokio::io::stdin());
+    let undelivered = Arc::new(AtomicUsize::new(0));
+    let (lines, receiver) = mpsc::channel::<Vec<u8>>(64);
+    let stdin = std::io::Cursor::new(carryover).chain(tokio::io::stdin());
+    let pump = tokio::spawn(pump_plain_lines(stdin, lines, Arc::clone(&undelivered)));
+    let reader = LineReader {
+        lines: receiver,
+        current: Vec::new(),
+        position: 0,
+        undelivered,
+    };
     let transport = (reader, CompleteFrameStdout::new());
     let running = match initialize {
         Some(request) => {
-            let peer_info = server
-                .resumed_peer_info(request)
-                .map_err(|error| start_error(&error))?;
+            let peer_info = match server.resumed_peer_info(request) {
+                Ok(peer_info) => peer_info,
+                Err(error) => {
+                    pump.abort();
+                    let _ = pump.await;
+                    return Err(start_error(&error));
+                }
+            };
             rmcp::service::serve_directly(server, transport, Some(peer_info))
         }
-        None => server
-            .serve(transport)
-            .await
-            .map_err(|error| start_error(&error))?,
+        None => match server.serve(transport).await {
+            Ok(running) => running,
+            Err(error) => {
+                pump.abort();
+                let _ = pump.await;
+                return Err(start_error(&error));
+            }
+        },
     };
-    running
+    let result = running
         .waiting()
         .await
-        .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?;
+        .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")));
+    pump.abort();
+    let _ = pump.await;
+    result?;
     Ok(StdioExit::Closed)
+}
+
+/// Read complete lines from a non-pollable stdin and forward them to the
+/// service, answering a rejected line here instead of forwarding it. This
+/// mirrors the unix pump's `forward_lines`: rmcp's `receive` clears such a
+/// line and then sends its error from a `select!` branch that a ready
+/// response task cancels, so the client would never see the rejection.
+async fn pump_plain_lines<R>(
+    mut reader: R,
+    lines: mpsc::Sender<Vec<u8>>,
+    undelivered: Arc<AtomicUsize>,
+) where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncReadExt as _;
+    let mut buffer = Vec::new();
+    let mut chunk = vec![0u8; READ_CHUNK];
+    loop {
+        let read = match reader.read(&mut chunk).await {
+            Ok(0) => {
+                if !buffer.is_empty() {
+                    let line = std::mem::take(&mut buffer);
+                    undelivered.fetch_add(1, Ordering::SeqCst);
+                    let _ = lines.send(line).await;
+                }
+                return;
+            }
+            Ok(read) => read,
+            Err(_) => return,
+        };
+        let mut remaining = &chunk[..read];
+        while !remaining.is_empty() {
+            let end = remaining.iter().position(|byte| *byte == b'\n');
+            let take = end.map_or(remaining.len(), |index| index + 1);
+            if buffer.len() + take > MAX_STDIO_LINE {
+                tracing::warn!(target: "orbit.mcp", "closing stdio session: input line exceeds the transport limit");
+                return;
+            }
+            buffer.extend_from_slice(&remaining[..take]);
+            remaining = &remaining[take..];
+            if end.is_some() && !forward_plain_lines(&mut buffer, &lines, &undelivered).await {
+                return;
+            }
+        }
+    }
+}
+
+/// Forward every complete line in `buffer`, leaving a partial one. False
+/// when the service stopped listening or the rejection could not be written.
+async fn forward_plain_lines(
+    buffer: &mut Vec<u8>,
+    lines: &mpsc::Sender<Vec<u8>>,
+    undelivered: &AtomicUsize,
+) -> bool {
+    while let Some(end) = buffer.iter().position(|byte| *byte == b'\n') {
+        let line: Vec<u8> = buffer.drain(..=end).collect();
+        if rmcp_receive_would_reject(&line) {
+            if !write_stdio_invalid_request().await {
+                return false;
+            }
+            continue;
+        }
+        undelivered.fetch_add(1, Ordering::SeqCst);
+        if lines.send(line).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 fn start_error(error: &dyn std::fmt::Display) -> OrbitError {
@@ -694,14 +826,10 @@ mod unix {
 
     use tokio::io::unix::AsyncFd;
     use tokio::sync::{mpsc, oneshot};
-    use tokio_util::codec::Decoder;
-
-    use bytes::BytesMut;
-    use rmcp::model::{ClientJsonRpcMessage, ErrorData, ServerJsonRpcMessage};
-    use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
 
     use super::{
-        MAX_CARRYOVER, MAX_STDIO_LINE, READ_CHUNK, Tracker, lock, write_complete_stdout_frame,
+        MAX_CARRYOVER, MAX_STDIO_LINE, READ_CHUNK, Tracker, lock, rmcp_receive_would_reject,
+        write_stdio_invalid_request,
     };
 
     pub(super) struct StdinFd(OwnedFd);
@@ -915,44 +1043,5 @@ mod unix {
             }
         }
         true
-    }
-
-    /// A line rmcp's `AsyncRwTransport::receive` would answer with an id-less
-    /// `-32600` after consuming it. Broken JSON and the non-standard
-    /// notification compatibility path are excluded: rmcp writes nothing for
-    /// those, and answering them would steal the next read.
-    ///
-    /// Classification goes through rmcp's public line codec, which already
-    /// decides the compatibility path. A copied method list would drift.
-    fn rmcp_receive_would_reject(line: &[u8]) -> bool {
-        let mut codec = JsonRpcMessageCodec::<ClientJsonRpcMessage>::new();
-        let mut buffer = BytesMut::from(line);
-        match codec.decode(&mut buffer) {
-            Err(JsonRpcMessageCodecError::Serde(error)) => matches!(
-                error.classify(),
-                serde_json::error::Category::Data | serde_json::error::Category::Io
-            ),
-            _ => false,
-        }
-    }
-
-    /// Same bytes `ErrorData::invalid_request("Invalid request", None)`
-    /// serializes to. The write shares [`write_complete_stdout_frame`] with
-    /// service responses and runs to completion on this task, outside the
-    /// service `select!` that cancels `receive`.
-    async fn write_stdio_invalid_request() -> bool {
-        let message =
-            ServerJsonRpcMessage::error(ErrorData::invalid_request("Invalid request", None), None);
-        let Ok(mut line) = serde_json::to_vec(&message) else {
-            return false;
-        };
-        line.push(b'\n');
-        tracing::debug!(
-            target: "orbit.mcp",
-            "answering an undecodable stdio line before the transport reads it"
-        );
-        tokio::task::spawn_blocking(move || write_complete_stdout_frame(&line).is_ok())
-            .await
-            .unwrap_or(false)
     }
 }
