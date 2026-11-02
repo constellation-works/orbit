@@ -6,12 +6,14 @@ use std::io::Write;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Result of applying a permissive Seatbelt profile to a harmless child.
+/// Result of checking Seatbelt state and, when needed, applying a permissive
+/// profile to a harmless child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxExecApplyProbe {
     /// The child ran successfully under the profile.
     Applied,
-    /// Seatbelt refused the apply operation (exit 71 with `sandbox_apply`).
+    /// The kernel reports an existing sandbox, or the child apply was refused
+    /// (exit 71 with `sandbox_apply` in stderr).
     ApplyRefused(String),
     /// No trusted executable wrapper exists. This is not a skippable refusal.
     BinaryAbsent(String),
@@ -73,9 +75,10 @@ pub fn seatbelt_deferral_notice(test: &str, detail: &str) -> String {
 /// cannot call: it exists only under the `test-support` feature.
 static FORCED_SEATBELT_REFUSAL: AtomicBool = AtomicBool::new(false);
 
-/// Probe once per process, using a trusted absolute wrapper, a permissive
-/// profile and `/usr/bin/true`. The child has a ten-second deadline and capped
-/// output. This diagnostic does not change production sandbox behavior.
+/// Probe once per process. If the kernel does not report an existing sandbox,
+/// use a trusted absolute wrapper, a permissive profile and `/usr/bin/true`.
+/// The child has a ten-second deadline and capped output. This diagnostic does
+/// not change production sandbox behavior.
 ///
 /// A permissive `(allow default)` profile can be applied nested inside
 /// another permissive profile, so the apply alone reports `Applied` for a

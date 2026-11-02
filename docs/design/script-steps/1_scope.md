@@ -819,12 +819,15 @@ there. A host without a grant refuses with `grant_missing`.
   `https` grant: the step refuses with `script_sandbox_unavailable`. `orbit doctor`
   reports a `script sandbox` row (available, or the reason), and `orbit script grant`
   warns on such a host.
-- **Nested sandboxes.** Orbit probes the profile once before spawn. Seatbelt can't
-  nest (exit 71, `sandbox_apply: Operation not permitted`, as in [ORB-19224]): on
-  macOS the probe applies a permissive profile to `/usr/bin/true` once per process
-  and refuses on that exit. On Linux a process whose PID 1 is `bwrap`, or a Flatpak
-  sandbox, is refused. Either way the step refuses with `script_sandbox_unavailable`
-  and nothing runs. It never runs under the outer profile instead.
+- **Nested sandboxes.** On macOS Orbit probes once per process before spawn. It
+  first asks the kernel whether the process already runs under Seatbelt and refuses
+  immediately if so, without launching a child. This catches even a permissive outer
+  profile under which a permissive nested profile could apply. Otherwise, it applies
+  a permissive profile to `/usr/bin/true` in a bounded child and classifies exit 71
+  with `sandbox_apply` in stderr as a refusal (as in [ORB-19224]). On Linux a process
+  whose PID 1 is `bwrap`, or a Flatpak sandbox, is refused. Either way the step
+  refuses with `script_sandbox_unavailable` and nothing runs. It never runs under
+  the outer profile instead.
 
 **Why.** A grant is consent on a host, for that host's files and network. Carrying it
 to another machine would run code where nobody approved it.
