@@ -175,6 +175,7 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
 {
   "schema_version": 1,
   "generated_at": "2026-11-01T22:10:03Z",
+  "candidate_read": true,
   "filters": { "workspace": ["orbit"], "kind": ["pilot_warning", "blocked"], "severity": "medium" },
   "items": [ ],
   "counts": { "matching": 4, "returned": 4, "truncated": false,
@@ -188,6 +189,20 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
 }
 ```
 
+- `candidate_read` is present with value `true` only on an aggregator candidate read; public
+  responses omit it. The counts describe different stages in the two modes:
+  - On a candidate read, `counts.matching` is the post-filter count before the per-workspace
+    item cap, `counts.returned` is the number of items in `items`, and `counts.truncated` is
+    true only when that cap dropped items. The public response limit and cursor do not apply.
+  - On a public response, `counts.matching` is the ordered set after per-workspace source caps
+    and the cursor but before the public `--limit`, `counts.returned` is the number of items
+    in `items`, and `counts.truncated` is true when the public limit dropped items.
+  The candidate-read shape, cap, and completeness rules are specified in
+  [attention-federation](./attention-federation.md#candidate-read); public limit semantics are
+  specified in [attention-filters](./attention-filters.md#public-response-limit).
+- A user MCP session that supplies the reserved `candidate_read` input receives the usage
+  error `candidate_read_not_permitted`, defined in
+  [attention-federation](./attention-federation.md#candidate-read).
 - `filters` echoes the resolved filters (workspaces as `{id, name}`), so an empty or surprising
   result is explainable.
 - `cursor.status` is `none` (no `since` supplied), `accepted`, `expired`, `invalid` or
