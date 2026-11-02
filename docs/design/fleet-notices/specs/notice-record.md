@@ -164,6 +164,13 @@ Only the latest write is compared, so a post is never dropped because the notice
 An identical request sent after another poster has written applies as a new post: an orchestrator
 re-asserting its notice after an agent's update still takes effect.
 
+The owner stores a versioned request fingerprint in each post event's `detail_json`, in the same
+transaction as the notice write. The posting snapshot reads the latest event by insertion sequence
+for each open notice, so equal timestamps cannot hide an intervening write. The fingerprint hashes
+the resolved author and request with defaults resolved, retaining the requested expiry form. Events
+written before fingerprints were introduced cannot identify a repeat; their next accepted post
+records one. An unchanged repeat also skips the posting transaction's retention purge.
+
 ## Invariants
 
 - Stored state changes only through `post`, `close`, the closure materializer and retention purge.

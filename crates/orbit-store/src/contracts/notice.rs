@@ -59,6 +59,10 @@ pub struct NoticePostSnapshot {
     /// Post events since the query's `events_since` by the poster's bound
     /// task, or by orchestrators posting as the poster's crew.
     pub poster_events: Vec<NoticeEventRow>,
+    /// The latest event of any poster for each stored-open notice in the
+    /// home workspace, ordered by insertion sequence rather than timestamp.
+    /// Core uses its request fingerprint to recognize lost-reply retries.
+    pub latest_events: Vec<NoticeEventRow>,
 }
 
 /// The rows a post's snapshot selects, and the retention purge it runs.
@@ -71,13 +75,16 @@ pub struct NoticePostQuery<'a> {
     pub poster_crew: Option<&'a str>,
     pub events_since: DateTime<Utc>,
     /// Delete the home workspace's notices that stopped being in force
-    /// (closed, or expired) before this instant, with their history.
+    /// (closed, or expired) before this instant, with their history, unless
+    /// the decision returns an unchanged notice.
     pub purge_before: Option<DateTime<Utc>>,
 }
 
 /// The write a post's decision chose.
 #[derive(Debug, Clone)]
 pub enum NoticePostPlan {
+    /// Return a snapshot row without writing a notice, event or purge.
+    Unchanged { row: NoticeRow },
     /// A new notice.
     Insert {
         row: NoticeRow,
@@ -99,7 +106,8 @@ pub type NoticePostDecision<'a> =
 
 pub trait NoticeStoreBackend: Send + Sync {
     /// Read the snapshot, run `decide` and apply its plan in one immediate
-    /// transaction. Returns the written row.
+    /// transaction. Returns the written row, or the unchanged snapshot row
+    /// for a repeat.
     fn post_notice(
         &self,
         query: &NoticePostQuery<'_>,

@@ -31,9 +31,6 @@ impl NoticeStoreBackend for Store {
     ) -> Result<NoticeRow, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn = tx.connection();
-            if let Some(cutoff) = query.purge_before {
-                purge_inactive(conn, query.workspace_id, &stamp(cutoff))?;
-            }
             let snapshot = NoticePostSnapshot {
                 unclosed: query_rows(
                     conn,
@@ -58,8 +55,25 @@ impl NoticeStoreBackend for Store {
                         query.poster_crew
                     ],
                 )?,
+                latest_events: query_events(
+                    conn,
+                    &format!(
+                        "SELECT {EVENT_COLUMNS} FROM notice_events WHERE seq IN (\
+                         SELECT (SELECT seq FROM notice_events WHERE notice_id = notices.id \
+                                 ORDER BY seq DESC LIMIT 1) \
+                         FROM notices WHERE workspace_id = ?1 AND closed_at IS NULL)"
+                    ),
+                    params![query.workspace_id],
+                )?,
             };
-            match decide(&snapshot)? {
+            let plan = decide(&snapshot)?;
+            if !matches!(plan, NoticePostPlan::Unchanged { .. })
+                && let Some(cutoff) = query.purge_before
+            {
+                purge_inactive(conn, query.workspace_id, &stamp(cutoff))?;
+            }
+            match plan {
+                NoticePostPlan::Unchanged { row } => Ok(row),
                 NoticePostPlan::Insert { row, event } => {
                     insert_row(conn, &row)?;
                     insert_event(conn, &event)?;
