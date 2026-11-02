@@ -1,9 +1,12 @@
-//! Recover only drafts whose live body identifies an Orbit section gap.
+//! Recover only drafts whose section-gap evidence names the live body.
 
 use orbit_common::{OrbitError, security::release::sha256_hex};
 use orbit_types::{
     task::{TaskDecision, TaskHistoryEntry},
-    workflow::{PR_DRAFT_RECOVERY_EVENT, PrDraftRecovery, PrDraftRecoveryOutcome},
+    workflow::{
+        MissingSectionPolicy, PR_DRAFT_RECOVERY_EVENT, PR_SECTION_GAP_EVENT, PrDraftRecovery,
+        PrDraftRecoveryOutcome, PrSectionGap,
+    },
 };
 use serde_json::json;
 
@@ -56,7 +59,9 @@ pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
     }
     let outcome = if config.conventions.draft {
         PrDraftRecoveryOutcome::ConfiguredDraft
-    } else if !live_body.contains(body::MISSING_SECTION_NOTE) && !reserved {
+    } else if !reserved
+        && draft_section_gap(host, context.tasks.iter().map(|task| task.id.as_str()), pr)?.is_none()
+    {
         PrDraftRecoveryOutcome::UnrelatedDraft
     } else if !missing.is_empty() {
         PrDraftRecoveryOutcome::MissingSections
@@ -91,6 +96,7 @@ pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
 pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &std::path::Path,
+    task_id: &str,
     pr_number: &str,
 ) -> Result<Vec<String>, OrbitError> {
     let response = host.run_private_vcs_operation(
@@ -98,10 +104,74 @@ pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<H: RuntimeHo
         json!({"pr": pr_number, "workspace_path": workspace}),
     )?;
     let pr = PullRequestStatus::from_view_response(&response)?;
-    Ok(if pr.is_draft {
-        body::missing_section_names(pr.body.as_deref().unwrap_or_default())
-    } else {
-        Vec::new()
+    if !pr.is_draft {
+        return Ok(Vec::new());
+    }
+    Ok(draft_section_gap(host, std::iter::once(task_id), &pr)?
+        .map(|gap| gap.missing_sections)
+        .unwrap_or_default())
+}
+
+/// The section-gap decision that published this draft's live body, read once
+/// from the tasks' history. Precedence:
+///
+/// 1. A typed [`PrSectionGap`] whose publication is this head branch and the
+///    exact live body wins.
+/// 2. A typed publication from this head branch with another body means the
+///    body changed after Orbit published it (a human edit): no evidence, and
+///    the body's prose cannot override it.
+/// 3. Only without any typed publication for the branch, the legacy reader
+///    recognizes Orbit's missing-section note in a body published before the
+///    typed record existed.
+pub(in crate::executor::automation::vcs) fn draft_section_gap<'a, H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_ids: impl Iterator<Item = &'a str>,
+    pr: &PullRequestStatus,
+) -> Result<Option<PrSectionGap>, OrbitError> {
+    let live_body = pr.body.as_deref().unwrap_or_default();
+    let digest = sha256_hex(live_body.as_bytes());
+    let head = pr.head_branch.as_deref();
+    let mut published_from_head = false;
+    let mut matching = None;
+    for task_id in task_ids {
+        for entry in host.get_task_history(task_id)? {
+            let Some(TaskDecision::PrSectionGap(gap)) = entry.decision else {
+                continue;
+            };
+            if entry.by != "system" || entry.event != PR_SECTION_GAP_EVENT {
+                continue;
+            }
+            let from_head = match head {
+                Some(head) => gap.published_from(head),
+                None => gap.publication.is_some(),
+            };
+            if !from_head {
+                continue;
+            }
+            published_from_head = true;
+            if head.is_some_and(|head| gap.published_body(head, &digest)) {
+                matching = Some(gap);
+            }
+        }
+    }
+    if matching.is_some() || published_from_head {
+        return Ok(matching);
+    }
+    Ok(legacy_section_gap(live_body, head))
+}
+
+/// The isolated legacy reader: a body published before [`PrSectionGap`] was
+/// recorded identifies its gaps only by Orbit's missing-section note under
+/// each required heading. It yields the same view the typed record does,
+/// without execution or publication identity.
+fn legacy_section_gap(live_body: &str, head: Option<&str>) -> Option<PrSectionGap> {
+    let missing_sections = body::missing_section_names(live_body);
+    (!missing_sections.is_empty()).then(|| PrSectionGap {
+        missing_sections,
+        action: MissingSectionPolicy::Draft,
+        run_id: String::new(),
+        head_branch: head.unwrap_or_default().to_string(),
+        publication: None,
     })
 }
 

@@ -76,7 +76,7 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
     isolated(
         "draft_handoff::follower_section_gap_draft_returns_for_repair_then_lands",
         |sandbox| {
-            for case in ["missing", "configured", "manual"] {
+            for case in ["missing", "configured", "manual", "legacy", "edited"] {
                 let (fx, follower) = fx_host(sandbox);
                 // Keep the bare fixture remote while giving observation the
                 // same repository identity the substitute forge reports.
@@ -100,6 +100,11 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                         .unwrap()
                         .contains("Missing required section")
                 );
+                if matches!(case, "manual" | "legacy") {
+                    // History as a build before the typed decision wrote it:
+                    // only the live body's note identifies the gap.
+                    follower.as_legacy_section_gap_history();
+                }
                 if case == "manual" {
                     // A human draft quoting the generated body is not an
                     // unfilled section eligible for automatic repair.
@@ -111,6 +116,13 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                         ),
                     );
                 }
+                if case == "edited" {
+                    // A human edit keeps the note but is no longer the body
+                    // the typed decision published; the prose cannot route it.
+                    let body = fx.forge_state("pr-body").unwrap();
+                    fx.write_forge("pr-body", format!("{body}\n\nReviewer note.\n"));
+                }
+                let repairable = matches!(case, "missing" | "legacy");
 
                 let owner = hand_off(&fx, &follower, false);
                 let error = land(&owner).expect_err("draft cannot merge").to_string();
@@ -121,12 +133,10 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                 assert_eq!(updates.len(), 1);
                 assert_eq!(
                     updates[0].step,
-                    HandoffLandingStep::Stop {
-                        repairable: case == "missing"
-                    },
+                    HandoffLandingStep::Stop { repairable },
                     "{error}"
                 );
-                if case != "missing" {
+                if !repairable {
                     assert!(
                         error.contains("still a draft")
                             && error.contains(if case == "configured" {

@@ -1724,8 +1724,9 @@ one. From then on:
   merge request was sent is never resent: the attempt keeps its unresolved
   merge intent, and the next attempt (**Retry landing**) reconciles that
   intent against the pull request before anything else.
-- A section-gap draft (the live body carries Orbit's missing-required-section
-  note) returns for the same automatic repair described below. The
+- A section-gap draft (its live body is the body a recorded section gap
+  created it with, or, for a PR published before that record existed,
+  carries Orbit's missing-required-section note) returns for the same automatic repair described below. The
   `landing_stopped` reason names the missing headings and asks the repair to
   fill them or attach their evidence, then resume `pr_open`, which refreshes
   the body and marks the PR ready. If the automatic repair is already spent,

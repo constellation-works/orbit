@@ -65,6 +65,9 @@ pub enum TaskDecision {
     RegressionRiskMarked(RegressionRiskMarks),
     /// A verified source-repair publication read and its durable wait reservation.
     SourceRepairPublication(PublicationSettlingObservation),
+    /// The required pull request sections a delivery had no content for,
+    /// recorded on `pr_section_gap`.
+    PrSectionGap(crate::workflow::PrSectionGap),
     /// The reason a reused PR stayed draft or became ready for review.
     PrDraftRecovery(crate::workflow::PrDraftRecovery),
     /// One bounded wait for a throttled pull-request log read, recorded on

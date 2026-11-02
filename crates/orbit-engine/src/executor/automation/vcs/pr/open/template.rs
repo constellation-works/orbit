@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::{
     MissingSectionPolicy, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT, PrBodyTemplateSource,
-    REPO_PR_TEMPLATE_LOCATIONS, SCREENSHOT_ARTIFACT_PREFIX, SCREENSHOTS_SECTION,
+    PrSectionGap, REPO_PR_TEMPLATE_LOCATIONS, SCREENSHOT_ARTIFACT_PREFIX, SCREENSHOTS_SECTION,
 };
 
 use crate::context::{PrConfig, RuntimeHost, TaskAutomationUpdate};
@@ -162,23 +162,23 @@ fn quoted_sections(sections: &[String]) -> String {
 }
 
 /// Record in each task's history which required sections had no content and
-/// what delivery did about it.
+/// what delivery did about it. The note renders the typed decision; readers
+/// use the decision.
 pub(super) fn record_section_gap<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffContext,
-    missing: &[String],
-    pr_config: &PrConfig,
+    gap: &PrSectionGap,
 ) -> Result<(), OrbitError> {
-    let action = match pr_config.conventions.missing_section {
+    let action = match gap.action {
         MissingSectionPolicy::Draft => "opens the pull request as a draft",
         MissingSectionPolicy::Refuse => "refuses to open the pull request",
     };
-    let gaps = section_gaps(missing);
+    let gaps = section_gaps(&gap.missing_sections);
     let note = format!(
         "{}{}; pr_open {action} (pr.missing_required_section = \"{}\").",
         gaps[..1].to_ascii_uppercase(),
         &gaps[1..],
-        pr_config.conventions.missing_section.as_str()
+        gap.action.as_str()
     );
     for task in &context.tasks {
         host.apply_task_automation_update(
@@ -192,7 +192,7 @@ pub(super) fn record_section_gap<H: RuntimeHost + ?Sized>(
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(TaskDecision::PrSectionGap(gap.clone())),
                 }],
                 ..TaskAutomationUpdate::default()
             },

@@ -5250,6 +5250,29 @@ impl DeliveryHost {
     fn history(&self, id: &str) -> Vec<TaskHistoryEntry> {
         locked(&self.history).get(id).cloned().unwrap_or_default()
     }
+    /// Rewrite every `pr_section_gap` entry as a build before the typed
+    /// decision recorded it: the same note, no decision.
+    fn as_legacy_section_gap_history(&self) {
+        for entries in locked(&self.history).values_mut() {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            {
+                entry.decision = None;
+            }
+        }
+    }
+    /// The typed section-gap decisions recorded for a task, oldest first.
+    fn section_gap_decisions(&self, id: &str) -> Vec<orbit_types::workflow::PrSectionGap> {
+        self.history(id)
+            .into_iter()
+            .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            .filter_map(|entry| match entry.decision {
+                Some(orbit_types::task::TaskDecision::PrSectionGap(gap)) => Some(gap),
+                _ => None,
+            })
+            .collect()
+    }
     fn completion_notes(&self) -> Vec<String> {
         locked(&self.completion_notes).clone()
     }

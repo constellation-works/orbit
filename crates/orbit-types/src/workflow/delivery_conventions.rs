@@ -24,6 +24,56 @@ pub const PR_SECTIONS_ARTIFACT: &str = "pr-sections.json";
 /// published without filled content.
 pub const PR_SECTION_GAP_EVENT: &str = "pr_section_gap";
 
+/// The decision recorded on [`PR_SECTION_GAP_EVENT`]: which required
+/// sections a delivery had no content for, what the configured policy did,
+/// and, when this delivery created the pull request with that body, the
+/// publication it binds to. The rendered history note and the body's
+/// missing-section note are presentation; this record is the evidence draft
+/// recovery and handed-off landing read.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PrSectionGap {
+    /// Configured names of the required sections published without content.
+    pub missing_sections: Vec<String>,
+    /// `pr.missing_required_section` when the gap was found.
+    pub action: MissingSectionPolicy,
+    /// Job run (execution) that rendered the body.
+    pub run_id: String,
+    /// Head branch the delivery publishes from.
+    pub head_branch: String,
+    /// The pull request this delivery created with the gap body. Absent when
+    /// it refused, or reused a pull request without publishing this body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PrSectionGapPublication>,
+}
+
+/// The exact body a delivery created its pull request with. Only a live body
+/// with this digest on a pull request from this head branch is that
+/// publication; a human edit changes the digest.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PrSectionGapPublication {
+    /// Head branch of the created pull request.
+    pub head_branch: String,
+    /// SHA-256 of the body sent to the forge's create operation.
+    pub body_sha256: String,
+}
+
+impl PrSectionGap {
+    /// Whether this decision published the live body of a pull request from
+    /// `head_branch`.
+    pub fn published_body(&self, head_branch: &str, body_sha256: &str) -> bool {
+        self.publication.as_ref().is_some_and(|publication| {
+            publication.head_branch == head_branch && publication.body_sha256 == body_sha256
+        })
+    }
+
+    /// Whether this decision created a pull request from `head_branch`.
+    pub fn published_from(&self, head_branch: &str) -> bool {
+        self.publication
+            .as_ref()
+            .is_some_and(|publication| publication.head_branch == head_branch)
+    }
+}
+
 /// History event explaining a reused pull request's draft recovery decision.
 pub const PR_DRAFT_RECOVERY_EVENT: &str = "pr_draft_recovery";
 
@@ -436,7 +486,8 @@ fn match_owner(
 
 /// What a delivery does when a required pull request section has no filled
 /// content.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MissingSectionPolicy {
     /// Open the pull request as a draft, with a note under the heading.
     #[default]
