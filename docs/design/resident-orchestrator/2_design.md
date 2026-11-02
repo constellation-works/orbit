@@ -80,8 +80,9 @@ Authority answers one question per action: may this resident do this, here, now?
 not the prompt.
 
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
-  to `backlog`, which admits it to task-pilot), `merge` (land a reviewed PR), `plugin_upgrade`
-  (install or upgrade a workspace plugin). Reading, commenting, filing `proposed` tasks and friction,
+  to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
+  (install or upgrade a workspace plugin). Task-pilot assessment is a separate gate: it can assess
+  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks and friction,
   and checkpointing need no right. Anything not listed (releases, tags, publishing, host changes,
   config edits, secrets) is not grantable to a resident in v1.
 - **Scope.** A list of covered workspaces. A tool call naming another workspace is refused.
