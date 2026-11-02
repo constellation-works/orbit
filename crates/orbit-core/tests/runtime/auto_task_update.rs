@@ -5,7 +5,9 @@ use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_core::application::auto_tasks::cursor_state_path;
+use orbit_core::application::auto_tasks::{
+    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, cursor_state_path,
+};
 use orbit_core::{
     AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, AutoTaskTemplatePatch,
     AutoTaskUpdateParams, DedupePolicy, OrbitError, OrbitRuntime, TaskComplexity, TaskPriority,
@@ -107,4 +109,140 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
         expected,
         "both independent edits must survive in the persisted definition"
     );
+}
+
+fn schedule_fixture(name: &str) -> OrbitRuntime {
+    let runtime = OrbitRuntime::in_memory().unwrap();
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: name.into(),
+            description: "Schedule edits".into(),
+            schedule: AutoTaskSchedule::every_minutes(60),
+            template: AutoTaskTemplate {
+                title: "Scheduled".into(),
+                description: "Body".into(),
+                acceptance_criteria: vec!["Done".into()],
+                task_type: TaskType::Chore,
+                tags: Vec::new(),
+                required_tools: Vec::new(),
+                context_files: Vec::new(),
+                priority: TaskPriority::Medium,
+                complexity: Some(TaskComplexity::Low),
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .unwrap();
+    runtime
+}
+
+#[test]
+fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
+    if !super::dispatch_admission::isolated(
+        "auto_task_update::schedule_command_profiles_compare_no_op_and_stamp_as_specified",
+    ) {
+        return;
+    }
+    let runtime = schedule_fixture("scheduled");
+    let current = AutoTaskSchedule::every_minutes(60);
+    let next = AutoTaskSchedule::every_minutes(30);
+    let observed = |expected_schedule: &AutoTaskSchedule| AutoTaskScheduleProfile::Observed {
+        expected_schedule: Box::new(expected_schedule.clone()),
+    };
+    let stamp = |runtime: &OrbitRuntime| {
+        runtime
+            .auto_task_show("scheduled")
+            .unwrap()
+            .unwrap()
+            .updated_at
+    };
+    let before = stamp(&runtime);
+
+    assert!(matches!(
+        runtime
+            .auto_task_schedule_command("missing", next.clone(), observed(&current))
+            .unwrap(),
+        AutoTaskScheduleOutcome::NotFound
+    ));
+    match runtime
+        .auto_task_schedule_command("scheduled", next.clone(), observed(&next))
+        .unwrap()
+    {
+        AutoTaskScheduleOutcome::Stale { actual_schedule } => {
+            assert_eq!(*actual_schedule, current);
+        }
+        other => panic!("expected a stale outcome, got {other:?}"),
+    }
+    assert!(matches!(
+        runtime
+            .auto_task_schedule_command("scheduled", current.clone(), observed(&current))
+            .unwrap(),
+        AutoTaskScheduleOutcome::AlreadySet(_)
+    ));
+    assert_eq!(stamp(&runtime), before, "refusals and no-ops never stamp");
+
+    let retired: AutoTaskSchedule = serde_json::from_value(serde_json::json!({
+        "deliveries_landed": {
+            "owner_machine": "fixture-machine",
+            "branch": "agent-main",
+            "threshold": 2,
+            "max_wait_minutes": 60,
+            "coverage": "integrated_qa_v1",
+            "max_items": 2,
+            "retries": 1
+        }
+    }))
+    .unwrap();
+    let refused = runtime
+        .auto_task_schedule_command("scheduled", retired, observed(&current))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, AutoTaskScheduleError::Write(OrbitError::InvalidInput(message))
+        if message.contains("integrated_qa_v1"))
+    );
+
+    assert!(matches!(
+        runtime
+            .auto_task_schedule_command("scheduled", next.clone(), observed(&current))
+            .unwrap(),
+        AutoTaskScheduleOutcome::Written(written) if written.schedule == next
+    ));
+    let written_stamp = stamp(&runtime);
+    assert_ne!(written_stamp, before, "a real change stamps");
+
+    // The ordinary profile writes and stamps even when nothing changes.
+    assert!(matches!(
+        runtime
+            .auto_task_schedule_command(
+                "scheduled",
+                next.clone(),
+                AutoTaskScheduleProfile::Unconditional,
+            )
+            .unwrap(),
+        AutoTaskScheduleOutcome::Written(_)
+    ));
+    assert_ne!(stamp(&runtime), written_stamp);
+}
+
+#[test]
+fn compound_update_writes_schedule_and_other_fields_in_one_edit() {
+    if !super::dispatch_admission::isolated(
+        "auto_task_update::compound_update_writes_schedule_and_other_fields_in_one_edit",
+    ) {
+        return;
+    }
+    let runtime = schedule_fixture("compound");
+    let edited = runtime
+        .auto_task_update(
+            "compound",
+            AutoTaskUpdateParams {
+                description: Some("Edited together".into()),
+                schedule: Some(AutoTaskSchedule::every_minutes(15)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(edited.description, "Edited together");
+    assert_eq!(edited.schedule, AutoTaskSchedule::every_minutes(15));
 }

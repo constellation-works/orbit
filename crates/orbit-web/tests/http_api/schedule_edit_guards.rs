@@ -198,3 +198,53 @@ fn dashboard_timing_edits_persist_guards_and_refuse_stale_values() {
         },
     );
 }
+
+/// A schedule edit for a missing definition is a 404, and a request the stored
+/// schedule already satisfies answers `changed: false` without stamping.
+#[test]
+fn dashboard_schedule_edit_reports_missing_and_already_matched_without_writing() {
+    isolated(
+        "schedule_edit_guards::dashboard_schedule_edit_reports_missing_and_already_matched_without_writing",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let endpoint = "/api/auto-tasks/schedule?workspace=ws_http_fixture";
+            let missing = server.send(
+                "POST",
+                endpoint,
+                json!({"name":"absent","expected_schedule":{"every_minutes":15},"schedule":{"every_minutes":30}}),
+            );
+            assert_eq!(missing.status().as_u16(), 404);
+            assert_eq!(
+                missing.json::<Value>().unwrap()["code"],
+                "auto_task_not_found"
+            );
+
+            auto_tasks::seed_auto_task_with_schedule(
+                &fixture,
+                "matched",
+                AutoTaskSchedule::every_minutes(15),
+            );
+            let stamp = || {
+                fixture
+                    .runtime
+                    .auto_task_show("matched")
+                    .unwrap()
+                    .unwrap()
+                    .updated_at
+            };
+            let before = stamp();
+            let matched = json_ok(server.send(
+                "POST",
+                endpoint,
+                json!({"name":"matched","expected_schedule":{"every_minutes":15},"schedule":{"every_minutes":15}}),
+            ));
+            assert_eq!(matched["changed"], false);
+            assert_eq!(
+                stamp(),
+                before,
+                "an already-matched schedule is not stamped"
+            );
+        },
+    );
+}
