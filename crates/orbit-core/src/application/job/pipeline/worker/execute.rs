@@ -168,7 +168,10 @@ impl OrbitRuntime {
         // with a durable `running` projection.
         let outcome = (|| {
             #[cfg(target_os = "macos")]
-            let _watchdog = self.start_worker_watchdog(run)?;
+            let _watchdog = self.start_worker_watchdog(
+                run,
+                super::usage::tree::session_tree_reader(std::process::id()),
+            )?;
             if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
                 if let Some(selection) = self
                     .read_run_state(&run.run_id)?
