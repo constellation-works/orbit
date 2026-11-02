@@ -482,6 +482,15 @@ orbit script revoke <name>                         # revoke this host's grant
 | `--output-max-files <n>` | Most declared output files one step may keep, 1 to 64. Default 8. |
 | `--output-max-file-bytes <b>` | Largest output file one step may keep, up to 64 MiB. Default 1 MiB. |
 
+Every read and write root, from the flags or the manifest's `requests`, must
+already exist, sit outside the credential paths (`~/.ssh`, `~/.config/gh`, the
+keychains, …), and pass a probe by the granting process: it lists the directory
+(or opens a file root), and for a write root creates and removes a file. A root
+that fails refuses the grant, names the path, and nothing is granted. Before
+every run, the process that runs the job repeats the probe; a root that is
+missing or denied then refuses the step with `script_root_unavailable`, naming
+the path, and nothing runs. Orbit never creates a granted root.
+
 A script that declares `files.outputs` in its manifest keeps the regular files it
 writes at the top level of `out/`, and later steps read them as
 `steps.<id>.files` (`name`, `path`, `bytes`, `media_type`, `sha256`). The
@@ -512,7 +521,12 @@ input's name, source path and SHA-256 (for a directory, a digest over its whole
 tree) as `input_files` in the `--json` output of `orbit run show` and
 `orbit script history`.
 
-A granted script step runs only on Linux; other hosts refuse the step. It has
+A granted script step runs on Linux under `linux-bwrap-script-v1` and on macOS
+under `macos-sandbox-script-v1`; other platforms refuse the step with
+`script_sandbox_unavailable`, and so does a step started inside another sandbox
+(a worker's own Seatbelt or Bubblewrap sandbox), which never runs nested. The
+script runs with `RLIMIT_CPU` at its timeout in CPU seconds and `RLIMIT_NOFILE`
+at 1024, which it cannot raise. On Linux it has
 no network unless its grant allows one: `--network https` shares the host
 network but admits outbound TCP to port 443 only (it needs Landlock ABI 4, so an
 older kernel refuses the step), and `--network any` shares it with no rule.
@@ -524,6 +538,22 @@ from the step's log, its output and `orbit run show` / `orbit script history`.
 A manifest asking for more network or another variable than its grant refuses
 with `grant_insufficient`. If the sandbox itself fails, see
 [Linux sandbox](linux-sandbox.md).
+
+On macOS a script step never has network: a grant with `--network https` or
+`any` refuses the step with `script_sandbox_unavailable`. The macOS profile
+allows the same paths as the Linux one, but the script sees its scratch
+directory at its host path (use `$ORBIT_SCRIPT_IN`, `$ORBIT_SCRIPT_OUT`,
+`$HOME` and `$TMPDIR`, never `/orbit-script`), and declared inputs are copied
+into `in/`, so they count against the scratch size limit. It has no memory or
+task limits, a timed-out descendant that calls `setsid` can outlive the step
+(still confined), and file metadata outside the grant stays visible; `orbit
+doctor` lists these gaps in its `script-sandbox` row. With
+`machine.worker_containment = "strict"`, every script step on macOS is refused.
+macOS privacy permissions (TCC) apply on top of the profile and belong to the
+process that runs the job (the Orbit clock's launch agent, or the `orbit`
+binary it runs), not to the terminal that granted. A root they deny refuses the
+step with `script_root_unavailable`, naming the path and the System Settings >
+Privacy & Security pane to allow it in.
 
 ### Grant states
 

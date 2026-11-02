@@ -1739,7 +1739,7 @@ ORB-00374 removed the v2 `shell` activity because it spawned workspace-named pro
 2. The snapshot runs under `linux-bwrap-script-v1`: a Bubblewrap constructed root with every namespace unshared (no network beyond the namespace's own loopback), the build profile's runtime table, the cwd (a run worktree read-write, the workspace root read-only), its Git metadata read-only, granted roots, and a scratch directory at `/orbit-script`. `.orbit/`, the global root and the credential paths are never mounted. A nested-sandbox start refuses with `script_sandbox_unavailable`. The script gets its own `orbit-script-*` systemd scope where one can be created; `strict` worker containment refuses without it.
 3. Stdin is the input validated against `input_schema_json`. Exit 0 must answer with one JSON document within 1 MiB matching `output_schema_json`, or the step fails without retry (`script_output_invalid`). A nonzero exit, a signal, a timeout (`SIGTERM`, 10 s, `SIGKILL`) or a scratch breach is `Ok(success = false)` with `{exit_code, signal, timed_out}` as output, retried per the step's `retry`.
 4. Every attempt, refusals included, writes one `script.execution` audit event with the script name, digests, grant, redacted argv, cwd mode, profile, exit, duration and the capped, redacted log blob. `orbit run show` lists them and `orbit script history <name>` reads them across runs.
-5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step. (Later: `files.inputs` shipped on Linux in [ORB-21297]; see [Scope: Script steps](../script-steps/1_scope.md) §4 Files in.)
+5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step. (Later: `files.inputs` shipped on Linux in [ORB-21297], and macOS runs script steps under `macos-sandbox-script-v1` with no network in [ORB-21298]; see [Scope: Script steps](../script-steps/1_scope.md) §3 and §4 Files in.)
 
 ### Rejected alternatives
 
@@ -1885,6 +1885,7 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
 - [ORB-19985] — run granted script steps on Linux under `linux-bwrap-script-v1`, record each attempt as `script.execution`, and supersede ORB-00374's removal for script steps.
+- [ORB-21298] — run granted script steps on macOS under `macos-sandbox-script-v1` with no network, `RLIMIT_*` limits, root probes and nested-sandbox refusal.
 - [ORB-20132] — operator approval of the breaking schemaVersion 3 change for auto-task jobs.
 - [ORB-20157] — define and explain disabled auto-task job steps (phase 1).
 - [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older clients with layout migration 5.

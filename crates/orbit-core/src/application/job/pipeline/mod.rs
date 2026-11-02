@@ -83,7 +83,8 @@ pub(crate) use worker::log::pipeline_worker_log_test_hook;
 #[cfg(all(feature = "test-support", unix))]
 pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
 pub(crate) use worker::scope::{
-    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_scope_launcher,
+    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_containment_is_strict,
+    script_scope_launcher,
 };
 pub(crate) use worker::supervisor::WorkerLaunchError;
 #[cfg(feature = "test-support")]

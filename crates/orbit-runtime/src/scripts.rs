@@ -549,6 +549,25 @@ impl RuntimeKernel {
                 )));
             }
         }
+        // Each root must exist, resolve, sit outside the credential paths and
+        // pass a read (and, for a write root, write) probe by this process.
+        // The job's process repeats the probe before every spawn.
+        let home = std::env::var_os("HOME");
+        let roots = read_roots
+            .iter()
+            .map(|root| (root, orbit_exec::ScriptRootAccess::Read))
+            .chain(
+                write_roots
+                    .iter()
+                    .map(|root| (root, orbit_exec::ScriptRootAccess::Write)),
+            );
+        for (root, access) in roots {
+            orbit_exec::probe_script_root(root, access, home.as_deref()).map_err(|reason| {
+                OrbitError::InvalidInput(format!(
+                    "script `{name}` cannot be granted: {reason}; nothing was granted"
+                ))
+            })?;
+        }
         let mut env_pass = asset.spec.requests.env_pass.clone();
         for env_name in &options.env_pass {
             if !env_pass.contains(env_name) {
