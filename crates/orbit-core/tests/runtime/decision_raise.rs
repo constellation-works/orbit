@@ -460,6 +460,38 @@ fn concurrent_same_question_raises_on_one_task_deduplicate() {
     );
 }
 
+/// Regression (ORB-21414): the `options` schema once advertised a bare array,
+/// so an agent sent strings that only the typed parser refused. Entries must
+/// be objects, and the refusal says so.
+#[test]
+fn string_options_are_refused_as_non_object_entries() {
+    let fx = Fixture::new();
+    let human = fx.task("Human work", "dk");
+    let refused = fx
+        .raise(
+            "claude",
+            json!({"task_id": human, "question": "Q?", "options": ["Keep it", "Drop it"]}),
+        )
+        .expect_err("string options are not the advertised object form");
+    assert!(
+        matches!(refused, OrbitError::InvalidInput(_)),
+        "invalid_input: {refused:?}"
+    );
+    assert!(
+        refused
+            .to_string()
+            .contains("`options` entries must be objects"),
+        "{refused}"
+    );
+    assert!(
+        fx.runtime
+            .get_task_decision_requests(&human)
+            .unwrap()
+            .is_empty(),
+        "nothing was written"
+    );
+}
+
 #[test]
 fn raising_is_refused_for_bad_input_agent_crews_and_past_the_caps() {
     let fx = Fixture::new();

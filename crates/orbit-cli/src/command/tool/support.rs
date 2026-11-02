@@ -36,6 +36,7 @@ fn format_tool_param_signature(param: &ToolParam) -> String {
 fn display_param_type(param_type: &str) -> &str {
     match param_type {
         "string_list" => "string|string[]",
+        "object_array" => "object[]",
         other => other,
     }
 }

@@ -35,8 +35,9 @@ pub enum ParamType {
     EnumList(&'static [EnumValue]),
     /// A JSON object, for structured input such as a schedule.
     Object,
-    /// A JSON array of structured entries, such as typed relations. The
-    /// handler owns the entries' shape.
+    /// A JSON array of structured entries, such as typed relations. Every
+    /// entry must be an object, and the tool schema advertises that item
+    /// type; the handler owns the entries' fields.
     Array,
 }
 
@@ -85,7 +86,7 @@ impl ParamType {
             // migrated enum is wire-identical to the string it replaced.
             ParamType::Enum(_) => "string",
             ParamType::Object => "object",
-            ParamType::Array => "array",
+            ParamType::Array => "object_array",
         }
     }
 }

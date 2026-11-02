@@ -296,7 +296,14 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
         ParamType::Boolean | ParamType::Switch => (value.is_boolean(), "a boolean"),
         ParamType::Enum(_) => (value.is_string(), "a string"),
         ParamType::Object => (value.is_object(), "an object"),
-        ParamType::Array => (value.is_array(), "an array"),
+        ParamType::Array => match value {
+            Value::Array(items) if !items.iter().all(Value::is_object) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "`{name}` entries must be objects"
+                )));
+            }
+            _ => (value.is_array(), "an array of objects"),
+        },
     };
     if valid {
         return Ok(());

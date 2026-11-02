@@ -298,6 +298,40 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
             && param["required"] == false
     }));
 }
+/// Regression (ORB-21414): array parameters of structured entries advertise
+/// object items, not a bare array an agent can fill with strings.
+#[test]
+fn structured_array_parameters_advertise_object_items() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+    let output = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<Value> = serde_json::from_slice(&output).expect("tool list JSON");
+    for (tool, param) in [
+        ("orbit.decision.raise", "options"),
+        ("orbit.task.block_triage", "options"),
+    ] {
+        let tool_json = tools
+            .iter()
+            .find(|candidate| candidate["name"] == tool)
+            .unwrap_or_else(|| panic!("{tool} is listed"));
+        let parameter = tool_json["parameters"]
+            .as_array()
+            .expect("parameters array")
+            .iter()
+            .find(|candidate| candidate["name"] == param)
+            .unwrap_or_else(|| panic!("{tool} has {param}"));
+        assert_eq!(parameter["param_type"], "object_array", "{tool} {param}");
+    }
+}
 
 #[test]
 fn tool_show_displays_lock_reservation_shapes() {
