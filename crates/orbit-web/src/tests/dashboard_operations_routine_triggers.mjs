@@ -225,4 +225,69 @@ chooseMissedRun('catch_up_once');
 assert(!editor().querySelector('.schedule-error').textContent && saveTrigger().disabled && saveTrigger().title === 'No change to save', 'changing Missed slots after refusal clears the message and restores the unchanged state');
 chooseMissedRun('skip');
 assert(!editor().querySelector('.schedule-error').textContent && !saveTrigger().disabled, 'a subsequent valid policy edit is revalidated and saveable');
+// An unapplied cadence belongs to its host (ORB-21486): host-a's draft never
+// shows or submits on host-b, and returning to host-a restores it.
+[...document.querySelectorAll('.schedule-editor button')].find(button => button.textContent === 'Cancel')?.click();
+const savedFetch = globalThis.fetch;
+let clockHost = 'host-a';
+let clockCadence = 60;
+const clockPosts = [];
+globalThis.fetch = async (path, options = {}) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/routines/clock' && options.method === 'POST') {
+    clockPosts.push(JSON.parse(options.body));
+    return response({ message: 'Saved', clock: { enabled: true, provider: 'fixture', health: 'healthy' } });
+  }
+  if (url.pathname === '/api/routines') return response({
+    machine_name: clockHost, capabilities, controls_authorized: true, cron_zone: { name: null, offset_seconds: 0 },
+    routines: [],
+    clock: { enabled: true, configured_cadence_seconds: clockCadence, effective_cadence_seconds: clockCadence, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true },
+    inactive_plugin_counts: {}, retired: [],
+  });
+  return response({});
+};
+setWorkspace('one');
+await fetchAndRenderOperations('routines');
+const cadenceSelect = () => get('clock-body').querySelector('.operation-cadence');
+const applyButton = () => Array.from(get('clock-body').querySelectorAll('button')).find(button => button.textContent.startsWith('Apply cadence'));
+cadenceSelect().value = '300';
+cadenceSelect().dispatchEvent(new Event('change', { bubbles: true }));
+assert(applyButton() && !applyButton().disabled, 'host-a draft enables Apply');
+clockHost = 'host-b';
+await fetchAndRenderOperations('routines');
+assert(cadenceSelect().value === '60', `host-b shows its own cadence, not host-a's draft: ${cadenceSelect().value}`);
+assert(applyButton().disabled, 'host-b Apply stays disabled with no host-b draft');
+cadenceSelect().value = '900';
+cadenceSelect().dispatchEvent(new Event('change', { bubbles: true }));
+clockHost = 'host-a';
+await fetchAndRenderOperations('routines');
+assert(cadenceSelect().value === '300', `returning to host-a restores its draft: ${cadenceSelect().value}`);
+applyButton().click();
+await new Promise(resolve => setTimeout(resolve, 0));
+await new Promise(resolve => setTimeout(resolve, 0));
+assert(clockPosts.some(post => post.machine_name === 'host-a' && post.cadence_seconds === 300), `Apply submits host-a's own draft: ${JSON.stringify(clockPosts)}`);
+assert(!clockPosts.some(post => post.machine_name === 'host-b'), 'no host-a draft is submitted for host-b');
+
+// Next-hour timeline across the Pacific spring-forward (ORB-21486): with the
+// current offset (PST) every 03:xx PDT fire would be missed; timezone-aware
+// evaluation counts all 41 minutes from 10:00Z to 10:40Z.
+globalThis.fetch = async (path) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/routines') return response({
+    machine_name: 'fixture-host', capabilities, controls_authorized: true, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -28800 },
+    routines: [routine('dst-sweep', { cron: '* 3 * * *', next_evaluation: { state: 'scheduled', at: '2026-03-08T10:00:00Z', hypothetical: false } })],
+    clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true },
+    inactive_plugin_counts: {}, retired: [],
+  });
+  return response({});
+};
+Date.now = () => Date.parse('2026-03-08T09:40:00Z');
+await fetchAndRenderOperations('routines');
+const dstTicks = Array.from(get('routines-body').querySelectorAll('.operation-timeline-tick')).filter(tick => tick.title.startsWith('dst-sweep ·'));
+assert(dstTicks.length === 41, `spring-forward strip plots 41 fires, got ${dstTicks.length}`);
+const dstSummary = get('routines-body').querySelector('.operation-timeline-summary').textContent;
+assert(dstSummary.startsWith('41 fires'), `spring-forward summary counts 41 fires: ${dstSummary}`);
+globalThis.fetch = savedFetch;
+Date.now = () => frozenNow;
+await fetchAndRenderOperations('routines');
 globalThis.routineTriggerTestsPassed = true;

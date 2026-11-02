@@ -1598,6 +1598,23 @@ assert.deepEqual(waitingRows().sort(), ['task-ORB-501', 'task-ORB-503', 'task-OR
 crewModule.cacheCrewPayload({ crews: [] });
 waitingBox.querySelector('.waiting-filter').dispatch('click');
 
+// "My work" in the aggregate view (ORB-21486): the registry is cleared, so the
+// filter reads the per-task `human_crew` stamp, not crew names. With no known
+// viewer every human task counts; with a known viewer only theirs does.
+crewModule.cacheCrewPayload({ crews: [] });
+assert.equal(crewModule.isMyWorkTask(humanBacklog), true, 'aggregate My work keeps a human task with no registry');
+assert.equal(crewModule.isMyWorkTask(agentBacklog), false, 'aggregate My work drops a same-named agent task');
+const danielTask = task(530, { status: 'backlog', crew: 'daniel', human_crew: { name: 'daniel', description: '' }, workspace_id: 'ws_b', workspace_name: 'b' });
+crewModule.cacheCrewPayload({ crews: [], human_crews: [{ name: 'ops' }, { name: 'daniel' }], viewer_human_crew: 'daniel' });
+assert.equal(crewModule.isMyWorkTask(danielTask), true, 'a known viewer keeps their own human task');
+assert.equal(crewModule.isMyWorkTask(humanBacklog), false, 'a known viewer excludes another human crew');
+crewModule.cacheCrewPayload({ crews: [] });
+waitingBox.querySelector('.my-work-filter').dispatch('click');
+renderTasks(humanTasks, humanContext);
+assert.deepEqual(taskRows().map(row => row.dataset.key).sort(), ['task-ORB-501', 'task-ORB-503', 'task-ORB-510', 'task-ORB-511', 'task-ORB-512'], 'aggregate My work lists human tasks and no agent task');
+waitingBox.querySelector('.my-work-filter').dispatch('click');
+renderTasks(humanTasks, humanContext);
+
 // Run the shipped app in a browser when a prepared Playwright module is given.
 // Hold workspace discovery so startup cannot accidentally rely on a default.
 if (process.argv.includes('--browser')) {

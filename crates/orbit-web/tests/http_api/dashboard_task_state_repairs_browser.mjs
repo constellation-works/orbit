@@ -41,9 +41,11 @@ const tasks = [
   { ...base, id: 'RUN-1', title: 'Running task owned elsewhere', status: 'in-progress', job_run_id: 'jrun-owned', job_run_navigable: true,
     workspace_id: 'second-owner', comments: [], started_at: at,
     job_run: { run_id: 'jrun-owned', state: 'running', step_id: 'implement', step_index: 1, step_count: 5, started_at: at } },
+  { ...base, id: 'CMP-1', title: 'Complexity task', status: 'backlog', complexity: 'low', comments: [] },
 ];
 const fx = globalThis.fx = {
   copied, posts: [], patches: [], runPolls: 0, refuseAdmission: true, holdPatch: null, patchRelease: null, holdRecord: false, recordRelease: null, refuseRecord: false,
+  tasks, detailGets: [],
 };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (input, options = {}) => {
@@ -63,7 +65,7 @@ globalThis.fetch = async (input, options = {}) => {
     const id = decodeURIComponent(sub[1]);
     const task = tasks.find(candidate => candidate.id === id);
     if (!task) return json({ error: 'not found' }, 404);
-    if (!sub[2] && method === 'GET') return json(task);
+    if (!sub[2] && method === 'GET') { fx.detailGets.push(id); return json(task); }
     if (!sub[2] && method === 'PATCH') {
       const body = JSON.parse(options.body);
       fx.patches.push({ id, body });
@@ -385,6 +387,50 @@ try {
       await context.close();
     });
   }
+  // 7. A pinned task outside the filter follows Refresh (ORB-21486).
+  await scenario('pinnedRefresh', async () => {
+    const { page, errors, context } = await open('#tasks?status=backlog&open=DOC-3');
+    await page.locator('#task-detail-body .task-pane-title', { hasText: 'Finished task outside the filter' }).waitFor();
+    const getsBefore = await page.evaluate(() => fx.detailGets.filter(id => id === 'DOC-3').length);
+    assert.ok(getsBefore >= 1, 'pinned open reads the detail once');
+    await page.evaluate(() => {
+      const task = fx.tasks.find(candidate => candidate.id === 'DOC-3');
+      task.title = 'Externally renamed pinned task';
+      task.comments = [{ at: '2026-10-20T16:00:00Z', by: 'operator', message: 'External comment.' }];
+    });
+    await page.locator('#refresh-btn').click();
+    await page.locator('#task-detail-body .task-pane-title', { hasText: 'Externally renamed pinned task' }).waitFor();
+    const getsAfter = await page.evaluate(() => fx.detailGets.filter(id => id === 'DOC-3').length);
+    assert.ok(getsAfter > getsBefore, `refresh re-reads the pinned detail (${getsBefore} -> ${getsAfter})`);
+    await page.screenshot({ path: path.join(evidence, 'pinned-refresh-dark-1440.png') });
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  // 8. Complexity low -> medium -> low beside an unsaved draft (ORB-21486).
+  await scenario('complexityDraft', async () => {
+    const { page, errors, context } = await open('#tasks?status=backlog&open=CMP-1');
+    const detail = page.locator('#detail-CMP-1');
+    await detail.waitFor();
+    await detail.locator('.description-block button.field-edit').first().click();
+    await detail.locator('.description-block textarea').fill('Unsaved description draft');
+    const select = detail.locator('.task-complexity-select');
+    await select.selectOption('medium');
+    await page.waitForFunction(() => fx.patches.some(patch => patch.id === 'CMP-1' && patch.body.complexity === 'medium'));
+    await select.selectOption('low');
+    await page.waitForFunction(() => fx.patches.filter(patch => patch.id === 'CMP-1' && patch.body.complexity).length >= 2);
+    assert.deepEqual(await page.evaluate(() => fx.patches.filter(patch => patch.id === 'CMP-1').map(patch => patch.body.complexity)), ['medium', 'low'], 'both complexity changes are sent');
+    assert.equal(await page.evaluate(() => fx.tasks.find(task => task.id === 'CMP-1').complexity), 'low', 'server ends at low');
+    assert.equal(await detail.locator('.description-block textarea').inputValue(), 'Unsaved description draft', 'draft survives complexity saves');
+    // Undo after the revert restores the last confirmed value (medium).
+    await detail.locator('.complexity-cell .mutation-undo').click();
+    await page.waitForFunction(() => fx.tasks.find(task => task.id === 'CMP-1').complexity === 'medium');
+    assert.equal(await detail.locator('.description-block textarea').inputValue(), 'Unsaved description draft', 'draft survives undo');
+    await page.screenshot({ path: path.join(evidence, 'complexity-draft-dark-1440.png') });
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
   fs.writeFileSync(path.join(evidence, 'task-state-repairs-result.json'), JSON.stringify(results, null, 2));
   const failed = Object.entries(results).filter(([, result]) => !result.passed);
   assert.deepEqual(failed, [], `Task state repair scenarios failed:\n${JSON.stringify(failed, null, 2)}`);

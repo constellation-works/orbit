@@ -1,10 +1,10 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
 import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
-import { forgetTaskDetailLoad } from './task-data.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, STATUS_LABELS } from './task-shared.js';
+import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
-import { humanCrewFor, myWorkCrewNames } from './task-crew.js';
+import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
 
 let settleMergedInFlight = false;
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
@@ -107,7 +107,7 @@ export function filterTasks(tasks, context) {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
-    if (myWorkOnly && !myWorkCrewNames().includes(t.crew)) return false;
+    if (myWorkOnly && !isMyWorkTask(t)) return false;
     if (waitingOnly && !taskWaitsOnYou(t)) return false;
     if (!q) return true;
     return (
@@ -349,6 +349,43 @@ async function pinOpenTask(taskId, context) {
   rerender(context);
 }
 
+let pinnedRefreshInFlight = null;
+
+// Re-read a pinned task from its owner on a list refresh or change notice.
+// The pinned object is the only copy of a filtered-out task, so without this
+// it stays at whatever the first open fetched. Drafts are preserved by the
+// pane's draft retention; this only replaces the cached record, guarded by
+// the workspace visit and the open-task generation like the first read.
+export function refreshPinnedTask(context) {
+  const pinned = taskState.pinnedExternalTask;
+  if (!pinned || !pinned.task) return Promise.resolve();
+  const taskId = pinned.id || pinned.task.id;
+  if (!taskId) return Promise.resolve();
+  if (pinnedRefreshInFlight && pinnedRefreshInFlight.id === taskId) return pinnedRefreshInFlight.promise;
+  const visit = captureWorkspaceVisit();
+  const generation = openTaskGeneration;
+  const previous = pinned.task;
+  const superseded = () => !visit.isCurrent() || taskState.openTaskId !== taskId || generation !== openTaskGeneration
+    || !taskState.pinnedExternalTask || taskState.pinnedExternalTask.id !== taskId;
+  const promise = (async () => {
+    try {
+      const task = await fetchJson(taskMutationPath(previous));
+      if (superseded()) return;
+      if (!task || task.id !== taskId) return;
+      const merged = mergeTaskRecord(previous, task);
+      taskState.pinnedExternalTask = { task: merged, id: taskId };
+      applyUpdatedTask(merged, context);
+    } catch {
+      // Keep the cached copy on a failed refresh; the next refresh retries.
+    } finally {
+      if (pinnedRefreshInFlight && pinnedRefreshInFlight.promise === promise) pinnedRefreshInFlight = null;
+    }
+    if (!superseded()) rerender(context);
+  })();
+  pinnedRefreshInFlight = { id: taskId, promise };
+  return promise;
+}
+
 /* Global ID resolver support (ORB-00211): allow rendering detail for a task that
    is outside the filtered list (hidden status, search, or truncated fetch)
    without mutating DASHBOARD_TASK_STATUSES. The pinned detail shows in the
@@ -431,7 +468,7 @@ function renderChips(context) {
       : chip.dataset.role === "my-work" ? myWorkOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
-    if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly;
+    if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly && !taskList(context).some((t) => isMyWorkTask(t));
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
     chip.setAttribute("aria-pressed", on ? "true" : "false");
@@ -766,7 +803,7 @@ export function renderFilterSummary(context) {
   }
   if (notReadyOnly) parts.push("not ready");
   if (pilotWarningsOnly) parts.push("pilot warnings");
-  if (myWorkOnly) parts.push(`my work (${myWorkCrewNames().join(", ") || "no human crew"})`);
+  if (myWorkOnly) parts.push(`my work (${myWorkCrewNames().join(", ") || "human crews"})`);
   if (waitingOnly) parts.push("waiting on you");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);

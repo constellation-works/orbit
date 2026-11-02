@@ -90,7 +90,7 @@ export function applyUpdatedTask(updatedTask, context) {
   return merged;
 }
 
-export function currentCrewTask(task, context) {
+export function currentTaskRecord(task, context) {
   if (!task || !task.id) return task;
   return taskList(context).find((current) => current && current.id === task.id) ||
     (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task && taskState.pinnedExternalTask.task.id === task.id
@@ -98,6 +98,10 @@ export function currentCrewTask(task, context) {
       : null) ||
     taskDetails.get(task.id) ||
     task;
+}
+
+export function currentCrewTask(task, context) {
+  return currentTaskRecord(task, context);
 }
 
 // Read the full projection behind a summary row. One read per summary object:
