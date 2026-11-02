@@ -124,6 +124,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`. `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
 | Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Regression-risk prompt marks count declared footprints; related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
+| Evolution costs | `orbit.evolution.add` records an interactive cost event; `orbit.evolution.list` ranks capability-gap signatures by recorded cost; `orbit.evolution.show` inspects one record and its occurrences | `orbit evolution add --event <JSON>`, `list [--state <state>] [--since <time>]`, and `show <id>`; operator-only `decline <id>` suppresses proposals for a signature. Use this for repeated costs caused by a missing capability; use [Friction](friction.md) for defects and contradicted assumptions |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` (`--auto-fix` also has an operator-only dashboard checkbox; no MCP auto-fix start input) |
 | Forecast mode for a local drain | `orbit_workflow_auto` `action: "start"` accepts `auto_concurrency: "off"`, `"shadow"` or `"enforce"`; omission follows the configured host mode each admission pass. Pull drains refuse this override and use the executor host mode. | `orbit run auto --auto-concurrency <MODE>`; omission has the same live host default. Explicit overrides and inheritance source (`explicit` or `configured`) survive restart/resume without writing config; host thresholds and provider-limit policy refresh next pass, caching unchanged config by mtime and retaining the previous policies with a warning on invalid config; run show and readiness expose `mode`, `source` and the current `configured_mode`. This selects forecast policy only: normal operator authority, worker ceiling and host thresholds still apply. |
 | Submit a catalog job | `orbit_pipeline_invoke` (`job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — an operator session polls `orbit_workflow_run_show` (operator authority; denied for agent sessions); a session with a shell on the owning host uses `orbit run show <run-id>` instead | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
@@ -143,6 +144,31 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Host agent invocation | Deprecated; opt-in `agent-invoke` MCP toolset | `orbit run agent <prompt>` still works and warns; dispatch work through tasks and `orbit run ship`, or run your provider's CLI directly for a one-off question |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+
+### Evolution records
+
+Evolution records measure the cost of capability gaps. `orbit.evolution.add` records an
+interactive cost event; it does not create friction or propose work. Its required `event` object
+has a `kind` (`workaround`, `manual_step`,
+`retry` or `wait`), one-line `what`, and nonnegative integer `minutes`, `retries` and
+`slot_minutes`. Include `wished` for a workaround or manual step. An optional kebab-case
+`signature` (3–64 characters) groups costs for the same capability gap into one record; an event
+without a signature is kept as a cost but does not create a gap record. Optional `mandate` and
+`cycle` attributes associate the event with an assignment and cycle; `cycle` requires `mandate`.
+
+`orbit.evolution.list` lists signatures ranked by summed minutes plus slot minutes. Filter with
+`state` (`open`, `proposed`, `declined` or `resolved`) or `since` (an RFC 3339 time).
+`orbit.evolution.show` displays one record, its occurrences, proposal state, suppression window
+and all-time aggregates. The matching CLI commands are `orbit evolution add --event <JSON>`
+(with optional `--mandate` and `--cycle`), `orbit evolution list [--state <state>] [--since <time>]`
+and `orbit evolution show <id>`. The CLI also has operator-only
+`orbit evolution decline <id>` to suppress proposals for a signature.
+
+Choose the record by the kind of improvement needed: if a fix would make the system behave as
+designed, record friction; if the system needs a different or new capability and the work has a
+measurable cost, record an evolution event. See [Friction](friction.md) for friction guidance.
+To verify the surface, run `orbit tool list` to confirm all three tools are active and
+`orbit evolution --help` to inspect the CLI commands.
 
 ### Codebase analytics and path detail
 
