@@ -177,8 +177,10 @@ closes the session once a single message exceeds 8 MiB
 past that bound, and rmcp's discard path is never reached on this listener. The
 pollable Unix stdio handover pump enforces the same 16 MiB line limit before
 buffering or tracking a complete line; an oversized line closes that stdio
-session, even if its newline has not arrived. Non-pollable stdio uses rmcp's
-default discard behavior directly.
+session, even if its newline has not arrived. The non-pollable stdio pump
+(`pump_plain_lines`) enforces the same 16 MiB line limit and likewise closes
+the session on overflow, even if its newline has not arrived, rather than
+discarding the line so reading can continue.
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
