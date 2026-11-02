@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBlocker, PrAutoFixReadDeferral,
+    PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBaseRed,
+    PrAutoFixBlocker, PrAutoFixReadDeferral,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -116,6 +117,23 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
     evidence: &Value,
 ) -> Result<(), OrbitError> {
     append_history_note(host, auto_fix, event, &history_note(evidence)?, None)
+}
+
+/// Persist the inherited-failure hold beside its unchanged diagnostic note.
+/// The record's field order preserves historical note bytes and exact
+/// note-based deduplication, including against decision-less entries.
+pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    record: &PrAutoFixBaseRed,
+) -> Result<(), OrbitError> {
+    append_history_note(
+        host,
+        auto_fix,
+        PR_AUTO_FIX_BASE_RED_EVENT,
+        &history_note(record)?,
+        Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
+    )
 }
 
 /// Record one throttled-read wait. The note stays the record's JSON; the

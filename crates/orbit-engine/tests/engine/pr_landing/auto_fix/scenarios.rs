@@ -1,7 +1,9 @@
 //! Resumed auto-fix authority through the public job and PR boundaries.
 
 use super::*;
-use orbit_types::workflow::{PrAutoFixReadDeferral, PrAutoFixReadReset};
+use orbit_types::workflow::{
+    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixReadDeferral, PrAutoFixReadReset,
+};
 use std::io::Write as _;
 
 type JobResult = Result<orbit_engine::JobOutcome, DispatchError>;
@@ -2683,7 +2685,7 @@ fn open_moved_base_ci(row: &std::path::Path) {
 fn auto_fix_holds_an_inherited_failure_until_the_base_proves_it() {
     auto_fix_table(
         "auto_fix::auto_fix_holds_an_inherited_failure_until_the_base_proves_it",
-        "skipped_tip_green_parent skipped_tip_red_parent skipped_tip_unproven pending_tip_unreadable_tip pending_tip_unreadable_fork_point",
+        "skipped_tip_green_parent skipped_tip_red_parent skipped_tip_unproven pending_tip_unreadable_tip pending_tip_unreadable_fork_point pending_tip_unreadable_fork_point:legacy_rich pending_tip_unreadable_fork_point:legacy_minimal pending_tip_unreadable_fork_point:typed_conflicting_note",
         |case, row| {
             let _timer = RowTimer::start(case);
             inherited_failure_case(row, case);
@@ -2692,7 +2694,9 @@ fn auto_fix_holds_an_inherited_failure_until_the_base_proves_it() {
 }
 
 fn inherited_failure_case(row: &std::path::Path, case: &str) {
+    let (case, storage) = case.split_once(':').unwrap_or((case, "typed"));
     let (fx, host) = opened_review(row);
+    let host = std::rc::Rc::new(host);
     let shared = "error[E0433]: cannot find module `broken_base`\n";
     let pair = case.starts_with("pending_tip");
     let failing: &[(&str, &str)] = if pair {
@@ -2749,7 +2753,70 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     }
     let input = waited_auto_fix_input(&fx, 30, Some(5));
     let reads_before = fx.status_reads();
-    let result = super::complete_with_logical_clock(&host, &input);
+    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+    let now = std::rc::Rc::clone(&clock);
+    let waited = std::rc::Rc::clone(&clock);
+    let stored = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let stored_on_wait = std::rc::Rc::clone(&stored);
+    let waiting_host = std::rc::Rc::clone(&host);
+    let storage_on_wait = storage.to_owned();
+    let legacy_rich = json!({"failed_head": fx.candidate, "landed_base": tip,
+        "base_branch": BASE, "source": "latest_push", "path": "known_red_base",
+        "checks": [{"base_commit": fork_point}]})
+    .to_string();
+    let result = orbit_engine::test_support::with_prerequisite_clock(
+        move || {
+            let current = now.get();
+            now.set(current + 1);
+            current
+        },
+        |_, _| {},
+        || {
+            orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| {
+                    waited.set(waited.get() + u64::try_from(duration.as_millis()).unwrap());
+                    if stored_on_wait.borrow().is_some() || storage_on_wait == "typed" {
+                        return;
+                    }
+                    // Reopen exactly the state an older process would have left,
+                    // before the next poll loses access to fork-point evidence.
+                    let mut history = waiting_host.history.lock().unwrap();
+                    let entry = history
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .iter_mut()
+                        .find(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+                        .unwrap();
+                    let record = PrAutoFixBaseRed::from_entry(entry).unwrap();
+                    assert!(matches!(
+                        entry.decision,
+                        Some(TaskDecision::PrAutoFixBaseRed(_))
+                    ));
+                    assert_eq!(
+                        serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap(),
+                        serde_json::to_value(&record).unwrap(),
+                        "new notes retain the historical payload"
+                    );
+                    match storage_on_wait.as_str() {
+                        "legacy_rich" => {
+                            entry.note = Some(legacy_rich.clone());
+                            entry.decision = None;
+                        }
+                        "legacy_minimal" => entry.decision = None,
+                        "typed_conflicting_note" => {
+                            entry.note = Some(
+                                json!({"failed_head": "other-head", "reason": "diagnostic only"})
+                                    .to_string(),
+                            );
+                        }
+                        _ => panic!("unknown storage {storage_on_wait}"),
+                    }
+                    *stored_on_wait.borrow_mut() = Some(entry.clone());
+                },
+                || action(&host, "pr_complete", &input),
+            )
+        },
+    );
     let polls = fx.status_reads() - reads_before;
     let history = host.history(TASK_ID);
     let attempts = repair_attempts(&host);
@@ -2759,9 +2826,44 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     );
     let base_red = history
         .iter()
-        .filter(|entry| entry.event == "pr_auto_fix_base_red")
-        .filter_map(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok())
+        .filter_map(PrAutoFixBaseRed::from_entry)
         .collect::<Vec<_>>();
+    if let Some(stored) = stored.borrow().as_ref() {
+        assert!(
+            history.iter().any(|entry| entry == stored),
+            "{storage}: no legacy rewrite"
+        );
+    }
+    for entry in history
+        .iter()
+        .filter(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+    {
+        let record = PrAutoFixBaseRed::from_entry(entry).unwrap();
+        assert_eq!(
+            record.failed_head, fx.candidate,
+            "{storage}: only the recorded head is held"
+        );
+        if storage == "typed" {
+            assert!(matches!(
+                entry.decision,
+                Some(TaskDecision::PrAutoFixBaseRed(_))
+            ));
+            // These are the original json! layouts, including insertion
+            // order: serde_json uses preserve_order in this workspace.
+            let legacy_note = if let Some(reason) = &record.reason {
+                json!({"failed_head": record.failed_head, "reason": reason})
+            } else {
+                json!({"failed_head": record.failed_head, "landed_base": record.landed_base,
+                    "base_branch": record.base_branch, "source": record.source,
+                    "checks": record.checks, "path": record.path})
+            };
+            assert_eq!(
+                entry.note.as_deref().unwrap(),
+                legacy_note.to_string(),
+                "the additive decision leaves note bytes and dedupe unchanged"
+            );
+        }
+    }
     let refresh = history
         .iter()
         .find(|entry| entry.event == "pr_auto_fix_base_refresh")
@@ -2801,8 +2903,11 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
         assert!(refresh.is_none(), "{case}: no green base, no refresh");
         if case == "skipped_tip_red_parent" {
             assert!(
-                base_red.iter().any(|note| note["path"] == "known_red_base"
-                    && note["checks"][0]["base_commit"] == fork_point.as_str()),
+                base_red
+                    .iter()
+                    .any(|record| record.path.as_deref() == Some("known_red_base")
+                        && record.checks.as_ref().unwrap()[0]["base_commit"]
+                            == fork_point.as_str()),
                 "{case}: the newest red commit decides: {base_red:?}"
             );
         } else {

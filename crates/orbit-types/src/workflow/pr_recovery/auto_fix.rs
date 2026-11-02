@@ -23,6 +23,75 @@ pub const PR_AUTO_FIX_ADMITTED_EVENT: &str = "pr_auto_fix_admitted";
 /// History event recording a repaired head the watcher published.
 pub const PR_AUTO_FIX_PUSHED_EVENT: &str = "pr_auto_fix_pushed";
 
+/// History event recording a failed head held for an inherited base failure.
+pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
+
+/// A failed head whose repair is held until the base proves it fixed.
+///
+/// Only `failed_head` supplies hold authority. The optional fields retain the
+/// rich base-tip evidence or the minimal poll reason without changing the
+/// historical note. New history entries also carry this record in a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixBaseRed {
+    pub failed_head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl PrAutoFixBaseRed {
+    /// A poll's minimal same-head hold and its diagnostic reason.
+    #[must_use]
+    pub fn for_failed_head(failed_head: String, reason: String) -> Self {
+        Self {
+            failed_head,
+            reason: Some(reason),
+            landed_base: None,
+            base_branch: None,
+            source: None,
+            checks: None,
+            path: None,
+        }
+    }
+
+    /// Decode the base-tip evidence boundary, selecting only known-red
+    /// evidence. A refresh decision supplies no inherited-failure hold.
+    #[must_use]
+    pub fn from_base_tip_evidence(evidence: &serde_json::Value) -> Option<Self> {
+        let record: Self = serde_json::from_value(evidence.clone()).ok()?;
+        (record.path.as_deref() == Some("known_red_base")).then_some(record)
+    }
+
+    /// Read a hold once at the task-history boundary. A typed decision wins
+    /// over diagnostic text; only an absent decision permits legacy decoding.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_BASE_RED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixBaseRed(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+    }
+
+    /// Both historical shapes are this record's JSON: rich base-tip evidence
+    /// and a minimal failed-head/reason pair. Neither requires a rewrite.
+    fn from_legacy_note(note: &str) -> Option<Self> {
+        serde_json::from_str(note).ok()
+    }
+}
+
 /// Leads the completion failure that hands an admitted check repair to the
 /// step's repair activity. Only the watcher writes it, after admission.
 pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";

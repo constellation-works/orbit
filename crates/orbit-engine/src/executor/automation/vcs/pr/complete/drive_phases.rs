@@ -8,18 +8,17 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::HandoffCandidate;
-use serde_json::{Value, json};
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed};
+use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
 use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    AutoFix, BlockedStopReason, BlockedVerdict, CiRerunRecovery, blocked_verdict,
-    defer_throttled_read, hold_auto_fix_stop, owed_read_wait, record_base_path, red_base_wait,
-    stopped,
+    self, AutoFix, BlockedStopReason, BlockedVerdict, CiRerunRecovery, blocked_verdict,
+    defer_throttled_read, hold_auto_fix_stop, owed_read_wait, red_base_wait, stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryPin, PrMergeState, UnreportedChecks, checked_pr_state,
@@ -354,11 +353,16 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     }
                 }
             {
-                record_base_path(
+                auto_fix::record_base_red(
                     host,
                     auto_fix,
-                    "pr_auto_fix_base_red",
-                    &json!({"failed_head":status.head_sha,"reason":reason}),
+                    &PrAutoFixBaseRed::for_failed_head(
+                        status
+                            .head_sha
+                            .clone()
+                            .ok_or_else(|| stopped(pr_number, "missing failed head"))?,
+                        reason.clone(),
+                    ),
                 )?;
                 base_red_reason = Some(reason);
             }

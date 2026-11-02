@@ -22,6 +22,7 @@ use orbit_common::governance::friction::normalize_title;
 use orbit_store::contracts::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::{PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed};
 use serde_json::Value;
 
 use super::super::blocked_recovery::{
@@ -35,12 +36,8 @@ use super::{
 };
 use crate::OrbitRuntime;
 
-/// History events whose `failed_head` or `head` note field marks a head's
-/// failure as inherited from the base, which the base-red path owns.
-const BASE_RED_EVENTS: [(&str, &str); 2] = [
-    ("pr_auto_fix_base_red", "failed_head"),
-    ("ci_base_suspect", "head"),
-];
+/// Events that may own an inherited failure within the current block episode.
+const BASE_RED_EVENTS: [&str; 2] = [PR_AUTO_FIX_BASE_RED_EVENT, "ci_base_suspect"];
 
 /// Tags whose tasks only an operator requeues.
 const OPERATOR_ONLY_TAGS: [&str; 2] = ["security", "security-review"];
@@ -434,11 +431,9 @@ pub(in crate::application::task) fn base_red_block_episode(
         .find(|entry| entry.to_status == Some(TaskStatus::Blocked))
         .is_some_and(|entry| BlockSource::of(entry).is_some());
     (blocked_by_run_failure
-        && episode.iter().any(|entry| {
-            BASE_RED_EVENTS
-                .iter()
-                .any(|(event, _)| entry.event == *event)
-        }))
+        && episode
+            .iter()
+            .any(|entry| BASE_RED_EVENTS.contains(&entry.event.as_str())))
     .then_some(episode)
 }
 
@@ -448,17 +443,22 @@ pub(in crate::application::task) fn base_red_owner(
     history: &[TaskHistoryEntry],
     head: &str,
 ) -> Option<&'static str> {
-    BASE_RED_EVENTS.iter().find_map(|(event, field)| {
-        history
-            .iter()
-            .any(|entry| {
-                entry.event == *event
-                    && entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                        .is_some_and(|note| note[*field] == head)
-            })
-            .then_some(*event)
-    })
+    if history
+        .iter()
+        .filter_map(PrAutoFixBaseRed::from_entry)
+        .any(|record| record.failed_head == head)
+    {
+        return Some(PR_AUTO_FIX_BASE_RED_EVENT);
+    }
+    history
+        .iter()
+        .any(|entry| {
+            entry.event == "ci_base_suspect"
+                && entry
+                    .note
+                    .as_deref()
+                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                    .is_some_and(|note| note["head"] == head)
+        })
+        .then_some("ci_base_suspect")
 }

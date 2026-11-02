@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
 use serde_json::json;
 
 use crate::context::RuntimeHost;
@@ -14,9 +14,9 @@ use super::super::super::push::push_batch_changes;
 use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome};
 use super::super::auto_fix::{
-    BlockedStopReason, BlockedVerdict, CheckRepair, base_tip_checks, blocked_verdict,
-    defer_throttled_read, hold_auto_fix_stop, record_base_path, record_landed_repair,
-    record_published_repair, red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
+    self, BlockedStopReason, BlockedVerdict, CheckRepair, base_tip_checks, blocked_verdict,
+    defer_throttled_read, hold_auto_fix_stop, record_landed_repair, record_published_repair,
+    red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
 use super::super::delivery::PrMergeState;
 use super::conflict::{
@@ -210,17 +210,14 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         ));
                     }
                 };
-                if base_evidence
+                if let Some(record) = base_evidence
                     .as_ref()
-                    .is_some_and(|evidence| evidence["path"] == "known_red_base")
+                    .and_then(PrAutoFixBaseRed::from_base_tip_evidence)
                 {
-                    let evidence = base_evidence
-                        .as_ref()
-                        .ok_or_else(|| stopped(pr_number, "missing base evidence"))?;
-                    record_base_path(host, auto_fix, "pr_auto_fix_base_red", evidence)?;
+                    auto_fix::record_base_red(host, auto_fix, &record)?;
                     *base_red_reason = Some(format!(
                         "base_red: required failures also fail on current base {}, so no repair agent runs",
-                        evidence["landed_base"]
+                        json!(record.landed_base)
                     ));
                 } else if !self.landed_refresh_attempted
                     && let Some(evidence) = base_evidence
@@ -312,11 +309,16 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         }
                     }
                 } {
-                    record_base_path(
+                    auto_fix::record_base_red(
                         host,
                         auto_fix,
-                        "pr_auto_fix_base_red",
-                        &json!({"failed_head":status.head_sha,"reason":reason}),
+                        &PrAutoFixBaseRed::for_failed_head(
+                            status
+                                .head_sha
+                                .clone()
+                                .ok_or_else(|| stopped(pr_number, "missing failed head"))?,
+                            reason.clone(),
+                        ),
                     )?;
                     *base_red_reason = Some(reason);
                 } else {
