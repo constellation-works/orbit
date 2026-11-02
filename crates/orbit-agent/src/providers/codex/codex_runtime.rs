@@ -142,13 +142,63 @@ impl AgentRuntime for CodexRuntime {
         true
     }
 
-    fn resume_failed(&self, exit_code: Option<i32>, stdout: &[u8], _stderr: &[u8]) -> bool {
-        exit_code != Some(0)
-            || crate::providers::usage_window::top_level_frames(stdout).any(|(_, frame)| {
-                matches!(
-                    frame.get("type").and_then(serde_json::Value::as_str),
-                    Some("turn.failed" | "error")
-                )
-            })
+    /// A resume failed only when Codex could not use the stored session: the
+    /// run did not complete, and its diagnostics name a missing, unknown or
+    /// expired session. A `type:error` frame alone is a transient notice (for
+    /// example `Reconnecting...`) that a turn survives, and a failure for any
+    /// other reason (auth, network, model) must surface rather than re-run the
+    /// brief.
+    fn resume_failed(&self, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+        let mut turn_failed = false;
+        let mut turn_completed = false;
+        let mut diagnostics = String::from_utf8_lossy(stderr).into_owned();
+        for (_, frame) in crate::providers::usage_window::top_level_frames(stdout) {
+            match frame.get("type").and_then(serde_json::Value::as_str) {
+                Some("turn.completed") => {
+                    turn_completed = true;
+                    turn_failed = false;
+                }
+                Some("turn.failed") => {
+                    turn_failed = true;
+                    turn_completed = false;
+                    push_frame_message(&mut diagnostics, &frame);
+                }
+                Some("error") => push_frame_message(&mut diagnostics, &frame),
+                _ => {}
+            }
+        }
+        let run_succeeded = exit_code == Some(0) && !turn_failed || turn_completed;
+        !run_succeeded && names_unusable_session(&diagnostics)
     }
+}
+
+fn push_frame_message(diagnostics: &mut String, frame: &serde_json::Value) {
+    for pointer in ["/message", "/error/message"] {
+        if let Some(message) = frame.pointer(pointer).and_then(serde_json::Value::as_str) {
+            diagnostics.push('\n');
+            diagnostics.push_str(message);
+        }
+    }
+}
+
+/// Whether diagnostics say the resumed session is missing, unknown or expired.
+fn names_unusable_session(diagnostics: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "no saved session",
+        "no rollout found",
+        "session not found",
+        "conversation not found",
+        "thread not found",
+        "unknown session",
+        "invalid session",
+    ];
+    const AUTH_WORDS: &[&str] = &["token", "auth", "login", "log in", "credential", "api key"];
+    let lower = diagnostics.to_ascii_lowercase();
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return true;
+    }
+    // An expired session, unless it is the account login that expired.
+    lower.contains("session")
+        && lower.contains("expired")
+        && !AUTH_WORDS.iter().any(|word| lower.contains(word))
 }

@@ -1215,3 +1215,148 @@ PY
     assert_eq!(logged[2]["continuity"], "rebuilt");
     assert_eq!(logged[2]["conversation_ref"], Value::Null);
 }
+
+/// Seeds a cycle whose checkpoint carries `conversation_ref`, then dispatches
+/// the next resident cycle through a fake `codex` running `provider_body`
+/// (Python; `args` is the argv). Returns the dispatch result, the argv of every
+/// provider call, and the brief's continuity.
+#[cfg(unix)]
+fn dispatch_resumed_cycle_with_fake_codex(
+    conversation_ref: &str,
+    provider_body: &str,
+) -> (Result<bool, String>, Vec<Vec<String>>, Value) {
+    use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset};
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = fixture();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let program = bin_dir.path().join("codex");
+    let invocations_log = bin_dir.path().join("invocations.jsonl");
+    let script = format!(
+        "#!/bin/sh\ncat >/dev/null\npython3 - '{log}' \"$@\" <<'PY'\nimport json, pathlib, sys\nargs = sys.argv[2:]\nwith pathlib.Path(sys.argv[1]).open('a') as f:\n    f.write(json.dumps(args) + '\\n')\n{body}\nPY\n",
+        log = invocations_log.display(),
+        body = provider_body
+    );
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let resource: ExecutorResource =
+        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
+    let mut def = ExecutorDef::from_resource_spec(
+        resource.metadata.name.clone(),
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    def.command = Some(program.to_string_lossy().into_owned());
+    def.sandbox = None;
+    fx.runtime.upsert_executor_def(&def).unwrap();
+
+    let watched = fx.task("Ship scribe v2 slice 5");
+    let mandate = fx.mandate(&watched);
+    let now = Utc::now();
+    let run1 = fx.cycle_run(&mandate, "resident-resume-seed");
+    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
+    fx.runtime
+        .append_resident_checkpoint(
+            &mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
+                "recovery_of": null, "wake": brief1["wake"],
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "actions": [], "decisions": [], "requests": [], "costs": [],
+                "notes": "seed",
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
+                "continuity": "rebuilt", "outcome": "idle", "probe": false,
+                "conversation_ref": conversation_ref
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fx.runtime.finish_resident_cycle(&run1).unwrap();
+    fx.stop_run(&run1, JobRunState::Success);
+
+    let run2 = fx.cycle_run(&mandate, "resident-resume-under-test");
+    let brief2 = fx
+        .runtime
+        .begin_resident_cycle(&run2, now + Duration::minutes(130))
+        .unwrap();
+    assert_eq!(brief2["conversation_ref"], conversation_ref);
+    let mut activity_asset =
+        load_activity_asset(include_str!("../../assets/activities/resident_cycle.yaml")).unwrap();
+    if let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(ref mut loop_spec) =
+        activity_asset.spec.spec
+    {
+        loop_spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
+        loop_spec.crew_name = Some("sol".into());
+    }
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit = V2AuditWriter::with_disk_sinks(
+        audit_dir.path(),
+        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        "ws_test",
+        &run2,
+        "codex:test".to_string(),
+        None,
+    )
+    .unwrap();
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "resident_cycle",
+        spec: &activity_asset.spec.spec,
+        fs_profile: None,
+        input: json!({"brief": brief2, "crew": "sol"}),
+        audit,
+        run_id: &run2,
+        host: Some(&fx.runtime),
+    })
+    .map(|outcome| outcome.success)
+    .map_err(|error| error.to_string());
+    let calls = std::fs::read_to_string(&invocations_log)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    (outcome, calls, brief2["continuity"].clone())
+}
+
+#[cfg(unix)]
+#[test]
+fn resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt() {
+    let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
+        "conv-live",
+        r#"
+envelope = {"schemaVersion": 1, "status": "success", "result": {"outcome": "idle", "summary": "ok"}, "error": None}
+print(json.dumps({"type": "thread.started", "thread_id": "conv-live"}))
+print(json.dumps({"type": "error", "message": "Reconnecting... 1/5"}))
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(envelope)}}))
+print(json.dumps({"type": "turn.completed", "usage": {}}))
+"#,
+    );
+    assert_eq!(outcome, Ok(true));
+    assert_eq!(calls.len(), 1, "the successful cycle was re-run: {calls:?}");
+    assert!(
+        calls[0]
+            .windows(2)
+            .any(|pair| pair == ["resume", "conv-live"]),
+        "{calls:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun() {
+    let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
+        "conv-live",
+        r#"
+print(json.dumps({"type": "error", "message": "unexpected status 401 Unauthorized: token has expired"}))
+print(json.dumps({"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized"}}))
+sys.stderr.write("authentication failed\n")
+sys.exit(1)
+"#,
+    );
+    assert_ne!(outcome, Ok(true), "the failure must surface");
+    assert_eq!(calls.len(), 1, "the brief was silently re-run: {calls:?}");
+}
