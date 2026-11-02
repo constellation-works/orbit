@@ -959,9 +959,16 @@ kept-publication receipt naming that run, task and unchanged task
 specification. The receipt is scope and preservation
 evidence, not a publication or validation certificate. Original successful host
 commit, preparation, synchronization, review corrections, push and PR
-checkpoints must authenticate the exact candidate. The retained branch,
-origin repository, remote lease and current open, unmerged PR must agree on
-branch and head, with automatic merge disabled. Missing, contradictory or
+checkpoints must authenticate the published head P and candidate. The origin
+repository and current open, unmerged PR must match the bound identity; the
+remote branch and PR must name the bound branch and both heads must equal P
+exactly, with automatic merge disabled. Normally the retained local branch
+also points to P. It may instead
+point to an unpublished candidate tip T when the source run's current
+host-certified clean base-chase checkpoints form an unambiguous chain from P
+to T and T still contains the last chase's target base. The binding records T
+as `candidate_head_sha`; publication uses a lease on P. Any other local branch
+movement is refused. Missing, contradictory or
 ambiguous evidence refuses before any source effect; no replacement PR is
 created. A dirty retained checkout also needs explicit reconciliation.
 
@@ -1098,7 +1105,8 @@ Inspect the original **successful publishing run**, using its `id` with
 in review and bound to that exact stopped, owner-local single-task run. A newer
 binding, a live or foreign owner, a claimed delivery, or a merged/closed PR
 refuses inspection. Original host publication checkpoints, candidate/base,
-retained branch, repository, PR identity and remote branch lease must agree.
+retained branch, repository, PR identity and remote branch lease must meet the
+inspection checks above, including the certified P-to-T exception.
 
 Review the returned `binding`, `review` and `policy_digest`. Submit the exact
 binding and policy digest with `action: "submit"`, a new `request_key`, a
@@ -1236,6 +1244,12 @@ whose candidate is already published. Final recovery records the task meaning
 with its requeue decision. The next admission authenticates the successful host
 commit, preparation, synchronization, review correction (if any), push and PR
 checkpoints, then checks the retained branch, remote lease and exact open PR.
+The remote branch and PR must both match the authenticated published head P.
+The retained branch may instead point to a candidate tip T only when the
+source run's current host-certified clean base-chase chain connects P to T and
+T still contains the last chase's target base. The successor adopts T as its
+candidate and publishes under a lease on P; unexplained local movement or
+remote/PR drift is refused.
 If setup lost its reply after rebinding the task, admission selects only the
 immediate preceding owner PR run from durable task-bound history; it never
 searches past a newer attempt for a usable publication.
@@ -1251,8 +1265,8 @@ next run adopts the head that auto-fix recorded. That is a
 `pr_auto_fix_pushed` record written by Orbit for the same run and pull
 request, starting from the published head. When the repair changed files the
 task does not declare, the next run's commit adds them to the task's context
-files as usual, and that addition does not void the adoption. A branch move
-with no such record is still refused.
+files as usual, and that addition does not void the adoption. A published
+branch move with no such record is still refused.
 
 A requeue that kept its publication does not wait behind other tasks' context
 locks. In a PR-mode workspace, `orbit run readiness` and the dashboard show
