@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{DecisionSubmitCaller, DecisionSubmitParams};
-use orbit_core::runtime::scripts::ScriptGrantOptions;
+use orbit_core::runtime::scripts::{self, ScriptGrantOptions};
+use orbit_engine::{RuntimeHost, ScriptStepRequest, ScriptStepRun};
 use orbit_types::task::{DecisionGate, DecisionRequest};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use orbit_types::workflow::activity_job::{ScriptGrantRequest, ScriptNetwork};
+use orbit_types::workflow::activity_job::{ScriptGrantRequest, ScriptNetwork, script_refusal};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -150,6 +151,113 @@ fn agent_session() -> ToolSessionContext {
         effective_capabilities: [McpCapability::Agent].into(),
         origin_session_id: Some("mcp-session-1".into()),
         ..Default::default()
+    }
+}
+
+crate::scenario_table!(
+    stored_script_grant_timeout_is_rechecked_before_step_supervision,
+    stored_script_grant_timeout_checks,
+);
+
+fn stored_script_grant_timeout_checks() {
+    let bound = u32::MAX as u64;
+    for seconds in [bound + 1, u64::MAX, 0, bound] {
+        let fx = fixture();
+        // A network mismatch gives the valid boundary case a deterministic
+        // later gate, without requiring a sandbox on the test host.
+        fx.write_manifest(&format!(
+            "  requests:\n    timeout_seconds: {}\n    network: https\n",
+            seconds.max(1)
+        ));
+        let mut grant = fx
+            .runtime
+            .grant_script(
+                SCRIPT,
+                &ScriptGrantOptions {
+                    timeout_seconds: Some(bound),
+                    network: Some(ScriptNetwork::None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let bytes = fx.runtime.granted_script_bytes(SCRIPT).unwrap().unwrap();
+        // Reproduce a legacy grant, including a valid authorization witness:
+        // admission now rejects these ceilings, but persisted rows survive.
+        grant.limits.timeout_max_seconds = seconds;
+        fx.runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_script_grant(&grant)
+            .unwrap();
+        scripts::record_script_grant_witness(
+            &fx.runtime.global_root(),
+            &grant,
+            &bytes.manifest,
+            &bytes.entry,
+        )
+        .unwrap();
+        scripts::verify_script_grant_witness(&fx.runtime.global_root(), &grant).unwrap();
+
+        let expected_code = if seconds == bound {
+            assert_eq!(
+                fx.runtime.verified_script_grant(SCRIPT).unwrap(),
+                Some(grant.clone())
+            );
+            script_refusal::GRANT_INSUFFICIENT
+        } else {
+            let error = fx
+                .runtime
+                .verified_script_grant(SCRIPT)
+                .expect_err("a witnessed legacy grant must still satisfy the timeout bound")
+                .to_string();
+            assert!(error.contains(&grant.grant_id), "{error}");
+            assert!(
+                error.contains(&format!("timeout ceiling {seconds}")),
+                "{error}"
+            );
+            assert!(error.contains(&format!("1..={bound}")), "{error}");
+            assert!(
+                error.contains(&format!("orbit script grant {SCRIPT}")),
+                "{error}"
+            );
+            script_refusal::GRANT_MISSING
+        };
+        let ScriptStepRun::Refused {
+            code,
+            message,
+            record,
+        } = RuntimeHost::run_script_step(
+            &fx.runtime,
+            &ScriptStepRequest {
+                run_id: "stored-grant-timeout".to_string(),
+                step_id: "run".to_string(),
+                script: SCRIPT.to_string(),
+                input: json!({}),
+                workspace_path: None,
+                timeout_seconds: None,
+            },
+        )
+        else {
+            panic!("the grant gate must refuse before sandbox supervision");
+        };
+        assert_eq!(code, expected_code, "{message}");
+        assert!(
+            record.argv.is_empty() && record.profile.is_none(),
+            "{record:?}"
+        );
+        let outcome = fx.run();
+        assert!(outcome.contains(expected_code), "{outcome}");
+        if seconds == bound {
+            assert!(message.contains("network `https`"), "{message}");
+        } else {
+            for refusal in [&message, &outcome] {
+                assert!(refusal.contains(&grant.grant_id), "{refusal}");
+                assert!(
+                    refusal.contains(&format!("orbit script grant {SCRIPT}")),
+                    "{refusal}"
+                );
+            }
+        }
     }
 }
 
