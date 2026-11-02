@@ -521,7 +521,10 @@ only for consumer `precedent_decision`, and only when `automation` is false and
 `score` refuses an in-window label with one of those actors, or `automation:
 true`, and prints `{ok: false, errors}` with exit 2. It does not emit a readout
 for that dataset. A model or precedent label on a request raised before
-`window_start` is outside the holdout and does not by itself refuse the score.
+`window_start` is outside the holdout and does not by itself refuse the score,
+even when it carries `provenance: recorded_human_decision`; `score` counts it as
+`outside_window`. `validate` without `--targets` has no window and checks every
+recorded label.
 Synthetic provenance is mechanics only. A synthetic label with
 `human_ground_truth: true` is refused. `check-split` accepts an in-window case
 only when its provenance is an eligible `recorded_human_decision`.

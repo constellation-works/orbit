@@ -361,7 +361,13 @@ def _cases(ds):
     return raw if isinstance(raw, list) else []
 
 
-def validate_precedent_dataset(ds):
+def validate_precedent_dataset(ds, bounds=None):
+    """Structural dataset checks. `bounds` is the (start, end) window, when known.
+
+    A recorded label on a request raised before `window_start` is outside the holdout,
+    so its actor and recorded-field eligibility are not checked. Without a window every
+    recorded label is checked.
+    """
     if not isinstance(ds, dict) or ds.get("format_version") != FORMAT:
         return [f"format_version must be {FORMAT}"]
     errors = []
@@ -414,7 +420,10 @@ def validate_precedent_dataset(ds):
             errors.append(f"{where}: label.value is required")
         if provenance == "synthetic" and label.get("human_ground_truth") is True:
             errors.append(f"{where}: synthetic labels are not human ground truth")
-        if provenance == RECORDED:
+        raised = _ts(case.get("raised_at", ""))
+        if provenance == RECORDED and not (
+            bounds is not None and raised is not None and raised < bounds[0]
+        ):
             errors.extend(_recorded_field_errors(label, where))
             actor = _ineligible_actor_message(label)
             if actor:
@@ -646,9 +655,9 @@ def score_precedent(ds, answers, targets):
     """Return (report, errors). Errors refuse the readout; metrics are not partial."""
     errors = []
     errors.extend(check_precedent_targets(targets))
-    errors.extend(validate_precedent_dataset(ds))
-    errors.extend(validate_precedent_answers(ds, answers))
     bounds = _window_bounds(targets) if isinstance(targets, dict) else None
+    errors.extend(validate_precedent_dataset(ds, bounds))
+    errors.extend(validate_precedent_answers(ds, answers))
     if bounds is not None and isinstance(ds, dict):
         errors.extend(window_label_errors(ds, bounds[0], bounds[1], require_recorded=False))
     if errors or bounds is None or not isinstance(targets, dict):
@@ -758,7 +767,7 @@ def score_precedent(ds, answers, targets):
 
 
 def check_precedent_split(ds, manifest, prior_ids):
-    errors = validate_precedent_dataset(ds)
+    errors = validate_precedent_dataset(ds, _window_bounds(manifest))
     if not isinstance(manifest, dict) or manifest.get("format_version") != FORMAT:
         return errors + [f"manifest format_version must be {FORMAT}"]
     holdout_id = manifest.get("holdout_id")
@@ -1012,12 +1021,12 @@ def precedent_cli(argv):
         answer_doc = _load(_path_arg(args.answers, "--answers")) if isinstance(args.answers, str) else None
         target_doc = _load(_path_arg(args.targets, "--targets")) if isinstance(args.targets, str) else None
         if command == "validate":
-            errors = validate_precedent_dataset(dataset)
+            bounds = _window_bounds(target_doc) if target_doc is not None else None
+            errors = validate_precedent_dataset(dataset, bounds)
             if answer_doc is not None:
                 errors.extend(validate_precedent_answers(dataset, answer_doc))
             if target_doc is not None:
                 errors.extend(check_precedent_targets(target_doc, args.holdout_opened_at))
-                bounds = _window_bounds(target_doc)
                 if bounds is not None:
                     errors.extend(window_label_errors(
                         dataset, bounds[0], bounds[1], require_recorded=False))
