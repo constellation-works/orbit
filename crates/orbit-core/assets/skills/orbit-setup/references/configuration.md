@@ -444,11 +444,20 @@ and is **global-only**: workspace files and workspace-scoped writes refuse it,
 including an empty table, and `orbit config set --seed-from-global` never copies
 it into a workspace file.
 
-Nothing installs a task or report consumer or a background worker that uses the
-table. Assisted calls happen only when an application integrates the library
-service explicitly, and a configured grant does not activate any consumer. No
-mode grants workflow authority: an annotation never approves, blocks, lands or
-dispatches work.
+One built-in consumer ships with Orbit: the `precedent_decision` shadow consumer
+described below. It stays off by default and runs only under an explicit host
+grant with `mode = "shadow"` for the exact workspace. A configured grant does
+not install any other task or report consumer or background worker; other
+assisted calls happen only when an application integrates the library service
+explicitly. No mode grants workflow authority: an annotation never approves,
+blocks, lands or dispatches work.
+
+Three mechanisms stay distinct. Precedent retrieval only gathers past-decision
+evidence and starts no model call, notification or automatic answer. Shadow
+prediction privately scores an open request from that evidence and never answers
+it, notifies anyone, or appears on normal decision surfaces. Only a current
+corpus rule the operator marked `auto` can answer an exact topic match, recorded
+with the `precedent` actor; a shadow prediction never becomes such an answer.
 
 ### Inspect the off state
 
@@ -474,13 +483,14 @@ with zero ceilings and no pricing.
 ### Set the table
 
 Only `--global` can write the table. A set replaces the whole table, and any
-field you omit returns to its built-in default, including every limit and
-`budget.epoch`. Read the current table first and carry forward each field you
-keep.
+field you omit returns to its built-in default, including `policies`,
+`precedent_providers`, every limit and `budget.epoch`. Read the current table
+first and carry forward each field you keep: setting `precedent_providers`
+without `policies` resets `policies` to `[]`, and vice versa.
 
 ```bash
 orbit config get assistance                               # read the current table
-orbit config set --global assistance '{ policies = [] }'  # explicit off state; limits and budget revert to defaults unless you include them
+orbit config set --global assistance '{ policies = [] }'  # explicit off state; limits, budget and precedent_providers revert to defaults unless you include them
 orbit config get assistance                               # confirm policies is []
 ```
 
@@ -528,6 +538,72 @@ credential-pattern redaction run before anything is stored or sent. The agent
 subprocess environment builder refuses the `ORBIT_ASSISTANCE_` namespace, even
 through passthrough or crew `env` mappings, so agents cannot receive the
 credential.
+
+### Precedent retrieval grants
+
+`precedent_providers` is an optional host-only field of the one `assistance`
+table (default `[]`). Each entry grants one exact workspace id its precedent
+sources: `built_in` (default `false`) includes that workspace's human decision
+history as the first source, and ordered `plugin_tools` (default `[]`) names
+additional sources. This retrieves decision evidence only; it starts no model
+calls, notifications or automatic answers.
+
+Only active, granted, read-only plugin tools are eligible. Each receives one
+`orbit.precedent-provider/1` request through ordinary audited plugin dispatch,
+with its existing callback session and sandbox. The built-in source runs first;
+plugin source order follows the configured list. Removing the entry disables
+retrieval on the next call. With no entry for the workspace, retrieval returns
+disabled evidence without scanning histories or calling plugins.
+
+Bounds: at most 128 workspace entries and eight plugin tools per entry.
+Duplicate workspace ids, or duplicate tool names in one entry, are refused.
+
+Set retrieval together with the rest of the table. This example keeps consumers
+off while granting one workspace its built-in history plus one plugin source;
+replace the workspace id and tool name with values from the host:
+
+```bash
+orbit config get assistance
+orbit config set --global assistance '{ policies = [], precedent_providers = [{ workspace_id = "ws_example", built_in = true, plugin_tools = ["history.retrieve"] }] }'
+orbit config get assistance
+orbit config show --json
+```
+
+Verify `precedent_providers` lists exactly the intended workspaces, in order,
+and `policies` is still exactly the intended grants. If the set is refused as
+an unknown field, this build predates retrieval grants; upgrade before applying
+it. Retrieval alone authorizes no paid or live call.
+
+### Precedent-decision shadow consumer
+
+`use_case = "precedent_decision"` is the built-in shadow consumer for an open
+human decision. It stays off until the host grants that exact workspace
+`mode = "shadow"`. `off` and `advisory` enqueue nothing and do not consult
+precedent providers. Shadow builds one packet after a request is raised and
+still open, enqueues it, and seals the settled prediction in a private ledger.
+The dashboard, mail, `orbit decision show`, the digest and advisory reads never
+show that prediction. Shadow does not wait before the human is notified.
+
+The grant uses the frozen question template `precedent-decision/1`. Its
+`evidence_fields` must include `option_ids`, the packet-bound choice copied
+from the open request; also grant `request`, `task_context`, `precedents` and
+`provenance` only when that evidence may leave the host, and allow
+`evidence_ref_prefixes` `task:` and `decision:` for provenance refs. A granted
+`precedents` value carries, for each of at most eight retained records, its
+question, option labels and consequences, bounded context and citation
+(`source`, `ref`, digest). Those option ids belong to the historical record,
+not the open request. Omitting `precedents` keeps that text on the host.
+Credential-pattern redaction still applies to values that are sent, and the
+serialized request stays within `limits.max_request_bytes`. The
+`contract_digest` is the digest of the granted `precedent-decision/1` template,
+not a per-request expansion; obtain it from the integrating application and do
+not hand-write it. All generic budget, credential and redaction rules in this
+section still apply, and the evaluation prerequisites below still govern any
+live or paid use.
+
+Shadow predictions never answer a request. Only a current corpus rule the
+operator marked `auto` answers an exact topic match; a shadow prediction is
+private comparison evidence for the operator, never an automatic answer.
 
 ### Limits
 
@@ -586,12 +662,17 @@ A grant does not authorize paid or live calls by itself.
 ### Verify the effective policy
 
 ```bash
-orbit config get assistance   # policies lists exactly the intended grants, with each mode
+orbit config get assistance   # policies and precedent_providers list exactly the intended grants, with each mode
 orbit config show --json      # the same table in effective JSON
 ```
 
-The table shows configuration only. It does not report that a consumer is
-running, because none ships with Orbit.
+The table shows configuration only. It does not report sealed predictions, and
+no installed CLI or MCP command reads them: only the integrating application
+can read its private shadow evidence through its library join
+(`precedent-decision-join/1`). Expect nothing about a shadow prediction in
+`orbit decision show`, the dashboard, mail, the digest or advisory reads; their
+absence is the intended seal, not a missing result. A grant by itself authorizes
+no paid or live call.
 
 ## Visual review
 
