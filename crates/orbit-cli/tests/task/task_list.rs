@@ -821,3 +821,31 @@ fn attention_cursor_resurfaces_material_changes_at_cli_boundary() {
         assert_eq!(result["counts"]["returned"], 2, "{result}");
     }
 }
+
+/// A `review` task whose review has not settled has no review-gate certificate.
+/// Reproduced on dk-server-2: every such task printed a `source_unavailable`
+/// degraded line from `orbit attention`, hiding real source failures.
+#[test]
+fn attention_review_task_without_certificate_is_not_degraded() {
+    let workspace = workspace();
+    let mut seed = workspace.task_seed("Review not yet settled");
+    seed.status = TaskStatus::Review;
+    let task = workspace.seed_tasks(&[seed]).remove(0);
+    assert_eq!(task["status"], "review");
+    let result: Value = serde_json::from_slice(
+        &workspace
+            .run_as_operator(
+                &["attention", "--kind", "review_waiting", "--json"],
+                "read attention",
+            )
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(result["counts"]["returned"], 0, "{result}");
+    assert!(
+        result["degraded"]
+            .as_array()
+            .is_none_or(|degraded| degraded.is_empty()),
+        "a review task without a certificate is not a source failure: {result}"
+    );
+}

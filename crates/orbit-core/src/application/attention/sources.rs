@@ -377,8 +377,10 @@ fn derive_subject_kind(
                 return Ok(None);
             }
             let Some(artifact) = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)? else {
-                // A status or approval request alone cannot prove review settlement.
-                return Err(OrbitError::Execution("review has no settled review certificate; cannot distinguish in-review from waiting".into()));
+                // No certificate yet: the review has not settled (not run, still
+                // running, or in owner landing). A status or approval request alone
+                // cannot prove settlement, so this is not waiting and not a read failure.
+                return Ok(None);
             };
             let certificate: ReviewCertificate = serde_json::from_slice(&artifact.content)
                 .map_err(|error| {
