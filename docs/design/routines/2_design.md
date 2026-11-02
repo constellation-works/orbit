@@ -241,7 +241,7 @@ trigger:
     deadline_minutes: 90
     eligibility:
       statuses: [proposed, backlog]
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []
       task_types: []
 target: job:task_pilot_pipeline
