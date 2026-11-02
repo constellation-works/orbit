@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-12
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
@@ -40,7 +40,7 @@ the same day. They govern kernel v2 and the migration plan in
 - **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation built in warn mode ([ORB-15933]).
 - **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted; built on auto-task in [ORB-15935] and the task reads in [ORB-15937].
 - **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
-- **[ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec)** — Accepted in [ORB-15937].
+- **[ID routing was keyed by tool name in the MCP rule tables (superseded)](#superseded-id-routing-was-keyed-by-tool-name)** — Superseded by definition-site declarations via `OperationSpec::id_route` and `Tool::declared_id_route`.
 
 ## Split spec/handler table joined by a typed verb enum
 
@@ -850,56 +850,63 @@ only; the migration is still incremental, one noun at a time.
 - Cost: migration tasks compete with feature work for drain capacity, and a
   phase runs even when no feature currently needs that noun.
 
-## ID routing is keyed by tool name in the MCP rule tables, not declared in the spec
+## Superseded: ID routing was keyed by tool name
+
+> **Superseded on 2026-11-02.** The decision below records the former
+> name-list implementation and no longer describes current routing. Builtin
+> routes are declared through [`OperationSpec::id_route`](../../../crates/orbit-common/src/governance/operation/spec.rs)
+> or [`Tool::declared_id_route`](../../../crates/orbit-tools/src/tool.rs), then
+> resolved from registered builtin definitions in
+> [`mcp_rules.rs`](../../../crates/orbit-tools/src/mcp_rules.rs).
 
 **Recorded:** 2026-10-13 · [ORB-15937]
-**Code anchors:** `crates/orbit-cli/src/command/operation/spec.rs::task_operation`, `crates/orbit-cli/src/command/host_route.rs::routed_command_id`, `crates/orbit-tools/src/mcp_rules.rs::ID_ROUTED_TASK_TOOLS`
+**Historical code anchors:** `crates/orbit-cli/src/command/operation/spec.rs::task_operation`, `crates/orbit-cli/src/command/host_route.rs::routed_command_id`, former `ID_ROUTED_TASK_TOOLS` name list
 
 ### Context
 
-ID routing is a cross-surface fact: `orbit task show` and `orbit.task.show`
-over MCP both follow a task ID to the host its prefix names and the workspace
-that owns it. Under
+At the time, the accepted decision treated ID routing as a cross-surface fact:
+`orbit task show` and `orbit.task.show` over MCP both followed a task ID to the
+host its prefix named and the workspace that owned it. Under
 [The spec holds cross-surface facts](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface),
-that points at a spec field. But two tool-name lists already hold it for
-every task-ID tool, migrated or not: `ID_ROUTED_TASK_TOOLS` (host prefix
+that pointed at a spec field. Two tool-name lists held it for every task-ID
+tool, migrated or not: `ID_ROUTED_TASK_TOOLS` (host prefix
 routing: `show`, `update`, `reject`, `delete`, `artifact get`/`put`, the
 review tools) with `NOT_ID_ROUTED_TOOLS` giving the reason a required-ID tool
 such as `orbit.friction.show` does not route, and `ID_RESOLVED_WORKSPACE_TOOLS`
 (owner workspace binding: `show` and `artifact get`). The federated MCP, the MCP
 server, `orbit tool run` and the CLI host preflight read them by tool name.
-Phase 3a migrated only `show` of those tools.
-`lint` now accepts an optional ID for its workspace sweep, so it no longer
-belongs in the required-ID exclusion table. It keeps the selected workspace
-on both its single-task and sweep paths.
+Phase 3a migrated only `show` of those tools. Later, `lint` accepted an
+optional ID for its workspace sweep, so it no longer belonged in the
+required-ID exclusion table. It kept the selected workspace on both its
+single-task and sweep paths.
 
 ### Decision
 
-ID routing stays keyed by tool name in those lists. A migrated verb's CLI
-derives its routing from them by its spec's `tool_name`, as `task_operation`
-and the host preflight do, and writes no routing of its own. Revisit when
-every tool in the lists has a spec: a `routing` field could then replace them
-without leaving a second home behind.
+The decision kept ID routing keyed by tool name in those lists. A migrated
+verb's CLI derived its routing from them by its spec's `tool_name`, as
+`task_operation` and the host preflight did, and wrote no routing of its own.
+It proposed revisiting the choice when every tool in the lists had a spec, so
+a `routing` field could replace them without leaving a second home behind.
 
 ### Rejected alternatives
 
 - **A `routing` field on `OperationSpec`.** Until the last task-ID tool
-  migrates, the fact would live in the field for migrated verbs and in the
-  lists for the rest, two homes for one fact. The lists also record the
+  migrated, the fact would have lived in the field for migrated verbs and in
+  the lists for the rest, two homes for one fact. The lists also recorded the
   negative case with its reason, which a field on migrated specs alone would
-  not cover.
+  not have covered.
 - **A CLI override per verb, as before.** The hand-wired task arm restated
   the owner binding for `show` beside the shared list; that copy is the kind
   of drift the shared list was introduced to stop ([ORB-12263]).
 
 ### Consequences
 
-- Every surface routes a task ID from the same two lists, and the routing
-  tests (`global_artifacts_and_workspace_selectors`, the `host_routing` and
-  `workspace_selector` suites) guard them.
-- Cost: the lists are strings, not compiler-checked against the registry. A
-  renamed tool silently loses its routing until a routing test fails, and a
-  new task-ID verb has to be added to a list by hand rather than being
+- In that design, every surface routed a task ID from the same two lists, and
+  the routing tests (`global_artifacts_and_workspace_selectors`, the
+  `host_routing` and `workspace_selector` suites) guarded them.
+- Cost: the lists were strings, not compiler-checked against the registry. A
+  renamed tool silently lost its routing until a routing test failed, and a
+  new task-ID verb had to be added to a list by hand rather than being
   prompted by a compile error.
 
 ## A multiplexed tool's action is an enum parameter; per-action rules are guarded modes
