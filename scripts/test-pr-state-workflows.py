@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import fnmatch
 import re
+import select
 import self_test_hang
 import shlex
 import shutil
@@ -17,6 +18,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest import mock
 
 from workflow_helper_tests import WorkflowHelperRevisionTests
 from ci_cache_workflow_tests import CiDependencyCacheWorkflowTests
@@ -431,6 +433,40 @@ exit 0
         # Public run() boundary used by the workflow fixtures. The leader must
         # not outlive the hang error, and neither may a child that inherited
         # the output pipes and stayed in the leader's process group.
+        self._run_timeout_fixtures(_stop_owned_processes)
+
+    def test_fallback_cleanup_never_signals_a_reused_pid(self):
+        # The real timeout fixture records real pids; each cleanup call (the
+        # addCleanup registration and the finally block) then runs against a
+        # deterministic model that retires the owned incarnation and reuses
+        # its number at each point after the ownership probe could have run.
+        if not hasattr(os, "pidfd_open"):
+            self.skipTest("pidfd reservation needs Linux 5.3")
+        seen = []
+
+        def stop_under_churn(record, marker):
+            pids = _recorded_pids(record)
+            self.assertTrue(pids, "the fixture must record its processes")
+            for churn in ("none", "before-open", "after-open", "after-probe", "after-alive"):
+                with self.subTest(churn=churn, pids=len(pids)):
+                    model = _PidChurnModel(pids, marker, churn)
+                    model.run(_stop_owned_processes, record)
+                    self.assertEqual(model.unsafe, [], "a replacement must never be signalled")
+                    self.assertEqual(model.open_fds, set(), "every reservation must be closed")
+                    if churn == "none":
+                        self.assertEqual(model.killed_originals, set(pids),
+                                         "every still-owned process must be terminated")
+                    else:
+                        self.assertEqual(model.killed_originals & model.retired_originals, set())
+            seen.append(len(pids))
+
+        # Cleanups run last-registered first, so this check runs after both
+        # fixtures' addCleanup registrations have fired.
+        self.addCleanup(lambda: self.assertEqual(
+            sorted(seen), [1, 1, 2, 2], "both registrations must run for both fixtures"))
+        self._run_timeout_fixtures(stop_under_churn)
+
+    def _run_timeout_fixtures(self, stop):
         if not Path("/proc/self/stat").exists():
             self.skipTest("process liveness is observed through /proc")
         limit = self_test_hang.HANG_PROBE_SECONDS
@@ -466,7 +502,7 @@ exit 0
             with self.subTest(step=step):
                 record = self.root / f"{step}.pids"
                 marker = str(record)
-                self.addCleanup(_stop_owned_processes, record, marker)
+                self.addCleanup(stop, record, marker)
                 try:
                     with self.assertRaises(AssertionError) as caught:
                         self_test_hang.run(
@@ -482,12 +518,90 @@ exit 0
                                if _owned_state(pid, marker) in {"R", "S", "D", "T"}]
                     self.assertEqual(running, [], "run() must terminate fixture processes before returning")
                 finally:
-                    _stop_owned_processes(record, marker)
+                    stop(record, marker)
 
     def test_ready_file_timeout_preserves_group_identity(self):
         assert_hang_group_identity(self, lambda: self_test_hang.run(
             ["fixture"], step="identity fixture", ready_file="empty-ready-file",
             capture_output=True, timeout=1))
+
+
+class _PidChurnModel:
+    """Deterministic /proc and pidfd view of recorded pids that exit and are reused.
+
+    Every recorded pid starts as one live, marked fixture incarnation. At the
+    chosen point the helper's own primitives run, that incarnation retires and
+    an unmarked replacement takes the same number. A pidfd pins the incarnation
+    current when it was opened; signalling it affects only that incarnation,
+    while a numeric `os.kill` is recorded as unsafe.
+    """
+
+    POINTS = {"before-open": "open", "after-open": "opened", "after-probe": "probed",
+              "after-alive": "alive"}
+
+    def __init__(self, pids, marker, churn):
+        self.marker = marker
+        self.churn = churn
+        self.pids = list(pids)
+        self.generation = {pid: 0 for pid in self.pids}
+        self.fds = {}
+        self.open_fds = set()
+        self.next_fd = 1000
+        self.killed_originals = set()
+        self.retired_originals = set()
+        self.unsafe = []
+        self.fired = set()
+
+    def _churn_at(self, point, pid):
+        if self.POINTS.get(self.churn) == point and pid not in self.fired:
+            self.fired.add(pid)
+            self.retired_originals.add(pid)
+            self.generation[pid] += 1
+
+    def read_proc(self, pid):
+        if self.generation[pid] == 0:
+            result = (f"python -c script {self.marker}".encode(), "1 (python) S 0 0")
+        else:
+            result = (b"unrelated replacement", "1 (sleep) S 0 0")
+        self._churn_at("probed", pid)
+        return result
+
+    def pidfd_open(self, pid):
+        self._churn_at("open", pid)
+        fd = self.next_fd
+        self.next_fd += 1
+        self.fds[fd] = (pid, self.generation[pid])
+        self.open_fds.add(fd)
+        self._churn_at("opened", pid)
+        return fd
+
+    def pidfd_is_alive(self, fd):
+        pid, generation = self.fds[fd]
+        alive = self.generation[pid] == generation
+        self._churn_at("alive", pid)
+        return alive
+
+    def pidfd_signal(self, fd, number):
+        pid, generation = self.fds[fd]
+        if self.generation[pid] != generation:
+            raise ProcessLookupError(pid)
+        if generation == 0:
+            self.killed_originals.add(pid)
+        else:
+            self.unsafe.append(("pidfd", pid))
+
+    def pidfd_close(self, fd):
+        self.open_fds.discard(fd)
+
+    def numeric_kill(self, pid, number):
+        self.unsafe.append(("kill", pid))
+
+    def run(self, stop, record):
+        patched = {"_read_proc_identity": self.read_proc, "_pidfd_open": self.pidfd_open,
+                   "_pidfd_is_alive": self.pidfd_is_alive, "_pidfd_signal": self.pidfd_signal,
+                   "_pidfd_close": self.pidfd_close}
+        with mock.patch.dict(globals(), patched), mock.patch.object(os, "kill", self.numeric_kill):
+            stop(record, self.marker)
 
 
 def _recorded_pids(path):
@@ -496,11 +610,20 @@ def _recorded_pids(path):
     return [int(line) for line in path.read_text().split() if line.strip()]
 
 
+def _read_proc_identity(pid):
+    """Return `(cmdline, stat)` for whichever process currently holds `pid`."""
+    return (Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" "),
+            Path(f"/proc/{pid}/stat").read_text())
+
+
 def _owned_state(pid, marker):
-    """Return the /proc state when pid is still this fixture, else None."""
+    """Return the /proc state when pid is still this fixture, else None.
+
+    This observes only. It never authorizes a signal: the number can name a
+    different process by the time anyone acts on it (see `_pin_owned_process`).
+    """
     try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        command, stat = _read_proc_identity(pid)
     except (FileNotFoundError, ProcessLookupError):
         # A process that exits between open and read fails with ESRCH.
         return None
@@ -509,14 +632,68 @@ def _owned_state(pid, marker):
     return stat.rsplit(")", 1)[1].split(None, 1)[0]
 
 
+def _pidfd_open(pid):
+    return os.pidfd_open(pid)
+
+
+def _pidfd_is_alive(fd):
+    """A pidfd becomes readable once the incarnation it pins has exited."""
+    readable, _, _ = select.select([fd], [], [], 0)
+    return not readable
+
+
+def _pidfd_signal(fd, number):
+    signal.pidfd_send_signal(fd, number)
+
+
+def _pidfd_close(fd):
+    os.close(fd)
+
+
+def _pin_owned_process(pid, marker):
+    """Reserve `pid` as a pidfd only when it is verifiably this fixture.
+
+    The pidfd is opened first and pins one incarnation. The ownership probe
+    then runs and the pidfd must still be alive afterwards: a number that was
+    retired and reused before the probe read it leaves the pidfd readable, so
+    the replacement is never mistaken for the fixture. Returns None when the
+    process is gone or not ours.
+    """
+    try:
+        fd = _pidfd_open(pid)
+    except ProcessLookupError:
+        return None
+    try:
+        if _owned_state(pid, marker) is None or not _pidfd_is_alive(fd):
+            _pidfd_close(fd)
+            return None
+    except BaseException:
+        _pidfd_close(fd)
+        raise
+    return fd
+
+
 def _stop_owned_processes(path, marker):
-    for pid in _recorded_pids(path):
-        if _owned_state(pid, marker) is None:
-            continue
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    """SIGKILL every recorded process that is still a reserved fixture incarnation.
+
+    Reserve every recorded identity before signalling any, and signal only
+    through the pidfds: a saved numeric PID is never signalled, so an exit and
+    PID reuse after the ownership probe cannot redirect the kill.
+    """
+    pinned = []
+    try:
+        for pid in _recorded_pids(path):
+            fd = _pin_owned_process(pid, marker)
+            if fd is not None:
+                pinned.append(fd)
+        for fd in pinned:
+            try:
+                _pidfd_signal(fd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    finally:
+        for fd in pinned:
+            _pidfd_close(fd)
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")

@@ -84,7 +84,12 @@ manifest by the same sequence.
 `--build-candidate` compiles the executable from the checkout into a disposable
 target directory. The harness snapshots HEAD, the tracked diff, and untracked
 inputs before the build, verifies that identity is unchanged after every local
-scenario, and binds every result to the resulting candidate ID. Supplying an
+scenario, and binds every result to the resulting candidate ID. Each untracked
+entry is identified the way Git records a deliverable: its path, entry kind and
+mode (`100644`, `100755` or `120000`), and its bytes or, for a symlink, its
+link text, which is never followed and so covers dangling links. A change to
+any of these between producers fails source stability. The declared report and
+browser-evidence outputs are excluded. Supplying an
 installed binary without that build attestation intentionally makes provenance
 FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.

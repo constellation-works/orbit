@@ -209,6 +209,7 @@ def self_test():
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
+    source_identity_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch, wire=True)
@@ -1008,6 +1009,114 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
 
         child, report, guard = run_sweep(valid_command_case, mode="seatbelt")
         assert report["decision"] == "INCOMPLETE", report
+
+
+SOURCE_MUTATION = '''
+import os, sys
+kind = sys.argv[1]
+if kind == "chmod":
+    os.chmod("probe.sh", 0o755)
+elif kind == "new-dangling":
+    os.symlink("missing-target", "fresh-dangling")
+elif kind == "dangling-retarget":
+    os.unlink("dangling")
+    os.symlink("gone-2", "dangling")
+elif kind == "retarget":
+    os.unlink("link")
+    os.symlink("b.txt", "link")
+elif kind == "file-to-symlink":
+    os.unlink("copy.txt")
+    os.symlink("a.txt", "copy.txt")
+elif kind == "excluded-output":
+    os.makedirs("out/report.browser-evidence", exist_ok=True)
+    artifact = "out/report.browser-evidence/artifact.sh"
+    open(artifact, "w").write("echo evidence\\n")
+    os.chmod(artifact, 0o755)
+print("mutated " + kind)
+'''
+
+
+def source_identity_self_test(harness, scratch):
+    """Untracked mode, entry kind and symlink text bind the candidate through the public sweep.
+
+    Each mutation runs inside the scenario (or its retired-case command) of a
+    real sweep over a disposable Git checkout, using the real `candidate_source`.
+    The same-byte `link` retarget and the file-to-symlink swap keep every
+    followed byte identical, so only the entry's own identity can fail them.
+    """
+    stub = ('qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,\n'
+            '                                "status": [], "diff_sha256": "fixture"}\n')
+    assert stub in DRIVER, "driver no longer stubs candidate_source"
+    with tempfile.TemporaryDirectory(prefix="qa-source-identity-", dir=scratch) as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True)
+        driver = root / "driver.py"
+        driver.write_text(DRIVER.replace(stub, ""))
+        mutation = root / "mutate.py"
+        mutation.write_text(SOURCE_MUTATION)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        (repo / "mode.json").write_text(json.dumps("complete"))
+        (repo / ".gitignore").write_text(".orbit/\nbin/\nmode.json\n")
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text("{}")
+
+        def git(*argv):
+            subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                            *argv], cwd=repo, check=True, capture_output=True)
+
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "baseline")
+
+        def reset_untracked_inputs():
+            git("clean", "-fdq")
+            (repo / "probe.sh").write_text("echo probe\\n")
+            (repo / "probe.sh").chmod(0o644)
+            for name in ["a.txt", "b.txt", "copy.txt"]:
+                (repo / name).write_text("same bytes\\n")
+            for name, target in [("link", "a.txt"), ("dangling", "gone-1")]:
+                (repo / name).symlink_to(target)
+
+        def sweep(kind, where="scenario"):
+            reset_untracked_inputs()
+            probe = [sys.executable, str(mutation), kind]
+            scenario = {"id": "probe", "required": True, "capability": "local", "kind": "command",
+                        "command": probe if where == "scenario" else [sys.executable, "-c", "pass"],
+                        "assertions": ["probe-ran"]}
+            if where == "retired-case":
+                scenario["retired_cases"] = [{
+                    "retired": "old::probe", "guarantee": "Probe still runs",
+                    "disposition": "verified-equivalent", "reason": "The command mutates its inputs",
+                    "command": probe}]
+            (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({
+                "surface_contracts": {"cli_top_level": [], "job_assets": [], "sha256": {}},
+                "feature_families": [], "scenarios": [scenario], "required_capability_gaps": {}}))
+            report_path = repo / "out/report.json"
+            report_path.parent.mkdir(exist_ok=True)
+            child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--run-commands",
+                            "--output", str(report_path)],
+                           cwd=repo, env={**os.environ}, capture_output=True, text=True, timeout=120)
+            if not report_path.is_file():
+                raise AssertionError(f"sweep did not produce a report: {child.stdout}\n{child.stderr}")
+            report = json.loads(report_path.read_text())
+            rows = [row for row in report["results"] if row["scenario"] == "probe"]
+            return report, rows
+
+        for where in ["scenario", "retired-case"]:
+            report, rows = sweep("control", where)
+            assert report["decision"] == "PASS" and all(row["outcome"] == "PASS" for row in rows), (where, report)
+            report, rows = sweep("excluded-output", where)
+            assert report["decision"] == "PASS" and all(row["outcome"] == "PASS" for row in rows), (
+                "declared report/evidence output must not change the candidate", where, report)
+            for kind in ["chmod", "new-dangling", "dangling-retarget", "retarget", "file-to-symlink"]:
+                report, rows = sweep(kind, where)
+                changed = [row for row in rows if row["outcome"] == "FAIL"
+                           and "source candidate changed while the scenario ran" in row["stderr"]]
+                assert changed and report["decision"] != "PASS", (kind, where, report)
 
 
 def native_emitter_cleanup_self_test(harness, scratch):
