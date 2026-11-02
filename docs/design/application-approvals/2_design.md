@@ -45,16 +45,19 @@ unless another file is named.
 3. **Admission** (`admit_application_call`, :310-412). Orbit resolves the invocation
    from an inherited callback record, the session, or the process credential descriptor
    (:317-342). It refuses agent and capability sessions (:347-354). It checks the record,
-   the witness, `schema_version == 1`, revocation, record equality, expiry (:355-368),
+   the witness, `schema_version` 1 or 2, revocation, record equality, expiry (:355-368),
    and the workspace id and checkout root (:369-375). A callback must exactly equal a
-   listed callback (:376-393). A direct call must exactly equal a scope's tool and input
+   listed callback (:376-393). A direct call may match an exact scope's tool and input
+   or satisfy a constrained `fields` scope
    (:395-404). The admitted invocation goes into the session and the thread-local audit
    slot (:409-411).
 4. **Execution and audit.** An admitted built-in runs through `execute_application_builtin`
    (`crates/orbit-core/src/application/application_authority.rs:9-80`). It runs as the
-   actor `application:<id>` through `update_task_as_human` or
-   `answer_decision_request_as_human`. Only `status` and `comment` reach the task update
-   (:45-60). The dispatch audit row takes the invocation
+   actor `application:<id>` through `update_task_as_application` or
+   `answer_decision_request_as_human`. An admitted `orbit.task.update` can pass `status`,
+   `comment`, `note`, `plan` and `execution_summary` to `update_task_as_application`;
+   `note` is accepted only when `status` is also supplied (:45-60). The dispatch audit
+   row takes the invocation
    (`crates/orbit-core/src/adapter/command/dispatch/execute/audit_store.rs:106-216`) and
    stores it as the redacted `application` JSON column
    (`crates/orbit-store/src/driver/sqlite/audit_event_store/insert.rs:274`).

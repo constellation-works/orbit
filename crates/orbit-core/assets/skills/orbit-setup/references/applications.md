@@ -146,11 +146,13 @@ digest, expired consent or revoked consent is refused before mutation.
 
 The supported built-in operations are:
 
-* `orbit.task.update`: exact `id`, optional `status` (`backlog`, `done`,
-  `rejected` or `archived`), optional `comment` and optional `workspace`.
-  The normal lifecycle, proposal completion and coordination ownership checks
-  still apply. No force, tool grants, field edits or review artifacts are
-  admitted through this application operation.
+* `orbit.task.update`: an exact scope may include `id`, optional `status`
+  (`backlog`, `done`, `rejected` or `archived`), optional `comment` and optional
+  `workspace`. A constrained `fields` scope may also include `note`, `plan` and
+  `execution_summary`. `note` is accepted only when `status` is supplied. The
+  normal lifecycle, proposal completion and coordination ownership checks still
+  apply. Other keys are refused. Force, tool grants and review artifacts are
+  not admitted through this application operation.
 * `orbit.decision.answer`: exact `id` and `answer`, optional `note` and
   optional `workspace`. The existing decision handler checks the current
   request, allowed answers, expiry and supersession. This includes an allowed
