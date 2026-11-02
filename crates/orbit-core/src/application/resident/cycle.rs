@@ -45,6 +45,34 @@ impl OrbitRuntime {
         expected_cycle: Option<&str>,
         next: Option<&ResidentLiveCycle>,
     ) -> Result<(), OrbitError> {
+        self.set_resident_live_cycle_inner(task_id, expected_cycle, next, false)
+            .map(|_| ())
+    }
+
+    /// Publish the live cycle like [`Self::set_resident_live_cycle`], but
+    /// also return the assignment history as read under the publication
+    /// lock, before the new cycle entry is appended. A manager control
+    /// write committed in that snapshot raced with the caller's earlier
+    /// observation, so the caller must re-derive any wake reasons from it;
+    /// a write committed after the lock is released postdates the new
+    /// cycle's start and stays pending for the next cycle.
+    pub(crate) fn publish_resident_live_cycle(
+        &self,
+        task_id: &str,
+        expected_cycle: Option<&str>,
+        next: &ResidentLiveCycle,
+    ) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        self.set_resident_live_cycle_inner(task_id, expected_cycle, Some(next), true)
+            .map(|history| history.unwrap_or_default())
+    }
+
+    fn set_resident_live_cycle_inner(
+        &self,
+        task_id: &str,
+        expected_cycle: Option<&str>,
+        next: Option<&ResidentLiveCycle>,
+        capture_prior_history: bool,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         if let Some(next) = next
             && (next.cycle.trim().is_empty()
@@ -59,12 +87,16 @@ impl OrbitRuntime {
         if next.is_some() {
             test_support::before_resident_cycle_publication();
         }
+        let mut prior_history = None;
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
                 let task = self.get_task(task_id)?;
                 self.ensure_resident_comment_assignment(&task)?;
                 let history = self.get_task_history(task_id)?;
+                if capture_prior_history {
+                    prior_history = Some(history.clone());
+                }
                 if next.is_some()
                     && self.resident_view(task, &history)?.state().0 != ResidentMandateState::Active
                 {
@@ -116,6 +148,7 @@ impl OrbitRuntime {
                     },
                 )?;
                 Ok(())
-            })
+            })?;
+        Ok(prior_history)
     }
 }
