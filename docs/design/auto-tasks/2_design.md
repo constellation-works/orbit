@@ -757,15 +757,19 @@ list response instead. The legacy `controls_authorized` field remains for existi
 API consumers and still answers only for toggle and mint.
 
 `POST /api/auto-tasks/schedule` decodes the body, binds the trusted caller and
-records the audit row, then runs the observed profile of the shared
-`auto_task_schedule_command`. The command owns the rest: a missing definition
-is a 404 `auto_task_not_found`, a schedule that differs from `expected_schedule`
-is a 409 `stale_auto_task_schedule` carrying `actual_schedule`, and a request the
-stored schedule already satisfies answers `changed: false`; none of those
-validates, writes, stamps or audits. Only a real change reaches the write, which
-rejects retired coverage, rechecks `expected_schedule` under the cursor lock
-(a later mismatch is an ordinary control error, not the 409), validates and
-stamps. The ordinary `update` tool runs the unconditional profile steps inside
+runs the observed profile of the shared `auto_task_schedule_command`;
+operation auditing follows the command's outcome. An authorization denial is
+audited separately before the command runs. The command owns the rest: a
+missing definition is a 404 `auto_task_not_found`, a schedule that differs
+from `expected_schedule` is a 409 `stale_auto_task_schedule` carrying
+`actual_schedule`, and a request the stored schedule already satisfies answers
+`changed: false`; none of those validates, writes, stamps or audits. A read
+error likewise returns without an operation audit. Only a real change reaches
+the write, which rejects retired coverage, rechecks `expected_schedule` under
+the cursor lock (a later mismatch is an ordinary control error, not the 409),
+validates and stamps; the route then audits the written change, and audits a
+write error with its failure message before returning the control error. The
+ordinary `update` tool runs the unconditional profile steps inside
 its single locked edit, so a schedule combined with other fields is still one
 write and always validates and stamps.
 
