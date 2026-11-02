@@ -36,6 +36,7 @@ pub mod external;
 pub mod github_cli;
 mod mcp_annotations;
 mod mcp_rules;
+mod mcp_toolsets;
 pub use mcp_rules::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, builtin_mcp_rules};
 pub mod plugin;
 mod registry;

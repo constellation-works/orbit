@@ -33,6 +33,9 @@ pub enum McpToolsetError {
     /// `name` is not a known toolset.
     #[error("unknown MCP toolset '{name}'; known toolsets: {known}, or all")]
     Unknown { name: String, known: String },
+    /// `name` is not a known MCP role.
+    #[error("unknown MCP role '{name}'; known roles: {known}")]
+    UnknownRole { name: String, known: String },
     /// A selection carries an empty entry, such as `leases,,analytics`.
     #[error("an MCP toolset selection must not contain an empty entry")]
     EmptyEntry,

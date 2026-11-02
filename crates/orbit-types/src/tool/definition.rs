@@ -363,6 +363,8 @@ pub enum McpToolDefinitionError {
     DuplicateCanonicalName(String),
     #[error("duplicate advertised MCP tool name: {0}")]
     DuplicateAdvertisedName(String),
+    #[error("MCP tool {0} belongs to no toolset; classify it in the builtin toolset table")]
+    UnclassifiedToolset(String),
 }
 
 /// Convert a canonical Orbit tool name to its MCP-advertised form.

@@ -29,9 +29,13 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
-    /// The `orbit mcp serve` toolset that advertises this entry. Plugin and
-    /// most builtin entries are in the default toolset.
-    toolset: McpToolset,
+    /// The `orbit mcp serve` toolset this entry belongs to: a builtin MCP
+    /// tool's comes from [`crate::mcp_toolsets`], a plugin's is
+    /// [`McpToolset::Plugins`] and a tool MCP never advertises is
+    /// [`McpToolset::Local`]. `None` only for a builtin MCP tool missing from
+    /// the toolset table, which [`ToolRegistry::mcp_tool_definitions`]
+    /// refuses.
+    toolset: Option<McpToolset>,
     /// Set for a plugin-backed entry: provenance for the audit row and, on
     /// an inactive entry, the diagnostic naming the missing step.
     plugin: Option<Arc<PluginToolBinding>>,
@@ -55,19 +59,10 @@ impl ToolRegistry {
         self.register_with_availability(tool, ToolAvailability::Active, None);
     }
 
-    /// Register one active builtin for MCP advertisement at the given scope.
+    /// Register one active builtin for MCP advertisement at the given scope,
+    /// in the toolset the builtin toolset table places it.
     pub fn register_mcp<T: Tool + 'static>(&mut self, tool: T, scope: McpToolScope) {
-        self.register_mcp_in_toolset(tool, scope, McpToolset::Default);
-    }
-
-    /// Register one active builtin for MCP advertisement in an opt-in
-    /// `orbit mcp serve` toolset. Only advertisement depends on the toolset.
-    pub fn register_mcp_in_toolset<T: Tool + 'static>(
-        &mut self,
-        tool: T,
-        scope: McpToolScope,
-        toolset: McpToolset,
-    ) {
+        let toolset = crate::mcp_toolsets::builtin_mcp_toolset(&tool.schema().name);
         self.register_entry(tool, ToolAvailability::Active, Some(scope), toolset, None);
     }
 
@@ -87,7 +82,7 @@ impl ToolRegistry {
             tool,
             ToolAvailability::Active,
             mcp_scope,
-            McpToolset::Default,
+            Some(McpToolset::Plugins),
             Some(binding),
         );
     }
@@ -103,7 +98,7 @@ impl ToolRegistry {
             tool,
             ToolAvailability::Inactive,
             None,
-            McpToolset::Default,
+            Some(McpToolset::Plugins),
             Some(binding),
         );
     }
@@ -114,7 +109,7 @@ impl ToolRegistry {
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
     ) {
-        self.register_entry(tool, availability, mcp_scope, McpToolset::Default, None);
+        self.register_entry(tool, availability, mcp_scope, Some(McpToolset::Local), None);
     }
 
     fn register_entry<T: Tool + 'static>(
@@ -122,7 +117,7 @@ impl ToolRegistry {
         tool: T,
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
-        toolset: McpToolset,
+        toolset: Option<McpToolset>,
         plugin: Option<Arc<PluginToolBinding>>,
     ) {
         let schema = tool.schema();
@@ -283,13 +278,11 @@ impl ToolRegistry {
             .and_then(|binding| binding.diagnostic.clone())
     }
 
-    /// The `orbit mcp serve` toolset of one MCP-advertised entry, active or
-    /// not; `None` for an entry MCP never advertises.
+    /// The `orbit mcp serve` toolset of one entry, active or not:
+    /// [`McpToolset::Local`] for an entry MCP never advertises, and `None`
+    /// only for an unknown name or an unclassified builtin MCP tool.
     pub fn mcp_toolset(&self, name: &str) -> Option<McpToolset> {
-        self.tools
-            .get(name)
-            .filter(|entry| entry.mcp_scope.is_some())
-            .map(|entry| entry.toolset)
+        self.tools.get(name).and_then(|entry| entry.toolset)
     }
 
     /// Advertised MCP scope of one entry, active or not.
@@ -330,7 +323,7 @@ impl ToolRegistry {
                     let schema = entry.tool.schema();
                     let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
                     let mut rules = mcp_rules(&schema);
-                    rules.toolset = entry.toolset;
+                    rules.toolset = entry.toolset.unwrap_or_default();
                     McpToolDefinition::new(schema, scope)
                         .with_rules(rules)
                         .with_input_schema(entry.tool.input_schema())
@@ -340,6 +333,16 @@ impl ToolRegistry {
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         validate_mcp_tool_definitions(&definitions)?;
+        let mut unclassified = self
+            .tools
+            .iter()
+            .filter(|(_, entry)| entry.mcp_scope.is_some() && entry.toolset.is_none())
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        unclassified.sort();
+        if let Some(name) = unclassified.into_iter().next() {
+            return Err(McpToolDefinitionError::UnclassifiedToolset(name));
+        }
         Ok(definitions)
     }
 }

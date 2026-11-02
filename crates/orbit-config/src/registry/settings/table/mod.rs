@@ -37,7 +37,7 @@ use super::resolve::{
     resolve_experiments_min_delivered_rate, resolve_generated_paths,
     resolve_host_shutdown_hold_minutes, resolve_lease_intake_peer_user,
     resolve_light_delivery_paths, resolve_machine_id, resolve_machine_labels, resolve_machine_name,
-    resolve_material_fields, resolve_mcp_toolsets, resolve_memory_limit,
+    resolve_material_fields, resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
     resolve_mid_run_steering_max_rounds, resolve_name_list, resolve_non_code_paths,
     resolve_non_empty, resolve_non_reviewable_paths, resolve_optional_choice,
     resolve_optional_non_empty, resolve_percent, resolve_pr_body_template, resolve_reclaim,

@@ -17,6 +17,7 @@ mod listener;
 mod mcp_wire_roundtrip;
 #[cfg(unix)]
 mod oversized_lines;
+mod role_surface;
 mod scripted_destination;
 #[cfg(unix)]
 mod ssh_reuse;

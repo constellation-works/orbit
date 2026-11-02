@@ -107,17 +107,35 @@ works with `--mode remote <ssh-host>` and `--mode federated`.
 ## Toolsets
 
 Every tool schema a server lists costs context in each agent session, so
-`orbit mcp serve` lists a default toolset and keeps occasional groups opt-in:
+every tool belongs to exactly one toolset, and a server lists only the
+toolsets it enables. `orbit tool list` shows each tool's toolset.
 
 | Toolset | Tools |
 |---|---|
-| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
+| `core` (always on) | Workspace discovery: `orbit.workspace.list` |
+| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `block_triage` and `orbit.task.artifact.get` |
+| `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put` and `orbit.friction.*` |
+| `task-repair` | The delivery repair verbs: `orbit.task.requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
+| `decisions` | `orbit.decision.list`, `show` and `raise` |
+| `runs` | `orbit.workflow.run.list`, `show` and `observe` |
+| `dispatch` | `orbit.workflow.ship`, `orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke` |
+| `automation` | `orbit.auto_task.*`, `orbit.routine.control` and `orbit.automation.explain` |
+| `codebase` | `orbit.codebase.*` |
+| `search` | `orbit.search` |
+| `ui` | `orbit.visual.capture` |
+| `exec` | `orbit.command.exec` |
+| `plugins` | Plugin tools |
 | `leases` | `orbit.lease.*` |
 | `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
 | `agent-invoke` | `orbit.agent.invoke`. A managed implement or review-repair run that is offered explorer delegation enables it on its own server; the operator invocation is deprecated. |
 | `notice` | `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and `orbit.notice.show`: fleet notices, short expiring announcements every agent and operator in their scope should see |
+| `local` | Tools no MCP server lists (`proc.spawn`, `github.*`, the drain tools); `orbit tool run` and activities reach them |
+
+Without a role, a server lists `core` plus the default surface: every
+toolset from `tasks-read` through `plugins` above. `default` names that
+surface in a selection. The other toolsets are opt-in.
 
 Enable groups per server with `--toolset`, or for every server on the host
 with the global `machine.mcp.toolsets` config key; the flag replaces the
@@ -129,12 +147,44 @@ orbit config set --global machine.mcp.toolsets '["experiments"]'
 ```
 
 A toolset changes only what that server lists and dispatches. Calling a tool
-outside it returns a `toolset_not_enabled` error naming the toolset and the
-flag to enable it, so a long-lived client learns how to reach it. The tools
-stay registered: `orbit tool run`, activities that require them, and a
-decision channel plugin's callback session reach every tool. `--mode remote`
-asks the destination for the same toolsets, and `--mode federated` applies
+outside it returns a `toolset_not_enabled` error naming the toolset, the
+server's role, the roles that include it and the flag to enable it, so a
+long-lived client learns how to reach it. The tools stay registered:
+`orbit tool run`, activities that require them, and a decision channel
+plugin's callback session reach every tool. `--mode remote` asks the
+destination for the same role and toolsets, and `--mode federated` applies
 them to every destination.
+
+## Roles
+
+A role is a named set of toolsets for one kind of session, so a session
+carries only the tools its job needs:
+
+| Role | Toolsets (beside `core`) |
+|---|---|
+| `operator` | Every toolset |
+| `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `search` |
+| `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
+| `reader` | `tasks-read`, `runs`, `codebase`, `search` |
+
+```bash
+orbit mcp serve --role reader
+orbit mcp serve --role manager --toolset analytics   # the role plus analytics
+orbit config set --global machine.mcp.role resident
+orbit tool list --role agent                         # the role's tools and size
+```
+
+`--role` replaces the global `machine.mcp.role` default for one server;
+`--toolset` and `machine.mcp.toolsets` add to the role. Without either, a
+server lists the default surface above, unchanged from before roles.
+`orbit tool list --role <role>` prints the role's tool count and an
+approximate token size of its listed schemas.
+
+A role grants no authority. It limits only what MCP lists and dispatches:
+operator-only tools still need `--operator` under every role, including
+`operator`, and `orbit tool run`, activities and plugin callbacks are
+unaffected. Managed activities keep their own tool allowlists.
 
 ## Serve on a socket
 

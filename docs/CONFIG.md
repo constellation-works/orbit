@@ -297,6 +297,12 @@ task_prefix = "ORB"
 | `machine.application_consent_max_days` | `30` | Yes (`--global`) | **Advanced.** Longest lifetime, in days (`1..=365`), of an application consent with constrained, named or rate-limited scopes (schema v2); `orbit application consent` refuses a later `expires_at`. Consents whose every scope is exact are not capped. |
 | `machine.web_terminal.enabled` | `false` | Yes (`--global`) | Enable private dashboard browser credentials at startup. |
 | `machine.web_session.ttl` | `43200` (12h) | Yes (`--global`) | Session lifetime in seconds (`1..=604800`); restart the dashboard to apply. See [browser sessions](#browser-sessions). |
+| `machine.mcp.toolsets` | `[]` | Yes (`--global`) | MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one (`leases`, `notice`, `tasks-write`, `default`, `all`, …). A server's `--toolset` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
+| `machine.mcp.role` | unset | Yes (`--global`) | The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
+
+### MCP roles and toolsets
+
+Every tool belongs to exactly one MCP toolset (`orbit tool list` shows it), and a role is a named set of toolsets defined in one place (`McpRole` in `orbit-types`). `orbit mcp serve --role <role>` serves the role's toolsets plus the always-on `core` (workspace discovery); `--toolset` or `machine.mcp.toolsets` add to it. With no `--role` and no `machine.mcp.role` a server advertises exactly the surface it did before roles existed, so running long-lived clients are unaffected. A role limits only what MCP lists and dispatches; it never grants authority, so operator-only tools still need operator capability under any role. A call outside the role is refused `toolset_not_enabled`, naming the toolset, the role and the roles that include it. `--mode remote` forwards `--role` to the destination; `--mode federated` applies the role to every destination at the mux. `orbit tool list --role <role>` reports a role's tool count and approximate token size; `crates/orbit-mcp/tests/boundary/mcp_role_budgets.json` holds each role's size budget, and a test fails when a role exceeds it. Design: [federated MCP §roles](design/federated-mcp/specs/mcp-roles.md).
 
 ### Browser sessions
 

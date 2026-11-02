@@ -38,9 +38,9 @@ pub struct RemoteProxyArgs {
     /// Authority this client was started with, and therefore the authority the
     /// destination is asked to serve [ORB-12564].
     pub authority: McpSessionAuthority,
-    /// Toolsets the destination is asked to advertise. The proxy is
+    /// Role and toolsets the destination is asked to advertise. The proxy is
     /// byte-faithful, so the destination applies them; an Orbit SSH route that
-    /// names none serves every toolset.
+    /// names neither serves every toolset.
     pub toolsets: McpToolsetSelection,
 }
 
@@ -87,14 +87,29 @@ fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Result<Comman
         args.orchestrator.as_deref(),
         args.authority,
     );
-    remote.push_str(" --toolset ");
-    remote.push_str(&quote_posix_arg(&args.toolsets.to_list()));
+    remote.push_str(&remote_surface_args(&args.toolsets));
     command
         .arg(remote)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     Ok(command)
+}
+
+/// The `--role` and `--toolset` arguments asking a destination for the same
+/// surface. Without a role this is the `--toolset` list it always was, so a
+/// destination that predates roles is asked for nothing new.
+pub(crate) fn remote_surface_args(selection: &McpToolsetSelection) -> String {
+    let mut args = String::new();
+    if let Some(role) = selection.role() {
+        args.push_str(" --role ");
+        args.push_str(role.as_str());
+    }
+    if let Some(list) = selection.to_list() {
+        args.push_str(" --toolset ");
+        args.push_str(&quote_posix_arg(&list));
+    }
+    args
 }
 
 /// Remote command whose hidden argument marks an SSH-originated MCP session.

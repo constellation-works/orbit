@@ -24,7 +24,7 @@ pub use mcp_rules::{
     McpIdRoute, McpInputCondition, McpInputDecoration, McpPresentationRead, McpToolRules,
     McpWorkspaceEcho,
 };
-pub use mcp_toolset::{McpToolset, McpToolsetSelection};
+pub use mcp_toolset::{McpRole, McpToolset, McpToolsetSelection};
 
 pub use definition::{
     ExecutionResult, McpCapability, McpToolAnnotations, McpToolDefinition, McpToolDefinitionError,
