@@ -467,7 +467,8 @@ rate.
 
 Description or acceptance-criteria edits make the assessment stale but never
 schedule another pilot. Dispatch fails closed as `pilot_assessment_stale` until
-`orbit task repilot <id>` completes against the edited requirements. A held
+`orbit task repilot <id>` completes against the edited requirements, unless an
+operator skips the pilot with `no-pilot` as described above. A held
 warning keeps its one pending decision across routine windows; routine ticks
 create no additional pilot, triage, or decision for that same assessment.
 
