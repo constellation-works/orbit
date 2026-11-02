@@ -806,21 +806,19 @@ spec:
       claim-host replay; that replay is the evidence, the worker's nested skip
       is not. When the test is outside every required gate, flag that scope
       mismatch instead.
-    - **Owner machine.** A criterion's evidence may exist on only one machine:
-      its live task store, services or data, such as timings on a named host.
-      This includes workspace-authored scans that need the authoritative
-      owner-workspace audit and a completed predecessor's cursor artifact or
-      execution summary, even when no host is named; read the description's
-      evidence contract with the criteria. A follower's local audit is
-      different data, and the claimed-owner bridge scopes predecessor
-      `task.show` and `artifact.get` reads to the claimed task, so required
-      tool names do not prove access. When that machine is `owner_machine`,
-      add `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`
-      to `required_machine`. Otherwise, or when `owner_machine` is null, leave
-      it empty and report the requirement in `utility_warnings`. Never guess a
-      cursor, substitute follower data, widen broker scope or remove tools.
-      The entry grants nothing: keep any independent re-home, re-authoring or
-      operator hold. A portable scan whose reads fit the bridge needs none.
+    - **Owner machine.** Require `required_machine` only when a criterion needs
+      evidence unavailable through the claimed-workspace bridge: authoritative
+      local audits, services or data. Read the description's evidence contract
+      as well as the criteria. `task.show` and `artifact.get` can read other tasks
+      in that workspace; another task's `review-*` artifacts remain refused.
+      Tool names alone prove no per-call access. When the required machine is
+      `owner_machine`, add
+      `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`.
+      Otherwise, or when it is null, use `utility_warnings`. Never guess a cursor,
+      substitute follower data, widen broker scope or remove tools. Machine
+      routing grants no authority: preserve independent re-home, re-authoring or
+      operator holds. Portable scans whose reads fit the bridge need no machine
+      requirement.
     - **Post-deploy.** When only the deployed build on a named host can
       evidence a criterion after merge (its live service's latency, the
       installed binary against its live store), add
