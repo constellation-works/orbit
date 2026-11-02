@@ -47,7 +47,7 @@ client of the API and lives in its own repository.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md). No new cross-crate dependency is
 needed: every crate below already depends on the ones it would call.
 
-| Concern | Location (slices 1–2 built; the rest proposed) |
+| Concern | Location (slices 1–3 built; the rest proposed) |
 |---|---|
 | `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
 | The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
@@ -180,20 +180,20 @@ extension adds is to *withhold* new unattended work on named hosts, bounded by t
 
 ## 8. Slices
 
-Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–2 done, slices 3–4 in progress, slice 5 in `backlog`);
+Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–3 done, slice 4 in progress, slice 5 in `backlog`);
 dependencies run top to bottom, and ids are in Task References.
 
 1. **Notice store, tools, CLI and the `notice` toolset** ([ORB-21211], done). Types; store migration and
    repository; core post/close/list/show with effective state, expiry defaults and caps, dedupe and
    corroboration, linked-task closure on read; poster-class resolution and every right and limit in
-   [notice-authority](./specs/notice-authority.md) (the agent rules are enforced here even though
-   agents are not yet granted the tool); `McpToolset::Notice` and `machine.mcp.toolsets`; registry-
+   [notice-authority](./specs/notice-authority.md) (the agent rules are enforced here; slice 3
+   grants the tools to managed agents, section 4); `McpToolset::Notice` and `machine.mcp.toolsets`; registry-
    derived CLI; audit rows; `[notice]` configuration; goldens; skill reference. Single-host,
    owner-local reads.
 2. **Brief delivery** ([ORB-21212], done). The `RuntimeHost` capability, the `fleet_notices` block, the
    `notice_instruction` on the opted-in activities, `NoticesDelivered`, fail-open marker, the
    `brief_delivery` switch, the claimed-run owner read. Depends on 1.
-3. **Managed-agent posting** ([ORB-21213], in progress). Activity tool baselines, toolset stamping onto the run's MCP
+3. **Managed-agent posting** ([ORB-21213], done). Activity tool baselines, toolset stamping onto the run's MCP
    server, the posting instruction, the `agent_posting` switch. Depends on 1; its end-to-end check
    (one agent posts, a second run's brief shows it) depends on 2.
 4. **Federation** ([ORB-21214], in progress). Follower writes through the owner route, routed reads, the
