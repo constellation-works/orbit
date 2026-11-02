@@ -1262,18 +1262,15 @@ completion and usage projection. Assistant messages carry their own `usage`, and
 the `StructuredOutput` call quotes the envelope, so neither reaches the answer
 or the token totals; a stream with no `result` has no answer.
 
-**Status/error correlation.** The provider schema nests `anyOf` inside
-`allOf` to associate each status with its error shape without putting a
-conditional at the top level, which Anthropic's structured-output subset
-rejects. For `success`, `error` must be absent or JSON null; for `failed` and
-`timeout`, it must be an object with `code` and `message` strings. The
-branches use the `\S` pattern to require a non-blank value for each string,
-because the provider subset rejects string-length constraints. The top-level
-`error` property does not itself declare an object type; the status branches
-do. `parse_json_envelope` enforces the correlation as a second layer for
-transports without schema-constrained output: it rejects an error object on
-`success` and requires an error with non-blank `code` and `message` on both
-`failed` and `timeout`.
+**Status/error correlation.** The provider schema stays within Anthropic's
+structured-output subset: it has no top-level conditional and no per-status
+branches, because the subset rejects top-level `oneOf`, `allOf` and `anyOf`.
+The schema therefore does not associate `error` with `status`;
+`parse_json_envelope` alone enforces that correlation. It allows `error` to be
+absent or JSON null for `success` and requires an error object for `failed`
+and `timeout`. The schema still describes the error object's `code` and
+`message` as strings with the `\S` pattern to reject blank values, because the
+provider subset rejects string-length constraints.
 
 The earlier untyped property plus a description that said "null when status
 is success" made Claude's constrained decoder emit the JSON *string*
