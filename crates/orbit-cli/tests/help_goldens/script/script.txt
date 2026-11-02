@@ -25,4 +25,5 @@ A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose
 as `target: script:<name>`. Grants are host-local consent bound to
 the manifest and entry digests: editing either file makes the grant
 stale until an operator grants again. A granted script step runs on
-Linux under a sandbox with no network; other hosts refuse it.
+Linux under a sandbox, with network and environment variables only
+as its grant allows; other hosts refuse it.

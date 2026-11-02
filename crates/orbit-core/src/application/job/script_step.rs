@@ -10,18 +10,27 @@
 //! the step accepts, before the scratch directory is removed. Declared
 //! input files ([`super::script_inputs`]) are resolved and digested before
 //! spawn and bound read-only at `in/<as>`.
+//!
+//! The grant's `network` decides the network the script reaches, and its
+//! `env_pass` names are the only host variables copied into the script's
+//! environment. Each passed value is redacted, through the shared redaction
+//! path, from the captured log, the stdout that becomes the step output and
+//! the recorded argv before any of them leaves this host boundary, so the
+//! audit record, `orbit run show` and `orbit script history` never hold it.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use orbit_common::security::redaction::{argv_redactor, redact_all_and_home};
+use orbit_common::security::redaction::{
+    argv_redactor, redact_all_and_home, redact_secret_values_text,
+};
 use orbit_engine::activity_job::{ScriptSnapshot, load_script_snapshot, render_script_args};
 use orbit_engine::{
     ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,
 };
 use orbit_exec::{
     SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxInput,
-    ScriptSandboxRequest, ScriptSandboxSpec,
+    ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxSpec,
 };
 use orbit_types::workflow::activity_job::{
     ScriptExecutionRecord, ScriptGrant, ScriptHostRole, ScriptNetwork, script_refusal,
@@ -181,8 +190,16 @@ fn prepare_and_run(
     let interpreter = admitted_interpreter(&snapshot, &grant)?;
     record.interpreter_paths = grant.interpreter_paths.clone();
     check_requests_within_grant(&snapshot, &grant)?;
+    // The grant, not the manifest's request, decides what the script gets.
+    record.network = grant.network;
     record.read_roots = grant.read_roots.clone();
     record.write_roots = grant.write_roots.clone();
+    // Which granted names pass is known before anything can refuse for the
+    // host, so every record after the grant check names them.
+    let parent: Vec<(String, String)> = std::env::vars().collect();
+    let passed = script_passed_env(&grant, &parent);
+    record.env_pass = passed.names();
+    record.env_pass_unset = passed.unset.clone();
 
     let input_text = admitted_input(&snapshot, &request.input)?;
 
@@ -214,6 +231,16 @@ fn prepare_and_run(
         )
     })?;
     record.profile = Some(profile.to_string());
+    let network = ScriptSandboxNetwork::for_grant(grant.network);
+    orbit_exec::probe_script_sandbox_network(network).map_err(|reason| {
+        refuse(
+            script_refusal::SANDBOX_UNAVAILABLE,
+            format!(
+                "script `{}` is granted network `{}`, which this host cannot give it: {reason}",
+                request.script, grant.network
+            ),
+        )
+    })?;
 
     let args = render_script_args(&asset.spec.args, &request.input)
         .map_err(|error| refuse(script_refusal::INPUT_INVALID, error.to_string()))?;
@@ -290,6 +317,8 @@ fn prepare_and_run(
         scratch: &scratch.path,
         masked: &masked,
         inputs: &inputs,
+        network,
+        passed,
         launcher: &launcher,
         launcher_env: &launcher_env,
         stdin: input_text.into_bytes(),
@@ -469,8 +498,8 @@ fn admitted_interpreter(
         .collect())
 }
 
-/// A manifest request beyond the grant, or one this phase cannot honour,
-/// refuses the step.
+/// A manifest request beyond the grant refuses the step before anything
+/// is spawned.
 fn check_requests_within_grant(
     snapshot: &ScriptSnapshot,
     grant: &ScriptGrant,
@@ -535,21 +564,6 @@ fn check_requests_within_grant(
              `orbit script grant {} --output-max-file-bytes {bytes}`)",
             grant.limits.output_max_file_bytes, asset.name
         )));
-    }
-    let unsupported = |what: &str| {
-        refuse(
-            script_refusal::SANDBOX_UNAVAILABLE,
-            format!(
-                "script `{}` uses {what}, which this build's script profile does not run yet",
-                asset.name
-            ),
-        )
-    };
-    if requests.network != ScriptNetwork::None || grant.network != ScriptNetwork::None {
-        return Err(unsupported("network access"));
-    }
-    if !requests.env_pass.is_empty() || !grant.env_pass.is_empty() {
-        return Err(unsupported("`env_pass`"));
     }
     Ok(())
 }
@@ -648,6 +662,8 @@ struct RunPlan<'a> {
     scratch: &'a Path,
     masked: &'a [PathBuf],
     inputs: &'a [ScriptSandboxInput],
+    network: ScriptSandboxNetwork,
+    passed: ScriptPassedEnv,
     launcher: &'a [String],
     launcher_env: &'a [(String, String)],
     stdin: Vec<u8>,
@@ -666,6 +682,8 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         scratch,
         masked,
         inputs,
+        network,
+        passed,
         launcher,
         launcher_env,
         stdin,
@@ -711,12 +729,15 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
             .to_string(),
     );
     argv.extend(args.iter().cloned());
+
+    let secrets = passed.values();
     record.argv = argv
         .iter()
-        .map(|argument| argv_redactor().apply_str(argument))
+        .map(|argument| redact_secret_values_text(&argv_redactor().apply_str(argument), &secrets))
         .collect();
 
-    let env = script_env(request, asset.digest.as_str(), grant);
+    let mut env = script_env(request, asset.digest.as_str(), grant);
+    env.extend(passed.vars);
     let mut readable: Vec<PathBuf> = grant
         .interpreter_paths
         .first()
@@ -742,6 +763,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
             masked,
             home: home.as_deref(),
             inputs,
+            network,
         },
         argv: &argv,
         env: &env,
@@ -758,7 +780,23 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         )
     })?;
     record.duration_ms = Some(u64::try_from(run.duration.as_millis()).unwrap_or(u64::MAX));
-    let log = redact_all_and_home(&String::from_utf8_lossy(&run.log)).into_bytes();
+    // The passed values are redacted first so their `[REDACTED]` placeholder
+    // wins when a passed name is also sensitive (`redact_all_and_home` would
+    // otherwise replace it with `[REDACTED_ENV]` first); the later `redact_all`
+    // pass leaves `[REDACTED]` untouched.
+    let log = redact_all_and_home(&redact_secret_values_text(
+        &String::from_utf8_lossy(&run.log),
+        &secrets,
+    ))
+    .into_bytes();
+    // The step output, and every record built from it, is parsed from this
+    // stdout: a passed value echoed into it is redacted before it is parsed.
+    // Without passed values the bytes stay exactly as the script wrote them.
+    let stdout = if secrets.is_empty() {
+        run.stdout
+    } else {
+        redact_secret_values_text(&String::from_utf8_lossy(&run.stdout), &secrets).into_bytes()
+    };
     Ok(ScriptStepRan {
         end: match run.end {
             ScriptRunEnd::Exited(code) => ScriptStepEnd::Exited(code),
@@ -766,7 +804,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
             ScriptRunEnd::TimedOut => ScriptStepEnd::TimedOut,
             ScriptRunEnd::ScratchCapExceeded => ScriptStepEnd::ScratchCapExceeded,
         },
-        stdout: run.stdout,
+        stdout,
         stdout_over_cap: run.stdout_over_cap,
         output_schema: asset.spec.output_schema_json.clone(),
         log,
@@ -798,7 +836,59 @@ pub(crate) fn script_launcher_env_from(parent: &[(String, String)]) -> Vec<(Stri
     )
 }
 
-/// The script's whole environment (§3): fixed values and the step context.
+/// The granted `env_pass` variables this process holds, and the granted
+/// names it does not.
+struct ScriptPassedEnv {
+    vars: Vec<(String, String)>,
+    unset: Vec<String>,
+}
+
+impl ScriptPassedEnv {
+    fn names(&self) -> Vec<String> {
+        self.vars.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    fn values(&self) -> Vec<String> {
+        self.vars.iter().map(|(_, value)| value.clone()).collect()
+    }
+}
+
+/// The variables a grant passes into the script (§3 Environment), read from
+/// `parent`. Only names the grant lists are copied, and a name the parent
+/// does not hold (or holds empty) is unset, never an empty string. An
+/// `ORBIT_*` name or one [`script_env`] fixes (`PATH`, `HOME`, …) is never
+/// copied, so a grant cannot carry Orbit authority or override the profile's
+/// own values.
+fn script_passed_env(grant: &ScriptGrant, parent: &[(String, String)]) -> ScriptPassedEnv {
+    let mut passed = ScriptPassedEnv {
+        vars: Vec::new(),
+        unset: Vec::new(),
+    };
+    for name in &grant.env_pass {
+        if name.starts_with("ORBIT_")
+            || SCRIPT_FIXED_ENV.contains(&name.as_str())
+            || passed.vars.iter().any(|(seen, _)| seen == name)
+            || passed.unset.contains(name)
+        {
+            continue;
+        }
+        match parent
+            .iter()
+            .find(|(key, value)| key == name && !value.is_empty())
+        {
+            Some((_, value)) => passed.vars.push((name.clone(), value.clone())),
+            None => passed.unset.push(name.clone()),
+        }
+    }
+    passed
+}
+
+/// The names [`script_env`] sets itself; a grant's `env_pass` never
+/// replaces them.
+const SCRIPT_FIXED_ENV: [&str; 5] = ["PATH", "HOME", "TMPDIR", "LANG", "TZ"];
+
+/// The script's fixed environment (§3): fixed values and the step context.
+/// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
 pub(crate) fn script_env(
     request: &ScriptStepRequest,
     digest: &str,

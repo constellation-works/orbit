@@ -806,12 +806,22 @@ pub struct ScriptExecutionRecord {
     /// `worktree` (read-write) or `workspace_root` (read-only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd_mode: Option<String>,
+    /// The manifest's requested network until the grant is admitted, then
+    /// the grant's: the network the script ran with.
     #[serde(default)]
     pub network: ScriptNetwork,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_roots: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write_roots: Vec<PathBuf>,
+    /// The granted `env_pass` names whose values reached the script. Names
+    /// only: the values are redacted wherever the run's output is kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_pass: Vec<String>,
+    /// Granted `env_pass` names this process did not hold, so the script ran
+    /// with them unset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_pass_unset: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

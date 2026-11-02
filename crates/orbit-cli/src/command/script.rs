@@ -29,7 +29,8 @@ use crate::output::table::{Column, Table};
                   as `target: script:<name>`. Grants are host-local consent bound to\n\
                   the manifest and entry digests: editing either file makes the grant\n\
                   stale until an operator grants again. A granted script step runs on\n\
-                  Linux under a sandbox with no network; other hosts refuse it."
+                  Linux under a sandbox, with network and environment variables only\n\
+                  as its grant allows; other hosts refuse it."
 )]
 pub struct ScriptCommand {
     #[command(subcommand)]
@@ -234,6 +235,12 @@ impl ScriptGrantArgs {
                 "requested network: {} (granted {})\n",
                 asset.spec.requests.network, grant.network
             ));
+        }
+        if grant.network == ScriptNetwork::Any {
+            text.push_str(
+                "warning: network `any` shares this host's network with the script with no \
+                 rule; `https` admits outbound TCP to port 443 only\n",
+            );
         }
         if let Some(asset) = asset
             && asset.spec.files.outputs.declared()

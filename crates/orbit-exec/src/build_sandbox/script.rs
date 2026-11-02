@@ -9,10 +9,13 @@
 //! [`SCRIPT_SANDBOX_MOUNT`], whose `snapshot/` (the manifest and entry
 //! bytes the grant was checked against) and `in/` are read-only. The
 //! credential denies are applied after every bind, so they win over all of
-//! them. Every namespace is unshared, the network included: under
-//! `network: none` the child has only its own loopback interface, never
-//! the host's. The environment is cleared inside the sandbox and set from
-//! the request alone.
+//! them. Every namespace is unshared. Under `network: none` the network
+//! namespace is unshared too, so the child has only its own loopback
+//! interface, never the host's. A networked grant shares the host network:
+//! `https` under a Landlock ruleset that admits outbound TCP to one port
+//! only (the build profile's fetch mode), `any` with no rule. The
+//! environment is cleared inside the sandbox and set from the request
+//! alone.
 //!
 //! Supervision is the build phase's: one capped log for stdout and stderr,
 //! a wall-clock bound and a scratch-size bound that kill the process group.
@@ -44,6 +47,35 @@ pub const SCRIPT_TERMINATION_GRACE: Duration = Duration::from_secs(10);
 /// The scratch subdirectories, created by the caller before the run.
 pub const SCRIPT_SCRATCH_DIRS: [&str; 5] = ["snapshot", "home", "tmp", "in", "out"];
 
+/// The TCP port a `network: https` grant may connect to.
+pub const SCRIPT_HTTPS_PORT: u16 = 443;
+
+/// The network one script run gets (§3 Network).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptSandboxNetwork {
+    /// Its own network namespace: only its own loopback interface.
+    None,
+    /// The host network under a Landlock ruleset that admits TCP connect
+    /// to this port only and no TCP bind. `network: https` is
+    /// [`SCRIPT_HTTPS_PORT`]. Needs Landlock ABI
+    /// [`crate::NETWORK_LANDLOCK_ABI`]; an older kernel refuses the run.
+    TcpPort(u16),
+    /// The host network with no rule.
+    Any,
+}
+
+impl ScriptSandboxNetwork {
+    /// The sandbox network a grant's `network` capability names.
+    pub fn for_grant(network: orbit_types::workflow::activity_job::ScriptNetwork) -> Self {
+        use orbit_types::workflow::activity_job::ScriptNetwork;
+        match network {
+            ScriptNetwork::None => Self::None,
+            ScriptNetwork::Https => Self::TcpPort(SCRIPT_HTTPS_PORT),
+            ScriptNetwork::Any => Self::Any,
+        }
+    }
+}
+
 /// What the script profile lets one script see.
 #[derive(Debug, Clone, Copy)]
 pub struct ScriptSandboxSpec<'a> {
@@ -70,6 +102,8 @@ pub struct ScriptSandboxSpec<'a> {
     /// caller resolves and admits them first ([`script_input_conflict`]);
     /// the profile refuses one that still overlaps protected state.
     pub inputs: &'a [ScriptSandboxInput],
+    /// The network the script reaches.
+    pub network: ScriptSandboxNetwork,
 }
 
 /// One declared file input of a script run.
@@ -231,16 +265,18 @@ pub fn compile_linux_script_argv(
         }
     }
     // `--unshare-all` includes the network namespace: with no
-    // `--share-net`, the only interface is the namespace's own loopback.
+    // `--share-net`, the only interface is the namespace's own loopback. A
+    // networked grant shares the host's; `TcpPort` is confined by the
+    // Landlock ruleset [`run_script_sandboxed`] applies to the child.
     let mut args: Vec<String> = vec![
         "--unshare-all".into(),
         "--new-session".into(),
         "--die-with-parent".into(),
-        "--proc".into(),
-        "/proc".into(),
-        "--dev".into(),
-        "/dev".into(),
     ];
+    if spec.network != ScriptSandboxNetwork::None {
+        args.push("--share-net".into());
+    }
+    args.extend(["--proc", "/proc", "--dev", "/dev"].map(String::from));
     push_runtime_table(&mut args, spec.readable);
     let cwd_bind = if spec.cwd_writable {
         "--bind"
@@ -467,8 +503,41 @@ fn nested_sandbox_reason() -> Option<String> {
     None
 }
 
+/// Whether this host can give a script `network`. A port-confined network
+/// needs Landlock ABI [`crate::NETWORK_LANDLOCK_ABI`]; only Linux shares a
+/// network with a script at all (macOS refuses it until descendants are
+/// contained). The error is the reason, for `script_sandbox_unavailable`.
+pub fn probe_script_sandbox_network(network: ScriptSandboxNetwork) -> Result<(), String> {
+    if network == ScriptSandboxNetwork::None {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let ScriptSandboxNetwork::TcpPort(port) = network {
+            let abi = crate::linux_landlock::abi_version();
+            if abi < crate::NETWORK_LANDLOCK_ABI {
+                return Err(format!(
+                    "network `https` needs Landlock ABI {} to confine TCP to port {port}; this \
+                     kernel provides {}",
+                    crate::NETWORK_LANDLOCK_ABI,
+                    if abi < 0 {
+                        "no Landlock".to_string()
+                    } else {
+                        format!("ABI {abi}")
+                    }
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("a script step gets network access only on Linux in this build".to_string())
+    }
+}
+
 /// Run one script under the profile. The caller probes first
-/// ([`probe_script_sandbox`]); a profile that cannot be applied here is an
+/// ([`probe_script_sandbox`], [`probe_script_sandbox_network`]); a profile that cannot be applied here is an
 /// error, never a weaker run.
 pub fn run_script_sandboxed(
     request: ScriptSandboxRequest<'_>,
@@ -516,6 +585,15 @@ pub fn run_script_sandboxed(
             None => std::process::Command::new(&bwrap),
         };
         command.args(wrapper_args);
+        // The ruleset is applied in the child before `exec`, so it binds the
+        // launcher, Bubblewrap and the script alike; the descriptor lives
+        // until the run ends.
+        let ruleset = match spec.network {
+            ScriptSandboxNetwork::TcpPort(port) => Some(
+                crate::linux_landlock::restrict_child_tcp_connect_to_port(&mut command, port)?,
+            ),
+            ScriptSandboxNetwork::None | ScriptSandboxNetwork::Any => None,
+        };
         let phase = super::supervise::Phase {
             env: request.launcher_env,
             cwd: spec.cwd,
@@ -528,7 +606,7 @@ pub fn run_script_sandboxed(
         };
         let mut log = super::supervise::BuildLog::with_cap(SCRIPT_LOG_CAP_BYTES);
         let started = std::time::Instant::now();
-        let run = super::supervise::run_phase(command, (), &phase, &mut log)?;
+        let run = super::supervise::run_phase(command, ruleset, &phase, &mut log)?;
         Ok(ScriptSandboxRun {
             end: match run.end {
                 super::BuildPhaseEnd::Exited(code) => ScriptRunEnd::Exited(code),
