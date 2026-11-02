@@ -35,6 +35,7 @@ use orbit_common::fs::git::run_git;
 use orbit_types::task::{DECISION_ANSWERED_EVENT, Task, TaskHistoryEntry};
 use serde_json::{Map, Value, json};
 
+use super::admission::OPERATOR_TOOL_CLASSIFICATIONS;
 use super::promotion::{WARNING_FIELDS, finding_holds_promotion, warning_text};
 use super::{CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, VALIDATION_TOOL_WARNINGS};
 use crate::OrbitRuntime;
@@ -75,7 +76,12 @@ const VERDICTS: [&str; 3] = ["resolved", "still_holds", "changed"];
 
 /// Assessment fields the host owns or recomputes on every apply; a re-check
 /// never carries them forward from the prior receipt.
-const HOST_FIELDS: [&str; 14] = [
+/// `operator_tool_classifications` is here too: it is keyed only by
+/// criterion index and tool, so a kept `subject` entry would still match
+/// an edited criterion that now requires invoking the tool. The pilot
+/// must re-classify every current mention; a mention it leaves
+/// unclassified fails safe to an operator hold.
+const HOST_FIELDS: [&str; 15] = [
     "task_id",
     "context_files_before",
     VALIDATION_TOOL_WARNINGS,
@@ -86,6 +92,7 @@ const HOST_FIELDS: [&str; 14] = [
     "context_reauthorization_required",
     CONTEXT_EVIDENCE_RETAINED,
     "explore_brief",
+    OPERATOR_TOOL_CLASSIFICATIONS,
     MODE,
     MODE_REASON,
     PRIOR_ASSESSMENT_ID,

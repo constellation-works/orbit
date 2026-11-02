@@ -1036,6 +1036,69 @@ fn unclassified_or_malformed_operator_tool_classification_still_holds() {
     }
 }
 
+/// A re-check must not carry a prior `subject` classification forward when
+/// the criterion now requires invoking the tool: the stale entry would
+/// otherwise drop the operator hold for the edited criterion.
+fn recheck_after_subject_to_invoke_criteria_edit_still_holds() {
+    let (workspace, task) = fresh_validation(
+        "The description `orbit.pipeline.invoke` advertises names its operator handoff, shown by the tool-list golden.",
+    );
+    assess_with(
+        &workspace,
+        &task,
+        Some("utility_warnings"),
+        "selectors",
+        json!({"operator_tool_classifications": [{
+            "criterion": 1, "tool": "orbit.pipeline.invoke", "classification": "subject",
+            "reason": "The criterion checks the advertised description text, not a run.",
+        }]}),
+    );
+    let audit = last_audit(&workspace, &task);
+    assert!(audit["operator_validation_hold"].is_null(), "{audit}");
+
+    set_criteria(
+        &workspace,
+        &task,
+        vec!["Run `orbit.pipeline.invoke` to perform the live evaluation.".into()],
+    );
+    let prepared = workspace.prepare(&[&task.id]);
+    assert_eq!(prepared["tasks"][0]["pilot_mode"], "recheck", "{prepared}");
+    assert_eq!(
+        prepared["partitions"][0]["operator_tool_candidates"][&task.id],
+        json!([{"criterion": 1, "tool": "orbit.pipeline.invoke"}]),
+        "{prepared}"
+    );
+    // The re-check pilot judges only the prior holding finding and returns
+    // no classifications; apply must not reuse the stale `subject` entry.
+    let applied = workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo, "prepared": prepared,
+            "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [{
+                "task_id": task.id,
+                "recheck_findings": [{
+                    "id": "utility_warnings[0]", "status": "resolved",
+                    "evidence": "The fixture utility check now passes.",
+                }],
+            }]}],
+        }),
+    );
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    let audit = last_audit(&workspace, &task);
+    assert_eq!(audit["assessment"]["mode"], "recheck", "{audit}");
+    assert!(
+        !audit["assessment"]["recheck_kept_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("operator_tool_classifications")),
+        "{audit}"
+    );
+    assert_req0(&audit["operator_validation_hold"]["requirements"], 1);
+    assert_eq!(reserved_findings(&workspace, &task), 1, "{audit}");
+    assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+}
+
 fn changed_criteria_make_the_pilot_validation_assessment_stale() {
     let (workspace, task) = fresh_validation("Evaluate through `orbit.pipeline.invoke`.");
     assess(&workspace, &task, None);
@@ -1943,7 +2006,8 @@ crate::scenario_table!(
     operator_validation_hold_is_retained_when_warnings_exceed_cap,
     operator_tool_named_as_the_change_subject_does_not_hold,
     operator_tool_the_criterion_must_invoke_still_holds,
-    unclassified_or_malformed_operator_tool_classification_still_holds
+    unclassified_or_malformed_operator_tool_classification_still_holds,
+    recheck_after_subject_to_invoke_criteria_edit_still_holds
 );
 
 crate::scenario_table!(
