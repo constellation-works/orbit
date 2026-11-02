@@ -74,6 +74,8 @@ plugin or passing protocol test alone does not prove rendering/context delivery.
 | Record and inspect repeated capability costs | [Evolution records](references/tool-surface.md#evolution-records) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
 | Understand Orbit nouns | [Concepts](references/concepts.md) |
+| Act as a manager for resident mandates | [Manager](references/manager.md) |
+| Run one resident cycle for a mandate | [Resident cycle](references/resident-cycle.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](references/setup/distributed-drain.md) |
 
 For dispatch, backlog supervision and failed runs, use
