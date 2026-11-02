@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, host-registry, federated-mcp]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 ---
 
 # Spec: Attention filters
@@ -46,7 +46,7 @@ array is shown.
 | `--orchestrator <crew>` (repeatable) | `orchestrator: string[]` | `item.task.orchestrator` | The orchestrator attributed to the task. |
 | `--older-than <duration>` | `older_than: string` | `item.age_seconds` at least the duration | `90m`, `36h`, `3d` (the duration syntax of `orbit run auto --for`). Items with `since: null` never match. |
 | `--since <cursor>` | `since: string` | Items new or changed since the cursor | [attention-cursor](./attention-cursor.md). |
-| `--limit <n>` | `limit: integer` | Caps `items` after ordering and delta | Default 100, maximum 500. `counts.matching` is the pre-limit total and `counts.truncated` says whether the cap cut anything. |
+| `--limit <n>` | `limit: integer` | Caps a public response after ordering and delta | Public responses only. Default 100, maximum 500. Omitted means 100. [Public response limit](#public-response-limit). |
 
 ## Combination semantics
 
@@ -66,8 +66,31 @@ array is shown.
   runs or claims. Other filters cannot be pushed down and apply after derivation.
 - **Evaluation order.** Resolve scope → read the selected kinds' sources → build items →
   apply item filters → apply `--severity` and `--older-than` → order → apply the cursor →
-  apply `--limit` → mint the next cursor. Filters therefore run before the cursor, so a cursor
-  only ever tracks items the caller's filters could show.
+  apply the public `--limit` → mint the next cursor. Filters therefore run before the cursor,
+  so a cursor only ever tracks items the caller's filters could show. The public limit is not
+  applied per workspace and not applied inside an aggregator candidate read.
+
+## Public response limit
+
+`--limit` applies to a public response: a CLI call, a user MCP call, a host-qualified
+single-destination call, and the envelope the aggregator returns after merging. The default
+is 100 and the maximum is 500. An omitted `limit` means 100. It does not mean "every
+matching item".
+
+The limit runs after ordering and after the cursor. `counts.matching` on a public response
+is the size of that ordered set before the limit, after any per-workspace source cap has
+already dropped items. `counts.truncated` is true when this response limit drops items from
+what the caller is shown. Items the limit drops stay unseen, so the next poll with the
+minted cursor returns them
+([attention-cursor](./attention-cursor.md#delta-semantics), rule 3). A merged set larger
+than 500 is still fully returned across successive polls, because 500 is only the largest
+public page.
+
+An aggregator candidate read does not take `--limit` and does not take this default. Its
+bound is `attention.per_workspace_item_cap` per workspace on the destination. The call
+shape, who may send it, and the rule that a truncated public body is not a complete
+candidate set are specified in
+[attention-federation](./attention-federation.md#candidate-read).
 
 ## Defaults
 
@@ -75,7 +98,8 @@ array is shown.
   workspace checkout, or an MCP session launched with `--workspace`) reads that workspace;
   an unbound call reads `--all`. `--all` makes the broad reading explicit. A hook should
   always pass its scope explicitly so a changed working directory cannot change its feed.
-- **Severity, kinds, limit.** No minimum severity, every kind, `--limit 100`.
+- **Severity, kinds, limit.** No minimum severity, every kind, public `--limit 100`.
+  That default is the response page. It is not an aggregator candidate read.
 - **Exit status.** `0` whenever the query ran, with or without items or `degraded` entries.
   Non-zero only for usage and resolution errors. Automation reads the JSON `counts`; the tool
   does not encode "items exist" in the exit code.

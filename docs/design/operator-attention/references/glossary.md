@@ -11,8 +11,9 @@ unless the feature gives them a narrower meaning.
 
 | Term | Meaning |
 |------|---------|
-| **Aggregator** | The outermost caller layer that merges per-workspace and per-host results, applies the cursor and limit, and builds unreachable-host items. [attention-federation](../specs/attention-federation.md). |
+| **Aggregator** | The outermost caller layer that candidate-reads each destination, merges those items, applies the cursor and the public response limit, and builds unreachable-host items. [attention-federation](../specs/attention-federation.md). |
 | **Attention** | The state of waiting on an operator, and the name of the tool (`orbit.attention`) and CLI (`orbit attention`). [1_overview.md](../1_overview.md). |
+| **Candidate read** | The aggregator's per-destination retrieval. It returns the post-filter items bounded by the per-workspace cap, not by the public response limit of 100. [attention-federation](../specs/attention-federation.md#candidate-read). |
 | **Cursor** | An opaque `atc1.` token holding hashes of the `(id, fingerprint)` pairs a caller has seen. [attention-cursor](../specs/attention-cursor.md). |
 | **Degraded** | An envelope entry naming a kind, workspace or host that could not be read, with a code. Never filterable. [attention-item](../specs/attention-item.md#response-envelope). |
 | **Fan-out read** | A tool the federated contract allows without a selector, called on every in-scope destination and merged. `orbit.attention` is the only one. [attention-federation](../specs/attention-federation.md#amendment-to-the-federated-mcp-contract). |

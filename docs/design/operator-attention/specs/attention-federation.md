@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 ---
 
 # Spec: Attention federation
@@ -57,7 +57,8 @@ beyond the folding rule inside one host.
    iterate its registry's active workspaces, derive each, and merge. A workspace whose
    derivation fails contributes `degraded` entries and does not fail the call. Per workspace,
    at most `attention.per_workspace_item_cap` items (default 200) are kept, highest severity
-   first, with `degraded` code `item_cap` when it cuts.
+   first, with `degraded` code `item_cap` when it cuts. The public response limit is applied
+   once, after this merge, not once per workspace.
 3. **All hosts.** The caller-side aggregator described next.
 
 ## Fan-out across hosts
@@ -67,20 +68,162 @@ receives `orbit.attention` **without** a workspace selector:
 
 1. Enumerates destinations: the implicit local one plus every host in `~/.orbit/hosts.toml`,
    narrowed by `--host`.
-2. Issues one `orbit.attention` call per destination, in parallel, with `all: true` (or the
-   resolved per-host `workspace` list when `--workspace` named workspaces; names and ids are
-   resolved against the live federated workspace list, never guessed) and the item filters,
-   but **without** `since` and `limit`. Destinations are stateless and unaware of the cursor.
-3. Merges the item lists, attaches `selector` to each item's `workspace` from the live list,
-   concatenates `degraded`, builds `hosts[]`, then applies, in this order, ordering, `--since`,
-   `--limit` and cursor minting ([attention-filters](./attention-filters.md#combination-semantics)).
+2. Issues one [candidate read](#candidate-read) per destination, in parallel. The hop carries
+   `all: true` (or the resolved per-host `workspace` list when `--workspace` named workspaces;
+   names and ids are resolved against the live federated workspace list, never guessed) and
+   the item filters. It carries neither `since` nor `limit`. Destinations are stateless and
+   unaware of the outer cursor.
+3. Keeps a destination's items as its candidate set only when the [completeness](#completeness)
+   rule says so. Merges those items, attaches `selector` to each item's `workspace` from the
+   live list, concatenates `degraded`, builds `hosts[]`, then applies, in this order, ordering,
+   `--since`, the public `--limit` and cursor minting
+   ([attention-filters](./attention-filters.md#combination-semantics),
+   [attention-cursor](./attention-cursor.md#delta-semantics)).
 
 A call that carries a host-qualified selector is routed to that one destination as any
-workspace-scoped federated call is, and still returns an envelope.
+workspace-scoped federated call is. That destination is the outermost responder, so the
+public response limit applies on it and the hop is not a candidate read. The call still
+returns an envelope.
 
 Because the tool only reads, a lost answer after dispatch is safe to retry: it does not carry
 the `outcome_unknown` ambiguity of a mutation. The aggregator still does not retry within one
 call; it reports the loss.
+
+### Candidate read
+
+A candidate read is the aggregator's retrieval of one destination's post-filter items. It
+is separate from the public response, whose omitted `limit` means 100 and whose maximum is
+500 ([attention-filters](./attention-filters.md#public-response-limit)).
+
+The hop is a `tools/call` of `orbit.attention` with these arguments:
+
+```json
+{
+  "all": true,
+  "candidate_read": true
+}
+```
+
+The caller's item filters are included: `kind`, `exclude_kind`, `severity`, `status`, `tag`,
+`task`, `crew`, `orchestrator` and `older_than`. `since` and `limit` are omitted. When the
+outer call named workspaces, `workspace` replaces `all` and `candidate_read` stays `true`.
+
+`candidate_read` is a reserved input, not a filter. The CLI has no flag for it, and the
+public filter table does not list it. The MCP text tells agents and other user sessions not
+to send it. The federation slice adds it to the tool schema so the mux can check the field
+against the destination's advertised input before dispatch. A schema that does not advertise
+`candidate_read` cannot take a candidate read. The aggregator then issues the public
+arguments without `since` and without `limit`, and judges that body by the no-echo rule
+in [Completeness](#completeness). A truncated public page becomes `response_truncated`.
+It is not merged as the destination's full candidate set.
+
+The destination returns every post-filter item it derived, bounded only by
+`attention.per_workspace_item_cap` per workspace (default 200), highest severity first.
+Items the cap drops are absent from `items`. Each such workspace contributes `degraded`
+code `item_cap`. On this read, `counts.matching` is the post-filter count before that cap,
+`counts.returned` is the length of `items`, and `counts.truncated` is true only when the
+cap dropped items. The public response limit is not applied: 150 matching items in one
+workspace, under the cap, come back as 150 items. The envelope echoes `"candidate_read": true`
+at the top level. This read does not apply the outer cursor. The aggregator discards any
+`cursor` on the body.
+
+The local destination does not cross a `tools/call`. The accepting process calls derivation
+in candidate-read mode and receives the same envelope, including the echo. Remote hops use
+the arguments above.
+
+**Who may send `candidate_read`.** Only the aggregator, on a hop it originates. The CLI
+cannot express it. A user MCP session — bound, unbound, or the outer federated call — that
+includes `candidate_read` is the usage error `candidate_read_not_permitted` and returns no
+items. The mux rejects the field on the outer call before fan-out, so a user's value is
+never copied onto a hop. The mux sets `candidate_read: true` itself. The destination honors
+the field only when the session's initialize `clientInfo.name` is `orbit-federated-mux`.
+That name is self-reported, as other MCP client names are. The refusal keeps ordinary
+clients on the public limit of 100. It is not an authentication check: an operator who can
+open a session on the destination already owns that host and can already page the same items
+with the public cursor. The mode changes the page size, up to the per-workspace cap, and
+does not reveal a different set of items.
+
+### Completeness
+
+The aggregator merges `items` as the destination's whole candidate set only when all of
+these hold:
+
+- The body echoes `candidate_read: true`.
+- `counts.truncated` is true exactly when the body contains at least one `item_cap` entry.
+- When `counts.truncated` is false, `counts.matching` equals the number of items returned.
+  When it is true, `counts.matching` is greater than the number returned, and the difference
+  is the number of items the source cap dropped.
+
+`item_cap` is the deliberate source cap. Those dropped items stay outside the merged set,
+later polls do not grow them back, and the degraded entry remains on later calls that still
+cut. Raising the outer `--limit` does not recover them. The aggregator does not also record
+`response_truncated` for a cut that `item_cap` explains.
+
+A body with no `candidate_read` echo is a public response. The aggregator may merge it as
+the whole candidate set only when `counts.truncated` is false and `counts.matching` equals
+the number of items returned: the public page held every item. Otherwise the public limit
+cut the body (the default of 100, or any explicit public limit). The aggregator keeps the
+items it was given, adds `degraded` code `response_truncated` at scope `host:<name>`, and
+does not report the outer `counts.matching` as though the missing items were in the merged
+set. The degraded message names the destination's reported matching and returned counts.
+
+A body that echoes `candidate_read` but whose counts and `item_cap` entries disagree is
+the same `response_truncated` failure. A partial body is never a complete candidate set.
+
+Items missing from a partial body are not marked seen. A later hop that returns a complete
+candidate read surfaces them once, because their hashes were never stored. Items already
+returned stay in the cursor
+([attention-cursor](./attention-cursor.md#delta-semantics), rules 3 and 4).
+`response_truncated` is a failed read. `item_cap` is a configured bound. They are different
+codes.
+
+### Worked traces
+
+Item numbers are the outer order after the merge: severity descending, then `since`
+ascending, then `id`. Fingerprints do not change, and no host is unreachable. Each
+candidate read below echoes `candidate_read: true`.
+
+**150 items on one destination.** One workspace, 150 matching items, cap 200, so nothing
+is cut. Every hop returns items 1..150, `counts.matching` 150, `counts.returned` 150,
+`counts.truncated` false, and `degraded` empty. The outer `--limit` is the default 100.
+`unchanged` follows rule 2.
+
+| Poll | Outer `since` | Merged set | Returned | Cursor afterwards | `truncated` | `unchanged` |
+|---|---|---|---|---|---|---|
+| 1 | absent | 1..150 | 1..100 | hashes of 1..100 | true | 0 |
+| 2 | poll 1 | 1..150 | 101..150 | hashes of 1..150 | false | 100 |
+| 3 | poll 2 | 1..150 | empty | hashes of 1..150 | false | 150 |
+
+Poll 1 returns 100 because the outer public limit cut the merged set. Rule 3 leaves
+101..150 unseen, so poll 2 returns them. All 150 have been returned after poll 2. The
+destination returned the same 150 on every hop; the outer cursor is what advances.
+
+A destination that instead returned a public page of items 1..100, with `counts.matching`
+150, `counts.returned` 100 and `counts.truncated` true, would not echo `candidate_read`.
+The aggregator merges those 100, records `response_truncated`, and does not put 101..150
+into the merged set. They stay absent until a later hop echoes a complete candidate read.
+That earlier poll is partial, and the degraded entry says so. It is not a successful empty
+delta.
+
+**More than 500 aggregate items.** One destination, three workspaces, 200 items each, none
+cut by the cap. The candidate read returns all 600, with `counts.truncated` false and no
+`item_cap`. The outer caller passes `--limit 500`, the public maximum. The same outer
+paging holds for any public limit from 1 to 500, and for the same 600 items split across
+destinations, when every hop is a complete candidate read.
+
+| Poll | Returned | Cursor afterwards | `truncated` | `unchanged` |
+|---|---|---|---|---|
+| 1 | 1..500 | hashes of 1..500 | true | 0 |
+| 2 | 501..600 | hashes of 1..600 | false | 500 |
+
+The outer `truncated: true` on poll 1 means the public page cut the merged set. It does
+not mean a destination was partial. Rule 3 returns 501..600 on poll 2. Two destinations of
+300 items each merge to the same set of 600 before that outer limit.
+
+**Source cap.** One workspace, 250 post-filter items, cap 200. The candidate read returns
+the 200 highest-severity items, `counts.matching` 250, `counts.returned` 200,
+`counts.truncated` true, and one `item_cap` entry. The merged set is those 200. Later polls
+do not return the other 50. The degraded entry is the record of the cut.
 
 ### Budgets
 
@@ -143,13 +286,16 @@ Today a workspace-scoped federated call needs a host-qualified selector, and a b
 `unknown_selector`. This feature adds one narrow exception: a tool the contract names as a
 **fan-out read** may be called without a selector. The mux then calls every in-scope
 destination and merges explicitly, with each item attributed to its host and every failure
-visible. v1 has exactly one such tool, `orbit.attention`. This is not store replication,
-synchronization or silent merging: nothing is written, nothing is cached, and no item is
-presented without its host. Slice 4 edits the federated-mcp design and spec to say so
+visible. Each destination hop is a [candidate read](#candidate-read): the mux sets
+`candidate_read` and does not forward a value the user supplied. v1 has exactly one such
+tool, `orbit.attention`. This is not store replication, synchronization or silent merging:
+nothing is written, nothing is cached, and no item is presented without its host. Slice 4
+edits the federated-mcp design and spec to say so, including this hop
 ([4_decisions.md](../4_decisions.md#fan-out-is-a-named-exception-in-the-federated-mux)).
 
 ## Task References
 
 - [ORB-21164] — specified the federated behaviour of attention
+- [ORB-21182] — specified the candidate read that separates destination retrieval from the public response limit
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

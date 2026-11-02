@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 ---
 
 # Spec: Attention item
@@ -194,8 +194,11 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   `unsupported`; see [attention-cursor](./attention-cursor.md).
 - `hosts` is present when more than the local host was in scope.
 - `degraded[].code` is one of `capability`, `source_unavailable`, `source_timeout`, `item_cap`
-  (per kind and workspace) or `unreachable_destination`, `tool_not_on_this_host` (per host,
-  the federated routing identities of [attention-federation](./attention-federation.md)).
+  (per kind and workspace), `response_truncated` (a destination body the aggregator could not
+  take as a complete candidate read;
+  [attention-federation](./attention-federation.md#completeness)), or
+  `unreachable_destination`, `tool_not_on_this_host` (per host, the federated routing
+  identities of [attention-federation](./attention-federation.md)).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
   echoed filters. When `degraded` is non-empty the message is instead `No items found; N
   sources could not be read`, so an empty list is never read as all clear while a source was
