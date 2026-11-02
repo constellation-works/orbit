@@ -446,6 +446,12 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         Ok(None)
     }
+    /// The workspace partition this machine's registry binds `id` to, when a
+    /// workspace registered here owns it. `None` when no local workspace
+    /// holds the task; the default is for backends without a registry.
+    fn registered_task_workspace(&self, _id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError>;
     fn search_tasks_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());

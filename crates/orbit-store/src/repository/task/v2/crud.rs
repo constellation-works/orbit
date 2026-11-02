@@ -383,6 +383,16 @@ impl TaskV2Store {
             .map(|bundle| super::sidecars::task_history_from_events(bundle.events)))
     }
 
+    /// The partition the registry binds `id` to, when a workspace on this
+    /// machine owns it.
+    pub(crate) fn registered_task_workspace(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        Ok(self
+            .registry
+            .find_task_binding(id)?
+            .map(|binding| binding.partition_id))
+    }
+
     /// Read the bundle another workspace partition registered for a task,
     /// without settling that partition's commit boundary. `None` when the
     /// bundle is gone.

@@ -19,6 +19,7 @@ mod capability;
 mod config;
 mod descriptor;
 mod host;
+mod notice_aggregate;
 mod probe;
 mod task_route;
 

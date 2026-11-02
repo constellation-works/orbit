@@ -17,6 +17,8 @@ test-support = []
 
 [dependencies]
 base64.workspace = true
+# Ordering merged notice timestamps when the mux aggregates owner reads.
+chrono.workspace = true
 # The callers-file trust check compares the file owner to the effective uid.
 libc.workspace = true
 orbit-common = { path = "../orbit-common" }
@@ -36,7 +38,6 @@ tracing.workspace = true
 [dev-dependencies]
 orbit-mcp = { path = ".", features = ["test-support"] }
 tracing-subscriber.workspace = true
-chrono.workspace = true
 # Build the store error a locked SQLite database becomes, for the busy-owner route.
 orbit-common = { path = "../orbit-common", features = ["sqlite"] }
 rusqlite.workspace = true

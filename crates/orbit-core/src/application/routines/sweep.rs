@@ -324,6 +324,29 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // Fleet notices linked to a done task in another workspace this host
+    // owns are materialized closed here; reads already report them closed,
+    // so this only keeps the store honest. Like settlement it starts no
+    // work, so it also runs before the host-shutdown hold. Owner entries
+    // only.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            if runtime.coordination_write_owner().is_none()
+                && let Err(error) = runtime.run_notice_closure_tick()
+            {
+                tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.notice_closure_failed"
+                );
+            }
+        }
+    }
+
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
     // this tick starts, so the whole fire phase — routines and auto-tasks —
     // stands down for it. A later schedule does not. Cursors are not advanced

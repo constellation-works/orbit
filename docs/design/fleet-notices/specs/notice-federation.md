@@ -41,7 +41,9 @@ them the way tasks are read, avoids inventing a second ownership or replication 
 A write names its home workspace. The federated gateway delivers it to the selector's destination;
 a replica destination refuses it with `capability_refused`, as for `orbit.task.add`, and the
 gateway does not redirect to the owner. The CLI on a follower addresses the owner by the federated
-selector (or `--host`), the same way an operator files a task on the owner from a follower.
+selector (`orbit notice … --workspace <selector>`; `orbit tool run` may spell it `--host` plus
+`--workspace`, while on `orbit notice` itself `--host` names the machines a maintenance notice
+concerns), the same way an operator files a task on the owner from a follower.
 
 A managed agent on a follower posts through its worker binding's owner route, as it already does for
 `orbit.task.update`, so its post lands on the owner with the binding's task and run attached. The
@@ -66,8 +68,12 @@ it still returns `updated` or `corroborated` with the stored expiry untouched.
   workspaces it owns; it never yields a silently shorter list.
 - The fan-out reuses the caller-side aggregation that `orbit attention` federation introduces
   ([operator-attention attention-federation](../../operator-attention/specs/attention-federation.md),
-  [ORB-21171]) when that has landed; slice 4 otherwise adds the minimal per-owner fan-out itself and
-  leaves a note to fold the two.
+  [ORB-21171]) when that has landed. It had not landed when slice 4 ([ORB-21214]) was built, so the
+  mux carries the minimal per-owner fan-out itself (`crates/orbit-mcp/src/federated/notice_aggregate.rs`);
+  fold the two when attention federation lands. Owners are the machines the listed workspaces name
+  as their owner: a reachable follower that owns nothing listed is read through its owners and is
+  never a `degraded` entry, while a configured destination that does not answer, and an owner with
+  no configured destination, both degrade.
 
 ## Scope
 

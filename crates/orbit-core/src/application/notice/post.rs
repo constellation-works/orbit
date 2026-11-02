@@ -327,15 +327,37 @@ impl OrbitRuntime {
             .filter(|id| !id.is_empty())
         {
             Some(id) => {
-                let task = self.get_task(id).map_err(|_| {
-                    refuse(
-                        NoticeRefusalCode::InvalidField,
-                        format!("linked task `{id}` is not a task in this workspace"),
-                    )
-                })?;
+                // A link must resolve on this owner: the home workspace or
+                // another workspace the same host owns. A task another host
+                // holds is refused, because this owner could not evaluate
+                // linked-task closure without a cross-host read.
+                use orbit_store::RegisteredTaskResolution;
+                let task = match self.resolve_dependency_task(id) {
+                    Ok(RegisteredTaskResolution::Resolved(task)) => *task,
+                    Ok(RegisteredTaskResolution::ForeignAuthority) => {
+                        return Err(refuse(
+                            NoticeRefusalCode::InvalidField,
+                            format!(
+                                "linked task `{id}` is held by another host; a notice links only a task this workspace's owner holds"
+                            ),
+                        ));
+                    }
+                    Ok(RegisteredTaskResolution::Missing) | Err(_) => {
+                        return Err(refuse(
+                            NoticeRefusalCode::InvalidField,
+                            format!(
+                                "linked task `{id}` is not a task any workspace on this host holds"
+                            ),
+                        ));
+                    }
+                };
                 Some(NoticeLinkedTask {
                     id: task.id.to_string(),
-                    workspace_id: self.workspace_id()?,
+                    workspace_id: self
+                        .registered_task_workspace(&task.id.to_string())
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| self.workspace_id().unwrap_or_default()),
                     status: None,
                 })
             }

@@ -16,5 +16,5 @@ mod setup;
 pub use command::{McpCommand, McpSubcommand, ServeMode};
 pub(crate) use orbit_cmd::mcp_clients::ORBIT_MCP_SERVER_ID;
 pub(crate) use orbit_mcp::safe_mcp_tool_names;
-pub(crate) use server::ID_RESOLVED_WORKSPACE_TOOLS;
+pub(crate) use server::{ID_RESOLVED_WORKSPACE_TOOLS, federated_notice_client};
 pub(crate) use setup::init_auto_for_workspace;

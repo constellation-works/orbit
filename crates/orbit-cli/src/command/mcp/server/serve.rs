@@ -70,6 +70,46 @@ pub(in super::super) fn serve_mcp_stdio(
     finish_stdio_session(exit)
 }
 
+/// The federated client a workspace-less CLI notice list aggregates
+/// through: this machine in-process plus every configured remote over
+/// SSH, the same composition the federated server serves. The SSH-only
+/// routed client cannot answer for the local owner, so a CLI aggregation
+/// composed from it alone would degrade this machine on every call.
+pub(crate) fn federated_notice_client(
+    global_root: PathBuf,
+    authority: McpSessionAuthority,
+) -> Result<federated::FederatedMcpHost, OrbitError> {
+    let remotes = federated::load_destinations(&global_root)?;
+    let identity = orbit_mcp::mcp_server_identity(&global_root, None, authority)?;
+    let destinations = federated::federated_membership(
+        identity.process_machine_id.clone(),
+        identity.process_machine_name.clone(),
+        remotes,
+    );
+    let local_machine = Arc::new(ServerMcpHost::new(
+        global_root,
+        identity.process_machine_id.clone(),
+        identity.process_machine_name.clone(),
+    ));
+    let probe = federated::CompositeDestinationProbe::new(
+        Arc::new(federated::InProcessDestinationProbe::new(
+            local_machine,
+            identity.session_context.clone(),
+        )),
+        Arc::new(federated::SshDestinationProbe::new(
+            identity.process_machine_id.clone(),
+            federated::DEFAULT_PROBE_TIMEOUT,
+            federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
+            None,
+            authority,
+        )),
+    );
+    Ok(federated::FederatedMcpHost::new(
+        destinations,
+        Arc::new(probe),
+    ))
+}
+
 /// Serve the federated mux: the accepting machine plus operator-configured
 /// SSH remotes, as one stdio surface.
 ///

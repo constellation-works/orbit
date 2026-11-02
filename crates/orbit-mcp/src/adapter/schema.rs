@@ -103,6 +103,20 @@ const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional. Omit it to del
      `orbit.workspace.list`; do not parse or construct the token. A read there may be another \
      host's mirror, and that host refuses a write to a task it does not hold.";
 
+/// A workspace-optional tool on the federated mux: omitted, the mux
+/// aggregates every owner it reaches.
+const FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION: &str = "Optional. Omit it to read every workspace on every owner this session reaches, merged \
+     into one answer with any unreachable owner reported as degraded, unless this session is \
+     already bound to one workspace. To address one workspace instead, copy the `selector` \
+     field from federated `orbit.workspace.list`; do not parse or construct the token.";
+
+/// A workspace-optional tool on an authoritative server: omitted, the
+/// server reads every workspace homed on it.
+const WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION: &str = "Optional workspace selector for the authoritative server: a registered workspace \
+     name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. \
+     Omitted, a bound session reads its bound workspace and an unbound session reads every \
+     workspace homed on this server. Never inferred from the server process cwd.";
+
 /// How this session advertises the workspace selector on workspace-scoped tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorAdvertisement {
@@ -137,7 +151,9 @@ pub(super) fn ensure_workspace_selector(
         SelectorAdvertisement::Authoritative(binding) => {
             ensure_authoritative_selector(schema, definition, binding, id_routed);
         }
-        SelectorAdvertisement::Federated => ensure_federated_selector(schema, id_routed),
+        SelectorAdvertisement::Federated => {
+            ensure_federated_selector(schema, id_routed, definition.rules.workspace_optional)
+        }
     }
 }
 
@@ -167,6 +183,17 @@ fn ensure_authoritative_selector(
     let Some(properties) = selector_properties(schema) else {
         return;
     };
+    if definition.rules.workspace_optional {
+        properties.insert(
+            WORKSPACE_SELECTOR_PARAM.to_string(),
+            json!({
+                "type": "string",
+                "description": WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION,
+            }),
+        );
+        unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);
+        return;
+    }
     if !properties.contains_key(WORKSPACE_SELECTOR_PARAM) {
         properties.insert(
             WORKSPACE_SELECTOR_PARAM.to_string(),
@@ -181,15 +208,18 @@ fn ensure_authoritative_selector(
     }
 }
 
-fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool) {
+fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool, workspace_optional: bool) {
     let Some(properties) = selector_properties(schema) else {
         return;
     };
     // Replace any v1 local wording a tool declared itself. Federated callers
     // copy the list token; an id-routed task tool may instead omit it and
-    // route by the id's prefix.
+    // route by the id's prefix, and a workspace-optional tool may omit it
+    // to aggregate every owner.
     let description = if id_routed {
         FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION
+    } else if workspace_optional {
+        FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION
     } else {
         FEDERATED_SELECTOR_DESCRIPTION
     };
@@ -200,7 +230,7 @@ fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool) {
             "description": description,
         }),
     );
-    if id_routed {
+    if id_routed || workspace_optional {
         // A tool that declared its own selector as required is still
         // addressable by id here.
         unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);

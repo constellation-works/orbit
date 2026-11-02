@@ -32,34 +32,40 @@ impl Execute for NoticeCommand {
             post_cli_input(&mut input)?;
         }
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
-        let blocks = match spec.verb {
-            NoticeVerb::List => vec![Block::table(list_table(&value, Utc::now()))],
-            NoticeVerb::Post => vec![Block::text(format!(
-                "{} {}\n{}",
-                text(&value["outcome"]),
-                text(&value["notice"]["id"]),
-                notice_detail(&value["notice"]),
-            ))],
-            NoticeVerb::Close => {
-                let verb = if value["already_inactive"].as_bool() == Some(true) {
-                    "already inactive"
-                } else {
-                    "closed"
-                };
-                vec![Block::text(format!(
-                    "{verb} {}\n{}",
-                    text(&value["notice"]["id"]),
-                    notice_detail(&value["notice"]),
-                ))]
-            }
-            NoticeVerb::Show => vec![Block::text(show_text(&value))],
-        };
-        Ok(Payload::blocks(value, blocks).into())
+        Ok(render_notice(spec.verb, value).into())
     }
 }
 
+/// The text rendering of one notice tool answer, shared by the local
+/// command and a call host routing delivered to the workspace's owner.
+pub(crate) fn render_notice(verb: NoticeVerb, value: Value) -> Payload {
+    let blocks = match verb {
+        NoticeVerb::List => vec![Block::table(list_table(&value, Utc::now()))],
+        NoticeVerb::Post => vec![Block::text(format!(
+            "{} {}\n{}",
+            text(&value["outcome"]),
+            text(&value["notice"]["id"]),
+            notice_detail(&value["notice"]),
+        ))],
+        NoticeVerb::Close => {
+            let verb = if value["already_inactive"].as_bool() == Some(true) {
+                "already inactive"
+            } else {
+                "closed"
+            };
+            vec![Block::text(format!(
+                "{verb} {}\n{}",
+                text(&value["notice"]["id"]),
+                notice_detail(&value["notice"]),
+            ))]
+        }
+        NoticeVerb::Show => vec![Block::text(show_text(&value))],
+    };
+    Payload::blocks(value, blocks)
+}
+
 /// Fold the CLI-only post flags into the tool's input.
-fn post_cli_input(input: &mut Map<String, Value>) -> Result<(), OrbitError> {
+pub(crate) fn post_cli_input(input: &mut Map<String, Value>) -> Result<(), OrbitError> {
     if let Some(path) = input.remove("body_file") {
         let path = path.as_str().unwrap_or_default().to_string();
         let body = std::fs::read_to_string(&path).map_err(|error| {

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
+use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_core::application::task::{TaskArtifactRead, TaskListResultPolicy};
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -79,6 +80,9 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         }
         return Ok(Preflight::Local);
     }
+    if matches!(&cli.command, Commands::Notice(_)) {
+        return notice_preflight(cli, &global_root);
+    }
     if let Some(host) = host {
         let value = workspace_value(cli)?.ok_or_else(|| {
             OrbitError::InvalidInput(
@@ -112,14 +116,153 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
     }
 }
 
+/// `orbit notice …` routing: a host-qualified `--workspace` selector names
+/// the owner the call belongs to, exactly as for a task tool, and a
+/// workspace-less `list` on a host with registered hosts aggregates every
+/// owner through the federated client. Anything else runs locally, as
+/// before. (`--host` is a notice flag of its own — the machines a
+/// maintenance notice concerns — so the selector is the owner address.)
+fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, OrbitError> {
+    if let Some(selector) = workspace_value(cli)? {
+        if let Some(holder) = hosts::selector_remote_host(global_root, &selector)? {
+            return deliver(cli, global_root, &holder, Some(selector));
+        }
+        if let Ok(qualified) = selector.parse::<MachineQualifiedSelector>() {
+            // The selector names a host, and no remote holder answered for
+            // it: it is this machine (rewrite to the local `ws_*` the
+            // bootstrap resolves) or a host this machine does not know.
+            let local = matches!(
+                inspect_machine_identity(global_root)?,
+                MachineIdentityState::Present(identity) if identity.id == qualified.machine_id()
+            );
+            if !local {
+                return Err(OrbitError::UnknownSelector(selector));
+            }
+            cli.workspace = Some(qualified.workspace_id().to_string());
+        }
+        return Ok(Preflight::Local);
+    }
+    let Commands::Notice(notice) = &cli.command else {
+        return Ok(Preflight::Local);
+    };
+    if notice.command.spec.verb != NoticeVerb::List || !workspace_less(cli)? {
+        return Ok(Preflight::Local);
+    }
+    if orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+        return Ok(Preflight::Local);
+    }
+    let input = Value::Object(notice.command.input.clone());
+    deliver_notice_aggregate(
+        global_root,
+        notice.command.spec.tool_name,
+        input,
+        AggregateRender::Notice(NoticeVerb::List),
+    )
+}
+
+/// Whether this invocation names no workspace at all: no selector, no
+/// explicit root, and no initialized workspace discoverable from the cwd.
+fn workspace_less(cli: &Cli) -> Result<bool, OrbitError> {
+    if workspace_value(cli)?.is_some() || explicit_root(cli) {
+        return Ok(false);
+    }
+    let cwd = std::env::current_dir()?;
+    Ok(
+        orbit_cmd::registry_runtime::RegisteredRuntimeFactory::try_resolve_initialized_cwd_roots(
+            &cwd,
+        )?
+        .is_none(),
+    )
+}
+
+/// How a workspace-less notice list's merged answer renders.
+enum AggregateRender {
+    Notice(NoticeVerb),
+    ToolRun {
+        full: bool,
+        fields: Vec<String>,
+        bare_field: bool,
+        list_policy: TaskListResultPolicy,
+    },
+}
+
+/// Deliver a workspace-less `orbit.notice.list` to the federated client,
+/// whose mux fans out one aggregate read per owner and merges them. The
+/// client composes this machine in-process beside the SSH remotes, so
+/// the local owner is read like any other instead of degraded.
+fn deliver_notice_aggregate(
+    global_root: &Path,
+    name: &str,
+    input: Value,
+    render: AggregateRender,
+) -> Result<Preflight, OrbitError> {
+    if matches!(
+        inspect_machine_identity(global_root)?,
+        MachineIdentityState::Absent
+    ) {
+        return Err(OrbitError::InvalidInput(
+            "this machine has no [machine] identity yet; run `orbit init` first".into(),
+        ));
+    }
+    let client =
+        super::mcp::federated_notice_client(global_root.to_path_buf(), caller_authority())?;
+    let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
+    Ok(Preflight::Remote(answer.and_then(|value| match render {
+        AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
+        AggregateRender::ToolRun {
+            full,
+            fields,
+            bare_field,
+            list_policy,
+        } => {
+            let shaped = super::tool::shape_tool_output(
+                name,
+                value,
+                &list_policy,
+                full,
+                &fields,
+                bare_field,
+            )?;
+            Ok(Payload::document(shaped).into())
+        }
+    })))
+}
+
 /// A non-id call (`orbit tool run` of any tool) whose selector names a
 /// registered remote host goes there too, as the raw token does.
 fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, OrbitError> {
     let Commands::Tool(tool) = &cli.command else {
         return Ok(Preflight::Local);
     };
-    if !matches!(tool.command, ToolSubcommand::Run(_)) {
+    let ToolSubcommand::Run(args) = &tool.command else {
         return Ok(Preflight::Local);
+    };
+    // A workspace-less notice list aggregates every owner, as the CLI verb
+    // does; inside a workspace it stays the local workspace's list.
+    if args.name == "orbit.notice.list"
+        && !args.dry_run
+        && workspace_less(cli)?
+        && !orbit_mcp::federated::load_destinations(global_root)?.is_empty()
+    {
+        let mut input = args.parsed_input()?;
+        super::tool::request_write_sidecars_from_cli_fields(&args.name, &mut input, &args.fields)?;
+        let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
+        let list_policy = TaskListResultPolicy::for_call(
+            &args.name,
+            &input,
+            super::tool::task_list_result_profile(args.full, &args.fields),
+        );
+        return deliver_notice_aggregate(
+            global_root,
+            &args.name.clone(),
+            input,
+            AggregateRender::ToolRun {
+                full: args.full,
+                fields: args.fields.clone(),
+                bare_field,
+                list_policy,
+            },
+        );
     }
     let Some(selector) = workspace_value(cli)? else {
         return Ok(Preflight::Local);
@@ -141,6 +284,7 @@ fn may_route(cli: &Cli) -> bool {
                 })
         }
         Commands::Tool(tool) => matches!(tool.command, ToolSubcommand::Run(_)),
+        Commands::Notice(_) => true,
         Commands::Run(run) => {
             matches!(&run.command, RunSubcommand::Auto(auto) if auto.pull.is_some())
         }
@@ -280,6 +424,9 @@ enum Render {
     ArtifactGet {
         out: Option<PathBuf>,
     },
+    Notice {
+        verb: NoticeVerb,
+    },
     ReviewReset,
     Requeue,
     Reconcile,
@@ -294,6 +441,20 @@ enum Render {
 
 fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
     match &cli.command {
+        Commands::Notice(notice) => {
+            let invocation = &notice.command;
+            let mut input = invocation.input.clone();
+            if invocation.spec.verb == NoticeVerb::Post {
+                super::notice::post_cli_input(&mut input)?;
+            }
+            Ok(RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: Value::Object(input),
+                render: Render::Notice {
+                    verb: invocation.spec.verb,
+                },
+            })
+        }
         Commands::Task(task) => task_call(&task.command, holder),
         Commands::Tool(tool) => match &tool.command {
             ToolSubcommand::Run(args) => {
@@ -497,6 +658,7 @@ fn with_host(mut value: Value, holder: &HostEntry) -> Value {
 
 fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> CommandOut {
     match render {
+        Render::Notice { verb } => Ok(super::notice::render_notice(verb, value).into()),
         Render::TaskShow { fields } => {
             // MCP structuredContent wraps arrays and scalars in objects. Undo
             // only those envelopes for a bare single-field projection.

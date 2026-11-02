@@ -106,6 +106,7 @@ the answering server reaches, [notice-federation](./notice-federation.md#reads))
 | Filter | Type | Default | Meaning |
 |---|---|---|---|
 | `workspace` | selector or list | session binding, else all | Home workspaces to read. Global notices homed elsewhere are included when `include_global` is true. |
+| `all` | boolean | `false` | Owner-local aggregate: every workspace homed on the answering owner, not only the selected one. Without a `limit`, every match is returned; a federated caller issues one such read per owner and limits once after merging. |
 | `include_global` | boolean | `true` | Also return effective `global` notices from every reachable home, deduplicated by `id`. |
 | `scope` | `workspace` \| `global` | both | |
 | `kind` | enum, repeatable | all | |

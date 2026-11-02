@@ -64,6 +64,41 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
     }
 }
 
+/// Fleet notices live in the home workspace's owner store, reads included:
+/// a replica answering from a local copy would keep showing a notice the
+/// owner already closed.
+#[test]
+fn a_replica_refuses_every_fleet_notice_tool() {
+    let held = CapabilityClasses::for_checkout(
+        &workspace_record(Some("hm_owner")),
+        &checkout_record(Some(WorkspaceCheckoutRole::Replica)),
+    );
+
+    for tool in [
+        "orbit.notice.post",
+        "orbit.notice.close",
+        "orbit.notice.list",
+        "orbit.notice.show",
+        "orbit_notice_post",
+        "orbit_notice_list",
+    ] {
+        let refused =
+            ensure_tool_class_held(tool, held).expect_err("a replica holds no notice board");
+        assert!(
+            matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("control_plane")),
+            "{tool}: {refused}"
+        );
+    }
+
+    let owner = CapabilityClasses::for_checkout(
+        &workspace_record(Some("hm_owner")),
+        &checkout_record(Some(WorkspaceCheckoutRole::Owner)),
+    );
+    for tool in ["orbit.notice.post", "orbit.notice.list"] {
+        ensure_tool_class_held(tool, owner).expect(tool);
+    }
+}
+
 /// A standalone registry predating host identity is not a control-plane
 /// authority, whatever role its checkout claims.
 #[test]

@@ -742,7 +742,11 @@ per owner, 2 open per agent task, 5 posts per agent task per day (corroborations
 count) and 30 per orchestrator crew per hour. Other refusals:
 `notice_scope_refused`, `notice_kind_refused`, `notice_evidence_required`,
 `notice_close_refused`, `notice_not_found` and `notice_invalid_field`; a replica
-refuses writes with `capability_refused`. Every write and refusal leaves an
+refuses every notice tool, reads included, with `capability_refused` — address
+the owner by its federated selector instead, and a managed agent on a follower
+posts through its worker binding's owner route. A `linked_task` must be a task
+the home owner holds, in the home or another of its workspaces; a task on
+another host is `notice_invalid_field`. Every write and refusal leaves an
 audit row with target type `notice`. The limits and caps are `notice.*` config.
 
 A managed `agent_implement`, `agent_review_repair` or `final_recovery` run
@@ -761,7 +765,12 @@ already closed or expired comes back with `already_inactive: true`. A notice
 whose linked task reaches `done` closes itself. `orbit.notice.list` filters by
 `status` (`open` by default, `closed`, `expired` or `all`), `include_global`,
 `scope`, `kind`, `linked_task`, `author_class`, `host` and `limit` (1–200, default 50), and orders
-incident, maintenance, info, newest first; `orbit.notice.show` takes `id`, and
+incident, maintenance, info, newest first. Called without a workspace in a
+federated session (or as `orbit notice list` outside any workspace on a host
+with registered hosts) it merges every reachable owner's notices, deduplicated
+by id and limited once after the merge, with each unreachable owner named in
+`degraded`; `all: true` is the per-owner hop that aggregation issues.
+`orbit.notice.show` takes `id`, and
 for the operator includes the history. Status is computed when read: closed,
 then linked task done, then expired, else open.
 
