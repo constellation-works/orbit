@@ -1,0 +1,193 @@
+---
+title: Operator Attention — Design
+owner: claude
+last_updated: 2026-11-01
+last_validated: 2026-11-01
+status: Draft
+feature: operator-attention
+doc_role: design
+type: design
+summary: "Design of orbit attention: derived-view architecture, code placement, tool and CLI surface, configuration, relationship to existing reads, and implementation slices"
+tags: [operator-attention, operator-ux]
+paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-types/src/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
+related_features: [operator-attention, human-decision-channel, federated-mcp, host-registry, distributed-drain]
+related_artifacts: [ORB-21164]
+---
+
+# Operator Attention — Design
+
+This document describes how `orbit attention` fits together and where it lands in the code.
+It is a design for work not yet built: names of modules below are placement proposals that the
+slices confirm. The prescriptive contracts live in the specs:
+[attention-item](./specs/attention-item.md) (kinds, schema, severity),
+[attention-filters](./specs/attention-filters.md),
+[attention-cursor](./specs/attention-cursor.md) and
+[attention-federation](./specs/attention-federation.md). Acknowledge and snooze, the dashboard
+reading the same feed, notifications and plugin-contributed kinds are in
+[3_vision.md](./3_vision.md).
+
+## 1. A derived view over existing state
+
+`orbit.attention` is a `read_only` tool. On each call it reads existing records and returns
+the list of conditions that currently hold. There is no inbox, no item table, no cursor store
+and no background job. Three properties follow and are tested as invariants:
+
+- **Resolution is the source's.** An item disappears the moment its source condition stops
+  holding: the task is re-piloted clean, the decision is answered, the run is superseded, the
+  claim is settled. Nothing needs to "close" an item, and nothing can leave one stale.
+- **One condition, one item.** The same underlying fact never appears twice. An open decision
+  request folds into the item it decides ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)).
+- **Same inputs, same list.** Derivation is deterministic given the stores and `generated_at`;
+  the only time-dependent outputs are `age_seconds` and the severity thresholds, and the
+  fingerprint ignores time except through `severity`.
+
+The kinds were chosen from conditions that already exist in Orbit's records and already have
+a resolving action. A condition without a source (a stall detected by heartbeat, a notion of
+"important" proposed task) is not a kind in v1; adding one means first giving it a source.
+
+## 2. Derivation pipeline
+
+For one workspace on one host:
+
+```
+scope ─▶ select kinds ─▶ read sources ─▶ derive items ─▶ fold ─▶ severity ─▶ fingerprint
+```
+
+- **Sources** are small adapters, one per kind, each wrapping the predicate the existing
+  surface already uses (`held_pilot_warnings`, `pilot_admission_hold`, `triage_candidacy`,
+  `decision_requests_from_history`, the claim inspection, the friction store). The adapters
+  call these; they do not re-implement them, so `orbit attention --kind pilot_warning` and
+  `orbit task list --pilot-warnings` can never disagree. Where a source has to be made
+  reusable (some are `pub(crate)` or `pub(super)`), the slice widens it minimally and adds
+  the shared predicate's regression check at the public boundary.
+- **Fold** merges decision requests into subject items (one pass over the derived list).
+- **Severity** applies the per-kind rule table; **fingerprint** hashes the per-kind state.
+- Task-level adapters share one pass over the task index: a single task-envelope read gives
+  status, tags, crew and orchestrator for filtering, and only tasks in a status a kind can
+  occupy (`proposed`, `blocked`, `review`, and `backlog`/`proposed` for holds) are hydrated for
+  comments or history. The existing `--pilot-warnings` residual in
+  `application/task/listing.rs` already does the per-proposed-task comment read; the adapter
+  reuses it rather than adding a second scan.
+
+Failures are per source: an adapter that errors or times out contributes a `degraded` entry
+for its kind and workspace and the rest of the list is returned.
+
+## 3. Placement in the code
+
+Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md); no new cross-crate dependency is
+needed, which the slice verifies before it merges.
+
+| Concern | Location (proposed) |
+|---|---|
+| `Item`, `Kind`, `Severity`, `Next`, `Envelope`, `CursorStatus` types | `crates/orbit-types/src/attention/` |
+| The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | `crates/orbit-common/src/governance/attention.rs`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
+| Derivation, folding, severity, fingerprint, filters, cursor codec, local multi-workspace aggregation | `crates/orbit-core/src/application/attention/` (`sources/` per kind, `derive.rs`, `severity.rs`, `fingerprint.rs`, `filter.rs`, `cursor.rs`, `aggregate.rs`) |
+| Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
+| Authorization | a catalog entry allowing `Agent` and `Operator`; the runtime kinds check capability themselves and degrade ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)) |
+| Cross-host fan-out and merge | `crates/orbit-mcp/src/federated/` (the same client code the CLI's routed calls use) |
+| `[attention]` configuration | `crates/orbit-config` |
+
+The core derivation function is a pure function of a runtime handle and a filter. The CLI,
+the MCP tool and, later, the dashboard are thin callers of it, which is what keeps the web
+dashboard reading "the same feed" a later, small step.
+
+## 4. Surfaces
+
+- **Tool**: `orbit.attention`, `read_only`, input exactly the filters in
+  [attention-filters](./specs/attention-filters.md) in snake_case, output the envelope in
+  [attention-item](./specs/attention-item.md#response-envelope). Seeing an item never changes
+  it; every `next` is advice.
+- **CLI**: `orbit attention [filters]` in the *Observe* group beside `doctor` and `log`, with
+  the global `--format` / `--json` modes. Help text and errors stand alone: no source paths,
+  no task or friction ids in help, and the kind names are the user-visible vocabulary.
+- **MCP**: one tool, no new transport. Annotated read-only so clients may auto-approve it.
+- **Goldens**: CLI help and the MCP tool text are golden surfaces; the slice that adds them
+  runs `make goldens`.
+- **Skill**: the `orbit` skill's reference lists `orbit attention` as the first check for an
+  orchestrator or on-call session (skill docs are edited under
+  `crates/orbit-core/assets/skills/` and synced, per the workspace guide).
+
+## 5. Configuration
+
+An `[attention]` table, all keys optional:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `cursor_ttl_hours` | `24` | Cursor validity after `issued_at` |
+| `age_bump_hours` | `[24, 72]` | Age thresholds that raise severity |
+| `run_window_hours` | `48` | How far back `run_failed` looks |
+| `run_stuck_after_minutes` | `120` | Wall-clock bound for `run_stuck` |
+| `ci_cache_seconds` | `60` | Provider-read cache per workspace |
+| `source_timeout_seconds` | `10` | Per-source read bound |
+| `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
+| `per_workspace_item_cap` | `200` | Items kept per workspace |
+
+Configuration changes thresholds only. It does not add kinds, change `next`, or change what
+counts as a condition; those are code and spec, so two operators' lists mean the same thing.
+
+## 6. Slices
+
+The implementation is cut so each slice ships a usable feed and the first is what the
+consumer hook ([ORB-21165]) depends on. Dependencies run top to bottom. Task ids are in Task
+References below; each is a proposed `ws_orbit` task tagged `operator-attention` with acceptance criteria.
+
+1. **Tool, CLI, filters and cursor over the task-level kinds** ([ORB-21168]). Item types and schema;
+   `pilot_warning`, `pilot_hold`, `blocked`, `decision_open` (with folding) and
+   `review_waiting`; severity and `next`; every filter in the filter spec; fingerprint and the
+   `--since` cursor; single-workspace and local `--all`; goldens, skill reference and docs.
+   This is the slice [ORB-21165] depends on: it is the first point a hook can inject the
+   motivating pilot warnings and later inject only what changed.
+2. **Runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
+   `degraded` reporting for sessions without the Operator capability; liveness check
+   confirmed per platform. Depends on slice 1.
+3. **Provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
+   read and the friction adapter; offline degrade. Depends on slice 1.
+4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
+   fan-out and merge, unreachable hosts as items, session-binding refusal, the
+   federated-mcp doc amendment, and the local doctor / drain-probe sources for
+   `host_unhealthy`. Depends on slice 1; its unreachable-host item is useful before slices 2
+   and 3 land.
+
+A fifth, consumer-side slice (the orchestrator-session hook) is constellation's own task,
+[ORB-21165]; it is deliberately not filed in this repository.
+
+Slice 1 also measures per-source cost on the real workspace so the hook cadence guidance in
+[attention-cursor](./specs/attention-cursor.md#cost) rests on data.
+
+## 7. Concerns & Honest Limitations
+
+- **Recompute per call.** There is no incremental maintenance. The cost is bounded by task
+  counts and, for `ci_red`, a cached network call. If a workspace grows to where a call takes
+  seconds, the first fix is the shared task index, not a store of items.
+- **No history, no "resolved" feed.** A derived view cannot say what used to be an item or
+  how long it was open. Onset times exist only where a source records them; `host_unhealthy`
+  often has none, and says so with `since: null`.
+- **Thresholds are judgement.** The severity table and defaults are a first reading of how bad
+  each condition is. They will be tuned from use; the fingerprint's inclusion of severity means
+  a retune can re-inject items once.
+- **`run_stuck` has no heartbeat.** Jobs record a pid and a start time, not progress. The kind
+  is a liveness check plus a wall-clock bound, which misses a live but wedged process inside
+  the bound. A progress signal would be a separate change to the run store.
+- **The `review_waiting` predicate needs confirming.** The kind is defined by behaviour
+  (settled, not being reviewed, awaiting approval or a budget reset). Slice 1 pins the exact
+  predicate in the review gate's records; if the records cannot tell "settled and waiting"
+  from "in review" without a scan, the slice reports it rather than guessing.
+- **Pilot hold coverage follows the hold enum.** `pilot_hold` reflects the holds the pilot
+  admission code knows. A new hold type that is not added to the adapter is invisible; the
+  adapter matches the enum exhaustively so the compiler flags a new variant.
+- **Fan-out adds a mux behaviour.** The federated mux gains its first merging call. It is
+  confined to one named tool and fails visible, but it is new surface to keep honest.
+- **Replica blindness.** A follower with its owner unreachable can show only its own runs
+  plus a `host_unhealthy` item. That is intended: showing stale replica tasks as current would
+  be worse.
+
+## Task References
+
+- [ORB-21164] — designed `orbit attention` and filed its slices
+- [ORB-21165] — constellation consumer hook (separate repository)
+- [ORB-21168] — slice 1: tool, CLI, filters and cursor over the task-level kinds
+- [ORB-21169] — slice 2: runtime kinds `run_failed`, `run_stuck`, `claim_stale`
+- [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
+- [ORB-21171] — slice 4: federation across workspaces and hosts, and `host_unhealthy`
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
