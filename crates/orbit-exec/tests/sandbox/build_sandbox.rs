@@ -964,8 +964,26 @@ fn script_network_grants_reach_only_what_they_allow() {
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let mut request = [0u8; 256];
-                let _ = stream.read(&mut request);
+                // Read the whole request headers before replying: bash may
+                // flush `printf ... >&3` in pieces, and a single read can
+                // catch a prefix, reply and close while the tail is still in
+                // flight, which resets the connection and loses the reply.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut request = Vec::new();
+                let mut buf = [0u8; 256];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            request.extend_from_slice(&buf[..n]);
+                            if request.len() > 4096 || request.windows(4).any(|w| w == b"\r\n\r\n")
+                            {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
                 let _ = write!(stream, "HTTP/1.0 200 OK\r\n\r\n{reply}\n");
             }
         });
