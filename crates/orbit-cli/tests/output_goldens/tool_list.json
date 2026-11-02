@@ -1129,7 +1129,7 @@
   },
   {
     "name": "orbit.experiment.abandon",
-    "description": "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks; tasks already assigned keep their arm. Operator only: an agent session is refused.",
+    "description": "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks. A fresh admission applies no overlay from the abandoned experiment; runs and claims already admitted keep the treatment they captured. Operator only: an agent session is refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1228,7 +1228,7 @@
   },
   {
     "name": "orbit.experiment.conclude",
-    "description": "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops; tasks already assigned keep their arm. Changes no configuration or repository file. Operator only: an agent session is refused.",
+    "description": "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops. A fresh admission applies no overlay from the concluded experiment; runs and claims already admitted keep the treatment they captured. Changes no configuration or repository file. Operator only: an agent session is refused.",
     "enabled": true,
     "active": true,
     "status": "active",
