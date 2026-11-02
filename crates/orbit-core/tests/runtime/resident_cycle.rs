@@ -836,6 +836,82 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
 }
 
 #[test]
+fn a_status_request_wake_survives_later_wakes_until_the_next_cycle() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 4");
+    let mandate = fx.mandate(&watched);
+    let now = Utc::now();
+    fx.complete_cycle(&mandate, "resident-cycle-status-seed");
+
+    let control = |action: &str, status_request: bool| {
+        call(
+            &fx.runtime,
+            "orbit.resident.control",
+            json!({"task_id": mandate.as_str(), "action": action,
+                   "reason": "Manager control", "status_request": status_request}),
+            McpCapability::Operator,
+        )
+        .unwrap();
+    };
+    let admitted_cycle = |key: &str, at: DateTime<Utc>| -> Value {
+        let run = fx.cycle_run(&mandate, key);
+        let brief = fx.runtime.begin_resident_cycle(&run, at).unwrap();
+        assert_eq!(brief["cycle_count"], 1, "{brief}");
+        fx.checkpoint(&brief, &run);
+        fx.runtime.finish_resident_cycle(&run).unwrap();
+        fx.stop_run(&run, JobRunState::Success);
+        brief
+    };
+    let reasons = |brief: &Value| -> Vec<String> {
+        brief["wake"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|reason| reason.as_str().map(str::to_string))
+            .collect()
+    };
+
+    // A plain wake after the status-request wake must not overwrite it.
+    control("wake", true);
+    control("wake", false);
+    let brief = admitted_cycle(
+        "resident-cycle-status-plain-wake",
+        now + Duration::minutes(11),
+    );
+    assert_eq!(brief["status_request"], true, "{brief}");
+    assert!(
+        reasons(&brief).contains(&"status_request".to_string()),
+        "{brief}"
+    );
+
+    // A pause/resume pair intervening before the cycle must not lose it.
+    control("wake", true);
+    control("pause", false);
+    control("resume", false);
+    let brief = admitted_cycle(
+        "resident-cycle-status-pause-resume",
+        now + Duration::minutes(22),
+    );
+    assert_eq!(brief["status_request"], true, "{brief}");
+    assert!(
+        reasons(&brief).contains(&"status_request".to_string()),
+        "{brief}"
+    );
+
+    // That cycle consumed the request: a later plain wake carries none.
+    control("wake", false);
+    let brief = admitted_cycle(
+        "resident-cycle-status-consumed",
+        now + Duration::minutes(33),
+    );
+    assert_eq!(brief["status_request"], false, "{brief}");
+    assert!(
+        !reasons(&brief).contains(&"status_request".to_string()),
+        "{brief}"
+    );
+}
+
+#[test]
 fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle() {
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");

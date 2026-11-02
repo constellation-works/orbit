@@ -117,6 +117,10 @@ pub(crate) struct ResidentControl {
     pub(crate) last: Option<(ResidentControlEntry, DateTime<Utc>)>,
     /// The latest waking action (`resume`, `wake`, `release`) and its time.
     pub(crate) last_wake: Option<(ResidentControlEntry, DateTime<Utc>)>,
+    /// The latest waking action that requested a status checkpoint, and
+    /// its time. Retained separately from `last_wake` so a later waking
+    /// action without the flag does not overwrite an unconsumed request.
+    pub(crate) last_status_request_wake: Option<(ResidentControlEntry, DateTime<Utc>)>,
 }
 
 impl ResidentControl {
@@ -129,6 +133,15 @@ impl ResidentControl {
         self.last_wake
             .as_ref()
             .filter(|(_, at)| since.is_none_or(|since| *at > since))
+    }
+
+    /// Whether a status request written after `since` (the last cycle
+    /// start) is still pending: the next cycle consumes it, so a request
+    /// at or before `since` no longer counts.
+    pub(crate) fn pending_status_request(&self, since: Option<DateTime<Utc>>) -> bool {
+        self.last_status_request_wake
+            .as_ref()
+            .is_some_and(|(_, at)| since.is_none_or(|since| *at > since))
     }
 }
 
@@ -147,6 +160,9 @@ pub(crate) fn resident_control_from_history(
                 .map_err(|error| format!("the resident control record is unreadable: {error}"))?;
         control.state = note.state;
         if note.action.wakes() {
+            if note.status_request {
+                control.last_status_request_wake = Some((note.clone(), entry.at));
+            }
             control.last_wake = Some((note.clone(), entry.at));
         }
         control.last = Some((note, entry.at));
