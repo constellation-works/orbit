@@ -196,6 +196,21 @@ the hold, including after owner reconciliation. The checkpoint is an advisory
 selection hold, so an admission racing its publication still settles the pilot's
 old assessment as `superseded` without an ordinary write to the claimed task.
 
+**Cross-workspace pilot dependencies.** A task's `dependencies` may name a
+task owned by another workspace registered on the same machine. Task-pilot
+apply keeps its dependency graph and its locks local to the assessed
+workspace: a foreign dependency takes no local lock, and its completion is
+read through the registered-owner lookup behind `resolved_dependencies`
+(an archived dependency that reached `done` before it was archived counts
+as done). A dependency no registered workspace holds is the only one that
+fails approval as `task not found`. When a pilot applies its assessment
+but approval then fails deterministically, the drain records the task
+`pilot_unresolved` and holds it for the operator — it is not piloted again
+until the task changes or an operator approves it. An apply that applied
+at least one task while leaving others unresolved still reports `failed`
+with its counts, but the pipeline guard passes it as held, so the applied
+tasks' receipts stand and only the unresolved tasks are held.
+
 **Applied pilot holds.** The latest applied assessment's typed holds are read on
 every admission path from its atomic audit (`OrbitRuntime::pilot_admission_hold`).
 Operator-validation and `host_operational` holds defer the task from every

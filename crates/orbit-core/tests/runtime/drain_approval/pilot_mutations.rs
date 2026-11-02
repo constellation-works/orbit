@@ -244,9 +244,152 @@ fn pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds() {
     }
 }
 
+fn a_cross_workspace_dependency_applies_and_approves() {
+    let workspace = Workspace::new();
+    let foreign = workspace.foreign_task("foreign prerequisite", TaskStatus::Done);
+    // The foreign task is registered, not local to this workspace.
+    assert!(workspace.runtime.get_task(&foreign.id).is_err());
+    assert_eq!(
+        workspace
+            .runtime
+            .get_dependency_task(&foreign.id)
+            .unwrap()
+            .map(|task| task.status),
+        Some(TaskStatus::Done)
+    );
+    let task = workspace.task(
+        "cross workspace dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    workspace.edit(
+        &task,
+        TaskUpdateParams {
+            dependencies: Some(vec![foreign.id.clone()]),
+            ..Default::default()
+        },
+    );
+    let sibling = workspace.task(
+        "local sibling",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let pilot = workspace.pilot_child(&drain, &json!([task.id, sibling.id]));
+    // The sibling names the same foreign task only in pilot prose: its
+    // completion, read through the registry, must not hold promotion.
+    let mut sibling_assessment = assessment(&sibling);
+    sibling_assessment["blocked_by"] = json!([format!("Await {}", foreign.id)]);
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![assessment(&task), sibling_assessment])
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 2, "{applied}");
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&sibling), TaskStatus::Backlog);
+}
+
+fn a_missing_dependency_is_partial_and_held_not_retried() {
+    let workspace = Workspace::new();
+    let dependency = workspace.task(
+        "deleted dependency",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let bad = workspace.task(
+        "missing dependency",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    workspace.edit(
+        &bad,
+        TaskUpdateParams {
+            dependencies: Some(vec![dependency.id.clone()]),
+            ..Default::default()
+        },
+    );
+    let sibling = workspace.task(
+        "applied sibling",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let pilot = workspace.pilot_child(&drain, &json!([bad.id, sibling.id]));
+    let assessments = vec![assessment(&bad), assessment(&sibling)];
+    let task_ids = assessments
+        .iter()
+        .map(|assessment| assessment["task_id"].clone())
+        .collect::<Vec<_>>();
+    let prepared = workspace
+        .action(
+            "prepare_task_pilot",
+            json!({"task_ids": task_ids, "workspace_path": workspace.repo, "base_branch": "main"}),
+        )
+        .unwrap();
+    // The dependency exists nowhere by the time approval runs.
+    workspace.runtime.delete_task(&dependency.id).unwrap();
+    let applied = workspace
+        .action(
+            "apply_task_pilot_results",
+            json!({
+                "run_id": pilot, "workspace_path": workspace.repo, "prepared": prepared,
+                "results": [{"partition_index": 0, "task_ids": task_ids, "tasks": assessments}],
+                "promotion_authorized": true, "drain_promotion": {"run_id": drain},
+            }),
+        )
+        .unwrap();
+    workspace.finish(&pilot, JobRunState::Success);
+    // The sibling's applied result stands; the bad task is reported alone.
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(applied["unresolved_count"], 1, "{applied}");
+    assert_eq!(applied["status"], "failed", "{applied}");
+    assert_eq!(workspace.status(&sibling), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&bad), TaskStatus::Proposed);
+    let bad_outcome = applied["task_outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outcome| outcome["task_id"] == bad.id)
+        .unwrap()
+        .clone();
+    assert_eq!(bad_outcome["outcome"], "apply_failed", "{bad_outcome}");
+    // The guard does not fail the sibling's applied result.
+    let guard = workspace
+        .action(
+            "pipeline_success_guard",
+            json!({"context": "task-pilot partition apply", "result": applied}),
+        )
+        .unwrap();
+    assert_eq!(guard["succeeded"], true, "{guard}");
+    // Recording the finished pilot holds the bad task for the operator
+    // instead of selecting it again on the next drain pass.
+    workspace.record(&drain);
+    let selection = workspace.select(&drain);
+    assert_eq!(
+        held_reason(&selection, &bad),
+        Some("pilot_unresolved"),
+        "{selection}"
+    );
+    assert!(
+        !selection["task_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &bad.id),
+        "{selection}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     replay_does_not_certify_operator_edits_as_pilot_output_scenarios,
     replay_does_not_certify_operator_edits_as_pilot_output,
-    pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds
+    pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds,
+    a_cross_workspace_dependency_applies_and_approves,
+    a_missing_dependency_is_partial_and_held_not_retried
 );

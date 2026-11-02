@@ -683,7 +683,16 @@ fn admit(
     let task_id = assessed.task_id.as_str();
     let operation_id = assessed.operation_id.as_str();
     let dependencies = current.dependencies();
-    let is_done = |id: &str| graph.is_done(id);
+    // The graph is local by design; a prerequisite owned by another
+    // registered workspace takes its status from the registry instead
+    // [ORB-21172].
+    let is_done = |id: &str| {
+        graph.is_done(id)
+            || matches!(
+                context.runtime.get_dependency_task(id),
+                Ok(Some(target)) if target.status == TaskStatus::Done
+            )
+    };
     let admission = match context.authority {
         PromotionAuthority::CiSweep(filing, authorized) => {
             let mut admission_task = current.clone();

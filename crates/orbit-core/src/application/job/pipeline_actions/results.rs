@@ -77,6 +77,7 @@ pub(crate) fn pipeline_success_guard(
                 .status
                 .valid()
                 .is_some_and(PipelineWaitStatus::is_held)
+                || entry.is_partial_apply()
         })
         .count();
     let mut failures = Vec::new();
@@ -309,7 +310,7 @@ fn pipeline_wait_entry_failure(
     let Some(status) = entry.status.valid() else {
         return Some(format!("{label} missing string status"));
     };
-    if status.is_success() || status.is_held() {
+    if status.is_success() || status.is_held() || entry.is_partial_apply() {
         return None;
     }
 
@@ -401,6 +402,20 @@ impl CheckedEntry {
         } else {
             Self::default()
         }
+    }
+
+    /// A task-pilot apply that applied at least one task while leaving
+    /// others unresolved: its applied results stand, and the unresolved
+    /// tasks are held for the operator rather than failing the siblings'
+    /// results [ORB-21172].
+    fn is_partial_apply(&self) -> bool {
+        self.partition_decisions
+            && self
+                .status
+                .valid()
+                .is_some_and(|status| status.as_str() == "failed")
+            && self.applied_count.valid().copied().unwrap_or(0) > 0
+            && self.unresolved_count.valid().copied().unwrap_or(0) > 0
     }
 
     fn run_id(&self) -> Option<&str> {

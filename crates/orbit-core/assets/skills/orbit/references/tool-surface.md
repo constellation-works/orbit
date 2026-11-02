@@ -409,6 +409,21 @@ forwarded caller machine ID — attribution, not a grant — plus the workspace
 checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
 relaunch a server with more privileges to work around a denied call.
 
+### Task-pilot dependencies and retries
+
+A task's `dependencies` may name a task in another workspace registered on
+the same machine. Task-pilot apply never locks a foreign task in the local
+store: it reads the dependency's status through the registered owner (the
+lookup behind `resolved_dependencies`), and only a dependency that no
+registered workspace holds fails as `task not found`. Use `relations`
+(`related_to`) for a reference that should not gate readiness. When a
+pilot's approval fails deterministically after its assessment was applied,
+the drain holds the task as `pilot_unresolved` for the operator instead of
+piloting it again on every pass; edit the task or approve it to retry. In
+a multi-task apply, one task's failure does not fail the other tasks'
+applied results: the pipeline guard passes a partially applied apply as
+held, and only the failed task is held.
+
 ### Pilot-warning triage
 
 `orbit_task_block_triage` (`orbit.task.block_triage`) serves pilot-warning
