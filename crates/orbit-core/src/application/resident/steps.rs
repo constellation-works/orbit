@@ -117,15 +117,38 @@ impl OrbitRuntime {
             }
             None => None,
         };
-        self.set_resident_live_cycle(
+        let last_cycle_at_before_publication = due.last_cycle.as_ref().map(|cycle| cycle.at);
+        let history_at_publication = self.publish_resident_live_cycle(
             &task_id,
             live.as_ref().map(|live| live.cycle.as_str()),
-            Some(&ResidentLiveCycle {
+            &ResidentLiveCycle {
                 cycle: cycle.clone(),
                 run_id: run_id.to_string(),
                 expires_at: now + Duration::minutes(RESIDENT_CYCLE_LEASE_MINUTES),
-            }),
+            },
         )?;
+        // A wake committed after the observation above but before
+        // publication is in this snapshot: its timestamp precedes the new
+        // cycle's start, so the next cycle would treat it as consumed.
+        // Fold any such pending wake into this cycle's grant instead.
+        let mut grant_reasons = due.reasons.clone();
+        let control_at_publication =
+            super::control::resident_control_from_history(&history_at_publication)
+                .map_err(OrbitError::Execution)?;
+        if control_at_publication
+            .pending_wake(last_cycle_at_before_publication)
+            .is_some()
+            && !grant_reasons.iter().any(|reason| reason == "wake")
+        {
+            grant_reasons.push("wake".to_string());
+        }
+        if control_at_publication.pending_status_request(last_cycle_at_before_publication)
+            && !grant_reasons
+                .iter()
+                .any(|reason| reason == "status_request")
+        {
+            grant_reasons.push("status_request".to_string());
+        }
         let deadline_passed = mandate.deadline.is_some_and(|deadline| deadline <= now);
         let narrowed_by = if let Some(notice) = due.maintenance.first() {
             Some(format!("notice:{notice}"))
@@ -147,7 +170,7 @@ impl OrbitRuntime {
             narrowed_by,
             recovery_of,
             digest: due.digest.clone(),
-            reasons: due.reasons.clone(),
+            reasons: grant_reasons,
         };
         self.append_resident_history(
             &task_id,

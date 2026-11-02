@@ -112,3 +112,58 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         );
     }
 }
+
+#[test]
+fn status_request_wake_between_observe_and_publication_reaches_the_admitted_cycle() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::control_admission::status_request_wake_between_observe_and_publication_reaches_the_admitted_cycle",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let watched = fx.task("Watched work");
+    let mandate = fx.mandate(&watched);
+    fx.runtime
+        .update_task_as_human(
+            &mandate,
+            TaskUpdateParams {
+                plan: Some("Run cycles until stopped.".into()),
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+    fx.grant(&mandate, &["merge"]);
+    let run = fx.cycle_run(&mandate, "status-request-before-publication");
+    let runtime = fx.runtime.clone();
+    let controlled_mandate = mandate.clone();
+    let brief = with_resident_cycle_admission_checkpoint(
+        move || {
+            call(
+                &runtime,
+                "orbit.resident.control",
+                json!({"task_id": controlled_mandate, "action": "wake",
+                       "reason": "Status please", "status_request": true}),
+                McpCapability::Operator,
+            )
+            .unwrap();
+        },
+        || fx.runtime.begin_resident_cycle(&run, Utc::now()),
+    )
+    .unwrap();
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    assert_eq!(brief["status_request"], true, "{brief}");
+    let reasons: Vec<String> = brief["wake"]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|reason| reason.as_str().map(str::to_string))
+        .collect();
+    assert!(reasons.contains(&"wake".to_string()), "{brief}");
+    assert!(reasons.contains(&"status_request".to_string()), "{brief}");
+    fx.checkpoint(&brief, &run);
+    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    assert_eq!(finished["finalized"], true, "{finished}");
+    assert_eq!(finished["synthesized"], false, "{finished}");
+}
