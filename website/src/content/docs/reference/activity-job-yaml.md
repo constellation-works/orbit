@@ -639,8 +639,45 @@ granted roots and a scratch directory at `/orbit-script` (`HOME`,
 `TMPDIR`, `in/`, `out/`). `.orbit/`, the global Orbit root and the
 credential paths under `HOME` are never visible. It has its own network
 namespace with only its own loopback, so neither the network nor
-services listening on the host's `127.0.0.1` are reachable. `network:
-https|any`, `env_pass` and `files.inputs` are refused for now.
+services listening on the host's `127.0.0.1` are reachable. This build does
+not run `network` other than `none`, or `env_pass`, yet. After the grant
+checks, a step whose manifest requests either, or whose grant allows network
+access or passes a variable, is refused before spawn with
+`script_sandbox_unavailable`. Script steps run only on Linux in this build:
+on macOS a granted step is refused with the same code, after the grant checks.
+
+**Input files (Linux).** A manifest declares its read-only inputs under
+`spec.files.inputs`, a list of `{from, as}` entries:
+
+```yaml
+spec:
+  files:
+    inputs:
+      - from: "{{ input.brief }}"
+        as: brief.md
+      - from: site/dist
+        as: site
+```
+
+`from` is rendered against the step input. A relative path resolves against
+the step's cwd (the run worktree, or the workspace root). The result must
+resolve physically, with symlinks followed, to a regular file or a directory
+inside the cwd tree or a read root granted with `orbit script grant <name>
+--read-root <path>`. Each input is bound read-only at `in/<as>` in the sandbox,
+that is `/orbit-script/in/<as>` or `$ORBIT_SCRIPT_IN/<as>`. `as` is a plain
+file name: not empty, not `.` or `..`, and with no `/`. No two inputs in a
+manifest may share one. A file's digest is of its bytes; a directory's is a
+digest over its whole tree, without following symlinks inside it.
+
+An input that is missing, resolves anywhere else, overlaps `.orbit/`, the
+global Orbit root or a credential path under `HOME`, or is a directory holding
+an entry that is neither a file, a directory nor a symlink (or more than
+100,000 entries) refuses the step before spawn with
+`script_file_input_unavailable`, naming the input. Input admission runs before
+the host profile check, so on macOS this refusal can come before
+`script_sandbox_unavailable`. Successfully admitted inputs are recorded with
+their names, sources and SHA-256 digests on the attempt's `script_execution`
+entry.
 
 The step's rendered input is validated against `input_schema_json` and
 written to stdin. On exit 0, stdout (at most 1 MiB) must be one JSON
