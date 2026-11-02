@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::record::{EffectiveStatus, Notice, NoticeKind, NoticeScope};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::{
@@ -217,18 +217,26 @@ impl OrbitRuntime {
     }
 
     /// Whether the live cycle's run can no longer act: its lease expired, or
-    /// its run is terminal and its owner stopped (or the run is gone).
-    pub(crate) fn resident_cycle_dead(&self, live: &ResidentLiveCycle, now: DateTime<Utc>) -> bool {
+    /// its run is terminal and its owner stopped, or the run is gone. Any
+    /// other lookup failure is an error, so the cycle stays live for this
+    /// tick instead of being taken over beside a run that may still act.
+    pub(crate) fn resident_cycle_dead(
+        &self,
+        live: &ResidentLiveCycle,
+        now: DateTime<Utc>,
+    ) -> Result<bool, OrbitError> {
         if live.expires_at <= now {
-            return true;
+            return Ok(true);
         }
         match self.show_job_run(&live.run_id) {
-            Ok(run) => {
-                run.state.is_terminal()
-                    && crate::application::job::run_owner_liveness(&run)
-                        == crate::application::job::RunOwnerLiveness::Stopped
-            }
-            Err(_) => true,
+            Ok(run) => Ok(run.state.is_terminal()
+                && crate::application::job::run_owner_liveness(&run)
+                    == crate::application::job::RunOwnerLiveness::Stopped),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::JobRun,
+                ..
+            }) => Ok(true),
+            Err(error) => Err(error),
         }
     }
 
@@ -291,7 +299,7 @@ impl OrbitRuntime {
         let mut withheld = None;
         let mut dead_cycle = None;
         if let Some(live) = live {
-            if self.resident_cycle_dead(&live, now) {
+            if self.resident_cycle_dead(&live, now)? {
                 reasons.push(format!("recovery:{}", live.cycle));
                 dead_cycle = Some(live);
             } else {

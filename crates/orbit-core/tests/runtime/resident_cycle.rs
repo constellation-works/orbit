@@ -708,6 +708,90 @@ fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
 }
 
 #[test]
+fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 4");
+    let mandate = fx.mandate(&watched);
+    let now = Utc::now();
+
+    // A live cycle holds the mandate.
+    let live_run = fx.cycle_run(&mandate, "resident-cycle-live");
+    let started = fx.runtime.begin_resident_cycle(&live_run, now).unwrap();
+    assert_eq!(started["cycle_count"], 1, "{started}");
+    let live_cycle = started["cycle"].as_str().unwrap().to_string();
+
+    // Corrupt the live run's row so its lookup fails with a store error,
+    // not `NotFound`: the row no longer parses as a job run.
+    let db = fx.global.join("orbit.db");
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM job_runs WHERE run_id = ?1",
+            rusqlite::params![live_run],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE job_runs SET state = 'not-a-state' WHERE run_id = ?1",
+            rusqlite::params![live_run],
+        )
+        .unwrap();
+    drop(connection);
+
+    // The lookup error surfaces instead of marking the live cycle dead:
+    // no takeover, no synthesized checkpoint.
+    let takeover_run = fx.cycle_run(&mandate, "resident-cycle-takeover");
+    fx.runtime
+        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
+        .expect_err("a lookup error is not a dead cycle");
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute(
+            "UPDATE job_runs SET state = ?1 WHERE run_id = ?2",
+            rusqlite::params![state, live_run],
+        )
+        .unwrap();
+    drop(connection);
+
+    // The cycle survived the error: the same run is still refused as live.
+    let refused = fx
+        .runtime
+        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
+        .unwrap();
+    assert_eq!(refused["cycle_count"], 0, "{refused}");
+    assert_eq!(refused["skip_reason"], "cycle_live", "{refused}");
+
+    // A missing run is dead: the next run recovers the cycle.
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute(
+            "DELETE FROM job_runs WHERE run_id = ?1",
+            rusqlite::params![live_run],
+        )
+        .unwrap();
+    drop(connection);
+    let recovered = fx
+        .runtime
+        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
+        .unwrap();
+    assert_eq!(recovered["cycle_count"], 1, "{recovered}");
+    assert_eq!(recovered["recovery_of"], live_cycle, "{recovered}");
+    let takeover_cycle = recovered["cycle"].as_str().unwrap().to_string();
+
+    // An expired lease is dead too, without touching the store.
+    let expired = fx
+        .runtime
+        .begin_resident_cycle(
+            &fx.cycle_run(&mandate, "resident-cycle-expired"),
+            now + Duration::minutes(60),
+        )
+        .unwrap();
+    assert_eq!(expired["cycle_count"], 1, "{expired}");
+    assert_eq!(expired["recovery_of"], takeover_cycle, "{expired}");
+}
+
+#[test]
 fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref()
  {
     let fx = fixture();
