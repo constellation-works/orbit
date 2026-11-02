@@ -80,7 +80,7 @@ impl RuntimeKernel {
         // An activity whose allowlist names a tool this workspace does not
         // register (say, one from a plugin that is not installed) is withdrawn
         // on its own: jobs that reference it are refused with the reason, and
-        // every other job keeps running. `orbit doctor` reports the fault.
+        // every other job keeps running. Catalog loading logs each withdrawal.
         let registered_tools = self.allowlist_known_tool_names();
         for failure in
             catalog.withdraw_invalid_tool_allowlists(registered_tools.iter().map(String::as_str))
