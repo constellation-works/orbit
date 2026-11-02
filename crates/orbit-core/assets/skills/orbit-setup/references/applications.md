@@ -150,7 +150,7 @@ digest, expired consent or revoked consent is refused before mutation.
 
 ## Built-ins and completion callbacks
 
-The supported built-in operations are:
+The supported built-in write operations include:
 
 * `orbit.task.update`: an exact scope may include `id`, optional `status`
   (`backlog`, `done`, `rejected` or `archived`), optional `comment` and optional
@@ -163,22 +163,66 @@ The supported built-in operations are:
   optional `workspace`. The existing decision handler checks the current
   request, allowed answers, expiry and supersession. This includes an allowed
   `dismiss` answer, which retains its gate's existing consequences.
+* `orbit.auto_task.add`: callback-only, using a constrained `fields` scope.
+  `name`, `schedule` and `template` are required; `description` and `dedupe`
+  are optional. Every listed definition field must be bound with
+  `artifact_json` to the artifact whose digest the parent entry's `task`
+  predicate checks. `workspace` is an optional ceiling field and is not part
+  of the definition. Exact calls and caller-supplied definition values are
+  refused.
+* `orbit.auto_task.update`: callback-only, using a constrained `fields`
+  scope. `name` is required and must be bound with `artifact_json` to the
+  approved artifact. Optional `enabled` must be constrained to a boolean with
+  `const` or a non-empty `one_of` of booleans. `workspace` is optional;
+  it does not select another workspace. `expected_enabled` and every other
+  field are refused. Exact calls are refused.
 
-All other built-ins are specifically **not permitted** by application consent,
-including routine control, unconditional auto-task minting, dispatch, lifecycle
-force and consent administration. A request naming one is refused at consent
-time. Applications must use a separately supported real operator surface for
-those operations; a plugin cannot manufacture that authority.
+In a scope whose entry `task` predicate binds the digest of `proposal.json`,
+these callbacks bind the definition fields and update name to values in that
+approved proposal, while `enabled` is limited to a boolean constant:
 
-For a plugin's completion callbacks, the operator lists each exact built-in
-call beside its parent operation. The plugin must also request the tool in
-`permissions.orbit_tools`, and the host must grant `orbit_tools`. Existing plugin
-grants, the caller ceiling and the consent are intersected; none replaces the
-others. Callbacks run on the spawning host through its authenticated descriptor
-route. They cannot invoke other plugins, create new callbacks, change the
-workspace, or use another scope in the app's consent. Each callback rechecks
-expiry, revocation, protected witness and the original plugin's live digest.
-Long-lived MCP backends are separated by consent and exact parent scope.
+```json
+{
+  "callbacks": [
+    {
+      "tool": "orbit.auto_task.add",
+      "plugin": null,
+      "fields": {
+        "name": {"artifact_json": {"path": "proposal.json", "pointer": "/add/name"}},
+        "description": {"artifact_json": {"path": "proposal.json", "pointer": "/add/description"}},
+        "schedule": {"artifact_json": {"path": "proposal.json", "pointer": "/add/schedule"}},
+        "template": {"artifact_json": {"path": "proposal.json", "pointer": "/add/template"}},
+        "dedupe": {"artifact_json": {"path": "proposal.json", "pointer": "/add/dedupe"}}
+      }
+    },
+    {
+      "tool": "orbit.auto_task.update",
+      "plugin": null,
+      "fields": {
+        "name": {"artifact_json": {"path": "proposal.json", "pointer": "/update/name"}},
+        "enabled": {"const": false}
+      }
+    }
+  ]
+}
+```
+
+Other built-in writes remain unavailable through application consent. This
+includes routine control, unconditional auto-task minting, auto-task
+delete/reset, dispatch, lifecycle force and consent administration. These
+operations require their separately supported Operator surfaces; a plugin
+cannot manufacture that authority.
+
+For a plugin's completion callbacks, the operator lists each permitted callback
+and its constrained fields under its parent operation. The plugin must also
+request the tool in `permissions.orbit_tools`, and the host must grant
+`orbit_tools`. Existing plugin grants, the caller ceiling and the consent are
+intersected; none replaces the others. Callbacks run on the spawning host
+through its authenticated descriptor route. They cannot invoke other plugins,
+create new callbacks, change the workspace, or use another scope in the app's
+consent. Each callback rechecks expiry, revocation, protected witness and the
+original plugin's live digest. Long-lived MCP backends are separated by consent
+and exact parent scope.
 
 Completion is explicitly sequenced by the consumer: apply the approved payload,
 then request the approved completion callback only after it succeeded. Core
