@@ -721,6 +721,9 @@ pub fn validate_script_spec(name: &str, spec: &ScriptSpec) -> Result<(), ScriptV
 /// The Linux script profile a `script_execution` record names.
 pub const SCRIPT_PROFILE_LINUX: &str = "linux-bwrap-script-v1";
 
+/// The macOS script profile a `script_execution` record names.
+pub const SCRIPT_PROFILE_MACOS: &str = "macos-sandbox-script-v1";
+
 /// The most stdout a script's JSON answer may be (§4).
 pub const SCRIPT_STDOUT_CAP_BYTES: usize = 1024 * 1024;
 
@@ -739,7 +742,9 @@ pub mod script_refusal {
     /// This host cannot apply the script profile (no Bubblewrap, no user
     /// namespaces, a nested sandbox, an unsupported platform or capability).
     pub const SANDBOX_UNAVAILABLE: &str = "script_sandbox_unavailable";
-    /// A granted root, or the run's cwd tree, is missing or unusable.
+    /// A granted root, or the run's cwd tree, is missing, lies within a
+    /// credential path, or fails the read (and, for a write root, write)
+    /// probe the job's process makes before spawn.
     pub const ROOT_UNAVAILABLE: &str = "script_root_unavailable";
     /// A pull follower holds no grant made with `--follower`.
     pub const FOLLOWER_REFUSED: &str = "script_follower_refused";

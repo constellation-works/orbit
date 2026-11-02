@@ -369,6 +369,14 @@ pub(crate) fn script_scope_launcher_with_availability(
     Ok(ScriptScopeLauncher::Scoped { unit, argv })
 }
 
+/// Whether a script step runs under strict containment: configured, or
+/// inherited from a strict parent run, the same rule
+/// [`script_scope_launcher`] applies.
+pub(crate) fn script_containment_is_strict(settings: &WorkerContainmentSettings) -> bool {
+    let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
+    super::start::effective_strict_containment(settings.strict, false, inherited.as_deref())
+}
+
 /// One script step's scope, as [`script_scope_launcher`] found it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ScriptScopeLauncher {

@@ -127,7 +127,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | Slice 5, ORB-21215: dashboard banner and view, attention kind | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243 | claude |
-| [Script Steps](./design/script-steps/1_scope.md) | Phases 1, 2, 4 and 5 landed ([ORB-19983], [ORB-19985], [ORB-21299], [ORB-21301]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task; an explicit raise surface for script_grant requests is not yet filed | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
 ### Designing (8)

@@ -110,6 +110,7 @@ pub(super) fn run<G>(
         stdin: None,
         stdout_cap: None,
         grace: crate::supervision::TERMINATION_GRACE_PERIOD,
+        limits: None,
     };
     Ok(run_phase(command, guard, &phase, log)?.end)
 }
@@ -130,16 +131,80 @@ pub(super) struct Phase<'a> {
     pub(super) stdout_cap: Option<usize>,
     /// How long a stopped group gets between `SIGTERM` and `SIGKILL`.
     pub(super) grace: Duration,
+    /// Resource limits set on the wrapper before it execs, so the script and
+    /// every descendant inherit them; `None` sets only `RLIMIT_CORE`.
+    pub(super) limits: Option<ProcessLimits>,
+}
+
+/// The `RLIMIT_*` limits of one script run (script steps §3 Resources).
+/// Each is set as both the soft and the hard limit, so the script cannot
+/// raise it, and never above the hard limit this process already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProcessLimits {
+    /// `RLIMIT_CPU` in seconds of CPU time per process: the soft limit
+    /// delivers `SIGXCPU`, and the hard limit, `cpu_grace_seconds` later,
+    /// `SIGKILL`.
+    pub(super) cpu_seconds: u64,
+    pub(super) cpu_grace_seconds: u64,
+    /// `RLIMIT_NOFILE`: the most descriptors one process may hold open.
+    pub(super) open_files: u64,
+}
+
+/// The hard limit this process holds for `$resource`, or infinity when it
+/// cannot be read. A macro because the resource type differs by platform.
+#[cfg(unix)]
+macro_rules! current_hard_limit {
+    ($resource:expr) => {{
+        let mut current = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `getrlimit` writes only the struct it is handed.
+        if unsafe { libc::getrlimit($resource, &mut current) } == 0 {
+            current.rlim_max
+        } else {
+            libc::RLIM_INFINITY
+        }
+    }};
+}
+
+/// The CPU and open-file limits to set, each clamped to the hard limit this
+/// process holds: an unprivileged process cannot raise its hard limit.
+#[cfg(unix)]
+fn clamped_limits(limits: ProcessLimits) -> (libc::rlimit, libc::rlimit) {
+    let cpu_hard_now = current_hard_limit!(libc::RLIMIT_CPU);
+    let files_hard_now = current_hard_limit!(libc::RLIMIT_NOFILE);
+    let clamp = |value: u64, hard: libc::rlim_t| (value as libc::rlim_t).min(hard);
+    let cpu_soft = clamp(limits.cpu_seconds.max(1), cpu_hard_now);
+    let cpu = libc::rlimit {
+        rlim_cur: cpu_soft,
+        rlim_max: clamp(
+            limits
+                .cpu_seconds
+                .max(1)
+                .saturating_add(limits.cpu_grace_seconds),
+            cpu_hard_now,
+        )
+        .max(cpu_soft),
+    };
+    let files = clamp(limits.open_files, files_hard_now);
+    (
+        cpu,
+        libc::rlimit {
+            rlim_cur: files,
+            rlim_max: files,
+        },
+    )
 }
 
 /// What one supervised start produced.
 pub(super) struct PhaseRun {
     pub(super) end: BuildPhaseEnd,
     /// The stdout kept apart from the log (empty without `stdout_cap`).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) stdout: Vec<u8>,
     /// Stdout went past `stdout_cap`; what is kept is its head.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) stdout_over_cap: bool,
 }
 
@@ -163,10 +228,11 @@ pub(super) fn run_phase<G>(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        let limits = request.limits.map(clamped_limits);
         // SAFETY: `setsid` and `setrlimit` are async-signal-safe and touch
         // only the forked child's own session, group and limits.
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 // A fresh session also creates the process group whose id
                 // is the child's PID, which the termination supervisor kills.
                 if libc::setsid() < 0 {
@@ -178,6 +244,14 @@ pub(super) fn run_phase<G>(
                 };
                 if libc::setrlimit(libc::RLIMIT_CORE, &none) != 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if let Some((cpu, files)) = limits {
+                    if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &files) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
@@ -251,9 +325,9 @@ pub(super) fn run_phase<G>(
     {
         end = BuildPhaseEnd::BuildDirCapExceeded;
     }
-    // Only Linux script runs consume a separate stdout answer. Build phases
-    // on every platform retain their output in the shared log instead.
-    #[cfg(target_os = "linux")]
+    // Only script runs consume a separate stdout answer. Build phases
+    // retain their output in the shared log instead.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let (stdout, stdout_over_cap) = {
         // The sink keeps one byte past the cap to mark an overflow.
         let mut stdout = outcome.stdout;
@@ -265,9 +339,9 @@ pub(super) fn run_phase<G>(
     };
     Ok(PhaseRun {
         end,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         stdout,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         stdout_over_cap,
     })
 }
