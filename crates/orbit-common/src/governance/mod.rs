@@ -12,6 +12,7 @@ pub mod lease;
 pub mod notice;
 pub mod operation;
 pub mod orchestrator;
+pub mod resident;
 pub mod search;
 pub mod task;
 pub mod visual;

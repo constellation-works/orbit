@@ -14,6 +14,7 @@ mod notice;
 pub mod operation;
 mod orchestrator;
 pub mod pipeline;
+mod resident;
 pub mod search;
 pub mod task;
 mod visual;

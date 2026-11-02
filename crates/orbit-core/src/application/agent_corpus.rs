@@ -241,8 +241,14 @@ impl OrbitRuntime {
         // request, and a model answer appends only once a human confirms it,
         // with that human as the answerer. A model-answer review decides
         // nothing about the work, so it appends nothing itself.
+        // A resident grant decides authority, never the work, and must not
+        // become precedent any automation could answer from.
         if resolution.is_automation_answer()
-            || request.gate == orbit_types::task::DecisionGate::ModelAnswerReview
+            || matches!(
+                request.gate,
+                orbit_types::task::DecisionGate::ModelAnswerReview
+                    | orbit_types::task::DecisionGate::ResidentAuthority
+            )
         {
             return Ok(None);
         }

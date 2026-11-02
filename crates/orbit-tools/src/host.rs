@@ -15,6 +15,7 @@ use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::lease::LeaseVerb;
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::resident::ResidentVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::visual::VisualVerb;
@@ -148,6 +149,8 @@ pub enum OrbitBuiltinAction {
     Lease(LeaseVerb),
     /// Fleet notices held by the home workspace's owner.
     Notice(NoticeVerb),
+    /// Resident mandates: authority grants and mandate reads.
+    Resident(ResidentVerb),
     /// Visual capture verbs: the implementer's mock self-check.
     Visual(VisualVerb),
 }
@@ -209,6 +212,12 @@ impl From<DrainVerb> for OrbitBuiltinAction {
 impl From<LeaseVerb> for OrbitBuiltinAction {
     fn from(verb: LeaseVerb) -> Self {
         Self::Lease(verb)
+    }
+}
+
+impl From<ResidentVerb> for OrbitBuiltinAction {
+    fn from(verb: ResidentVerb) -> Self {
+        Self::Resident(verb)
     }
 }
 

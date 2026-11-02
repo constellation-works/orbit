@@ -2,8 +2,8 @@
   "_comment": "Per-role MCP surface budgets over the canonical builtin and discovery definitions (ORB-21263). role_surface_budget fails when a role's tools or approximate tokens exceed its budget. Raising a budget is a reviewed decision: say in the PR why the role needs the extra surface. `orbit tool list --role <role>` reports the current size.",
   "default": { "max_tools": 42, "max_approx_tokens": 23000 },
   "operator": { "max_tools": 76, "max_approx_tokens": 38500 },
-  "manager": { "max_tools": 18, "max_approx_tokens": 9500 },
-  "resident": { "max_tools": 28, "max_approx_tokens": 18500 },
+  "manager": { "max_tools": 20, "max_approx_tokens": 10500 },
+  "resident": { "max_tools": 29, "max_approx_tokens": 19500 },
   "agent": { "max_tools": 33, "max_approx_tokens": 19000 },
   "reader": { "max_tools": 14, "max_approx_tokens": 7200 }
 }

@@ -249,3 +249,29 @@ pub enum ConventionTemplateError {
     #[error("{key}: {reason}")]
     Invalid { key: String, reason: String },
 }
+
+/// Why a mandate artifact is refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResidentMandateError {
+    /// The artifact is not a JSON mandate object.
+    #[error("the mandate is not valid JSON for resident.mandate/v1: {0}")]
+    Malformed(String),
+    /// The schema id is not the supported one.
+    #[error("the mandate schema must be `resident.mandate/v1`, not `{0}`")]
+    Schema(String),
+    /// A required field is empty.
+    #[error("mandate `{0}` must not be empty")]
+    Empty(&'static str),
+    /// A one-line field spans lines or is too long.
+    #[error("mandate `{0}` must be one line of at most 240 characters")]
+    NotOneLine(String),
+    /// Exit criteria count outside 1–8.
+    #[error("a mandate holds 1-8 exit criteria, not {0}")]
+    ExitCriteriaCount(usize),
+    /// A workspace is listed twice.
+    #[error("mandate workspace `{0}` is listed twice")]
+    DuplicateWorkspace(String),
+    /// The cadence floor or heartbeat is out of range.
+    #[error("{0}")]
+    Cadence(String),
+}

@@ -45,7 +45,7 @@ pub use request::{
     DecisionRequestState, DecisionResolution, DecisionRewrite, DecisionRiskTier,
     MODEL_ANSWER_ACTOR, MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO, ModelAnswerCitation,
     ModelAnswerConfirmation, ModelAnswerEnablement, ModelCitedPrecedent, PRECEDENT_ACTOR,
-    PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, current_candidate_identity,
-    decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
-    open_decision_requests,
+    PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, RESIDENT_AUTHORITY_GRANT,
+    RESIDENT_AUTHORITY_REJECT, current_candidate_identity, decision_option_answers,
+    decision_requests_from_history, is_precedent_bookkeeping, open_decision_requests,
 };

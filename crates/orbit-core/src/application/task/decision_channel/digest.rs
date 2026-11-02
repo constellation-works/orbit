@@ -136,7 +136,8 @@ impl OrbitRuntime {
                     DecisionGate::BlockTriage
                     | DecisionGate::PilotAdmission
                     | DecisionGate::AgentRequest
-                    | DecisionGate::ModelAnswerReview => {
+                    | DecisionGate::ModelAnswerReview
+                    | DecisionGate::ResidentAuthority => {
                         return Ok(());
                     }
                 };

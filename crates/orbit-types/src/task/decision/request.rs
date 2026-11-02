@@ -6,7 +6,9 @@ use crate::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT, Task,
     TaskHistoryEntry, TaskStatus, task_fields_updated_documents,
 };
-use crate::workflow::{HeldCandidate, ReviewGateHistoryNote};
+use crate::workflow::{
+    HeldCandidate, ResidentGrantRequest, ReviewGateHistoryNote, resident_authority_revision,
+};
 
 /// History event that raises a [`DecisionRequest`].
 pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
@@ -60,6 +62,11 @@ pub enum DecisionGate {
     /// keeps it and makes it precedent, `veto` re-opens the original
     /// request. The model never answers this gate.
     ModelAnswerReview,
+    /// A request to widen a resident mandate's authority, relayed by a
+    /// caller without operator authority: `grant` applies exactly the
+    /// requested addition, `reject` changes nothing. Only a human answers
+    /// it; precedent and the decision model never do.
+    ResidentAuthority,
 }
 
 impl DecisionGate {
@@ -72,6 +79,7 @@ impl DecisionGate {
             "review_approval" => Some(Self::ReviewApproval),
             "agent_request" => Some(Self::AgentRequest),
             "model_answer_review" => Some(Self::ModelAnswerReview),
+            "resident_authority" => Some(Self::ResidentAuthority),
             _ => None,
         }
     }
@@ -85,6 +93,7 @@ impl DecisionGate {
             Self::ReviewApproval => "review_approval",
             Self::AgentRequest => "agent_request",
             Self::ModelAnswerReview => "model_answer_review",
+            Self::ResidentAuthority => "resident_authority",
         }
     }
 
@@ -101,7 +110,8 @@ impl DecisionGate {
             Self::BlockTriage
             | Self::PilotAdmission
             | Self::AgentRequest
-            | Self::ModelAnswerReview => return Vec::new(),
+            | Self::ModelAnswerReview
+            | Self::ResidentAuthority => return Vec::new(),
         };
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),
@@ -126,7 +136,30 @@ impl DecisionGate {
             ),
         ]
     }
+
+    /// The two answers of a [`Self::ResidentAuthority`] request, in
+    /// presentation order. [`DecisionRequest::new`] marks both as
+    /// authority-tier.
+    pub fn resident_authority_answers() -> Vec<DecisionAnswer> {
+        vec![
+            DecisionAnswer::plain(
+                RESIDENT_AUTHORITY_GRANT,
+                "Grant",
+                "Add exactly the requested rights and workspaces to the resident's authority.",
+            ),
+            DecisionAnswer::plain(
+                RESIDENT_AUTHORITY_REJECT,
+                "Reject",
+                "Leave the resident's authority unchanged.",
+            ),
+        ]
+    }
 }
+
+/// Answer id that applies a resident grant request.
+pub const RESIDENT_AUTHORITY_GRANT: &str = "grant";
+/// Answer id that refuses a resident grant request.
+pub const RESIDENT_AUTHORITY_REJECT: &str = "reject";
 
 /// Answer id that confirms a model answer.
 pub const MODEL_ANSWER_CONFIRM: &str = "confirm";
@@ -545,6 +578,12 @@ pub enum DecisionBinding {
         /// `answered_at` of the model's resolution.
         answered_at: chrono::DateTime<chrono::Utc>,
     },
+    /// A resident grant request: current while the mandate's authority is
+    /// still at `revision`, so any authority change supersedes it.
+    ResidentAuthority {
+        /// The authority revision the request was raised against.
+        revision: u64,
+    },
 }
 
 impl DecisionBinding {
@@ -591,6 +630,7 @@ impl DecisionBinding {
                 "model_answer:{request_id}:{}",
                 answered_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
             ),
+            Self::ResidentAuthority { revision } => format!("resident_authority:{revision}"),
         }
     }
 }
@@ -884,6 +924,10 @@ pub struct DecisionRequest {
     /// Recorded when the request is answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<DecisionResolution>,
+    /// The exact addition a [`DecisionGate::ResidentAuthority`] request asks
+    /// for, with the relayed quote verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resident_grant: Option<ResidentGrantRequest>,
 }
 
 impl DecisionRequest {
@@ -927,6 +971,8 @@ impl DecisionRequest {
                     MODEL_ANSWER_VETO => DecisionRiskTier::Reversible,
                     _ => DecisionRiskTier::Unknown,
                 },
+                // Either answer is the human's call on authority.
+                DecisionGate::ResidentAuthority => DecisionRiskTier::Authority,
             };
         }
         let risk_tier = answers
@@ -952,7 +998,14 @@ impl DecisionRequest {
             expires_at: raised_at + chrono::Duration::hours(DEFAULT_DECISION_REQUEST_TTL_HOURS),
             state: DecisionRequestState::Open,
             resolution: None,
+            resident_grant: None,
         }
+    }
+
+    /// Attach the exact addition a resident grant request asks for.
+    pub fn with_resident_grant(mut self, grant: ResidentGrantRequest) -> Self {
+        self.resident_grant = Some(grant);
+        self
     }
 
     /// Fix the category at raise time for this workspace.
@@ -1160,6 +1213,7 @@ pub fn decision_requests_from_history(
         .flatten()
         .map(|entry| entry.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
     let current_candidate = current_candidate_identity(history);
+    let authority_revision = resident_authority_revision(history);
     let binding_current = |request: &DecisionRequest| {
         request.task_id == task.id
             && match &request.binding {
@@ -1186,20 +1240,34 @@ pub fn decision_requests_from_history(
                     request_id,
                     answered_at,
                 } => standing_model_answer(request_id, *answered_at),
+                // A grant request lapses with any authority change and with
+                // the mandate's end.
+                DecisionBinding::ResidentAuthority { revision } => {
+                    *revision == authority_revision
+                        && !matches!(
+                            task.status,
+                            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
+                        )
+                }
             }
     };
     let mut requests: Vec<DecisionRequest> = history
         .iter()
         .filter_map(DecisionRequest::from_entry)
         .collect();
-    // A model-answer review rides beside the request it reviews: it neither
+    // A model-answer review rides beside the request it reviews, and a
+    // resident grant request beside the assignment's other requests: neither
     // supersedes an older request on the task nor is superseded by a newer
     // one; only its own binding retires it.
+    let rides_beside = |gate: DecisionGate| {
+        matches!(
+            gate,
+            DecisionGate::ModelAnswerReview | DecisionGate::ResidentAuthority
+        )
+    };
     let task_ids: Vec<Option<String>> = requests
         .iter()
-        .map(|request| {
-            (request.gate != DecisionGate::ModelAnswerReview).then(|| request.task_id.clone())
-        })
+        .map(|request| (!rides_beside(request.gate)).then(|| request.task_id.clone()))
         .collect();
     for (index, request) in requests.iter_mut().enumerate() {
         if let Some((resolution, reopened)) = folded.get(&request.id) {
@@ -1216,7 +1284,7 @@ pub fn decision_requests_from_history(
         }
         if !binding_current(request)
             || task_revision_changed_since(request, history)
-            || (request.gate != DecisionGate::ModelAnswerReview
+            || (!rides_beside(request.gate)
                 && task_ids
                     .iter()
                     .skip(index + 1)
