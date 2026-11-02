@@ -85,11 +85,12 @@ function targetFor(view, width) {
   return { id: `${view}|dark|${width}|default`, view, width, theme: "dark", state: "default" };
 }
 
-async function measure(width, markup, { css = [] } = {}) {
+async function measure(width, markup, { css = [], prepare } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 812 } });
   try {
     await page.setContent(`<!doctype html><html><head><meta charset="utf-8"></head><body>${markup}</body></html>`);
     for (const path of css) await page.addStyleTag({ path });
+    if (prepare) await prepare(page);
     const result = await check({ page, target: targetFor("aligned-starts-fixture", width) });
     return { page, result };
   } catch (error) {
@@ -314,6 +315,179 @@ test("a displaced text start names its anchor, peer and delta", { skip: !ENABLED
     assert.equal(result.fingerprint, "ui.aligned-starts|aligned-starts-fixture|dark|800|default");
   } finally {
     await page.close();
+  }
+});
+
+const MULTILINE_FIELDS = `
+<style>
+  body { margin: 0; font: 16px/20px sans-serif; }
+  .row { display: flex; align-items: flex-start; gap: 12px; }
+  button, textarea, input, select {
+    font: 16px/20px sans-serif;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 2px;
+    border: 1px solid #000;
+  }
+</style>`;
+
+const SCROLLED_VALUE = "One\nTwo\nThree\nFour\nFive\nSix\nSeven";
+
+test("a tall textarea uses its first line, and a displaced control still fails", { skip: !ENABLED }, async () => {
+  const aligned = await measure(800, `${MULTILINE_FIELDS}
+    <div class="row" id="tall">
+      <textarea id="area" style="height:110px;width:120px;resize:none">Same</textarea>
+      <textarea id="taller" style="height:180px;width:120px;resize:none">Same</textarea>
+      <button id="button" type="button" style="height:30px">Same</button>
+      <select id="list" size="4" style="height:110px"><option>Same</option><option>Two</option><option>Three</option><option>Four</option></select>
+      <select id="multi" multiple style="height:110px"><option>Same</option><option>Two</option><option>Three</option><option>Four</option></select>
+    </div>
+    <div class="row" id="scrolled-pair">
+      <textarea id="scrolled-a" style="height:80px;width:120px;resize:none">${SCROLLED_VALUE}</textarea>
+      <textarea id="scrolled-b" style="height:80px;width:120px;resize:none">${SCROLLED_VALUE}</textarea>
+    </div>
+    <div class="row" id="unmeasured">
+      <textarea id="zero" style="height:80px;width:120px;font-size:0;line-height:0;resize:none">Same</textarea>
+      <button id="zero-button" type="button" style="height:30px">Same</button>
+    </div>`, {
+    prepare: async (page) => {
+      await page.evaluate(() => {
+        for (const id of ["#scrolled-a", "#scrolled-b"]) document.querySelector(id).scrollTop = 25;
+      });
+    },
+  });
+  try {
+    const geometry = await aligned.page.evaluate(() => {
+      const contentTop = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return rect.top + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0);
+      };
+      const centered = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        const borderTop = parseFloat(style.borderTopWidth) || 0;
+        const borderBottom = parseFloat(style.borderBottomWidth) || 0;
+        const padTop = parseFloat(style.paddingTop) || 0;
+        const padBottom = parseFloat(style.paddingBottom) || 0;
+        const top = rect.top + borderTop + padTop;
+        const contentHeight = rect.height - borderTop - borderBottom - padTop - padBottom;
+        const fontSize = parseFloat(style.fontSize) || 16;
+        let line = fontSize * 1.2;
+        if (style.lineHeight.endsWith("px")) line = parseFloat(style.lineHeight);
+        return top + Math.max(0, (contentHeight - line) / 2);
+      };
+      const area = document.querySelector("#area");
+      const scrolled = document.querySelector("#scrolled-a");
+      const list = document.querySelector("#list");
+      return {
+        areaContentTop: contentTop(area),
+        areaCentered: centered(area),
+        tallerContentTop: contentTop(document.querySelector("#taller")),
+        optionTop: list.querySelector("option").getBoundingClientRect().top,
+        multiOptionTop: document.querySelector("#multi option").getBoundingClientRect().top,
+        listCentered: centered(list),
+        scrolledTop: contentTop(scrolled) - scrolled.scrollTop,
+        scrolledContentTop: contentTop(scrolled),
+        scrollTop: scrolled.scrollTop,
+      };
+    });
+    assert.equal(aligned.result.status, "pass", JSON.stringify(aligned.result.measurements.failures));
+    const tall = rowOf(aligned.result, "tall").anchors;
+    const area = tall.find((anchor) => anchor.selector === "#area");
+    const taller = tall.find((anchor) => anchor.selector === "#taller");
+    const button = tall.find((anchor) => anchor.selector === "#button");
+    const list = tall.find((anchor) => anchor.selector === "#list");
+    const multi = tall.find((anchor) => anchor.selector === "#multi");
+    assert.ok(area && taller && button && list && multi, JSON.stringify(tall));
+    assert.equal(area.anchor_top_px, taller.anchor_top_px, JSON.stringify(tall));
+    assert.ok(Math.abs(area.anchor_top_px - Math.round(geometry.areaContentTop)) <= 1, JSON.stringify({ area, geometry }));
+    assert.ok(Math.abs(area.anchor_top_px - Math.round(geometry.tallerContentTop)) <= 1, JSON.stringify({ area, geometry }));
+    assert.ok(geometry.areaCentered - area.anchor_top_px > 20, JSON.stringify({ area, geometry }));
+    assert.ok(Math.abs(button.anchor_top_px - area.anchor_top_px) <= 8, JSON.stringify(tall));
+    assert.ok(Math.abs(list.anchor_top_px - Math.round(geometry.optionTop)) <= 1, JSON.stringify({ list, geometry }));
+    assert.ok(Math.abs(multi.anchor_top_px - Math.round(geometry.multiOptionTop)) <= 1, JSON.stringify({ multi, geometry }));
+    assert.ok(geometry.listCentered - list.anchor_top_px > 20, JSON.stringify({ list, geometry }));
+    const scrolled = rowOf(aligned.result, "scrolled-pair").anchors;
+    assert.equal(scrolled.length, 2, JSON.stringify(scrolled));
+    assert.ok(scrolled.every((anchor) => anchor.anchor_top_px === Math.round(geometry.scrolledTop)), JSON.stringify({ scrolled, geometry }));
+    assert.ok(geometry.scrolledContentTop - geometry.scrolledTop >= 20, JSON.stringify(geometry));
+    assert.equal(geometry.scrollTop, 25);
+    const zero = aligned.result.measurements.incomparable.find((item) => item.selector === "#zero" || item.column_selector === "#zero");
+    assert.ok(zero, JSON.stringify(aligned.result.measurements.incomparable));
+    assert.equal(zero.reason, "content geometry unavailable");
+  } finally {
+    await aligned.page.close();
+  }
+
+  const shifted = await measure(800, `${MULTILINE_FIELDS}
+    <div class="row" id="scroll-shift">
+      <textarea id="still" style="height:80px;width:120px;resize:none">${SCROLLED_VALUE}</textarea>
+      <textarea id="moved" style="height:80px;width:120px;resize:none">${SCROLLED_VALUE}</textarea>
+    </div>`, {
+    prepare: async (page) => {
+      await page.evaluate(() => {
+        document.querySelector("#moved").scrollTop = 25;
+      });
+    },
+  });
+  try {
+    assert.equal(shifted.result.status, "fail", JSON.stringify(shifted.result.measurements));
+    const failure = shifted.result.measurements.failures.find((item) => item.anchor_selector === "#still");
+    assert.ok(failure, JSON.stringify(shifted.result.measurements.failures));
+    assert.equal(failure.peer_selector, "#moved");
+    assert.equal(failure.kind, "control");
+    assert.ok(failure.delta_px > 8, JSON.stringify(failure));
+  } finally {
+    await shifted.page.close();
+  }
+
+  const displaced = await measure(800, `${MULTILINE_FIELDS}
+    <div class="row" id="pushed">
+      <div><textarea id="early-area" style="height:110px;width:120px;resize:none">Same</textarea></div>
+      <div style="padding-top:24px"><textarea id="late-area" style="height:110px;width:120px;resize:none">Same</textarea></div>
+    </div>`);
+  try {
+    assert.equal(displaced.result.status, "fail", JSON.stringify(displaced.result.measurements));
+    const failure = displaced.result.measurements.failures.find((item) => item.anchor_selector === "#late-area");
+    assert.ok(failure, JSON.stringify(displaced.result.measurements.failures));
+    assert.equal(failure.peer_selector, "#early-area");
+    assert.equal(failure.kind, "control");
+    assert.ok(failure.delta_px > 8, JSON.stringify(failure));
+  } finally {
+    await displaced.page.close();
+  }
+
+  const single = await measure(800, `${MULTILINE_FIELDS}
+    <div class="row" id="single">
+      <input id="field" style="height:48px;width:120px" value="Same">
+      <select id="closed" style="height:48px"><option>Same</option></select>
+      <button id="single-button" type="button" style="height:48px">Same</button>
+    </div>`);
+  try {
+    const tops = await single.page.evaluate(() => {
+      const contentTop = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return rect.top + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0);
+      };
+      return {
+        field: contentTop(document.querySelector("#field")),
+        closed: contentTop(document.querySelector("#closed")),
+      };
+    });
+    assert.equal(single.result.status, "pass", JSON.stringify(single.result.measurements.failures));
+    const row = rowOf(single.result, "single").anchors;
+    const field = row.find((anchor) => anchor.selector === "#field");
+    const closed = row.find((anchor) => anchor.selector === "#closed");
+    const button = row.find((anchor) => anchor.selector === "#single-button");
+    assert.ok(field && closed && button, JSON.stringify(row));
+    assert.ok(field.anchor_top_px - tops.field > 8, JSON.stringify({ field, tops }));
+    assert.ok(closed.anchor_top_px - tops.closed > 8, JSON.stringify({ closed, tops }));
+    assert.ok(Math.abs(field.anchor_top_px - button.anchor_top_px) <= 8, JSON.stringify(row));
+    assert.ok(Math.abs(closed.anchor_top_px - button.anchor_top_px) <= 8, JSON.stringify(row));
+  } finally {
+    await single.page.close();
   }
 });
 

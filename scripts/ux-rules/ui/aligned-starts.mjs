@@ -56,11 +56,47 @@ export async function check(ctx) {
       if (usable.length === 0) return null;
       let best = usable[0];
       for (const rect of usable) if (rect.top < best.top - 0.01) best = rect;
-      return { top: best.top, width: best.width };
+      return { top: best.top, width: best.width, height: best.height };
     }
 
-    // Native fields and graphics have no measurable text node. A field's
-    // glyphs sit in the centred line box; a graphic starts at its border box.
+    function usedLine(style) {
+      const fontSize = H.px(style.fontSize) || 16;
+      let line = fontSize * 1.2;
+      if (style.lineHeight.endsWith("px")) line = H.px(style.lineHeight);
+      else if (style.lineHeight !== "normal" && Number(style.lineHeight) > 0) line = fontSize * Number(style.lineHeight);
+      return line;
+    }
+
+    // A zero font size or a zero line height has no line box to place.
+    function lineBoxMeasurable(style) {
+      if (H.px(style.fontSize) <= 0) return false;
+      if (style.lineHeight.endsWith("px")) return H.px(style.lineHeight) > 0.5;
+      if (style.lineHeight !== "normal") {
+        const factor = Number(style.lineHeight);
+        if (Number.isFinite(factor) && factor <= 0) return false;
+      }
+      return true;
+    }
+
+    // A closed select and a text input centre one line. A textarea always
+    // stacks lines from the top, and so does a select shown as a list.
+    function multilineField(el) {
+      if (el.tagName === "TEXTAREA") return true;
+      return el.tagName === "SELECT" && (el.multiple || el.size > 1);
+    }
+
+    // Ignore a rect as tall as the control: that is the border box, not a line.
+    function measuredFieldLine(el, rect) {
+      const line = firstLine(el);
+      if (!line || !(line.height > 0.5)) return null;
+      if (rect.height > 48 && line.height > rect.height * 0.6) return null;
+      return line;
+    }
+
+    // Native fields and graphics have no author text node for a single line.
+    // A single-line field centres that line. A multiline field's first line
+    // starts at the content top and moves with scrollTop; a graphic starts
+    // at its border box.
     function replacedStart(el) {
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -71,13 +107,23 @@ export async function check(ctx) {
       const padBottom = H.px(style.paddingBottom);
       let top = rect.top;
       if (FIELD.has(el.tagName)) {
-        const contentTop = rect.top + borderTop + padTop;
-        const contentHeight = Math.max(0, rect.height - borderTop - borderBottom - padTop - padBottom);
-        const fontSize = H.px(style.fontSize) || 16;
-        let line = fontSize * 1.2;
-        if (style.lineHeight.endsWith("px")) line = H.px(style.lineHeight);
-        else if (style.lineHeight !== "normal" && Number(style.lineHeight) > 0) line = fontSize * Number(style.lineHeight);
-        top = contentTop + Math.max(0, (contentHeight - line) / 2);
+        if (multilineField(el)) {
+          const measured = measuredFieldLine(el, rect);
+          if (measured) {
+            top = measured.top;
+          } else if (el.tagName === "TEXTAREA" && lineBoxMeasurable(style) && Number.isFinite(el.scrollTop)) {
+            // getClientRects on a scrolled text block shifts the first line by
+            // scrollTop. A textarea does not expose those rects, so apply the
+            // same shift from the content top.
+            top = rect.top + borderTop + padTop - el.scrollTop;
+          } else {
+            return { unavailable: true, element: el, reason: "content geometry unavailable" };
+          }
+        } else {
+          const contentTop = rect.top + borderTop + padTop;
+          const contentHeight = Math.max(0, rect.height - borderTop - borderBottom - padTop - padBottom);
+          top = contentTop + Math.max(0, (contentHeight - usedLine(style)) / 2);
+        }
       }
       const raw = FIELD.has(el.tagName)
         ? el.value || el.placeholder || el.getAttribute("aria-label") || ""
