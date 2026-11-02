@@ -193,6 +193,75 @@ fn granted_roots_are_probed_for_existence_credentials_and_access() {
     }
 }
 
+/// A FIFO (or another non-regular kind) named as a read root is refused
+/// promptly, naming the path, instead of blocking on `File::open` for a
+/// writer that may never come. The probe runs on a thread with a bounded
+/// wait so the frozen blocking implementation fails this check instead of
+/// hanging it. A regular file replaced by a FIFO at the same path — the
+/// replacement a granted root can undergo before the run-time re-probe —
+/// is refused the same way, which also exercises the post-open type check:
+/// the non-blocking open succeeds on a FIFO and the opened handle's type
+/// is what refuses it.
+#[cfg(unix)]
+#[test]
+fn nonregular_read_roots_are_refused_promptly_without_blocking() {
+    use orbit_exec::{ScriptRootAccess, probe_script_root};
+    use std::sync::mpsc;
+
+    fn mkfifo(path: &Path) {
+        let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().into_owned())
+            .expect("fifo path has no NUL");
+        // SAFETY: `c_path` is a valid NUL-terminated path for the call.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    fn probe_bounded(root: PathBuf) -> Result<PathBuf, String> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(probe_script_root(&root, ScriptRootAccess::Read, None));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the root probe must not block on a non-regular root")
+    }
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = None;
+
+    let fifo = dir.path().join("fifo");
+    mkfifo(&fifo);
+    let refused = probe_bounded(fifo.clone()).expect_err("a FIFO read root is refused");
+    assert!(
+        refused.contains(&fifo.display().to_string())
+            && refused.contains("not a regular file or directory"),
+        "{refused}"
+    );
+
+    let socket = dir.path().join("socket");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket fixture");
+    let refused = probe_bounded(socket.clone()).expect_err("a socket read root is refused");
+    assert!(refused.contains(&socket.display().to_string()), "{refused}");
+
+    // A granted regular file replaced by a FIFO at the same path.
+    let data = dir.path().join("data");
+    std::fs::write(&data, "data").expect("data file");
+    probe_script_root(&data, ScriptRootAccess::Read, home).expect("a regular file passes");
+    std::fs::remove_file(&data).expect("remove data");
+    mkfifo(&data);
+    let refused = probe_bounded(data.clone()).expect_err("a FIFO replacement is refused");
+    assert!(
+        refused.contains(&data.display().to_string())
+            && refused.contains("not a regular file or directory"),
+        "{refused}"
+    );
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::path::Path;

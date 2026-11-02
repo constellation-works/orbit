@@ -138,6 +138,97 @@ fn a_granted_root_missing_at_run_time_refuses_before_spawn() {
     assert!(!fixture.ran_marker.exists(), "nothing ran");
 }
 
+#[cfg(unix)]
+fn mkfifo(path: &std::path::Path) {
+    let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().into_owned()).unwrap();
+    // SAFETY: `c_path` is a valid NUL-terminated path for the call.
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    assert_eq!(
+        rc,
+        0,
+        "mkfifo {}: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_grant_refuses_a_fifo_read_root_and_grants_nothing() {
+    let fixture = fixture("");
+    let fifo = fixture._root.path().join("fifo");
+    mkfifo(&fifo);
+
+    let error = fixture
+        .runtime
+        .grant_script(
+            "export",
+            &ScriptGrantOptions {
+                read_roots: vec![fifo.clone()],
+                ..Default::default()
+            },
+        )
+        .expect_err("a FIFO read root is refused at grant");
+
+    let message = error.to_string();
+    assert!(
+        message.contains(&fifo.display().to_string())
+            && message.contains("not a regular file or directory"),
+        "{message}"
+    );
+    let status = fixture
+        .runtime
+        .script_status("export")
+        .unwrap()
+        .expect("the script is listed");
+    assert_eq!(
+        status.state,
+        ScriptGrantState::Ungranted,
+        "nothing was granted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
+    let fixture = fixture("");
+    let data = fixture._root.path().join("data.txt");
+    std::fs::write(&data, "data").unwrap();
+    fixture
+        .runtime
+        .grant_script(
+            "export",
+            &ScriptGrantOptions {
+                read_roots: vec![data.clone()],
+                write_roots: vec![fixture.outbox.clone()],
+                ..Default::default()
+            },
+        )
+        .expect("an existing regular read root is granted");
+    std::fs::remove_file(&data).unwrap();
+    mkfifo(&data);
+
+    let ScriptStepRun::Refused {
+        code,
+        message,
+        record,
+    } = RuntimeHost::run_script_step(&fixture.runtime, &request())
+    else {
+        panic!("a step whose granted read root became a FIFO must refuse");
+    };
+
+    assert_eq!(code, script_refusal::ROOT_UNAVAILABLE, "{message}");
+    assert!(
+        message.contains(&data.display().to_string()),
+        "the refusal names the root: {message}"
+    );
+    assert!(
+        record.argv.is_empty() && record.profile.is_none(),
+        "refused before the profile was probed or anything spawned: {record:?}"
+    );
+    assert!(!fixture.ran_marker.exists(), "nothing ran");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn strict_containment_refuses_every_script_step_on_macos() {

@@ -62,6 +62,17 @@ pub fn probe_script_root(
     }
     let metadata = std::fs::metadata(&physical).map_err(|error| denied(label, root, &error))?;
     if metadata.is_dir() {
+        let handle = open_root_probe(&physical).map_err(|error| denied(label, root, &error))?;
+        let opened = handle
+            .metadata()
+            .map_err(|error| denied(label, root, &error))?;
+        if !opened.is_dir() {
+            return Err(format!(
+                "granted {label} {} is not a directory",
+                root.display()
+            ));
+        }
+        drop(handle);
         std::fs::read_dir(&physical)
             .and_then(|mut entries| entries.next().transpose().map(|_| ()))
             .map_err(|error| denied(label, root, &error))?;
@@ -71,12 +82,50 @@ pub fn probe_script_root(
             root.display()
         ));
     } else {
-        std::fs::File::open(&physical).map_err(|error| denied(label, root, &error))?;
+        // The open is the authority, not the metadata above: a regular
+        // file replaced by a FIFO (or another non-regular kind) between
+        // the two must be refused from the opened handle, and the
+        // non-blocking open must not wait for a FIFO writer.
+        let handle = open_root_probe(&physical).map_err(|error| denied(label, root, &error))?;
+        let opened = handle
+            .metadata()
+            .map_err(|error| denied(label, root, &error))?;
+        if opened.is_dir() {
+            return Err(format!(
+                "granted {label} {} changed type while it was probed",
+                root.display()
+            ));
+        }
+        if !opened.is_file() {
+            return Err(format!(
+                "granted {label} {} is not a regular file or directory",
+                root.display()
+            ));
+        }
     }
     if access == ScriptRootAccess::Write {
         write_probe(&physical).map_err(|error| denied(label, root, &error))?;
     }
     Ok(physical)
+}
+
+/// Open `physical` without blocking on a FIFO and without following a
+/// symlink swapped in after canonicalisation. Callers validate the type
+/// from the opened handle, so a kind swapped in between the path metadata
+/// check and this open is still refused rather than waited on.
+fn open_root_probe(physical: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(physical)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(physical)
+    }
 }
 
 /// Create and remove one uniquely named file in `dir`.
