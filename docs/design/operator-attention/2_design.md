@@ -1,7 +1,7 @@
 ---
 title: Operator Attention — Design
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 last_validated: 2026-11-01
 status: Draft
 feature: operator-attention
@@ -96,7 +96,11 @@ dashboard reading "the same feed" a later, small step.
 - **Tool**: `orbit.attention`, `read_only`, input exactly the filters in
   [attention-filters](./specs/attention-filters.md) in snake_case, output the envelope in
   [attention-item](./specs/attention-item.md#response-envelope). Seeing an item never changes
-  it; every `next` is advice.
+  it; every `next` is advice. The federated aggregator's destination hop adds one reserved
+  input, `candidate_read`, which is not a filter, has no CLI flag, and is refused for every
+  other caller ([attention-federation](./specs/attention-federation.md#candidate-read)).
+  The federation slice adds that input with the fan-out. It is not part of the public filter
+  surface the first slice ships.
 - **CLI**: `orbit attention [filters]` in the *Observe* group beside `doctor` and `log`, with
   the global `--format` / `--json` modes. Help text and errors stand alone: no source paths,
   no task or friction ids in help, and the kind names are the user-visible vocabulary.
@@ -145,8 +149,11 @@ References below; each is a proposed `ws_orbit` task tagged `operator-attention`
 4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
    fan-out and merge, unreachable hosts as items, session-binding refusal, the
    federated-mcp doc amendment, and the local doctor / drain-probe sources for
-   `host_unhealthy`. Depends on slice 1; its unreachable-host item is useful before slices 2
-   and 3 land.
+   `host_unhealthy`. The fan-out hop is the candidate read in
+   [attention-federation](./specs/attention-federation.md#candidate-read): the slice calls
+   that shape and does not merge a public page, produced by an omitted `limit`, as the
+   destination's candidate set. Depends on slice 1; its unreachable-host item is useful
+   before slices 2 and 3 land.
 
 A fifth, consumer-side slice (the orchestrator-session hook) is constellation's own task,
 [ORB-21165]; it is deliberately not filed in this repository.
