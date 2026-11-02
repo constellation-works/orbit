@@ -36,13 +36,14 @@
 //!   A passing rerun clears the failure; the same signature failing again
 //!   is **candidate**. [ORB-21586] When the rerun's own evidence (its plan
 //!   authentication or a log it reads) cannot be read for
-//!   `max_base_ci_cycles` consecutive polls, the base pass alone decides:
-//!   the failure is the candidate's and takes the repair path (or the
-//!   requeue once spent). Any other failure whose rerun evidence stays
-//!   unreadable stops in review naming the read failure; a provider
-//!   throttle keeps its paced hold. Without that pass, the landing waits for base evidence
-//!   until its configurable cycle limit or deadline; a same-signature base
-//!   failure remains **inherited**.
+//!   `max_base_ci_cycles` consecutive polls, a same-check base pass sends a
+//!   flaky failure to repair (or requeue once spent). Candidate failures keep
+//!   their candidate repair/requeue route, and inherited failures keep their
+//!   base update/wait route. Other failure classes whose rerun evidence stays
+//!   unreadable stop in review naming the read failure; a provider throttle
+//!   keeps its paced hold. Base-suspect failures awaiting a same-check base
+//!   result wait for base evidence until their cycle limit or deadline; a
+//!   same-signature base failure remains **inherited**.
 //! - **candidate**: the failed step names a diagnostic, and the base's own
 //!   jobs were read and do not explain it. The landing stops for the same
 //!   single automatic repair a conflicting base gets, with the failed step's
