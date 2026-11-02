@@ -715,7 +715,7 @@ impl OrbitRuntime {
         }
         match self.plan_completion_repair_resume(&run.run_id, &repair.marker) {
             Ok(_) => Verdict::Repair(Box::new(repair)),
-            Err(error @ OrbitError::JobValidation(_)) => {
+            Err(error) if error.job_validation_message().is_some() => {
                 Verdict::Skip("not_resumable", error.to_string())
             }
             Err(error) => Verdict::Skip("resume_unplannable", error.to_string()),

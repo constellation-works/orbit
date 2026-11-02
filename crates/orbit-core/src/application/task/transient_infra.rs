@@ -282,7 +282,7 @@ impl OrbitRuntime {
                 Ok((entry, _)) => Some(entry),
                 // Only the authentication's own refusal is final; a remote,
                 // forge or store error says nothing about the publication.
-                Err(error @ OrbitError::JobValidation(_)) => {
+                Err(error) if error.job_validation_message().is_some() => {
                     self.refuse_transient_infra_requeue(scanned, &error.to_string())?;
                     return Ok(None);
                 }

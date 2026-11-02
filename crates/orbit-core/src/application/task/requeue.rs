@@ -725,12 +725,14 @@ impl OrbitRuntime {
             let authenticated = self
                 .failure_handoff_preservation(task)
                 .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
-            return authenticated.map(Some).map_err(|error| match error {
-                OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
-                    "{refusal}. Nothing was changed. To {discard_hint}."
-                )),
-                error => error,
-            });
+            return authenticated
+                .map(Some)
+                .map_err(|error| match error.job_validation_message() {
+                    Some(refusal) => OrbitError::InvalidInput(format!(
+                        "{refusal}. Nothing was changed. To {discard_hint}."
+                    )),
+                    None => error,
+                });
         }
         // The run pushed and opened its pull request itself, then failed
         // completion and was escalated: the requeue resumes that pull request,
@@ -740,16 +742,18 @@ impl OrbitRuntime {
             let authenticated = self
                 .escalated_publication_preservation(task)
                 .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
-            return authenticated.map(Some).map_err(|error| match error {
-                OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
-                    "{refusal}. Nothing was changed. The requeue resumes the pull request its \
+            return authenticated
+                .map(Some)
+                .map_err(|error| match error.job_validation_message() {
+                    Some(refusal) => OrbitError::InvalidInput(format!(
+                        "{refusal}. Nothing was changed. The requeue resumes the pull request its \
                      run published once it is open at the recorded head with every required \
                      check passed: requeue again when they pass. If the pull request already \
                      merged, settle the task with `orbit task settle-merged`. Otherwise, \
                      {discard_hint}."
-                )),
-                error => error,
-            });
+                    )),
+                    None => error,
+                });
         }
         if self.unbound_publication(task)? {
             return Err(OrbitError::InvalidInput(format!(

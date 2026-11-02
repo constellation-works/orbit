@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{OrbitError, SourceRepairAuthorityRefusal};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
@@ -43,6 +43,11 @@ pub(super) struct RepairLink {
 
 pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
+}
+
+/// A named authority refusal; reports exactly as the [`refuse`] text it replaced.
+pub(super) fn refuse_authority(code: SourceRepairAuthorityRefusal) -> OrbitError {
+    OrbitError::SourceRepairAuthorityRefused(code)
 }
 
 pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
@@ -95,18 +100,20 @@ pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Resul
             // Key-only references are a supported persisted format. Repository
             // authority comes from the host checkpoints, origin and provider.
             if reference.url.as_deref().is_some_and(|value| value != url) {
-                return Err(refuse(
-                    "task PR association has a conflicting repository or URL",
+                return Err(refuse_authority(
+                    SourceRepairAuthorityRefusal::PrAssociationRepositoryConflict,
                 ));
             }
             associated = true;
         } else if reference.url.as_deref() == Some(url) {
-            return Err(refuse("task PR association has a conflicting number"));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::PrAssociationNumberConflict,
+            ));
         }
     }
     if !associated {
-        return Err(refuse(
-            "task PR association is missing for the authenticated publication",
+        return Err(refuse_authority(
+            SourceRepairAuthorityRefusal::PrAssociationMissing,
         ));
     }
     Ok(())
@@ -189,29 +196,32 @@ impl OrbitRuntime {
                         .as_str(),
                     ))
         {
-            return Err(refuse(
-                "publication requires unchanged explicit rework authority and current policy",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::ReworkAuthorityChanged,
             ));
         }
-        let prefix = "source, task, scope or reservation changed before source application";
         if source.state == JobRunState::Failed
             && super::inline_publication::kept_inline_publication(&state)
             && binding.superseded.is_none()
         {
-            return Err(refuse(
-                "kept inline publication requires its complete stopped lineage",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::InlineLineageMissing,
             ));
         }
         if !self.source_successor_unchanged(binding, run_id)? {
-            return Err(refuse(format!("{prefix}: newer execution changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::SuccessorChanged,
+            ));
         }
         if !self.source_owner_unchanged(&source, binding)? {
-            return Err(refuse(format!(
-                "{prefix}: original checkpoint owner changed"
-            )));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::CheckpointOwnerChanged,
+            ));
         }
         if run_evidence_digest(&source, &state, &definition)? != binding.source_digest {
-            return Err(refuse(format!("{prefix}: source evidence changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::SourceEvidenceChanged,
+            ));
         }
         if !super::adoption::admitted_task_matches(
             &task,
@@ -220,7 +230,9 @@ impl OrbitRuntime {
             record.authorized_at,
             &binding.task_digest,
         )? {
-            return Err(refuse(format!("{prefix}: task meaning changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::TaskMeaningChanged,
+            ));
         }
         if binding.schema_version != 1
             || binding.workspace_id != self.workspace_id()?
@@ -249,8 +261,8 @@ impl OrbitRuntime {
                 .iter()
                 .any(|r| digest(r).ok() == digest(&record).ok())
         {
-            return Err(refuse(
-                "source, task, scope or reservation changed before source application",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::BindingChanged,
             ));
         }
         task_pr_association(&task, &binding.pull_request, &binding.pull_request_url)?;

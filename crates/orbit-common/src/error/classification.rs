@@ -2,8 +2,8 @@ use std::path::Path;
 
 use super::{
     ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer,
-    WorkspaceClaimHeld,
+    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SourceRepairAuthorityRefusal,
+    SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -246,6 +246,28 @@ impl OrbitError {
     pub fn private_vcs_failure(&self) -> Option<&PrivateVcsFailure> {
         match self {
             Self::PrivateVcs(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// The named source-repair authority refusal, if this is one.
+    pub fn source_repair_authority_refusal(&self) -> Option<SourceRepairAuthorityRefusal> {
+        match self {
+            Self::SourceRepairAuthorityRefused(code) => Some(*code),
+            _ => None,
+        }
+    }
+
+    /// The message of a job-validation refusal: a [`Self::JobValidation`],
+    /// or a typed source-repair refusal that reports as one. Callers that
+    /// answer job-validation refusals specially use this so the typed
+    /// refusal keeps the treatment its untyped predecessor had.
+    pub fn job_validation_message(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Self::JobValidation(message) => Some(message.as_str().into()),
+            Self::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
+                Some(code.message().into())
+            }
             _ => None,
         }
     }

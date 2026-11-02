@@ -542,3 +542,86 @@ impl std::fmt::Display for DecisionRefusalCode {
         f.write_str(self.as_str())
     }
 }
+
+/// A named source-repair authority refusal, carried by
+/// [`crate::OrbitError::SourceRepairAuthorityRefused`].
+///
+/// The producer that decides the refusal attaches the code, so publication
+/// diagnostics name it without reading the rendered error. Each code keeps the
+/// exact text and error category its untyped predecessor reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRepairAuthorityRefusal {
+    /// The immutable publication admission differs from the bound one. Raised
+    /// by the engine's publication check; reports as an execution failure.
+    PublicationAdmissionChanged,
+    HostSelectorRemoved,
+    HostWideningUnreadable,
+    ReworkAuthorityChanged,
+    InlineLineageMissing,
+    SuccessorChanged,
+    CheckpointOwnerChanged,
+    SourceEvidenceChanged,
+    TaskMeaningChanged,
+    BindingChanged,
+    PrAssociationRepositoryConflict,
+    PrAssociationNumberConflict,
+    PrAssociationMissing,
+}
+
+impl SourceRepairAuthorityRefusal {
+    /// The static reason retained as a publication refusal's
+    /// `authority_refusal` evidence. Persisted: never reword it.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::PublicationAdmissionChanged => "publication admission changed",
+            Self::HostSelectorRemoved => "host-widened selector was removed",
+            Self::HostWideningUnreadable => "unreadable host selector widening",
+            Self::ReworkAuthorityChanged => {
+                "publication requires unchanged explicit rework authority and current policy"
+            }
+            Self::InlineLineageMissing => {
+                "kept inline publication requires its complete stopped lineage"
+            }
+            Self::SuccessorChanged => {
+                "source, task, scope or reservation changed before source application: newer execution changed"
+            }
+            Self::CheckpointOwnerChanged => {
+                "source, task, scope or reservation changed before source application: original checkpoint owner changed"
+            }
+            Self::SourceEvidenceChanged => {
+                "source, task, scope or reservation changed before source application: source evidence changed"
+            }
+            Self::TaskMeaningChanged => {
+                "source, task, scope or reservation changed before source application: task meaning changed"
+            }
+            Self::BindingChanged => {
+                "source, task, scope or reservation changed before source application"
+            }
+            Self::PrAssociationRepositoryConflict => {
+                "task PR association has a conflicting repository or URL"
+            }
+            Self::PrAssociationNumberConflict => "task PR association has a conflicting number",
+            Self::PrAssociationMissing => {
+                "task PR association is missing for the authenticated publication"
+            }
+        }
+    }
+
+    /// Whether this refusal reports as [`crate::OrbitError::Execution`]
+    /// rather than [`crate::OrbitError::JobValidation`].
+    pub fn reports_as_execution(self) -> bool {
+        matches!(self, Self::PublicationAdmissionChanged)
+    }
+
+    /// The message of the untyped error this refusal reports as: the reason
+    /// itself for an execution failure, otherwise the reason after the
+    /// `source repair refused: ` prefix every job-validation refusal carries.
+    pub fn message(self) -> String {
+        if self.reports_as_execution() {
+            self.reason().to_string()
+        } else {
+            format!("source repair refused: {}", self.reason())
+        }
+    }
+}

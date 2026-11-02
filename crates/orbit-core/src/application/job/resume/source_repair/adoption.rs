@@ -1,5 +1,7 @@
 //! Authenticate a stopped repair's branch adoption without reusing authority.
+use super::admission::refuse_authority;
 use super::*;
+use orbit_common::SourceRepairAuthorityRefusal;
 
 impl OrbitRuntime {
     pub(super) fn source_repair_adopted_binding(
@@ -130,15 +132,19 @@ pub(super) fn admitted_task_matches(
             && entry.at >= authorized_at
             && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
     }) {
-        let widening = orbit_types::task::ContextFilesWidening::from_entry(entry)
-            .ok_or_else(|| refuse("unreadable host selector widening"))?;
+        let widening =
+            orbit_types::task::ContextFilesWidening::from_entry(entry).ok_or_else(|| {
+                refuse_authority(SourceRepairAuthorityRefusal::HostWideningUnreadable)
+            })?;
         if widening.run_id == run_id {
             for selector in widening.selectors {
                 let index = original_task
                     .context_files
                     .iter()
                     .position(|s| s == &selector)
-                    .ok_or_else(|| refuse("host-widened selector was removed"))?;
+                    .ok_or_else(|| {
+                        refuse_authority(SourceRepairAuthorityRefusal::HostSelectorRemoved)
+                    })?;
                 original_task.context_files.remove(index);
             }
         }

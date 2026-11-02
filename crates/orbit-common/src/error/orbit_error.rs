@@ -4,7 +4,8 @@ use thiserror::Error;
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
     DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
-    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention,
+    StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -372,6 +373,14 @@ pub enum OrbitError {
         layer: StorageLayer,
         message: String,
     },
+    /// A named source-repair authority refusal. Displays, reports and
+    /// serializes exactly as the [`Self::JobValidation`] (or, for
+    /// [`SourceRepairAuthorityRefusal::PublicationAdmissionChanged`],
+    /// [`Self::Execution`]) error it stands in for; the code is attached where
+    /// the refusal is decided, so callers never read it from the text.
+    #[error("{}", source_repair_refusal_legacy_error(*.0))]
+    #[serde(untagged, serialize_with = "serialize_source_repair_refusal")]
+    SourceRepairAuthorityRefused(SourceRepairAuthorityRefusal),
 }
 
 const _: () = assert!(
@@ -411,4 +420,20 @@ fn serialize_as_storage_layer<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     OrbitError::storage(*layer, false, message).serialize(serializer)
+}
+
+/// The untyped error a source-repair authority refusal reports as.
+fn source_repair_refusal_legacy_error(code: SourceRepairAuthorityRefusal) -> OrbitError {
+    if code.reports_as_execution() {
+        OrbitError::Execution(code.message())
+    } else {
+        OrbitError::JobValidation(code.message())
+    }
+}
+
+fn serialize_source_repair_refusal<S: serde::Serializer>(
+    code: &SourceRepairAuthorityRefusal,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    source_repair_refusal_legacy_error(*code).serialize(serializer)
 }

@@ -3,8 +3,8 @@ use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
 use orbit_common::{
-    OrbitError, security::redaction::redact_all, security::release::sha256_hex,
-    text::floor_char_boundary,
+    OrbitError, SourceRepairAuthorityRefusal, security::redaction::redact_all,
+    security::release::sha256_hex, text::floor_char_boundary,
 };
 use orbit_types::{
     task::{
@@ -177,8 +177,8 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         let authority = (|| {
             let input = json!({"job_run_id":context.batch_id});
             if publication_admission(host, &input)?.as_ref() != Some(binding) {
-                return Err(OrbitError::Execution(
-                    "publication admission changed".into(),
+                return Err(OrbitError::SourceRepairAuthorityRefused(
+                    SourceRepairAuthorityRefusal::PublicationAdmissionChanged,
                 ));
             }
             if host.source_repair_admission(&context.batch_id)?.is_some() {
@@ -313,54 +313,14 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
     }
 }
 
-// Only known static validation reasons may cross this boundary. Other errors
+// Only named static refusal reasons may cross this boundary. Other errors
 // can contain task input, credentials or arbitrarily large provider data.
 fn authority_refusal_reason(error: &OrbitError) -> &'static str {
-    match error {
-        OrbitError::Execution(message) if message == "publication admission changed" => {
-            "publication admission changed"
-        }
-        OrbitError::JobValidation(message) => match message.as_str() {
-            "source repair refused: host-widened selector was removed" => {
-                "host-widened selector was removed"
-            }
-            "source repair refused: unreadable host selector widening" => {
-                "unreadable host selector widening"
-            }
-            "source repair refused: source, task, scope or reservation changed before source application: task meaning changed" => {
-                "source, task, scope or reservation changed before source application: task meaning changed"
-            }
-            "source repair refused: source, task, scope or reservation changed before source application: newer execution changed" => {
-                "source, task, scope or reservation changed before source application: newer execution changed"
-            }
-            "source repair refused: source, task, scope or reservation changed before source application: original checkpoint owner changed" => {
-                "source, task, scope or reservation changed before source application: original checkpoint owner changed"
-            }
-            "source repair refused: source, task, scope or reservation changed before source application: source evidence changed" => {
-                "source, task, scope or reservation changed before source application: source evidence changed"
-            }
-            "source repair refused: source, task, scope or reservation changed before source application" => {
-                "source, task, scope or reservation changed before source application"
-            }
-            "source repair refused: publication requires unchanged explicit rework authority and current policy" => {
-                "publication requires unchanged explicit rework authority and current policy"
-            }
-            "source repair refused: kept inline publication requires its complete stopped lineage" => {
-                "kept inline publication requires its complete stopped lineage"
-            }
-            "source repair refused: task PR association has a conflicting repository or URL" => {
-                "task PR association has a conflicting repository or URL"
-            }
-            "source repair refused: task PR association has a conflicting number" => {
-                "task PR association has a conflicting number"
-            }
-            "source repair refused: task PR association is missing for the authenticated publication" => {
-                "task PR association is missing for the authenticated publication"
-            }
-            _ => "authority validation failed (details withheld)",
-        },
-        _ => "authority validation failed (details withheld)",
-    }
+    error
+        .source_repair_authority_refusal()
+        .map_or("authority validation failed (details withheld)", |code| {
+            code.reason()
+        })
 }
 
 fn replacement_previous<'a>(push: &'a PublicationPushProof, head: &str) -> Option<&'a str> {
