@@ -3,7 +3,7 @@ summary: "Task Artifacts — Decisions"
 type: design
 title: "Task Artifacts — Decisions"
 owner: codex
-last_updated: 2026-10-10
+last_updated: 2026-11-02
 last_validated: 2026-10-11
 status: Draft
 feature: task-artifacts
@@ -373,8 +373,14 @@ The dashboard exposes orchestration metrics as a separate dimension from executo
 
 ## Task References
 
-- ORB-00093
-- ORB-00273
-- ORB-10343
+- [ORB-00273] — Bind the retired review-thread hook to the active task.
+- [ORB-10332] — Retire review-thread task surfaces and leave their legacy sidecars inert.
+- [ORB-10343] — Bound failure-history notes while retaining a command to retrieve the full durable error.
+- [ORB-10458] — Backfill design decision narratives into the former ADR store; preserve their provenance.
+- [ORB-10579] — Correct GPT pricing and cached-input accounting, cited as orchestration-cost context.
+- [ORB-10580] — Add explicit orchestration ownership to task metadata and read/write surfaces.
+- [ORB-10581] — Aggregate distinct managed invocations by task orchestrator without double-counting.
+- [ORB-10582] — Expose orchestration cost metrics separately from executor metrics in the dashboard.
+- [ORB-10721] — Give each machine a distinct task prefix and remove the old host-mode distinction.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

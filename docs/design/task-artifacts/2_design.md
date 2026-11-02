@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-23
-last_validated: 2026-10-19
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -13,7 +13,7 @@ tags: ["task-artifacts"]
 
 # Task Artifacts — Design
 
-This document describes the v2 task artifact implementation. The v2 store is the only task backend; the legacy status-directory store and its `[task] artifact_store` config gate were removed once Phase 6 began (`e9582eba`), and stale `artifact_store` keys are now rejected for every value. Sections below are prescriptive about invariants the live store maintains rather than aspirational about a target.
+This document describes the v2 task artifact implementation. The v2 store is the only task backend; the legacy status-directory store and its `[task] artifact_store` config gate were removed once Phase 6 began (`e9582eba`), and stale `artifact_store` keys are now rejected for every value. Atomic creation is complete [ORB-10466], and live full-bundle readers coordinate with lifecycle writers [ORB-11349]. Sections below are prescriptive about invariants the live store maintains rather than aspirational about a target.
 
 ---
 
@@ -73,7 +73,7 @@ relations:
   - type: resolves
     target: F2026-05-007
 context_files:
-  - file:crates/orbit-store/src/repository/task/v2_bundle.rs
+  - file:crates/orbit-store/src/repository/task/v2/crud.rs
 external_refs: []
 created_by: codex:gpt-5.5
 created_by_model: gpt-5.5   # only when the create named a full model
@@ -122,7 +122,7 @@ APIs should treat the Markdown file as the source of truth. They may offer parse
 
 JSONL appends use a single-line JSON record, append mode, flush, and file sync before success. Readers tolerate a final unterminated or invalid line as tail corruption: valid preceding rows remain readable, and repair may truncate only the corrupt tail. Sidecar rewrites use write-temp-in-same-directory, file sync, atomic rename, and parent-directory sync.
 
-V2 does not provide cross-file transactions for later mutations. A crash can leave an appended event before the envelope status update or artifact files before the manifest update. New-bundle creation is stricter: Orbit assembles and validates the entire bundle in a sibling staging directory, fsyncs it, and atomically renames the directory into its canonical path. A failed or interrupted create therefore leaves the final task path absent rather than exposing a partial bundle.
+V2 does not provide cross-file transactions for later mutations. A crash can leave an appended event before the envelope status update or artifact files before the manifest update. Live full-bundle readers hold the same per-task bundle lock as writers and therefore do not observe an in-flight lifecycle mismatch [ORB-11349]. New-bundle creation is stricter: Orbit assembles and validates the entire bundle in a sibling staging directory, fsyncs it, and atomically renames the directory into its canonical path. A failed or interrupted create therefore leaves the final task path absent rather than exposing a partial bundle.
 
 ## 5. Artifact Manifest
 
@@ -304,7 +304,7 @@ That comparison also supplies the metadata candidate selection filters and order
 
 ## 8. Crash Consistency
 
-Ordinary task updates persist artifacts before document and history changes. An
+Ordinary task updates persist artifacts before document and history changes [ORB-14345]. An
 artifact store rejection therefore leaves the task's status, document and history
 unchanged. Accepted artifacts are not rolled back if a later document or history
 write fails; this ordering does not make the combined update transactional.
@@ -433,10 +433,11 @@ Binary artifacts increase storage flexibility and require stronger validation. C
 
 ## Task References
 
-- [ORB-10332] — Retired the unused review-thread task surface and made legacy sidecars inert.
+- [ORB-10332] — Retire review-thread task surfaces and leave their legacy sidecars inert.
+- [ORB-10466] — Publish new bundles atomically and isolate unrelated reads from malformed bundles.
+- [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
+- [ORB-11364] — Expose the worker/operator image-path portability problem that artifact retrieval addresses.
 - [ORB-11365] — Added the bounded artifact read surface, image presentation classification, and the dashboard image preview.
-- [ORB-10466] — Made new-bundle publication atomic and isolated unrelated operations from malformed bundles.
-- [T20260505-12] — Designed git-orphan-branch task sync and documented the current sync-era task bundle assumptions.
-- [T20260506-11] — Removed knowledge-graph task attribution and documented why old task IDs were only local search keys.
+- [ORB-14345] — Persist artifacts before task documents and history so an artifact refusal leaves metadata unchanged.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

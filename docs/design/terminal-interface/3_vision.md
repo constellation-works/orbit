@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Vision
 owner: claude
-last_updated: 2026-08-01
-last_validated: 2026-10-18
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Accepted
 feature: terminal-interface
 doc_role: vision
@@ -58,6 +58,6 @@ Orbit's terminal output is read by humans, scripts, and the agents Orbit itself 
 
 ## Task References
 
-- [T20260411-0335] — introduced the table arrangement whose limits motivate questions 1 and 3.
+- [T20260411-0335] — Introduce the earlier dynamic full-width table arrangement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

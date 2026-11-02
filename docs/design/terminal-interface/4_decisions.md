@@ -1,7 +1,7 @@
 ---
 title: Terminal Interface — Decisions
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-11-02
 last_validated: 2026-10-10
 status: Accepted
 feature: terminal-interface
@@ -168,11 +168,13 @@ Rejected alternative: **a thread-local rather than a `OnceLock`.** Correct for c
 
 ## Task References
 
-- [T20260411-0335] — introduced the table arrangement [Borderless Tables With Truncate-to-Width Rows](#borderless-tables-with-truncate-to-width-rows) reverses.
-- [T20260427-43] — extended the duplicated color vocabulary [One Semantic Color Vocabulary, Gated at the Sink](#one-semantic-color-vocabulary-gated-at-the-sink) consolidates.
-- [ORB-10356] — made `OrbitError` `#[non_exhaustive]`, establishing the error payload shape [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) generalizes.
-- [ORB-10570] — wired the sink into color and width, the implementation [The Output Sink Is a Process Global, Not a Renderer Parameter](#the-output-sink-is-a-process-global-not-a-renderer-parameter) documents.
-- [ORB-10585] — filed [The Output Sink Is a Process Global, Not a Renderer Parameter](#the-output-sink-is-a-process-global-not-a-renderer-parameter), which [ORB-10570] could not allocate.
-- [ORB-10586] — converted every command body to return a payload and gave the renderer sole ownership of stdout ([Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) steps 2–4), superseding [The Output Sink Is a Process Global, Not a Renderer Parameter](#the-output-sink-is-a-process-global-not-a-renderer-parameter).
+- [ORB-10202] — removed the `friction` arm from both halves when the status was retired.
+- [ORB-10228] — added trusted MCP session context to the audit event JSON payload, but not to the printed line.
+- [ORB-10356] — Make OrbitError non-exhaustive and add the internal-error JSON catch-all.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-10585] — Record the interim process-global sink decision.
+- [ORB-10586] — Convert command bodies to payload returns and give the shared renderer stdout ownership.
+- [T20260411-0335] — Introduce the earlier dynamic full-width table arrangement.
+- [T20260427-43] — Extend the earlier duplicated color vocabulary for friction status.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

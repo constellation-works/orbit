@@ -2,7 +2,8 @@
 type: design
 summary: "Spec: Filesystem Profile Resolution"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-19
+last_validated: 2026-11-02
+last_updated: 2026-11-02
 ---
 
 # Spec: Filesystem Profile Resolution
@@ -61,3 +62,9 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 ## Agent Signature
 
 Last revised by codex for [ORB-14286].
+
+## Task References
+
+- [ORB-14286] — Preserve final profile-rule ordering when intersecting host modify exceptions.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

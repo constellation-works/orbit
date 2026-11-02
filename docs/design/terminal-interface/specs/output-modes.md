@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-10-26
+last_validated: 2026-11-02
+last_updated: 2026-11-02
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -78,7 +79,7 @@ Precedence, first match wins:
 
 1. ~~Introduce the sink and the global `--format`; leave every command body untouched.~~ Done [ORB-10569].
 2. ~~Route the existing per-command `--json` branches through the resolver so precedence is centralized.~~ Done [ORB-10586]. That routing now reads the global `--json` and command-local `--ops` booleans from parsed matches at any level — the same walk `--format` uses — and passes them as `OutputSink::resolve`'s `legacy_json` rung. The individual output-only `json` fields are removed.
-3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. One remaining bypass has a separate owner and is not an omission: `orbit doctor --fix-*` repair counts ([ORB-11597]). Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
+3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. Doctor repair counts are also complete: [ORB-11597] moved the notices to stderr and added structured result rows. Non-record health/status trailers remain separate work [ORB-21576]. Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
 4. ~~Once a command returns a payload, delete its inline table construction and let the renderer own it.~~ Done for every list and detail command [ORB-10586]. A command builds a `Table` and hands it back inside the payload; `Table::print` is gone, and `Table::emit` is called only by the renderer.
 5. ~~Move error output to stderr and audit exit codes.~~ Done [ORB-10570].
 
@@ -95,3 +96,15 @@ Steps 2–4 shipped together in [ORB-10586] and change three things for existing
 One deliberate deviation from §3, recorded here because it is a deviation: `--json` pretty-prints in every sink, while `--format json` pretty-prints only for a terminal. Every branch `--json` replaced called `print_pretty` unconditionally, and byte-identity for those invocations is an [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload) requirement, so the legacy rung keeps the bytes it had.
 
 The global shorthand replaces the redundant per-command fields and the registry-level switch that declared them. Streaming commands (`log tail`, `run logs --follow`) retain their JSONL behavior; their internal rendering booleans are derived from the sink, not parsed as separate flags.
+
+## Task References
+
+- [ORB-10569] — Introduce the output sink and global format selection.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-10586] — Convert command bodies to payload returns and give the shared renderer stdout ownership.
+- [ORB-11596] — Convert remaining record-output commands onto shared payload rendering.
+- [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
+- [ORB-11622] — Convert workspace initialization to shared payload rendering.
+- [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
