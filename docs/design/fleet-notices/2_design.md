@@ -16,8 +16,8 @@ related_artifacts: [ORB-21207]
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–2
-([ORB-21211], [ORB-21212]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–3
+([ORB-21211], [ORB-21212], [ORB-21213]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -98,9 +98,10 @@ tools' descriptions say which is which ([references/glossary.md](./references/gl
 
 A managed agent can always *read* notices through its brief. Posting needs the tool:
 
-- Slice 3 adds `orbit.notice.post` and `orbit.notice.show` to the tool baselines of
-  `agent_implement`, `agent_review_repair` and `final_recovery`, and `orbit.notice.close` to the
-  same baselines for closing the agent's own notice. Nothing else is granted.
+- Slice 3 (built) adds `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` to the
+  tool baselines of `agent_implement`, `agent_review_repair` and `final_recovery` for closing the
+  agent's own notice, resolved in `resolve_activity_tool_denials`/`resolve_activity_tools`.
+  Nothing else is granted.
 - When the resolved activity tools include a notice tool, the dispatcher stamps the `notice` toolset
   onto the run's own MCP server, the way explorer delegation stamps `agent-invoke`, so the agent
   sees the tool whatever the host's `machine.mcp.toolsets`.
@@ -109,7 +110,8 @@ A managed agent can always *read* notices through its brief. Posting needs the t
   evidence required, 24 h cap, per-task rate and open counts
   ([notice-authority](./specs/notice-authority.md#rights)).
 - A workspace can switch agent posting off with `notice.agent_posting = false`; the baseline then
-  omits the tools and the owner refuses agent-class posts.
+  omits the tools and the owner refuses agent-class posts and closes with
+  `notice_agent_posting_disabled`.
 
 The activity instruction for posting is short: post only when the problem is outside your task, will
 affect other agents, and you have a linked task or evidence; prefer linking the fix task; search

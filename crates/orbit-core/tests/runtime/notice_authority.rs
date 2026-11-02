@@ -16,12 +16,37 @@ const CONFIG: &str =
     "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
 
 fn runtime_at(root: &Path) -> OrbitRuntime {
+    runtime_at_config(root, CONFIG)
+}
+
+fn runtime_at_config(root: &Path, config: &str) -> OrbitRuntime {
     let global = root.join("home/.orbit");
     let orbit = root.join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&orbit).unwrap();
-    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    std::fs::write(orbit.join("config.toml"), config).unwrap();
     OrbitRuntime::from_roots(&global, &orbit).unwrap()
+}
+
+const CONFIG_NO_AGENT_POSTING: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[notice]\nagent_posting = false\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
+
+/// The effective tools of one shipped activity, resolved through its own
+/// declared disallow list.
+fn activity_effective_tools(runtime: &OrbitRuntime, activity: &str) -> Vec<String> {
+    let yaml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("assets/activities/{activity}.yaml")),
+    )
+    .unwrap();
+    let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("agent activity")
+    };
+    let denied = spec.tool_disallow_list.unwrap_or_default();
+    runtime
+        .resolve_activity_tool_denials(&[], activity, &denied)
+        .unwrap()
+        .effective_tools
 }
 
 fn session(capability: McpCapability) -> ToolSessionContext {
@@ -915,8 +940,107 @@ fn close_preserves_corroboration_committed_after_close_read() {
     assert_eq!(shown["notice"]["closed"]["cause"], "linked_task_done");
 }
 
+fn agent_posting_baseline_and_switch_govern_managed_runs() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let task = add_task(&runtime, "Posting agent's bound task");
+    let agent = agent_session(&runtime, &task);
+    let operator = session(McpCapability::Operator);
+
+    // The three agent activities carry exactly the notice write tools in
+    // their baselines; no other notice tool is granted by this slice.
+    for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
+        let effective = activity_effective_tools(&runtime, activity);
+        for tool in [
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+        ] {
+            assert!(
+                effective.iter().any(|name| name == tool),
+                "{activity} baseline must carry {tool}"
+            );
+        }
+    }
+
+    // A managed run posts through its own task, and a later prompt build's
+    // brief (what a second run sees) quotes the stored agent notice.
+    let posted = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Every agent hits the red shard",
+               "linked_task": task}),
+        &agent,
+    )
+    .unwrap();
+    assert_eq!(posted["notice"]["author"]["class"], "agent");
+    assert_eq!(posted["notice"]["author"]["task_id"], task.as_str());
+    assert_eq!(posted["notice"]["author"]["run_id"], "jrun-notice-1");
+    let id = posted["notice"]["id"].as_str().unwrap().to_string();
+    let brief = runtime
+        .notices_for_agent_input("jrun-second", "agent_implement", &json!({"task_id": task}))
+        .expect("a second run's brief carries the open notice");
+    assert_eq!(brief.block["trust"], "untrusted_data");
+    assert!(
+        brief.notices.iter().any(|entry| entry.starts_with(&id)),
+        "the brief names the agent's notice: {:?}",
+        brief.notices
+    );
+
+    // With notice.agent_posting = false the tools leave the baselines and
+    // the owner refuses agent-class posts and closes, while the operator
+    // is unaffected.
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at_config(root.path(), CONFIG_NO_AGENT_POSTING);
+    let task = add_task(&runtime, "Silenced agent's bound task");
+    let agent = agent_session(&runtime, &task);
+    for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
+        let effective = activity_effective_tools(&runtime, activity);
+        for tool in [
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+        ] {
+            assert!(
+                !effective.iter().any(|name| name == tool),
+                "{activity} baseline must omit {tool} when agent posting is off"
+            );
+        }
+    }
+    refused(
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "incident", "title": "Silenced", "linked_task": task}),
+            &agent,
+        ),
+        "notice_agent_posting_disabled",
+    );
+    let operator_notice = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "info", "title": "Operator still posts", "linked_task": task}),
+        &operator,
+    )
+    .unwrap();
+    let operator_id = operator_notice["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    refused(
+        call(
+            &runtime,
+            "orbit.notice.close",
+            json!({"id": operator_id, "reason": "done"}),
+            &agent,
+        ),
+        "notice_agent_posting_disabled",
+    );
+}
+
 crate::scenario_table!(
     notice_authority,
+    agent_posting_baseline_and_switch_govern_managed_runs,
     operator_posts_updates_and_closes_any_notice,
     orchestrator_session_posts_fleet_wide_within_its_caps,
     run_bound_agent_reports_only_about_its_task,

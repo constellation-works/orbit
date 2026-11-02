@@ -121,6 +121,65 @@ fn implement_instruction(offered: bool) -> (Value, String) {
     (envelope["instruction"].clone(), toolsets)
 }
 
+/// Dispatch `agent_implement` with `tools` as its baseline and return the
+/// MCP toolsets the provider was stamped.
+fn stamped_toolsets(tools: Vec<String>, offered: bool) -> String {
+    let temp = tempfile::tempdir().unwrap();
+    let toolsets = temp.path().join("toolsets");
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_MCP_TOOLSETS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            toolsets.display()
+        ),
+    )
+    .unwrap();
+    let (writer, _store) = build_writer(temp.path(), "notice-stamp").unwrap();
+    let host = ExploreHost {
+        cli: ScriptHost::new(fake.cli_path()),
+        offered,
+        sandbox: None,
+    };
+    let mut spec = cli_agent_loop_spec(None);
+    spec.tools = tools;
+    if offered {
+        spec.explore_instruction = Some(INSTRUCTION.to_string());
+    }
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "agent_implement",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: json!({ "prompt": "hello" }),
+        audit: writer,
+        run_id: "notice-stamp",
+        host: Some(&host),
+    });
+    assert!(outcome.unwrap().success);
+    fs::read_to_string(toolsets).expect("the provider recorded its toolsets")
+}
+
+#[test]
+fn a_notice_tool_in_the_baseline_stamps_the_notice_toolset() {
+    assert_eq!(
+        stamped_toolsets(
+            vec!["orbit.task.show".into(), "orbit.notice.post".into()],
+            false
+        ),
+        "notice",
+        "a run whose resolved tools include a notice tool gets the notice toolset on its own MCP server, independent of machine.mcp.toolsets"
+    );
+    assert_eq!(
+        stamped_toolsets(vec!["orbit.task.show".into()], false),
+        String::new(),
+        "a run without a notice tool is stamped with no toolset"
+    );
+    assert_eq!(
+        stamped_toolsets(vec!["orbit.notice.close".into()], true),
+        "agent-invoke,notice",
+        "explorer delegation and a notice tool stamp both toolsets together"
+    );
+}
+
 #[test]
 fn delegation_is_offered_only_while_the_host_enables_it() {
     assert_eq!(

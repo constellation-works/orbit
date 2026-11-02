@@ -957,6 +957,13 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, 1, 3650, "notice.retention_days"),
     },
+    notice_agent_posting: bool => bool {
+        key: "notice.agent_posting", value_type: "bool",
+        description: "Managed agents may post and close their own fleet notices through their bound task (default true). When false, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes.",
+        section: ConfigSection::Housekeeping, order: 221,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
     notice_brief_delivery: bool => bool {
         key: "notice.brief_delivery", value_type: "bool",
         description: "Quote open fleet notices into opted-in managed activities' prompts as untrusted data (default true). Independent of the MCP toolsets.",

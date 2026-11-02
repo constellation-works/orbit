@@ -797,6 +797,7 @@ established, never as a pass.
 | `notice.max_open_per_workspace` | **Advanced.** integer · **Default:** `20`<br>Open notices one workspace may hold, all poster classes (1-1000). |
 | `notice.max_open_global_per_owner` | **Advanced.** integer · **Default:** `10`<br>Open global notices across one owner host's workspaces (1-1000). |
 | `notice.max_open_per_agent_task` | **Advanced.** integer · **Default:** `2`<br>Open notices one managed task's runs may hold (1-100). |
+| `notice.agent_posting` | **Advanced.** bool · **Default:** `true`<br>Managed agents may post and close their own fleet notices through their bound task (default true). When false, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes. |
 | `notice.agent_posts_per_task_per_day` | **Advanced.** integer · **Default:** `5`<br>Posts, corroborations included, one managed task's runs may make in 24 hours (1-1000). |
 | `notice.orchestrator_posts_per_hour` | **Advanced.** integer · **Default:** `30`<br>Posts one orchestrator crew may make per hour on this owner (1-10000). |
 | `notice.retention_days` | **Advanced.** integer · **Default:** `30`<br>Days closed and expired notices stay listable before they are purged (1-3650). |

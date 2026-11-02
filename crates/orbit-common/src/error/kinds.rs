@@ -557,6 +557,7 @@ pub enum NoticeRefusalCode {
     CloseRefused,
     NotFound,
     InvalidField,
+    AgentPostingDisabled,
 }
 
 impl NoticeRefusalCode {
@@ -573,6 +574,7 @@ impl NoticeRefusalCode {
             Self::CloseRefused => "notice_close_refused",
             Self::NotFound => "notice_not_found",
             Self::InvalidField => "notice_invalid_field",
+            Self::AgentPostingDisabled => "notice_agent_posting_disabled",
         }
     }
 
@@ -587,6 +589,7 @@ impl NoticeRefusalCode {
                 | Self::ExpiryExceedsCap
                 | Self::LimitExceeded
                 | Self::CloseRefused
+                | Self::AgentPostingDisabled
         )
     }
 }

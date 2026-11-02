@@ -553,6 +553,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "notice.agent_posting": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "notice.agent_posts_per_task_per_day": {
       "scope": "built-in",
       "state": "default",
