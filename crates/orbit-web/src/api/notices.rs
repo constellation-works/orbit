@@ -110,17 +110,37 @@ fn notice_json(notice: &Notice) -> Value {
     value
 }
 
+struct ResolvedNoticeRuntimes {
+    runtimes: Vec<Arc<OrbitRuntime>>,
+    degraded: Vec<String>,
+}
+
 fn resolve_runtimes(
     state: &DashboardState,
     workspace: Option<&str>,
-) -> Result<Vec<Arc<OrbitRuntime>>, Box<Response>> {
+) -> Result<ResolvedNoticeRuntimes, Box<Response>> {
     let pinned = state.pin();
     match workspace {
-        Some("all") => Ok(pinned
-            .open_runtimes()
-            .into_iter()
-            .map(|(_, runtime)| runtime)
-            .collect()),
+        Some("all") => {
+            let mut runtimes = Vec::new();
+            let mut degraded = Vec::new();
+            // The cache is only an optimization: cold and config-invalidated
+            // homes still belong to this aggregate's pinned workspace set.
+            for entry in pinned.entries() {
+                if !entry.active {
+                    degraded.push(format!("workspace '{}' is unavailable", entry.id));
+                    continue;
+                }
+                match pinned.runtime_for(&entry.id) {
+                    Ok(runtime) => runtimes.push(runtime),
+                    Err(_) => {
+                        tracing::warn!(workspace = %entry.id, "notice list could not open workspace");
+                        degraded.push(format!("failed to open workspace '{}'", entry.id));
+                    }
+                }
+            }
+            Ok(ResolvedNoticeRuntimes { runtimes, degraded })
+        }
         other => {
             let id = match other.filter(|value| !value.is_empty()) {
                 Some(id) => id.to_string(),
@@ -137,7 +157,10 @@ fn resolve_runtimes(
             let runtime = pinned
                 .runtime_for(&id)
                 .map_err(|error| Box::new(error.into_response()))?;
-            Ok(vec![runtime])
+            Ok(ResolvedNoticeRuntimes {
+                runtimes: vec![runtime],
+                degraded: Vec::new(),
+            })
         }
     }
 }
@@ -151,8 +174,9 @@ fn resolve_runtime(
             "select one workspace to write a notice".to_string(),
         )));
     }
-    let mut runtimes = resolve_runtimes(state, workspace)?;
-    runtimes
+    let mut resolved = resolve_runtimes(state, workspace)?;
+    resolved
+        .runtimes
         .pop()
         .ok_or_else(|| Box::new(bad_request("no workspace selected".to_string())))
 }
@@ -190,13 +214,22 @@ pub(super) async fn list_notices(
     Query(query): Query<NoticesQuery>,
 ) -> Response {
     let can_write = state.operator_session();
-    let runtimes = match resolve_runtimes(&state, query.workspace.as_deref()) {
-        Ok(runtimes) => runtimes,
+    // Registry refresh and cold/config-invalidated runtime construction do
+    // filesystem and store I/O, so keep resolution on the blocking pool.
+    let resolved = blocking("resolve notice workspaces", move || {
+        Ok(resolve_runtimes(&state, query.workspace.as_deref()))
+    })
+    .await
+    .and_then(|resolved| resolved);
+    let ResolvedNoticeRuntimes {
+        runtimes,
+        mut degraded,
+    } = match resolved {
+        Ok(resolved) => resolved,
         Err(response) => return *response,
     };
     match blocking("list notices", move || {
         let mut by_id: BTreeMap<String, Notice> = BTreeMap::new();
-        let mut degraded: Vec<String> = Vec::new();
         for runtime in &runtimes {
             // Read the full effective state before choosing what to show:
             // the core listing sorts by kind and truncates at `limit`, so a
