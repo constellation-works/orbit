@@ -13,6 +13,7 @@ const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs
 const routineTriggersTest = fileURLToPath(new URL('./dashboard_operations_routine_triggers.mjs', import.meta.url));
 const scheduleStaleTest = fileURLToPath(new URL('./dashboard_operations_schedule_stale.mjs', import.meta.url));
 const relativeTimeTest = fileURLToPath(new URL('./dashboard_operations_relative_time.mjs', import.meta.url));
+const scriptsTest = fileURLToPath(new URL('./dashboard_scripts.mjs', import.meta.url));
 const feedbackHarness = `
 globalThis.review = {
   mint: async (failsReadback = false) => {
@@ -238,6 +239,7 @@ const server = http.createServer((req, res) => {
     : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
     : name === '/schedule-stale.mjs' ? { data: fs.readFileSync(scheduleStaleTest), type: 'text/javascript' }
     : name === '/relative-time.mjs' ? { data: fs.readFileSync(relativeTimeTest), type: 'text/javascript' }
+    : name === '/scripts-test.mjs' ? { data: fs.readFileSync(scriptsTest), type: 'text/javascript' }
     : name === '/feedback-timer.mjs' ? { data: fs.readFileSync(test) + '\n' + feedbackHarness, type: 'text/javascript' }
     : name === '/dock-feedback.mjs' ? { data: fs.readFileSync(test) + '\n' + dockHarness, type: 'text/javascript' }
     : dashboardFile(name);
@@ -1806,6 +1808,21 @@ try {
   await relativePage.screenshot({ path: path.join(evidence, 'auto-tasks-next-mint-dark-1440.png'), animations: 'disabled' });
   await relativePage.setViewportSize({ width: 375, height: 812 });
   await relativePage.screenshot({ path: path.join(evidence, 'auto-tasks-next-mint-dark-375.png'), animations: 'disabled' });
+  await relativePage.close();
+  // Scripts grants are visit-scoped: late success/refusal after a workspace
+  // switch (including A→B→A) never paints, and a successful POST with a failed
+  // GET keeps the grant with a separate refresh warning (ORB-21565).
+  const scriptsPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
+  scriptsPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await scriptsPage.goto(`http://127.0.0.1:${server.address().port}/#operations/scripts`);
+  await scriptsPage.addScriptTag({ type: 'module', url: '/scripts-test.mjs' });
+  await scriptsPage.waitForFunction(() => globalThis.dashboardScriptsTestsPassed || globalThis.dashboardScriptsError, undefined, { timeout: 15000 });
+  const scriptsError = await scriptsPage.evaluate(() => globalThis.dashboardScriptsError || '');
+  if (scriptsError) throw new Error(`scripts grant scope: ${scriptsError}`);
+  await scriptsPage.locator('#scripts-panel').screenshot({ path: path.join(evidence, 'scripts-grant-scope-dark-1440.png'), animations: 'disabled' });
+  await scriptsPage.setViewportSize({ width: 375, height: 812 });
+  await scriptsPage.locator('#scripts-panel').screenshot({ path: path.join(evidence, 'scripts-grant-scope-dark-375.png'), animations: 'disabled' });
+  await scriptsPage.close();
 
   // Operation mutation success expiry retains readback failure diagnostics.
   const feedbackPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
