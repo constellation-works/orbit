@@ -96,8 +96,9 @@ per request:
   current field is refused (`answer_not_applicable`) before anything is written, so the task
   stays blocked and the request open. The same card shape serves `proposed_approval` for
   pilot-warning triage, where an option approves or re-pilots the held proposed task.
-  `re_pilot` explicitly submits one pilot even without a field rewrite; pending or
-  running pilots deduplicate the request. Only the first assessment is automatic.
+  `re_pilot` explicitly submits one pilot even without a field rewrite; while a pilot is
+  pending or running, the answer is refused (`answer_not_applicable`, nothing applied, the
+  request stays open) until that pilot settles. Only the first assessment is automatic.
   Requirements edits alone never re-pilot, and delivery waits for an explicit
   assessment of edited description/criteria (`orbit task repilot <id>`,
   `orbit.task.repilot`, or task update `repilot: true`). A held warning retains
