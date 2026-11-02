@@ -333,6 +333,10 @@ const MULTILINE_FIELDS = `
 
 const SCROLLED_VALUE = "One\nTwo\nThree\nFour\nFive\nSix\nSeven";
 
+// Every line identical, so scrolling by exactly one line renders the same
+// pixels: the visible-equivalence case the hidden first line falsified.
+const REPEATED_VALUE = "Same\nSame\nSame\nSame\nSame\nSame\nSame\nSame";
+
 test("a tall textarea uses its first line, and a displaced control still fails", { skip: !ENABLED }, async () => {
   const aligned = await measure(800, `${MULTILINE_FIELDS}
     <div class="row" id="tall">
@@ -387,7 +391,11 @@ test("a tall textarea uses its first line, and a displaced control still fails",
         optionTop: list.querySelector("option").getBoundingClientRect().top,
         multiOptionTop: document.querySelector("#multi option").getBoundingClientRect().top,
         listCentered: centered(list),
-        scrolledTop: contentTop(scrolled) - scrolled.scrollTop,
+        // First line wholly inside the clip after 25px of scroll on a 20px
+        // line: the hidden original first line sits 25px above the content
+        // top, the first wholly visible line 15px below it.
+        scrolledTop: contentTop(scrolled) + (20 - (scrolled.scrollTop % 20)),
+        scrolledHiddenTop: contentTop(scrolled) - scrolled.scrollTop,
         scrolledContentTop: contentTop(scrolled),
         scrollTop: scrolled.scrollTop,
       };
@@ -411,7 +419,8 @@ test("a tall textarea uses its first line, and a displaced control still fails",
     const scrolled = rowOf(aligned.result, "scrolled-pair").anchors;
     assert.equal(scrolled.length, 2, JSON.stringify(scrolled));
     assert.ok(scrolled.every((anchor) => anchor.anchor_top_px === Math.round(geometry.scrolledTop)), JSON.stringify({ scrolled, geometry }));
-    assert.ok(geometry.scrolledContentTop - geometry.scrolledTop >= 20, JSON.stringify(geometry));
+    assert.ok(geometry.scrolledTop - geometry.scrolledHiddenTop >= 20, JSON.stringify(geometry));
+    assert.ok(geometry.scrolledTop - geometry.scrolledContentTop >= 8, JSON.stringify(geometry));
     assert.equal(geometry.scrollTop, 25);
     const zero = aligned.result.measurements.incomparable.find((item) => item.selector === "#zero" || item.column_selector === "#zero");
     assert.ok(zero, JSON.stringify(aligned.result.measurements.incomparable));
@@ -432,12 +441,15 @@ test("a tall textarea uses its first line, and a displaced control still fails",
     },
   });
   try {
+    // A partial-line scroll is a genuine displacement of the first wholly
+    // visible line (25px on a 20px line puts it 15px below the content top),
+    // unlike a whole-line scroll, which the next test shows is no displacement.
     assert.equal(shifted.result.status, "fail", JSON.stringify(shifted.result.measurements));
-    const failure = shifted.result.measurements.failures.find((item) => item.anchor_selector === "#still");
+    const failure = shifted.result.measurements.failures.find((item) => item.anchor_selector === "#moved");
     assert.ok(failure, JSON.stringify(shifted.result.measurements.failures));
-    assert.equal(failure.peer_selector, "#moved");
+    assert.equal(failure.peer_selector, "#still");
     assert.equal(failure.kind, "control");
-    assert.ok(failure.delta_px > 8, JSON.stringify(failure));
+    assert.ok(failure.delta_px > 8 && failure.delta_px < 20, JSON.stringify(failure));
   } finally {
     await shifted.page.close();
   }
@@ -488,6 +500,57 @@ test("a tall textarea uses its first line, and a displaced control still fails",
     assert.ok(Math.abs(closed.anchor_top_px - button.anchor_top_px) <= 8, JSON.stringify(row));
   } finally {
     await single.page.close();
+  }
+});
+
+test("a textarea scrolled by one whole line starts where an unscrolled one does", { skip: !ENABLED }, async () => {
+  const { page, result } = await measure(800, `${MULTILINE_FIELDS}
+    <div class="row" id="full-line">
+      <textarea id="still-full" style="height:80px;width:120px;resize:none">${REPEATED_VALUE}</textarea>
+      <textarea id="moved-full" style="height:80px;width:120px;resize:none">${REPEATED_VALUE}</textarea>
+    </div>
+    <div class="row" id="unknown-line">
+      <textarea id="unknown-scrolled" style="height:80px;width:120px;resize:none;line-height:normal">${REPEATED_VALUE}</textarea>
+      <button id="unknown-button" type="button" style="height:30px">Same</button>
+    </div>`, {
+    prepare: async (page) => {
+      await page.evaluate(() => {
+        document.querySelector("#moved-full").scrollTop = 20;
+        document.querySelector("#unknown-scrolled").scrollTop = 20;
+      });
+    },
+  });
+  try {
+    // Rendered equivalence is established independently of the rule: the two
+    // element screenshots are byte-identical, so a failure here could only
+    // come from measuring a line nothing paints.
+    const stillShot = await page.locator("#still-full").screenshot();
+    const movedShot = await page.locator("#moved-full").screenshot();
+    assert.ok(stillShot.equals(movedShot), "scrolled-by-one-line textarea does not render identically");
+    const probe = await page.evaluate(() => {
+      const moved = document.querySelector("#moved-full");
+      const style = getComputedStyle(moved);
+      const rect = moved.getBoundingClientRect();
+      return {
+        scrollTop: moved.scrollTop,
+        contentTop: rect.top + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0),
+      };
+    });
+    assert.equal(probe.scrollTop, 20, JSON.stringify(probe));
+    assert.equal(result.status, "pass", JSON.stringify(result.measurements.failures));
+    const anchors = rowOf(result, "full-line").anchors;
+    assert.equal(anchors.length, 2, JSON.stringify(anchors));
+    for (const anchor of anchors) {
+      assert.equal(anchor.anchor_top_px, Math.round(probe.contentTop), JSON.stringify({ anchor, probe }));
+    }
+    // A scrolled textarea whose used line height cannot be established
+    // (line-height: normal) is unavailable, not an invented pass member.
+    const unknown = result.measurements.incomparable.find((item) => item.selector === "#unknown-scrolled");
+    assert.ok(unknown, JSON.stringify(result.measurements.incomparable));
+    assert.equal(unknown.reason, "content geometry unavailable");
+    assert.equal(anchorsOf(result).some((anchor) => anchor.selector === "#unknown-scrolled"), false, JSON.stringify(anchorsOf(result)));
+  } finally {
+    await page.close();
   }
 });
 
