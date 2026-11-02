@@ -103,6 +103,25 @@ impl OrbitRuntime {
         })
     }
 
+    /// The workspace partition holding `id` on this machine, when a
+    /// workspace registered here owns it.
+    pub fn registered_task_workspace(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            let task: Option<Task> = match self.read_owner(id, "dependency") {
+                Ok(task) => task,
+                Err(error) if is_legacy_dependency_unavailable(&error) => None,
+                Err(error) => return Err(error),
+            };
+            // The owner read carries no partition; the binding's workspace
+            // is the workspace the owner route serves this call for.
+            return Ok(task.and_then(|_| {
+                self.worker_invocation()
+                    .map(|binding| binding.owner_workspace_id.clone())
+            }));
+        }
+        self.stores().tasks().registered_task_workspace(id)
+    }
+
     /// A dependency's history through its registered owner, or `None` when
     /// no workspace registered on this machine owns it.
     pub fn get_dependency_history(

@@ -144,9 +144,14 @@ impl FederatedMcpHost {
         Ok(json!({ "workspaces": self.probe_all_destinations(include_crews) }))
     }
 
+    /// The configured destinations, in configured order.
+    pub(super) fn destinations(&self) -> &[Destination] {
+        &self.destinations
+    }
+
     /// Probe every destination concurrently, so the list costs the slowest
     /// destination rather than the sum of all of them.
-    fn probe_all_destinations(&self, include_crews: bool) -> Vec<WorkspaceDescriptor> {
+    pub(super) fn probe_all_destinations(&self, include_crews: bool) -> Vec<WorkspaceDescriptor> {
         std::thread::scope(|scope| {
             let probes = self
                 .destinations
@@ -228,7 +233,7 @@ impl FederatedMcpHost {
     /// That precedence covers everything decidable *before* dispatch. The
     /// delivery itself runs on its own budget and, if its answer is lost, is
     /// reported as `outcome_unknown` rather than re-entering this ladder.
-    fn route_workspace_call(
+    pub(super) fn route_workspace_call(
         &self,
         name: &str,
         input: Value,
@@ -504,6 +509,11 @@ impl crate::McpHost for FederatedMcpHost {
         {
             return self.route_task_call(name, &task_id, input, session_context);
         }
+        if let Some(aggregated) =
+            self.aggregate_notice_list(name, input.clone(), session_context.clone())
+        {
+            return aggregated;
+        }
         self.route_workspace_call(name, input, session_context, false)
     }
 
@@ -666,7 +676,7 @@ fn listed_workspaces(snapshot: &DestinationSnapshot) -> String {
 /// An omitted or null `workspace` falls back to the session's. A non-string
 /// value is malformed input and is refused rather than silently replaced by
 /// the session default.
-fn workspace_selector<'a>(
+pub(super) fn workspace_selector<'a>(
     input: &'a Value,
     context: &'a ToolSessionContext,
 ) -> Result<Option<&'a str>, OrbitError> {

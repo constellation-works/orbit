@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -62,6 +62,7 @@ A destination Core that does not hold a class **refuses** tools of that class wi
 Tool class is assigned by what the tool does, not by a per-tool registry field:
 
 - task issuance, coordination-store writes, and task reads (`orbit_task_add`, `orbit.task.update`, `orbit.task.list`, `orbit.task.show`, …) → `control_plane`
+- fleet notices (`orbit.notice.post`, `orbit.notice.close`, and the workspace-scoped `orbit.notice.list` / `orbit.notice.show` reads) → `control_plane`: a notice lives in its home workspace's owner store, so a replica refuses with `capability_refused` and the gateway never redirects to the owner. The workspace-less `orbit.notice.list` is aggregated by the caller instead — one owner-local aggregate read (`all: true`) per owner machine, merged, deduplicated by id, ordered, then limited once, with each unreachable owner reported as `degraded` ([fleet-notices notice-federation](../fleet-notices/specs/notice-federation.md)).
 - anything touching runs, logs, or scheduler state → `execute`
 - discovery / list tools (`orbit_workspace_list`, …) → unclassified, not subject to `capability_refused`
 
@@ -173,5 +174,6 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-12564] — `--operator` propagates into every destination the client opens
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
+- [ORB-21214] — fleet-notice tools classified `control_plane`; workspace-less notice list aggregated per owner
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

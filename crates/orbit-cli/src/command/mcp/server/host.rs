@@ -405,9 +405,60 @@ impl ServerMcpHost {
                 return task_owner::resolve_task_owner(&self.global_root, &task_id);
             }
         }
-        let selector = Self::workspace_selector(explicit, context)
-            .ok_or_else(|| self.workspace_required(name))?;
-        RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, selector)
+        if let Some(selector) = Self::workspace_selector(explicit, context) {
+            return RegisteredRuntimeFactory::resolve_workspace_selector(
+                &self.global_root,
+                selector,
+            );
+        }
+        if self.workspace_optional_aggregate(name, input, context) {
+            return self.owner_local_selection(name);
+        }
+        Err(self.workspace_required(name))
+    }
+
+    /// A workspace-optional tool called with no selector at all: the
+    /// answering host reads every workspace homed on it, which the caller
+    /// of [`Self::call_workspace_tool`] requests by stamping `all: true`.
+    /// A worker-bound call never aggregates; its binding names its owner.
+    fn workspace_optional_aggregate(
+        &self,
+        name: &str,
+        input: &Value,
+        context: &ToolSessionContext,
+    ) -> bool {
+        context.worker_invocation.is_none()
+            && call_workspace_selector(input)
+                .ok()
+                .flatten()
+                .is_none_or(|selector| selector.trim().is_empty())
+            && Self::workspace_selector(None, context).is_none()
+            && self
+                .definition(name, context)
+                .is_ok_and(|definition| definition.rules.workspace_optional)
+    }
+
+    /// Any active owner checkout on this host: its runtime answers the
+    /// owner-local aggregate from the host-wide store, so which workspace
+    /// lends the runtime does not change the answer.
+    fn owner_local_selection(&self, name: &str) -> Result<ResolvedWorkspaceSelection, OrbitError> {
+        let registry_path =
+            orbit_registry::workspace_registry::registry_path_for(&self.global_root);
+        let registry = orbit_registry::workspace_registry::load_validated_registry_from(
+            &registry_path,
+            orbit_registry::workspace_registry::WorkspaceValidationMode::InMemory,
+        )?;
+        let owner = orbit_registry::workspace_registry::local_workspaces(&registry)
+            .find(|(workspace, checkout)| {
+                workspace.status == orbit_types::workspace::WorkspaceStatus::Active
+                    && federated::CapabilityClasses::for_checkout(workspace, checkout)
+                        .holds(federated::McpToolClass::ControlPlane)
+            })
+            .map(|(workspace, _)| workspace.id.clone());
+        let Some(workspace_id) = owner else {
+            return Err(self.workspace_required(name));
+        };
+        RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, &workspace_id)
     }
 
     pub(super) fn audit_global_failure(
@@ -437,7 +488,9 @@ impl ServerMcpHost {
         if let Some(binding) = &context.worker_invocation
             && binding.execution.machine_id == self.process_machine_id
             && binding.owner_machine_id != self.process_machine_id
-            && (name.starts_with("orbit.task.") || name.starts_with("orbit.friction."))
+            && (name.starts_with("orbit.task.")
+                || name.starts_with("orbit.friction.")
+                || name.starts_with("orbit.notice."))
         {
             let routed_name = if name == "orbit.task.artifact.put" {
                 let cwd = std::env::current_dir()?;
@@ -487,6 +540,11 @@ impl ServerMcpHost {
                 input,
                 context,
             );
+        }
+        if self.workspace_optional_aggregate(name, &input, &context)
+            && let Some(object) = input.as_object_mut()
+        {
+            object.insert("all".into(), Value::Bool(true));
         }
         let (runtime, selected) = match self.resolve_workspace_runtime(name, &input, &context) {
             Ok(resolved) => resolved,

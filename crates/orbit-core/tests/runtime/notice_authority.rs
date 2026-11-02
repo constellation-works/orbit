@@ -1038,6 +1038,138 @@ fn agent_posting_baseline_and_switch_govern_managed_runs() {
     );
 }
 
+/// A link must resolve on the home owner: a task id whose prefix this
+/// host never issued belongs to another host and is refused, as is one
+/// no workspace here holds.
+fn linked_task_this_owner_does_not_hold_is_refused() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    // Touch the local allocator so its prefix is the known one.
+    add_task(&runtime, "Local fixture");
+
+    let foreign = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Foreign link", "linked_task": "XYZ-123"}),
+        &operator,
+    );
+    let error = foreign.expect_err("a foreign task must not link");
+    assert!(error.starts_with("notice_invalid_field"), "{error}");
+    assert!(error.contains("another host"), "{error}");
+
+    refused(
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "incident", "title": "Missing link", "linked_task": "ORB-999999"}),
+            &operator,
+        ),
+        "notice_invalid_field",
+    );
+}
+
+fn runtime_at_roots(global: &Path, orbit: &Path) -> OrbitRuntime {
+    std::fs::create_dir_all(global).unwrap();
+    std::fs::create_dir_all(orbit).unwrap();
+    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    OrbitRuntime::from_roots(global, orbit).unwrap()
+}
+
+/// A notice in one workspace may link a task in another workspace the
+/// same host owns: it reads closed once that task is done, and the
+/// closure tick (the scheduler sweep's writer) stores the closure and
+/// frees the dedupe key.
+fn cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let home = runtime_at_roots(&global, &root.path().join("home-ws/.orbit"));
+    let other = runtime_at_roots(&global, &root.path().join("other-ws/.orbit"));
+    assert_ne!(
+        home.workspace_id().unwrap(),
+        other.workspace_id().unwrap(),
+        "the fixture needs two workspace partitions on one host"
+    );
+    let operator = session(McpCapability::Operator);
+
+    // Complete the linked task in the other workspace before the notice
+    // exists, so no transition writer can materialize the closure.
+    let other_root = root.path().join("other-ws").to_string_lossy().into_owned();
+    let update = |input: Value| other.run_tool("orbit.task.update", input).unwrap();
+    let task = other
+        .run_tool(
+            "orbit.task.add",
+            json!({"title": "Fix in other workspace", "description": "Fixture fix.",
+                   "acceptance_criteria": ["Fixed."], "complexity": "low",
+                   "workspace": other_root, "type": "bug", "model": "codex"}),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    update(json!({"id": task, "plan": "1. Fix it.", "model": "codex"}));
+    update(json!({"id": task, "status": "backlog", "model": "codex"}));
+    update(json!({"id": task, "status": "in_progress", "model": "codex"}));
+    update(
+        json!({"id": task, "status": "review", "execution_summary": "Fixed.", "model": "codex"}),
+    );
+    other
+        .apply_task_automation_update(
+            &task,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(orbit_types::task::TaskStatus::Done),
+                status_note: Some("completion authorized by run jrun-notice-xws".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let posted = call(
+        &home,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Cross-workspace fix", "linked_task": task}),
+        &operator,
+    )
+    .expect("a same-owner cross-workspace link is accepted");
+    assert_eq!(
+        posted["notice"]["linked_task"]["workspace_id"],
+        other.workspace_id().unwrap().as_str()
+    );
+    let id = posted["notice"]["id"].as_str().unwrap().to_string();
+
+    // Closed on read, because the linked task is done; not yet stored, so
+    // the history has no linked_task_done event.
+    let shown = call(&home, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+    assert_eq!(shown["notice"]["status"], "closed");
+    assert_eq!(shown["notice"]["closed"]["cause"], "linked_task_done");
+    assert_eq!(shown["notice"]["linked_task"]["status"], "done");
+    assert!(
+        shown["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["action"] != "linked_task_done"),
+        "{shown}"
+    );
+
+    home.run_notice_closure_tick().unwrap();
+    let shown = call(&home, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+    assert_eq!(
+        shown["history"].as_array().unwrap().last().unwrap()["action"],
+        "linked_task_done"
+    );
+
+    // The stored closure freed the dedupe key.
+    let reposted = call(
+        &home,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Cross-workspace fix", "linked_task": task}),
+        &operator,
+    )
+    .unwrap();
+    assert_eq!(reposted["outcome"], "created");
+}
+
 crate::scenario_table!(
     notice_authority,
     agent_posting_baseline_and_switch_govern_managed_runs,
@@ -1049,4 +1181,6 @@ crate::scenario_table!(
     lost_reply_retries_preserve_editor_and_corroborator_state,
     lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request,
     close_preserves_corroboration_committed_after_close_read,
+    linked_task_this_owner_does_not_hold_is_refused,
+    cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
 );

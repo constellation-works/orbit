@@ -88,12 +88,17 @@ impl NoticeStatusFilter {
 pub struct NoticeListFilter {
     pub status: NoticeStatusFilter,
     pub include_global: bool,
+    /// Read every workspace homed on this owner, not only the bound one:
+    /// the owner-local aggregate a federated fan-out issues per owner.
+    pub all_workspaces: bool,
     pub scope: Option<NoticeScope>,
     pub kinds: Vec<NoticeKind>,
     pub linked_task: Option<String>,
     pub author_class: Option<AuthorClass>,
     pub host: Option<String>,
-    pub limit: usize,
+    /// `None` returns every match; an aggregating caller applies its own
+    /// limit once, after merging the owners' answers.
+    pub limit: Option<usize>,
 }
 
 impl Default for NoticeListFilter {
@@ -101,12 +106,13 @@ impl Default for NoticeListFilter {
         Self {
             status: NoticeStatusFilter::Open,
             include_global: true,
+            all_workspaces: false,
             scope: None,
             kinds: Vec::new(),
             linked_task: None,
             author_class: None,
             host: None,
-            limit: 50,
+            limit: Some(50),
         }
     }
 }
@@ -267,7 +273,9 @@ impl OrbitRuntime {
     }
 
     /// The linked tasks of `rows` that are done, with when they last
-    /// changed, read from this workspace.
+    /// changed, resolved through this owner's registered workspaces: a link
+    /// may name a task in another workspace the same host owns, never one
+    /// on another host.
     pub(crate) fn linked_done_tasks(&self, rows: &[NoticeRow]) -> LinkedDone {
         rows.iter()
             .filter(|row| row.closed_at.is_none() && row.close_on_linked_done)
@@ -275,10 +283,26 @@ impl OrbitRuntime {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter_map(|id| {
-                let task = self.get_task(id).ok()?;
+                let task = self.notice_linked_task(id)?;
                 (task.status == TaskStatus::Done).then(|| (id.to_string(), task.updated_at))
             })
             .collect()
+    }
+
+    /// A notice's linked task as this owner holds it, in whichever of its
+    /// workspaces owns the task. `None` when no workspace on this host
+    /// holds it (deleted, or held by another host): the notice then stays
+    /// open and reports the link's status as unknown.
+    pub(crate) fn notice_linked_task(&self, id: &str) -> Option<orbit_types::task::Task> {
+        use orbit_store::RegisteredTaskResolution;
+        match self.resolve_dependency_task(id) {
+            Ok(RegisteredTaskResolution::Resolved(task)) => Some(*task),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(task = id, %error, "failed to resolve a notice's linked task");
+                None
+            }
+        }
     }
 
     /// Close a notice for `caller`, recording an audit row for the write or
@@ -426,10 +450,14 @@ impl OrbitRuntime {
     pub fn list_notices(&self, filter: &NoticeListFilter) -> Result<NoticeListing, OrbitError> {
         let workspace_id = self.workspace_id()?;
         let store = self.sqlite_store()?;
-        let rows = store.notice_rows(
-            Some(std::slice::from_ref(&workspace_id)),
-            filter.include_global,
-        )?;
+        let rows = if filter.all_workspaces {
+            store.notice_rows(None, false)?
+        } else {
+            store.notice_rows(
+                Some(std::slice::from_ref(&workspace_id)),
+                filter.include_global,
+            )?
+        };
         let now = Utc::now();
         let retention = Duration::days(i64::from(self.notice_settings().retention_days));
         let done = self.linked_done_tasks(&rows);
@@ -471,7 +499,9 @@ impl OrbitRuntime {
                 .then_with(|| right.updated_at.cmp(&left.updated_at))
                 .then_with(|| left.id.cmp(&right.id))
         });
-        notices.truncate(filter.limit.clamp(1, 200));
+        if let Some(limit) = filter.limit {
+            notices.truncate(limit.clamp(1, 200));
+        }
         Ok(NoticeListing {
             notices,
             degraded: Vec::new(),
@@ -517,10 +547,12 @@ impl OrbitRuntime {
     }
 
     fn fill_linked_status(&self, notice: &mut Notice) {
-        if let Some(linked) = notice.linked_task.as_mut()
-            && let Ok(task) = self.get_task(&linked.id)
-        {
-            linked.status = Some(task.status.to_string());
+        if let Some(linked) = notice.linked_task.as_mut() {
+            linked.status = Some(
+                self.notice_linked_task(&linked.id)
+                    .map(|task| task.status.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            );
         }
     }
 
@@ -532,6 +564,28 @@ impl OrbitRuntime {
         if let Err(error) = self.materialize_notice_closures(task_id) {
             tracing::warn!(task = task_id, %error, "failed to close notices linked to a done task");
         }
+    }
+
+    /// One sweep pass over this workspace's open notices: store the
+    /// closure of every one whose linked task — in this workspace or
+    /// another workspace this host owns — is done. The done-task
+    /// transition writer covers links it can see; this covers the rest (a
+    /// task already done when the notice was posted, a transition another
+    /// workspace's runtime made). Reads already report these notices
+    /// closed either way. Returns how many linked tasks it closed
+    /// notices for.
+    pub fn run_notice_closure_tick(&self) -> Result<usize, OrbitError> {
+        if self.coordination_write_owner().is_some() {
+            return Ok(0);
+        }
+        let workspace_id = self.workspace_id()?;
+        let store = self.sqlite_store()?;
+        let rows = store.notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?;
+        let done = self.linked_done_tasks(&rows);
+        for task_id in done.keys() {
+            self.materialize_notice_closures(task_id)?;
+        }
+        Ok(done.len())
     }
 
     fn materialize_notice_closures(&self, task_id: &str) -> Result<(), OrbitError> {

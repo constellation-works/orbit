@@ -13,6 +13,12 @@ pub struct McpToolRules {
     pub id_route: McpIdRoute,
     /// Keep the tool's own authoritative workspace selector schema verbatim.
     pub declared_workspace_selector: bool,
+    /// The selector may be omitted: the answering server then reads every
+    /// workspace it reaches (a federated session aggregates its owners; a
+    /// single-host server answers its owner-local aggregate, which the host
+    /// requests by stamping `all: true` on the call).
+    #[serde(default)]
+    pub workspace_optional: bool,
     /// Read operation supporting an adapter-owned presentation.
     pub presentation_read: Option<McpPresentationRead>,
     /// Additional input constraints and workspace taxonomy decoration.

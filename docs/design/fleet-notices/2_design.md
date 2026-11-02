@@ -16,8 +16,8 @@ related_artifacts: [ORB-21207]
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–3
-([ORB-21211], [ORB-21212], [ORB-21213]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–4
+([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214]) are built; module names for the remaining slices are placement proposals they confirm. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -47,7 +47,7 @@ client of the API and lives in its own repository.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md). No new cross-crate dependency is
 needed: every crate below already depends on the ones it would call.
 
-| Concern | Location (slices 1–3 built; the rest proposed) |
+| Concern | Location (slices 1–4 built; the rest proposed) |
 |---|---|
 | `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
 | The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
@@ -180,7 +180,7 @@ extension adds is to *withhold* new unattended work on named hosts, bounded by t
 
 ## 8. Slices
 
-Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–3 done, slice 4 in progress, slice 5 in `backlog`);
+Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–4 done, slice 5 in `backlog`);
 dependencies run top to bottom, and ids are in Task References.
 
 1. **Notice store, tools, CLI and the `notice` toolset** ([ORB-21211], done). Types; store migration and
@@ -196,7 +196,7 @@ dependencies run top to bottom, and ids are in Task References.
 3. **Managed-agent posting** ([ORB-21213], done). Activity tool baselines, toolset stamping onto the run's MCP
    server, the posting instruction, the `agent_posting` switch. Depends on 1; its end-to-end check
    (one agent posts, a second run's brief shows it) depends on 2.
-4. **Federation** ([ORB-21214], in progress). Follower writes through the owner route, routed reads, the
+4. **Federation** ([ORB-21214], done). Follower writes through the owner route, routed reads, the
    per-owner fan-out for workspace-less lists with `degraded` hosts, global aggregation, the
    closure materializer in the sweep for cross-workspace links, the federated-mcp doc amendment.
    Depends on 1; reuses attention's fan-out when [ORB-21171] has landed.

@@ -515,3 +515,150 @@ mod task_route {
         );
     }
 }
+
+mod notice_aggregation {
+    use super::*;
+
+    const OTHER_MACHINE: &str = "hm_other";
+    const DOWN_MACHINE: &str = "hm_down";
+
+    fn snapshot(
+        machine_id: &str,
+        workspaces: Vec<orbit_types::workspace::Workspace>,
+    ) -> DestinationSnapshot {
+        DestinationSnapshot {
+            crews: Default::default(),
+            machine_id: machine_id.to_string(),
+            workspaces,
+            host: Default::default(),
+        }
+    }
+
+    fn notice(id: &str, kind: &str, updated_at: &str) -> Value {
+        json!({ "id": id, "kind": kind, "updated_at": updated_at, "title": id })
+    }
+
+    fn mux() -> (FederatedMcpHost, crate::scripted_destination::CallLog) {
+        let probe = ScriptedProbe::new()
+            .answering(
+                OWNER_MACHINE,
+                snapshot(
+                    OWNER_MACHINE,
+                    vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+                ),
+            )
+            .answering(
+                OTHER_MACHINE,
+                snapshot(
+                    OTHER_MACHINE,
+                    vec![workspace("ws_other", Some(OTHER_MACHINE))],
+                ),
+            )
+            .answering(
+                REPLICA_MACHINE,
+                snapshot(
+                    REPLICA_MACHINE,
+                    vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+                ),
+            )
+            .refusing(
+                DOWN_MACHINE,
+                OrbitError::UnreachableDestination("hm_down: could not start SSH".to_string()),
+            )
+            .on_call(
+                OWNER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [
+                        notice("ntc_info", "info", "2026-11-02T09:00:00Z"),
+                        notice("ntc_incident", "incident", "2026-11-02T07:00:00Z"),
+                    ],
+                    "degraded": [],
+                })),
+            )
+            .on_call(
+                OTHER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [
+                        notice("ntc_incident", "incident", "2026-11-02T07:00:00Z"),
+                        notice("ntc_maint", "maintenance", "2026-11-02T08:00:00Z"),
+                    ],
+                    "degraded": [],
+                })),
+            );
+        let log = probe.call_log();
+        let host = FederatedMcpHost::new(
+            vec![
+                destination("orbit-owner", OWNER_MACHINE),
+                destination("orbit-other", OTHER_MACHINE),
+                destination("operator@orbit-replica", REPLICA_MACHINE),
+                destination("orbit-down", DOWN_MACHINE),
+            ],
+            Arc::new(probe),
+        );
+        (host, log)
+    }
+
+    /// A workspace-less list reads each owner once with `all: true` and no
+    /// limit, then merges: deduplicated by id, in listing order, limited
+    /// once. The reachable replica is read through its owner, never
+    /// itself; the down host degrades instead of shortening the list.
+    #[test]
+    fn workspaceless_notice_list_merges_every_owner_once() {
+        let (host, log) = mux();
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({ "limit": 2 }),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+
+        let ids: Vec<&str> = answer["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["ntc_incident", "ntc_maint"], "{answer}");
+        let degraded = answer["degraded"].as_array().unwrap();
+        assert_eq!(degraded.len(), 1, "{answer}");
+        assert!(
+            degraded[0].as_str().unwrap().contains(DOWN_MACHINE),
+            "{answer}"
+        );
+
+        let calls = log.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        for (machine, tool, arguments) in &calls {
+            assert_ne!(machine, REPLICA_MACHINE);
+            assert_eq!(tool, "orbit.notice.list");
+            assert_eq!(arguments["all"], true, "{arguments}");
+            assert!(arguments.get("limit").is_none(), "{arguments}");
+            assert!(
+                arguments["workspace"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("ws_")),
+                "{arguments}"
+            );
+        }
+    }
+
+    /// With a selector the same tool is one routed workspace read, not an
+    /// aggregation: the replica destination gets the call it was addressed
+    /// (its own core then refuses the class it does not hold).
+    #[test]
+    fn notice_list_with_a_selector_routes_to_one_workspace() {
+        let (host, log) = mux();
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({ "workspace": format!("{OWNER_MACHINE}/ws_orbit") }),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        assert_eq!(answer["notices"].as_array().unwrap().len(), 2);
+        assert_eq!(log.calls().len(), 1);
+    }
+}

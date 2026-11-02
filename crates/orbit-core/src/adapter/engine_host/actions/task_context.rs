@@ -251,7 +251,7 @@ fn read_open_notices_for_brief(
     }
     Ok(runtime
         .list_notices(&crate::application::notice::NoticeListFilter {
-            limit: 200,
+            limit: Some(200),
             ..Default::default()
         })?
         .notices)

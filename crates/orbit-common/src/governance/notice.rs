@@ -120,7 +120,7 @@ const POST_PARAMS: &[ParamSpec] = &[
     both(
         "linked_task",
         ParamType::String,
-        "Id of the task the notice is about, usually its fix. When that task is done the notice closes, unless close_on_linked_done is false.",
+        "Id of the task the notice is about, usually its fix. It must be a task this workspace's owner holds, in this or another of its workspaces. When that task is done the notice closes, unless close_on_linked_done is false.",
         CliArgKind::flag("link"),
         "Task the notice is about, usually its fix",
     ),
@@ -244,6 +244,11 @@ const CLOSE: OperationSpec<NoticeVerb> = OperationSpec {
 };
 
 const LIST_PARAMS: &[ParamSpec] = &[
+    mcp_only(
+        "all",
+        ParamType::Boolean,
+        "List notices from every workspace homed on this owner, not only the selected one. Without a limit, every match is returned.",
+    ),
     both(
         "status",
         ParamType::Enum(STATUSES),
@@ -306,7 +311,7 @@ const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.notice.list",
-    tool_description: "List fleet notices for this workspace, open ones unless status says otherwise, plus global notices homed elsewhere on this owner. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any home that could not be read. Read-only.",
+    tool_description: "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
     cli_about: "List fleet notices",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

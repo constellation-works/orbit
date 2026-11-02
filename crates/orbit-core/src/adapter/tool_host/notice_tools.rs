@@ -116,10 +116,19 @@ fn post_request(input: &OperationInput) -> Result<NoticePostRequest, OrbitError>
 
 fn list_filter(input: &OperationInput) -> Result<NoticeListFilter, OrbitError> {
     let defaults = NoticeListFilter::default();
-    let limit = input.optional_count("limit")?.unwrap_or(defaults.limit);
-    if !(1..=200).contains(&limit) {
-        return Err(invalid("`limit` must be between 1 and 200"));
-    }
+    let all_workspaces = input.optional_bool("all")?.unwrap_or(false);
+    // An owner-local aggregate read (`all: true`) without a limit returns
+    // every match; the aggregating caller limits once after the merge.
+    let limit = match input.optional_count("limit")? {
+        Some(limit) => {
+            if !(1..=200).contains(&limit) {
+                return Err(invalid("`limit` must be between 1 and 200"));
+            }
+            Some(limit)
+        }
+        None if all_workspaces => None,
+        None => defaults.limit,
+    };
     Ok(NoticeListFilter {
         status: match input.optional_string("status")? {
             Some(status) => NoticeStatusFilter::parse(&status)
@@ -129,6 +138,7 @@ fn list_filter(input: &OperationInput) -> Result<NoticeListFilter, OrbitError> {
         include_global: input
             .optional_bool("include_global")?
             .unwrap_or(defaults.include_global),
+        all_workspaces,
         scope: input
             .optional_string("scope")?
             .map(|scope| parse_scope(&scope))

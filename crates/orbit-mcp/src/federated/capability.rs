@@ -71,6 +71,12 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_pull"
         | "orbit_drain_claim_bind"
         | "orbit_drain_claim_settle"
+        // Fleet notices, including reads, answer for the home workspace's
+        // owner store only; a replica holding a copy would go stale.
+        | "orbit_notice_post"
+        | "orbit_notice_close"
+        | "orbit_notice_list"
+        | "orbit_notice_show"
         // Leases, including reads, answer for the owner's single lock state.
         | "orbit_lease_request"
         | "orbit_lease_renew"

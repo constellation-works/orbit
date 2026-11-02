@@ -105,6 +105,43 @@ impl WorkspaceDescriptor {
         self.selector.as_deref()
     }
 
+    /// The destination machine this row describes.
+    pub fn machine_id(&self) -> &str {
+        &self.machine_id
+    }
+
+    /// The destination's display identity.
+    pub fn machine_name(&self) -> &str {
+        &self.machine_name
+    }
+
+    /// The workspace's name, when the destination reported one.
+    pub fn workspace_name(&self) -> Option<&str> {
+        self.workspace
+            .as_ref()
+            .map(|workspace| workspace.name.as_str())
+    }
+
+    /// The machine that owns the reported workspace, when its record
+    /// names one — which may be another destination than the reporting
+    /// one, for a replica checkout.
+    pub fn workspace_owner_machine_id(&self) -> Option<&str> {
+        self.workspace
+            .as_ref()
+            .and_then(|workspace| workspace.owner_machine_id.as_deref())
+    }
+
+    /// Whether the destination answered its live probe for this row.
+    pub fn is_reachable(&self) -> bool {
+        self.reachability == Reachability::Reachable
+    }
+
+    /// Whether this row's workspace advertises the control-plane class, so
+    /// an owner-store read may be addressed through it.
+    pub fn holds_control_plane(&self) -> bool {
+        self.capabilities.contains(&Capability::ControlPlane)
+    }
+
     /// Attach the crew keys the destination reported for this workspace.
     pub(super) fn with_crews(mut self, crews: Map<String, Value>) -> Self {
         self.crews = crews;
