@@ -397,8 +397,32 @@ fn totals_divide_per_mandate_day_by_summed_active_days() {
     );
 }
 
+fn invalid_and_day_windows_at_tool_boundary() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    for window in ["999999999999d", "99999999d", "-5d"] {
+        let error = runtime
+            .execute_tool_command_dispatch_with_session_context(
+                "orbit.resident.metrics",
+                json!({"since": window}),
+                None,
+                None,
+                ToolEntryPoint::Mcp,
+                operator(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&error, orbit_common::OrbitError::InvalidInput(message) if message.contains(window)),
+            "expected invalid input naming {window}, got {error:?}"
+        );
+    }
+    let report = metrics(&runtime, json!({"since": "7days"}));
+    assert_eq!(report["window"]["days"], 7.0);
+}
+
 crate::scenario_table!(
     resident_metrics,
+    invalid_and_day_windows_at_tool_boundary,
     human_write_undoes_checkpoint_action_once,
     baseline_marks_underivable_measures_not_derivable,
     totals_divide_per_mandate_day_by_summed_active_days,
