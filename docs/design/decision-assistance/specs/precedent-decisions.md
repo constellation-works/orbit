@@ -13,7 +13,7 @@ tags: [decision-assistance, human-decision-channel]
 
 # Proposal: precedent-answered human decisions
 
-Status: **shadow consumer implemented and default-off** (packet, enqueue on raise, hidden seal, join export). Self-answer, notification wait, and the statistical readout are not implemented ([ORB-21089]).
+Status: **shadow consumer implemented and default-off** (packet, enqueue on raise, hidden seal, join export). Model-answer provenance, the review gate and veto are implemented with no caller ([ORB-21092]). Self-answer, notification wait, and the statistical readout are not implemented ([ORB-21089]).
 The [scope](../1_scope.md) keeps the older consumers parked. This consumer is a
 separate evaluation candidate. Its labels are real, structured human answers to
 [human decision channel](../../human-decision-channel/2_design.md) requests, not
@@ -511,7 +511,9 @@ by this design.
 2. **Model-answer provenance, review gate and veto** ([ORB-21092]). The `model`
    actor and citation, the `model_answer_review` gate, the generalised reversal,
    the digest `model_answered` section, confirmation-only precedent and corpus
-   rules. Depends on 1.
+   rules. Depends on 1. Implemented: the internal apply step answers agent
+   requests only and has no caller until slice 7; `model_answered` lists every
+   model answer whose review is still open.
 3. **Precedent-provider contract and built-in provider** ([ORB-21093]). The
    `orbit.precedent-provider/1` contract, host validation, the Orbit-history
    provider, the plugin-provider route and deterministic merge.

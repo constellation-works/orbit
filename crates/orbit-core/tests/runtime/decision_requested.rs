@@ -429,6 +429,8 @@ fn an_active_member_settles_when_its_request_is_answered() {
                     note: None,
                     answered_at: Utc::now(),
                     precedent: None,
+                    model: None,
+                    confirmation: None,
                 })
                 .ok(),
                 from_status: None,

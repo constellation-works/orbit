@@ -18,6 +18,14 @@ pub const DECISION_REOPENED_EVENT: &str = "decision_reopened";
 /// Writer label of an answer applied from an operator-approved corpus rule.
 /// It is not a human answer and the human apply path refuses it.
 pub const PRECEDENT_ACTOR: &str = "precedent";
+/// Writer label of an answer the decision model applied. It is an automation
+/// actor ([`crate::identity::is_automation_actor`]), so no guard that needs a
+/// human resolution accepts it, and the human apply path refuses it.
+pub const MODEL_ANSWER_ACTOR: &str = "model";
+/// History event a human writes when confirming a model answer through its
+/// [`DecisionGate::ModelAnswerReview`] request. The note is a
+/// [`ModelAnswerConfirmation`]; only a confirmed model answer is precedent.
+pub const DECISION_MODEL_CONFIRMED_EVENT: &str = "decision_model_confirmed";
 /// Status-note marker on the bookkeeping status moves a precedent answer
 /// and its reversal write. Those moves must not permanently supersede the
 /// request: the reversal puts the task back and the request reads open again.
@@ -48,6 +56,10 @@ pub enum DecisionGate {
     /// A multiple-choice question an agent raised on a human-crew task. An
     /// answer records the chosen option and completes the task.
     AgentRequest,
+    /// Human review of an answer the decision model applied: `confirm`
+    /// keeps it and makes it precedent, `veto` re-opens the original
+    /// request. The model never answers this gate.
+    ModelAnswerReview,
 }
 
 impl DecisionGate {
@@ -59,6 +71,7 @@ impl DecisionGate {
             "proposed_approval" => Some(Self::ProposedApproval),
             "review_approval" => Some(Self::ReviewApproval),
             "agent_request" => Some(Self::AgentRequest),
+            "model_answer_review" => Some(Self::ModelAnswerReview),
             _ => None,
         }
     }
@@ -71,6 +84,7 @@ impl DecisionGate {
             Self::ProposedApproval => "proposed_approval",
             Self::ReviewApproval => "review_approval",
             Self::AgentRequest => "agent_request",
+            Self::ModelAnswerReview => "model_answer_review",
         }
     }
 
@@ -84,14 +98,40 @@ impl DecisionGate {
                 "Approve the proposed task; it goes through task-pilot screening like a CLI approval."
             }
             Self::ReviewApproval => "Approve the task in review.",
-            Self::BlockTriage | Self::PilotAdmission | Self::AgentRequest => return Vec::new(),
+            Self::BlockTriage
+            | Self::PilotAdmission
+            | Self::AgentRequest
+            | Self::ModelAnswerReview => return Vec::new(),
         };
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),
             DecisionAnswer::plain("reject", "Reject", "Reject the task."),
         ]
     }
+
+    /// The two answers of a [`Self::ModelAnswerReview`] request, in
+    /// presentation order. [`DecisionRequest::new`] fixes their tiers:
+    /// `confirm` is routine and `veto` reversible.
+    pub fn model_answer_review_answers() -> Vec<DecisionAnswer> {
+        vec![
+            DecisionAnswer::plain(
+                MODEL_ANSWER_CONFIRM,
+                "Confirm",
+                "Keep the model's answer; it becomes precedent with you as the decider.",
+            ),
+            DecisionAnswer::plain(
+                MODEL_ANSWER_VETO,
+                "Veto",
+                "Re-open the original request and restore the task's previous status.",
+            ),
+        ]
+    }
 }
+
+/// Answer id that confirms a model answer.
+pub const MODEL_ANSWER_CONFIRM: &str = "confirm";
+/// Answer id that vetoes a model answer.
+pub const MODEL_ANSWER_VETO: &str = "veto";
 
 /// Lifecycle state of a [`DecisionRequest`]. `Superseded` and `Expired`
 /// are derived on read; only `Open` is written when a request is raised.
@@ -495,6 +535,16 @@ pub enum DecisionBinding {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         candidate: Option<String>,
     },
+    /// The model answer a [`DecisionGate::ModelAnswerReview`] request
+    /// reviews: the original request and the time the model answered it.
+    /// Current while that answer stands; a veto, reversal or later answer
+    /// supersedes the review.
+    ModelAnswer {
+        /// The model-answered request.
+        request_id: String,
+        /// `answered_at` of the model's resolution.
+        answered_at: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 impl DecisionBinding {
@@ -534,6 +584,13 @@ impl DecisionBinding {
             } => {
                 format!("task_revision:{revision}:{status}:{candidate}")
             }
+            Self::ModelAnswer {
+                request_id,
+                answered_at,
+            } => format!(
+                "model_answer:{request_id}:{}",
+                answered_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+            ),
         }
     }
 }
@@ -636,6 +693,92 @@ pub struct PrecedentCitation {
     pub previous_status: Option<TaskStatus>,
 }
 
+/// One precedent a model answer cites, as the precedent provider supplied it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelCitedPrecedent {
+    /// Provider that supplied the precedent.
+    pub provider: String,
+    /// Provider-stable precedent id.
+    pub precedent_id: String,
+    /// When the cited human decision was made.
+    pub decided_at: chrono::DateTime<chrono::Utc>,
+    /// Citation source name.
+    pub source: String,
+    /// Stable reference inside the source.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Content digest of the cited record.
+    pub digest: String,
+}
+
+/// The category enablement a model answer ran under.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelAnswerEnablement {
+    /// Operator who enabled the category.
+    pub operator: String,
+    /// The readout the enablement cites (`<task>/<artifact>`).
+    pub readout: String,
+}
+
+/// Audit fields that separate a model answer from a human one. Recorded
+/// only when `answered_by` is [`MODEL_ANSWER_ACTOR`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelAnswerCitation {
+    /// Assessment that produced the answer.
+    pub assessment_id: String,
+    /// Logical id of that assessment.
+    pub logical_id: String,
+    /// Category the request belongs to.
+    pub category: String,
+    /// Assistance policy version.
+    pub policy_version: String,
+    /// Assistance policy digest.
+    pub policy_digest: String,
+    /// Question-set version.
+    pub question_set: String,
+    /// Assistance contract version.
+    pub contract_version: String,
+    /// Adapter that served the assessment.
+    pub adapter: String,
+    /// Model identity requested.
+    pub requested_model: String,
+    /// Model identity the service returned.
+    pub returned_model: String,
+    /// Model revision epoch.
+    pub model_revision: String,
+    /// Probability of the chosen answer.
+    pub probability: f64,
+    /// The operating threshold the probability met.
+    pub threshold: f64,
+    /// Probability that the supplied precedents conflict.
+    pub conflict_probability: f64,
+    /// Precedents the answer cites.
+    pub cited_precedents: Vec<ModelCitedPrecedent>,
+    /// The enablement the answer ran under.
+    pub enablement: ModelAnswerEnablement,
+    /// Task status to restore when the answer is vetoed or reversed. The
+    /// apply step records it; any value the caller supplies is replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_status: Option<TaskStatus>,
+}
+
+// Probabilities are checked to lie in [0, 1] before an answer is applied, so
+// no stored citation holds a NaN and equality is total.
+impl Eq for ModelAnswerCitation {}
+
+/// Note body of a [`DECISION_MODEL_CONFIRMED_EVENT`]: the human who
+/// confirmed the model answer `answered_at` on `request_id`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAnswerConfirmation {
+    /// The model-answered request.
+    pub request_id: String,
+    /// `answered_at` of the confirmed model resolution.
+    pub answered_at: chrono::DateTime<chrono::Utc>,
+    /// The confirming human; the event's writer.
+    pub confirmed_by: String,
+}
+
 /// What an applied answer recorded on a [`DecisionRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecisionResolution {
@@ -660,6 +803,23 @@ pub struct DecisionResolution {
     /// Set only when `answered_by` is [`PRECEDENT_ACTOR`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precedent: Option<PrecedentCitation>,
+    /// Set only when `answered_by` is [`MODEL_ANSWER_ACTOR`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelAnswerCitation>,
+    /// The human confirmation of a model answer, derived on read from a
+    /// later [`DECISION_MODEL_CONFIRMED_EVENT`]; never written with the
+    /// answer itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<ModelAnswerConfirmation>,
+}
+
+impl DecisionResolution {
+    /// Whether an automation writer (the `precedent` rule actor, the
+    /// `model` actor or any other automation label) applied this answer.
+    pub fn is_automation_answer(&self) -> bool {
+        let actor = self.answered_by.trim();
+        actor == PRECEDENT_ACTOR || crate::identity::is_automation_actor(actor)
+    }
 }
 
 /// Note body of a [`DECISION_REOPENED_EVENT`].
@@ -762,6 +922,11 @@ impl DecisionRequest {
                     None => DecisionRiskTier::Unknown,
                 },
                 DecisionGate::AgentRequest => answer.risk_tier,
+                DecisionGate::ModelAnswerReview => match answer.id.as_str() {
+                    MODEL_ANSWER_CONFIRM => DecisionRiskTier::Routine,
+                    MODEL_ANSWER_VETO => DecisionRiskTier::Reversible,
+                    _ => DecisionRiskTier::Unknown,
+                },
             };
         }
         let risk_tier = answers
@@ -898,7 +1063,11 @@ impl DecisionRequest {
 /// answer (or its own resolution records one), `expired` once its expiry
 /// passes, and `superseded` when its binding is no longer current or a newer
 /// request for the same task follows it. At most one request per task reads
-/// as `open`. An approval ([`DecisionBinding::TaskRevision`]) is superseded
+/// as `open`, besides a [`DecisionGate::ModelAnswerReview`] request, which is
+/// current while the model answer it reviews stands and never supersedes or
+/// is superseded by another request. A [`DECISION_MODEL_CONFIRMED_EVENT`]
+/// written by a human sets the reviewed answer's derived `confirmation`. An
+/// approval ([`DecisionBinding::TaskRevision`]) is superseded
 /// for good by a description or criteria edit, status move or, for a review
 /// approval, a candidate change after its raise, so restoring the earlier
 /// state does not reopen it. A precedent answer's bookkeeping status moves
@@ -916,39 +1085,6 @@ pub fn decision_requests_from_history(
     pilot_operation: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<DecisionRequest> {
-    let block_episode = (task.status == TaskStatus::Blocked)
-        .then(|| {
-            history
-                .iter()
-                .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
-        })
-        .flatten()
-        .map(|entry| entry.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
-    let current_candidate = current_candidate_identity(history);
-    let binding_current = |request: &DecisionRequest| {
-        request.task_id == task.id
-            && match &request.binding {
-                DecisionBinding::BlockEpisode { episode } => {
-                    block_episode.as_ref() == Some(episode)
-                }
-                DecisionBinding::PilotOperation { operation_id } => {
-                    task.status == TaskStatus::Backlog
-                        && pilot_operation == Some(operation_id.as_str())
-                }
-                DecisionBinding::TaskRevision {
-                    revision,
-                    status,
-                    candidate,
-                } => {
-                    *status == task.status
-                        && (revision == &task.spec_digest()
-                            || chrono::DateTime::parse_from_rfc3339(revision)
-                                .is_ok_and(|revision| revision == task.updated_at))
-                        && (!binds_candidate(*status)
-                            || candidate.as_deref() == current_candidate.as_deref())
-                }
-            }
-    };
     // Oldest first. A later answer clears a reopen; a later reopen clears the
     // answer. Anything else leaves the latest of the two in place.
     let mut folded: std::collections::BTreeMap<String, (DecisionResolution, bool)> =
@@ -982,15 +1118,88 @@ pub fn decision_requests_from_history(
             if let Some(state) = folded.get_mut(&request_id) {
                 state.1 = true;
             }
+        } else if entry.event == DECISION_MODEL_CONFIRMED_EVENT {
+            let Some(confirmation) = entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<ModelAnswerConfirmation>(note).ok())
+            else {
+                continue;
+            };
+            if confirmation.confirmed_by != entry.by
+                || crate::identity::is_automation_actor(&entry.by)
+                || entry.by.trim() == PRECEDENT_ACTOR
+            {
+                continue;
+            }
+            if let Some((resolution, false)) = folded.get_mut(&confirmation.request_id)
+                && resolution.answered_by == MODEL_ANSWER_ACTOR
+                && resolution.answered_at == confirmation.answered_at
+            {
+                resolution.confirmation = Some(confirmation);
+            }
         }
     }
+    // A review request is current while the model answer it reviews stands:
+    // answered by the model at the bound time and not re-opened since.
+    let standing_model_answer = |request_id: &str, answered_at: chrono::DateTime<chrono::Utc>| {
+        folded
+            .get(request_id)
+            .is_some_and(|(resolution, reopened)| {
+                !reopened
+                    && resolution.answered_by == MODEL_ANSWER_ACTOR
+                    && resolution.answered_at == answered_at
+            })
+    };
+    let block_episode = (task.status == TaskStatus::Blocked)
+        .then(|| {
+            history
+                .iter()
+                .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        })
+        .flatten()
+        .map(|entry| entry.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    let current_candidate = current_candidate_identity(history);
+    let binding_current = |request: &DecisionRequest| {
+        request.task_id == task.id
+            && match &request.binding {
+                DecisionBinding::BlockEpisode { episode } => {
+                    block_episode.as_ref() == Some(episode)
+                }
+                DecisionBinding::PilotOperation { operation_id } => {
+                    task.status == TaskStatus::Backlog
+                        && pilot_operation == Some(operation_id.as_str())
+                }
+                DecisionBinding::TaskRevision {
+                    revision,
+                    status,
+                    candidate,
+                } => {
+                    *status == task.status
+                        && (revision == &task.spec_digest()
+                            || chrono::DateTime::parse_from_rfc3339(revision)
+                                .is_ok_and(|revision| revision == task.updated_at))
+                        && (!binds_candidate(*status)
+                            || candidate.as_deref() == current_candidate.as_deref())
+                }
+                DecisionBinding::ModelAnswer {
+                    request_id,
+                    answered_at,
+                } => standing_model_answer(request_id, *answered_at),
+            }
+    };
     let mut requests: Vec<DecisionRequest> = history
         .iter()
         .filter_map(DecisionRequest::from_entry)
         .collect();
-    let task_ids: Vec<String> = requests
+    // A model-answer review rides beside the request it reviews: it neither
+    // supersedes an older request on the task nor is superseded by a newer
+    // one; only its own binding retires it.
+    let task_ids: Vec<Option<String>> = requests
         .iter()
-        .map(|request| request.task_id.clone())
+        .map(|request| {
+            (request.gate != DecisionGate::ModelAnswerReview).then(|| request.task_id.clone())
+        })
         .collect();
     for (index, request) in requests.iter_mut().enumerate() {
         if let Some((resolution, reopened)) = folded.get(&request.id) {
@@ -1007,10 +1216,12 @@ pub fn decision_requests_from_history(
         }
         if !binding_current(request)
             || task_revision_changed_since(request, history)
-            || task_ids
-                .iter()
-                .skip(index + 1)
-                .any(|task_id| task_id == &request.task_id)
+            || (request.gate != DecisionGate::ModelAnswerReview
+                && task_ids
+                    .iter()
+                    .skip(index + 1)
+                    .flatten()
+                    .any(|task_id| task_id == &request.task_id))
         {
             request.state = DecisionRequestState::Superseded;
         } else if now >= request.expires_at {

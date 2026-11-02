@@ -127,12 +127,8 @@ pub struct PrecedentRetrieval {
 /// Confirmation history seam for a human review of a model resolution.
 /// The event writer and confirming human must agree. Its timestamp is the
 /// availability time, preventing a later confirmation leaking into replay.
-pub const PRECEDENT_HUMAN_CONFIRMED_EVENT: &str = "decision_model_confirmed";
+/// The confirm answer of a `model_answer_review` request writes it.
+pub const PRECEDENT_HUMAN_CONFIRMED_EVENT: &str = orbit_types::task::DECISION_MODEL_CONFIRMED_EVENT;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrecedentHumanConfirmation {
-    pub request_id: String,
-    pub answered_at: DateTime<Utc>,
-    pub confirmed_by: String,
-}
+/// Note body of [`PRECEDENT_HUMAN_CONFIRMED_EVENT`].
+pub type PrecedentHumanConfirmation = orbit_types::task::ModelAnswerConfirmation;

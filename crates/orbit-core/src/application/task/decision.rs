@@ -285,6 +285,8 @@ impl OrbitRuntime {
                     note: note.clone(),
                     answered_at: now,
                     precedent: None,
+                    model: None,
+                    confirmation: None,
                 };
                 let entry = TaskHistoryEntry {
                     at: now,
@@ -497,6 +499,10 @@ impl OrbitRuntime {
                         format!("`{other}` is not an approval answer; nothing was applied"),
                     )),
                 }
+            }
+            DecisionGate::ModelAnswerReview => {
+                self.apply_model_answer_review(request, answer_id, note, actor_label, via)?;
+                Ok(None)
             }
         }
     }
@@ -828,7 +834,10 @@ impl OrbitRuntime {
 /// Refuse an answer to `request` as it reads now: one that is not open
 /// (expired, answered or superseded) or whose answer it does not allow.
 /// Nothing is written.
-fn ensure_request_answerable(request: &DecisionRequest, answer_id: &str) -> Result<(), OrbitError> {
+pub(super) fn ensure_request_answerable(
+    request: &DecisionRequest,
+    answer_id: &str,
+) -> Result<(), OrbitError> {
     let request_id = request.id.as_str();
     match request.state {
         DecisionRequestState::Open => {}
@@ -907,7 +916,7 @@ struct TriageEdit {
 }
 
 /// The human comment an applied answer records beside its own effect.
-fn decision_comment(
+pub(super) fn decision_comment(
     request: &DecisionRequest,
     answer_id: &str,
     label: &str,

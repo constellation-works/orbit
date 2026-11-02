@@ -95,7 +95,7 @@ impl Execute for DecisionCommand {
             DecisionVerb::Reverse => {
                 let id = required(&input, "id")?;
                 let actor = operator_label(runtime);
-                let request = runtime.reverse_precedent_answer(&id, &actor)?;
+                let request = runtime.reverse_decision_answer(&id, &actor)?;
                 let value = serde_json::to_value(&request).map_err(|error| {
                     OrbitError::Execution(format!("serialize decision request: {error}"))
                 })?;
@@ -316,10 +316,44 @@ fn list_blocks(value: &Value) -> Vec<Block> {
 fn digest_blocks(value: &Value) -> Vec<Block> {
     let raised = value["raised"].as_array().map_or(0, Vec::len);
     let expiring = value["expiring"].as_array().map_or(0, Vec::len);
+    let model_answered = value["model_answered"].as_array().map_or(0, Vec::len);
     let mut blocks = vec![Block::text(format!(
-        "Digest: {raised} request(s) raised, {expiring} open request(s) expiring within 24 hours."
+        "Digest: {raised} request(s) raised, {expiring} open request(s) expiring within 24 hours, {model_answered} model answer(s) awaiting review."
     ))];
     blocks.extend(list_blocks(value));
+    if model_answered > 0 {
+        let mut table = Table::new(vec![
+            Column::new("REVIEW").fixed(),
+            Column::new("REQUEST").fixed(),
+            Column::new("TASK").fixed(),
+            Column::new("ANSWER").fixed(),
+            Column::new("PROBABILITY").fixed(),
+            Column::new("PRECEDENTS"),
+        ]);
+        for entry in value["model_answered"].as_array().into_iter().flatten() {
+            let resolution = &entry["request"]["resolution"];
+            let model = &resolution["model"];
+            let precedents = model["cited_precedents"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|precedent| precedent["precedent_id"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            table.add_row(vec![
+                text(&entry["review"]["id"]),
+                text(&entry["request"]["id"]),
+                text(&entry["request"]["task_id"]),
+                text(&resolution["answer_id"]),
+                model["probability"]
+                    .as_f64()
+                    .map(|probability| format!("{probability:.2}"))
+                    .unwrap_or_default(),
+                precedents,
+            ]);
+        }
+        blocks.push(Block::table(table));
+    }
     blocks
 }
 
@@ -368,6 +402,29 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         );
         if let Some(note) = resolution["note"].as_str() {
             let _ = write!(out, "\nnote: {note}");
+        }
+        if let Some(model) = resolution.get("model").filter(|value| !value.is_null()) {
+            let _ = write!(
+                out,
+                "\nmodel: probability {} (threshold {}), {} cited precedent(s), category {}",
+                model["probability"],
+                model["threshold"],
+                model["cited_precedents"].as_array().map_or(0, Vec::len),
+                text(&model["category"]),
+            );
+            match resolution
+                .get("confirmation")
+                .filter(|value| !value.is_null())
+            {
+                Some(confirmation) => {
+                    let _ = write!(
+                        out,
+                        "\nconfirmed by {}",
+                        text(&confirmation["confirmed_by"])
+                    );
+                }
+                None => out.push_str("\nunconfirmed model answer"),
+            }
         }
     }
     vec![Block::text(out)]

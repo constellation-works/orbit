@@ -223,13 +223,26 @@ impl OrbitRuntime {
         id: &str,
         params: TaskUpdateParams,
     ) -> Result<Task, OrbitError> {
+        self.update_task_as_decision_automation(id, params, orbit_types::task::PRECEDENT_ACTOR)
+    }
+
+    /// Apply the bookkeeping write of an automation decision answer (the
+    /// `precedent` or `model` actor) or its reversal, writing as `actor`.
+    /// Status moves carry the bookkeeping note, so a reversal that restores
+    /// the status makes the request readable as open again.
+    pub(crate) fn update_task_as_decision_automation(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        actor: &str,
+    ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.update_task_with_context(
             id,
             params,
             TaskUpdateContext {
                 status_note: Some(orbit_types::task::PRECEDENT_BOOKKEEPING_NOTE.to_string()),
-                actor_override: Some(orbit_types::task::PRECEDENT_ACTOR.to_string()),
+                actor_override: Some(actor.to_string()),
                 status_authority: StatusAuthority::Internal,
                 ..Default::default()
             },

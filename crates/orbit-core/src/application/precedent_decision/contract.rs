@@ -111,6 +111,7 @@ pub(super) fn question_text(request: &DecisionRequest) -> String {
         DecisionGate::ProposedApproval => "Should this proposed task be approved?",
         DecisionGate::ReviewApproval => "Should this task in review be approved?",
         DecisionGate::AgentRequest => "Which option answers this request?",
+        DecisionGate::ModelAnswerReview => "Should the model's answer stand?",
     }
     .to_string()
 }

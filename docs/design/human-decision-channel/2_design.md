@@ -20,9 +20,9 @@ related_artifacts: [ORB-17979, ORB-21089]
 decision-request record, the delegated-human channel that lets a transport submit a
 human's answer without becoming the human, reply authentication, the stale guard,
 the reply grammar, triggers, the digest, noise control, and compatibility. §10
-lists the ordered implementation slices, all done. §11 records the proposed
-request fields, model-answer provenance and veto path for precedent-answered
-decisions, with their own proposed slices. Code anchors were re-checked at `b32997c50`
+lists the ordered implementation slices, all done. §11 records the request
+fields, model-answer provenance and veto path for precedent-answered decisions,
+with their own slices (the first two implemented). Code anchors were re-checked at `b32997c50`
 (2026-11-01); symbols are the anchor, and line numbers that no longer sit on the
 symbol were dropped. §9 (Concerns &
 Honest Limitations) precedes §10 only because the slice list must close the doc;
@@ -80,7 +80,7 @@ the plugin stays a pure transport.
 | `topic`, `filer` | Agent-raised requests only: an exact-match structured topic (or corpus rule id) and the raising agent's writer label (the per-filer cap counts by it) |
 | `expires_at` | `raised_at + request_ttl_hours` (default 72h); the token expires with it |
 | `state` | `open` → `answered` \| `superseded` \| `expired` (§2.2) |
-| `resolution` | On `answered`: chosen answer id, `answered_by` (a human label, the `precedent` actor, or proposed the `model` actor, §11.2), channel provenance, note text, applied-at, and the precedent or model citation when not human |
+| `resolution` | On `answered`: chosen answer id, `answered_by` (a human label, the `precedent` actor, or the `model` actor, §11.2), channel provenance, note text, applied-at, and the precedent or model citation when not human |
 
 Answer ids come from the source that already owns the vocabulary, never invented
 per request:
@@ -632,13 +632,15 @@ Ordered; each slice is independently deliverable and leaves the tree shippable.
    fixture that fools forwarded verdicts is refused by core-side verification;
    the runbook walks register → rotate → revoke against the live mailbox.
 
-## 11. Proposed: precedent-answered decisions
+## 11. Precedent-answered decisions
 
 [ORB-21089] designs a decision-assistance consumer that predicts a request's
 answer from recorded human precedent and, only in enabled low-risk categories,
 answers on its own ([precedent-decisions](../decision-assistance/specs/precedent-decisions.md)).
-This section records what that consumer needs from the channel. Nothing here is
-implemented. With the consumer off, every surface above behaves as it does today.
+This section records what that consumer needs from the channel. §11.1 and
+§11.2–§11.3 are implemented; nothing yet calls the model apply step, so no request
+is model-answered until the self-answer slice (§11.4). With the consumer off,
+every surface above behaves as it does today.
 
 ### 11.1 Request options, risk tier and category
 
@@ -675,6 +677,17 @@ writer label is never a human label, and the channel's delegated-human authority
 (§3) is not used. Decision listings show a model answer as distinct from a human
 or precedent answer.
 
+As implemented ([ORB-21092]), the apply step is an internal entry point
+(`apply_model_decision_answer` in `decision_model.rs`) with no caller yet. It
+refuses, writing nothing, a request that is not open, an answer it does not
+allow, a tier other than `routine` or `reversible`, a `model_answer_review`
+request, a citation whose category differs from the request's, and a probability
+outside [0, 1]. It applies `agent_request` requests only: their effect (the
+human-crew task completes) is exactly what a veto restores. Other gates are
+refused `answer_not_applicable` until a later slice applies their effects as the
+`model` actor. The answer's status move carries the precedent bookkeeping note,
+so restoring the status re-opens the request instead of superseding it.
+
 ### 11.3 Veto digest and path
 
 A model answer raises, in the same write, a `model_answer_review` request on the
@@ -682,7 +695,7 @@ same task, with answers `confirm` (`routine`) and `veto` (`reversible`), bound t
 the original request id and its resolution time. The model never answers this
 gate. It rides the existing machinery: the `DecisionRequested` trigger, tokens,
 the stale guard, and the digest. `orbit.decision.digest` returns model answers
-since the last digest in a `model_answered` section, and the daily mail lists them
+awaiting review in a `model_answered` section, and the daily mail lists them
 for `veto <n>` / `confirm <n>` replies under the §6 grammar. The dashboard and
 `orbit decision answer` answer it like any request.
 
@@ -693,6 +706,18 @@ human. It does not undo downstream work that already started, which is why only
 `routine` and `reversible` requests qualify. `confirm` records the human's
 confirmation; only a confirmed model answer becomes a precedent or a corpus
 entry. An expired review leaves the answer standing and unconfirmed.
+
+As implemented: the review binds as `{kind: model_answer, request_id,
+answered_at}` and stays current while that model answer stands, so a veto, an
+`orbit decision reverse` or a later answer supersedes it. It neither supersedes
+nor is superseded by other requests on the task, so it can be open beside them.
+`model_answered` lists every open review with the request it reviews (each pair
+until a human answers or the review expires), and the review is left out of
+`expiring`. `confirm` writes a `decision_model_confirmed` event (the human, the
+request and the model's `answered_at`), which the built-in precedent provider
+reads as `human_confirmed`, and reads back as the resolution's derived
+`confirmation`; it then appends the corpus entry with the confirming human as the
+answerer. A model answer and the review answer append none.
 
 ### 11.4 Consulting the consumer before notifying
 
@@ -706,13 +731,14 @@ and default-off: the raise path records the request before it builds a packet,
 does not wait for a model, and does not show the prediction. The notification
 wait and self-answer are not implemented.
 
-### 11.5 Proposed slices
+### 11.5 Slices
 
-Filed as proposed `ws_orbit` tasks; the consumer spec's Phasing lists all seven.
+Filed as `ws_orbit` tasks; the consumer spec's Phasing lists all seven.
 The channel-side ones are:
 
 1. **Risk tier and category on requests** ([ORB-21091]) — §11.1.
 2. **Model-answer provenance, review gate and veto** ([ORB-21092]) — §11.2–§11.3.
+   Implemented; the apply step has no caller yet.
 3. **Enablement and self-answer, including the notification wait**
    ([ORB-21097]) — §11.4.
 

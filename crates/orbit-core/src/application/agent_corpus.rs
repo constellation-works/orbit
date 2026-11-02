@@ -236,9 +236,14 @@ impl OrbitRuntime {
         request: &DecisionRequest,
         resolution: &DecisionResolution,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
-        // A precedent answer is not a human answer and must not enter the
-        // entries outbox. The rule proposal is a separate pull request.
-        if resolution.answered_by == orbit_types::task::PRECEDENT_ACTOR {
+        // A precedent or model answer is not a human answer and must not
+        // enter the entries outbox; the rule proposal is a separate pull
+        // request, and a model answer appends only once a human confirms it,
+        // with that human as the answerer. A model-answer review decides
+        // nothing about the work, so it appends nothing itself.
+        if resolution.is_automation_answer()
+            || request.gate == orbit_types::task::DecisionGate::ModelAnswerReview
+        {
             return Ok(None);
         }
         let Some(index) = self
