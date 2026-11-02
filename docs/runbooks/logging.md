@@ -189,7 +189,7 @@ separate file because it is not the JSONL tracing sink:
 ~/.orbit/logs/sweep.log
 ```
 
-Two behaviors keep it bounded on an always-on host [ORB-00423]:
+These behaviors keep it bounded on an always-on host [ORB-00423]:
 
 - `orbit sweep` prints only fires, retries, baselines, errors, and a one-line heartbeat when
   nothing was due; `--verbose` restores one row per routine.
