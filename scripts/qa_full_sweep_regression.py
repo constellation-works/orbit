@@ -646,7 +646,11 @@ def self_test():
             "else if (mode === 'ux-skipped') test('ux browser case executes', { skip: true }, () => {});\n"
             "else if (mode === 'ux-missing') test('renamed browser case', () => {});\n"
             "else if (mode === 'ux-failed') test('ux browser case executes', () => { throw new Error('genuine failure'); });\n"
-            "else if (mode === 'ux-launch-failed') test('ux browser case executes', (t) => { t.skip('Chromium launch failed'); });\n")
+            "else if (mode === 'ux-launch-failed') test('ux browser case executes', (t) => { t.skip('Chromium launch failed'); });\n"
+            "else if (mode === 'ux-truncated') {\n"
+            "  test('ux browser case executes', { skip: true }, () => {});\n"
+            "  test('large diagnostics', () => console.log('x'.repeat(1_048_576 + 64)));\n"
+            "}\n")
         ux = {"id": "ux-measurement-browser", "required": True, "capability": "browser", "kind": "command",
               "command": ["node", "--test", "--test-reporter=tap", "ux-fixture.mjs"],
               "assertions": ["ux-browser-case-executed"], "required_cases": ["ux browser case executes"],
@@ -657,7 +661,7 @@ def self_test():
         assert ux_row["executed_cases"] == ["mock case runs without a browser", "ux browser case executes"], ux_row
         assert ux_row["retained_evidence"]["files"], ux_row
         for mode, expected in [("ux-skipped", "NOT_RUN"), ("ux-launch-failed", "NOT_RUN"),
-                               ("ux-missing", "FAIL"), ("ux-failed", "FAIL")]:
+                               ("ux-missing", "FAIL"), ("ux-failed", "FAIL"), ("ux-truncated", "FAIL")]:
             report = sweep([ux], mode, browser_args)
             ux_row = row(report, "ux-measurement-browser")
             assert report["decision"] == "INCOMPLETE" and ux_row["outcome"] == expected, (mode, ux_row)
@@ -669,6 +673,21 @@ def self_test():
                 assert "did not execute the required browser cases" in ux_row["stderr"], ux_row
             if mode == "ux-failed":
                 assert ux_row["exit_code"] != 0 and ux_row["failed_cases"] == ["ux browser case executes"], ux_row
+            if mode == "ux-truncated":
+                assert ux_row["exit_code"] == 0 and ux_row["output_truncated"], ux_row
+                assert "command output was truncated" in ux_row["stderr"], ux_row
+        # A capability skip cannot hide a second required case that disappeared.
+        report = sweep([{**ux, "required_cases": ["ux browser case executes", "absent browser case"]}],
+                       "ux-skipped", browser_args)
+        ux_row = row(report, "ux-measurement-browser")
+        assert report["decision"] == "INCOMPLETE" and ux_row["outcome"] == "FAIL", report
+        assert ux_row["exit_code"] == 0 and not ux_row["assertions"], ux_row
+        assert "did not execute the required browser cases: ['absent browser case']" in ux_row["stderr"], ux_row
+        assert ux_row["skipped_cases"] == ["ux browser case executes"], ux_row
+        retained = Path(ux_row["retained_evidence"]["directory"]) / "harness-result.json"
+        raw = json.loads(retained.read_text())
+        assert raw["exit_code"] == 0 and raw["stdout"] == ux_row["stdout"], raw
+        assert "ux browser case executes # SKIP" in raw["stdout"], raw
         report = sweep([ux], "ux-executed")
         assert row(report, "ux-measurement-browser")["outcome"] == "NOT_RUN", report
         assert report["decision"] == "INCOMPLETE", report
