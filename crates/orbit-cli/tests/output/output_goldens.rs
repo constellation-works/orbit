@@ -649,6 +649,8 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.notice.close", Placement::Advertised),
     ("orbit.notice.post", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `resident` toolset.
+    ("orbit.resident.grant", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     // Script grants are reached via `orbit script grant|revoke`; phase 1
     // registers no MCP tool for them, so the governed rows exist to make
@@ -750,11 +752,15 @@ fn authorization_matrix_matches_live_registry() {
         .iter()
         .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
     {
-        if operation.id.starts_with("orbit.lease.") || operation.id.starts_with("orbit.notice.") {
-            // Interactive agents coordinate their own paths and post their
-            // own notices. Lease and notice governance is an identity floor,
-            // while owner placement, lease policy and the poster class core
-            // derives constrain their requests.
+        if operation.id.starts_with("orbit.lease.")
+            || operation.id.starts_with("orbit.notice.")
+            || operation.id == "orbit.resident.grant"
+        {
+            // Interactive agents coordinate their own paths, post their own
+            // notices and relay or narrow a resident's authority. That
+            // governance is an identity floor, while owner placement, lease
+            // policy, the poster class and the operator-only widening rule
+            // core derives constrain their requests.
             let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
             assert!(
                 authorize(operation, &unidentified).is_err(),

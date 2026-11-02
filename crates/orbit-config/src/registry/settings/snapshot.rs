@@ -91,6 +91,9 @@ pub struct NoticeSettings {
     pub orchestrator_posts_per_hour: u32,
     /// `notice.retention_days` (default 30).
     pub retention_days: u32,
+    /// `notice.agent_posting` (default `true`): managed agents may post
+    /// and close their own notices through their bound task.
+    pub agent_posting: bool,
     /// `notice.brief_delivery` (default `true`): quote open notices into
     /// opted-in activities' prompts as untrusted data.
     pub brief_delivery: bool,
@@ -137,6 +140,7 @@ impl Default for NoticeSettings {
             agent_posts_per_task_per_day: 5,
             orchestrator_posts_per_hour: 30,
             retention_days: 30,
+            agent_posting: true,
             brief_delivery: true,
             brief_max_items: 5,
             brief_body_chars: 600,
@@ -603,6 +607,7 @@ impl ConfigSnapshot {
             agent_posts_per_task_per_day: self.notice_agent_posts_per_task_per_day,
             orchestrator_posts_per_hour: self.notice_orchestrator_posts_per_hour,
             retention_days: self.notice_retention_days,
+            agent_posting: self.notice_agent_posting,
             brief_delivery: self.notice_brief_delivery,
             brief_max_items: self.notice_brief_max_items,
             brief_body_chars: self.notice_brief_body_chars,
@@ -692,8 +697,6 @@ impl ConfigSnapshot {
                 ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
             }),
             commit_body: text("commit.body_template", &self.commit_body_template),
-            planned_by_trailer: self.commit_planned_by_trailer,
-            implemented_by_trailer: self.commit_implemented_by_trailer,
             orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
             regression_trailers: self.commit_regression_trailers,
             branch_name: self

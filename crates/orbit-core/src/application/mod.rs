@@ -43,6 +43,7 @@ pub mod notice;
 pub mod plugin;
 pub mod precedent_decision;
 pub(crate) mod pull_drain;
+pub mod resident;
 pub mod review;
 pub mod routines;
 pub(crate) mod search;

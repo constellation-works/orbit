@@ -553,11 +553,25 @@ pub(super) fn dispatch_prepared_provider(
         fs_profile,
     ));
     // A run offered explorer delegation gets `orbit.agent.invoke` on its
-    // nested MCP server, which a default server does not advertise.
+    // nested MCP server, which a default server does not advertise. A run
+    // whose resolved tools include a fleet-notice tool likewise gets the
+    // `notice` toolset stamped, independent of `machine.mcp.toolsets`, so
+    // the agent sees the tool its baseline grants.
+    let mut stamped_toolsets: Vec<&str> = Vec::new();
     if explore_instruction.is_some() {
+        stamped_toolsets.push(McpToolset::AgentInvoke.as_str());
+    }
+    if activity_tools
+        .effective_tools
+        .iter()
+        .any(|tool| tool.starts_with("orbit.notice."))
+    {
+        stamped_toolsets.push(McpToolset::Notice.as_str());
+    }
+    if !stamped_toolsets.is_empty() {
         dispatch_env.push((
             ACTIVITY_MCP_TOOLSETS_ENV.to_string(),
-            McpToolset::AgentInvoke.as_str().to_string(),
+            stamped_toolsets.join(","),
         ));
     }
     dispatch_env.extend(orbit_env);

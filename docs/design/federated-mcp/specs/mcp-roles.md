@@ -44,7 +44,7 @@ carries only the tools its job needs. The decision is recorded in
   `plugins`. The selection name `default` stands for them, so an existing
   `--toolset default` or `machine.mcp.toolsets = ["default"]` keeps its
   meaning. `leases`, `experiments`, `analytics`, `decision-channel`,
-  `agent-invoke` and `notice` stay opt-in.
+  `agent-invoke`, `notice` and `resident` stay opt-in.
 
 ## Roles
 
@@ -53,16 +53,16 @@ Roles are defined in one place, `McpRole::toolsets`:
 | Role | Toolsets beside `core` |
 |---|---|
 | `operator` | every toolset |
-| `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `search` |
-| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `search` |
+| `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
 | `reader` | `tasks-read`, `runs`, `codebase`, `search` |
 
 `agent` follows the managed activity baseline allowlist; activities keep
-their own allowlists, which still decide what a managed run may call. When
-the resident toolset ([ORB-21245]) lands, it joins `manager` (relay and
-control) and `resident`; the roles, not another add-on toolset, are how
-those surfaces are served.
+their own allowlists, which still decide what a managed run may call. The
+`resident` toolset (`orbit.resident.grant`, `show` and `list`, [ORB-21242])
+is in `manager` and `resident`; relay and control join it in [ORB-21245].
+The roles, not another add-on toolset, are how those surfaces are served.
 
 ## Selection
 

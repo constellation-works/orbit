@@ -16,8 +16,8 @@ related_artifacts: [ORB-21207]
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–2
-([ORB-21211], [ORB-21212]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–3
+([ORB-21211], [ORB-21212], [ORB-21213]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -47,7 +47,7 @@ client of the API and lives in its own repository.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md). No new cross-crate dependency is
 needed: every crate below already depends on the ones it would call.
 
-| Concern | Location (slices 1–2 built; the rest proposed) |
+| Concern | Location (slices 1–3 built; the rest proposed) |
 |---|---|
 | `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
 | The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
@@ -98,9 +98,10 @@ tools' descriptions say which is which ([references/glossary.md](./references/gl
 
 A managed agent can always *read* notices through its brief. Posting needs the tool:
 
-- Slice 3 adds `orbit.notice.post` and `orbit.notice.show` to the tool baselines of
-  `agent_implement`, `agent_review_repair` and `final_recovery`, and `orbit.notice.close` to the
-  same baselines for closing the agent's own notice. Nothing else is granted.
+- Slice 3 (built) adds `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` to the
+  tool baselines of `agent_implement`, `agent_review_repair` and `final_recovery` for closing the
+  agent's own notice, resolved in `resolve_activity_tool_denials`/`resolve_activity_tools`.
+  Nothing else is granted.
 - When the resolved activity tools include a notice tool, the dispatcher stamps the `notice` toolset
   onto the run's own MCP server, the way explorer delegation stamps `agent-invoke`, so the agent
   sees the tool whatever the host's `machine.mcp.toolsets`.
@@ -109,7 +110,8 @@ A managed agent can always *read* notices through its brief. Posting needs the t
   evidence required, 24 h cap, per-task rate and open counts
   ([notice-authority](./specs/notice-authority.md#rights)).
 - A workspace can switch agent posting off with `notice.agent_posting = false`; the baseline then
-  omits the tools and the owner refuses agent-class posts.
+  omits the tools and the owner refuses agent-class posts and closes with
+  `notice_agent_posting_disabled`.
 
 The activity instruction for posting is short: post only when the problem is outside your task, will
 affect other agents, and you have a linked task or evidence; prefer linking the fix task; search
@@ -178,20 +180,20 @@ extension adds is to *withhold* new unattended work on named hosts, bounded by t
 
 ## 8. Slices
 
-Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–2 done, slices 3–4 in progress, slice 5 in `backlog`);
+Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–3 done, slice 4 in progress, slice 5 in `backlog`);
 dependencies run top to bottom, and ids are in Task References.
 
 1. **Notice store, tools, CLI and the `notice` toolset** ([ORB-21211], done). Types; store migration and
    repository; core post/close/list/show with effective state, expiry defaults and caps, dedupe and
    corroboration, linked-task closure on read; poster-class resolution and every right and limit in
-   [notice-authority](./specs/notice-authority.md) (the agent rules are enforced here even though
-   agents are not yet granted the tool); `McpToolset::Notice` and `machine.mcp.toolsets`; registry-
+   [notice-authority](./specs/notice-authority.md) (the agent rules are enforced here; slice 3
+   grants the tools to managed agents, section 4); `McpToolset::Notice` and `machine.mcp.toolsets`; registry-
    derived CLI; audit rows; `[notice]` configuration; goldens; skill reference. Single-host,
    owner-local reads.
 2. **Brief delivery** ([ORB-21212], done). The `RuntimeHost` capability, the `fleet_notices` block, the
    `notice_instruction` on the opted-in activities, `NoticesDelivered`, fail-open marker, the
    `brief_delivery` switch, the claimed-run owner read. Depends on 1.
-3. **Managed-agent posting** ([ORB-21213], in progress). Activity tool baselines, toolset stamping onto the run's MCP
+3. **Managed-agent posting** ([ORB-21213], done). Activity tool baselines, toolset stamping onto the run's MCP
    server, the posting instruction, the `agent_posting` switch. Depends on 1; its end-to-end check
    (one agent posts, a second run's brief shows it) depends on 2.
 4. **Federation** ([ORB-21214], in progress). Follower writes through the owner route, routed reads, the

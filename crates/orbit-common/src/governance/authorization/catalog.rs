@@ -746,6 +746,19 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         ],
         rationale: "closing a fleet notice changes what the fleet sees, so the caller must be identified; core decides which notices the poster class may close",
     },
+    // Resident authority: an identification floor. Core applies a widening
+    // only for an operator caller; any other caller's widening becomes a
+    // resident_authority decision request a human must answer.
+    GovernedOperation {
+        id: "orbit.resident.grant",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "changing a resident's authority decides what it may do unattended, so the caller must be identified; only an operator's widening applies directly, anyone else's becomes a decision request for the human",
+    },
     GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,

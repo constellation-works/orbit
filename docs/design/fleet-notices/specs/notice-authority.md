@@ -118,7 +118,9 @@ and never partially applied:
 `notice_poster_unidentified`, `notice_scope_refused`, `notice_kind_refused`,
 `notice_evidence_required`, `notice_expiry_exceeds_cap`, `notice_expiry_invalid`,
 `notice_limit_exceeded`, `notice_close_refused`, `notice_not_found`, `notice_invalid_field`,
-and the federated `capability_refused` when a replica receives a write
+`notice_agent_posting_disabled` (an agent-class post or close while the workspace sets
+`notice.agent_posting = false`, which also removes the notice tools from the agent
+activities' baselines), and the federated `capability_refused` when a replica receives a write
 ([notice-federation](./notice-federation.md#writes)).
 
 ## Invariants

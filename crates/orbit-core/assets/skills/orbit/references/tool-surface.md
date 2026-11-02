@@ -270,8 +270,10 @@ subprocess, and external authentication checks.
 the opt-in toolsets the host enables: `leases` (path leases), `experiments`
 (experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
 show, crew ladder), `decision-channel` (decision submit and digest; decision
-list and show stay default), `agent-invoke` (`orbit.agent.invoke`) and `notice`
-(`orbit.notice.*`, fleet notices). Enable them per server with
+list and show stay default), `agent-invoke` (`orbit.agent.invoke`), `notice`
+(`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
+mandates; widening their authority from an MCP session raises a decision
+request for the human). Enable them per server with
 `--toolset leases,analytics` (or `all`), or for the host with
 `orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
 replaces the config. A call to a tool outside the server's toolsets is refused
@@ -742,6 +744,17 @@ count) and 30 per orchestrator crew per hour. Other refusals:
 `notice_close_refused`, `notice_not_found` and `notice_invalid_field`; a replica
 refuses writes with `capability_refused`. Every write and refusal leaves an
 audit row with target type `notice`. The limits and caps are `notice.*` config.
+
+A managed `agent_implement`, `agent_review_repair` or `final_recovery` run
+carries `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` in
+its tool baseline, and its MCP server is stamped with the `notice` toolset
+when a notice tool is granted, whatever `machine.mcp.toolsets` says. Such a
+run posts only for a problem outside its task that affects other agents,
+with a linked task (prefer the fix) or evidence, after checking the brief's
+open notices; re-posting the same subject corroborates it. The workspace
+switch `notice.agent_posting = false` removes those tools from the
+baselines and the owner refuses agent-class posts and closes with
+`notice_agent_posting_disabled`.
 
 `orbit.notice.close` takes `id` or `dedupe_key` and a `reason`; a notice that is
 already closed or expired comes back with `already_inactive: true`. A notice

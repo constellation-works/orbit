@@ -27,7 +27,7 @@ macro_rules! with_tail_keys {
     },
     machine_mcp_toolsets: Vec<String> => Vec<String> {
         key: "machine.mcp.toolsets", value_type: "array<string>",
-        description: "MCP toolsets orbit mcp serve and listen advertise beside the role or the default surface, such as leases, experiments, analytics, decision-channel, agent-invoke, notice or all.",
+        description: "MCP toolsets orbit mcp serve and listen advertise beside the role or the default surface, such as leases, experiments, analytics, decision-channel, agent-invoke, notice, resident or all.",
         section: ConfigSection::Machine, order: 85,
         resolve: |raw: Option<Vec<String>>| resolve_mcp_toolsets(raw),
     },
@@ -956,6 +956,13 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Housekeeping, order: 216,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, 1, 3650, "notice.retention_days"),
+    },
+    notice_agent_posting: bool => bool {
+        key: "notice.agent_posting", value_type: "bool",
+        description: "Managed agents may post and close their own fleet notices through their bound task (default true). When false, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes.",
+        section: ConfigSection::Housekeeping, order: 221,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     notice_brief_delivery: bool => bool {
         key: "notice.brief_delivery", value_type: "bool",

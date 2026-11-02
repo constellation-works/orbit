@@ -42,21 +42,7 @@
       "path": null,
       "shadowed_by": []
     },
-    "commit.implemented_by_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "commit.orchestrated_by_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "commit.planned_by_trailer": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -547,6 +533,13 @@
       "shadowed_by": []
     },
     "machine.worker_tasks_max": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.agent_posting": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",

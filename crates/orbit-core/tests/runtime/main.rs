@@ -161,6 +161,7 @@ mod readiness_population;
 #[cfg(unix)]
 mod recovery_provider_auth;
 mod regression_risk;
+mod resident_authority;
 mod resource_profiles;
 mod risk_history;
 

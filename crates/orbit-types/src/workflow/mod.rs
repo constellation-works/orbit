@@ -23,6 +23,7 @@ mod host_evidence;
 mod job;
 mod pr_recovery;
 mod reconciliation;
+mod resident;
 mod review;
 mod review_evidence;
 mod routine;
@@ -67,6 +68,7 @@ pub use job::*;
 pub use pr_recovery::*;
 
 pub use reconciliation::*;
+pub use resident::*;
 pub use review::*;
 pub use review_evidence::*;
 pub use routine::{

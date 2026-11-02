@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Land slices 3-4 (ORB-21213, ORB-21214, in flight); then slice 5, ORB-21215"
+next: "Slice 4, ORB-21214: federation and global aggregation"
 feature: fleet-notices
 doc_role: overview
 type: design
@@ -70,10 +70,12 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Slices 1–2 ([ORB-21211], [ORB-21212]) are built: the notice store, the `orbit.notice.*` tools,
-`orbit notice`, the opt-in `notice` toolset, and brief delivery of open notices into opted-in
-agent prompts as untrusted data. Managed-agent posting, federation and the dashboard are later
-slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placement proposals.
+Slices 1–3 ([ORB-21211], [ORB-21212], [ORB-21213]) are built: the notice store, the
+`orbit.notice.*` tools, `orbit notice`, the opt-in `notice` toolset, brief delivery of open
+notices into opted-in agent prompts as untrusted data, and managed-agent posting through a
+run's own task (the `notice.agent_posting` workspace switch, default on). Federation and the
+dashboard are later slices ([2_design.md §8](./2_design.md#8-slices)); their locations are
+placement proposals.
 
 | Concern | File | Task |
 |---------|------|------|
@@ -100,7 +102,7 @@ slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placemen
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
 - [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset (done)
 - [ORB-21212] — slice 2: brief delivery as untrusted data (done)
-- [ORB-21213] — slice 3: managed-agent posting (in progress)
+- [ORB-21213] — slice 3: managed-agent posting (done)
 - [ORB-21214] — slice 4: federation and global aggregation (in progress)
 - [ORB-21215] — slice 5: dashboard banner and view, attention kind (backlog)
 

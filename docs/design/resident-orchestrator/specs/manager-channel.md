@@ -45,11 +45,17 @@ below are thin, governed wrappers that close exactly those gaps.
 
 ## `orbit.resident.grant`
 
-Input: `{task, add?: [right], remove?: [right], workspaces_add?: [ws], workspaces_drop?: [ws], quote: string, source?: {human, via, said_at}}`.
-Output: `{applied: bool, authority, decision_request?: id}`. `applied` is true for an operator caller
-or a pure narrowing. Otherwise a `resident_authority` decision request is returned
-([mandate-and-authority](./mandate-and-authority.md#widening)). Mixing additions and removals in
-one call applies the removals at once and requests the additions.
+Input (as built in [ORB-21242]): `{task_id, add?: [right], workspaces?: [ws], remove?: [right],
+drop_workspaces?: [ws], deadline?: rfc3339, quote?: string, orchestrator?, model?}`, at least one
+change. `quote` is required for a widening from any caller but the operator; the relaying session
+(crew, model, session id) is taken from the caller, not from input.
+Output: `{outcome, authority, request?, deduplicated}`, with `outcome` `granted` (an operator
+widening, applied), `requested` (a `resident_authority` decision request was raised or an open one
+for the same addition reused; nothing changed,
+[mandate-and-authority](./mandate-and-authority.md#widening)), `narrowed` or `unchanged`. One call
+may not both widen and narrow: it is refused, so a caller narrows first and then asks to widen.
+CLI: `orbit resident grant <task> --add … --add-workspace … --remove … --drop-workspace … --deadline …
+--quote …`.
 
 ## `orbit.resident.relay`
 
@@ -89,9 +95,19 @@ checkpoint parsed, open requests, next due estimate, and the last five outcomes.
 `list {workspace?, state?}` → one row per mandate: task, goal, state, last checkpoint time and
 outcome, open requests, stalled flag. Both are read-only and federated like other reads.
 
+Slice 1 ([ORB-21242]) ships the parts that exist yet: `show {task_id}` returns the task, `state`
+(`active`, `handed_off`, `ended`, `invalid` with `state_reason`), the parsed mandate (or
+`mandate_error`), the effective authority, the folded authority record with `granted[]` and
+`narrowed[]` (or `authority_error`), and open grant requests. `list {include_ended?}` returns
+`{count, mandates}` rows with state, goal, deadline, effective rights and workspaces, authority
+revision and open request count. Checkpoint, cycle, due and stalled fields arrive with their
+slices.
+
 ## The `resident` toolset
 
-`orbit mcp serve --toolset resident` advertises the tools above. The default toolset does not,
+`orbit mcp serve --toolset resident` advertises the tools above; [ORB-21242] introduced it with
+`grant`, `show` and `list`, and the `manager` and `resident` MCP roles include it. The default
+toolset does not,
 because a leaf agent has no use for them. A resident cycle's own grant includes
 `orbit.resident.checkpoint` and `orbit.resident.show` for its own mandate regardless of toolset.
 

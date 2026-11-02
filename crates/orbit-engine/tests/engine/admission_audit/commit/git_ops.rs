@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
+use orbit_types::task::{TaskRelation, TaskRelationType};
 use serde_json::json;
 
 use super::git_commit as commit_batch_changes;
@@ -262,4 +263,71 @@ fn glob_candidate_names_stage_and_commit_only_themselves() {
         fs::read_to_string(workspace.join(".orbit/tmp/scratch.txt")).unwrap(),
         "scratch\n"
     );
+}
+
+#[test]
+fn regression_fallback_ignores_quoted_fix_subjects() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::regression_fallback_ignores_quoted_fix_subjects"
+    )) {
+        return;
+    }
+
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    let commit_task = |id: &str, title: &str, target: Option<&str>| {
+        fs::write(repo.join("README.md"), format!("{id}\n")).unwrap();
+        let mut task = task_with_file(id, title, "README.md", "codex");
+        if let Some(target) = target {
+            task.relations.push(TaskRelation {
+                relation_type: TaskRelationType::RegressionFrom,
+                target: target.to_string(),
+                regression: None,
+            });
+        }
+        let host = CommitTestHost::new(vec![task], repo.to_path_buf());
+        git_commit(
+            &host,
+            &json!({"workspace_path": repo, "job_run_id": "batch-1"}),
+        )
+        .expect("commit task");
+        git_output(repo, &["rev-parse", "HEAD"]).unwrap()
+    };
+
+    let culprit = commit_task("T-CULPRIT", "Original behavior", None);
+    let subject = git_output(repo, &["show", "-s", "--format=%s", &culprit]).unwrap();
+    assert!(subject.contains("[T-CULPRIT]"));
+    let first = commit_task("T-REPAIR-1", "First repair", Some("T-CULPRIT"));
+    let expected = format!("Fixes: {} (\"{subject}\")", &culprit[..12]);
+    assert!(
+        git_output(repo, &["log", "-1", "--format=%B"])
+            .unwrap()
+            .contains(&expected)
+    );
+    commit_task("T-REPAIR-2", "Second repair", Some("T-CULPRIT"));
+    let message = git_output(repo, &["log", "-1", "--format=%B"]).unwrap();
+    assert!(message.contains(&expected), "wrong attribution: {message}");
+    assert!(!message.contains(&format!("Fixes: {}", &first[..12])));
+
+    // A marker only in another commit's body is not ownership evidence.
+    super::git_success(
+        repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Unrelated",
+            "-m",
+            "Fixes: deadbeef (\"[T-MISSING] unknown\")",
+        ],
+    )
+    .unwrap();
+    commit_task("T-REPAIR-3", "Missing evidence", Some("T-MISSING"));
+    let message = git_output(repo, &["log", "-1", "--format=%B"]).unwrap();
+    assert!(
+        !message.contains("Fixes:"),
+        "unexpected attribution: {message}"
+    );
+    assert!(message.contains("Regression-From: T-MISSING"));
 }

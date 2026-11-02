@@ -25,6 +25,7 @@ pub mod migrate;
 pub mod notice;
 pub mod operation;
 pub mod orchestrator;
+pub mod resident;
 pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
@@ -112,6 +113,7 @@ Operate:
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
   notice       Post, close and list fleet notices other agents and operators see
+  resident     Grant, narrow and inspect resident orchestrator mandates
   tool         Manage and run Orbit tools, including external MCP plugins
   gc           Inspect and explicitly reap Orbit-managed garbage
 
@@ -185,6 +187,7 @@ pub enum Commands {
     Experiment(experiment::ExperimentCommand),
     Lease(lease::LeaseCommand),
     Notice(notice::NoticeCommand),
+    Resident(resident::ResidentCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 

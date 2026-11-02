@@ -135,7 +135,8 @@ always advertised. `leases` adds the lease tools; `experiments` the experiment t
 `analytics` the agent and orchestrator scorecards and the crew ladder; `decision-channel` a \
 decision channel's submit and digest, which only the bound channel plugin or the operator may \
 call; `agent-invoke` agent invocation, which a managed run offered explorer delegation enables \
-on its own server; `notice` the fleet notice tools (post, close, list and show).\n\n\
+on its own server; `notice` the fleet notice tools (post, close, list and show); `resident` \
+the resident mandate tools (grant, show and list).\n\n\
 `--toolset` replaces the `machine.mcp.toolsets` host config for this server. A toolset changes \
 only what this server lists and dispatches: a call to a tool outside it is refused with the \
 toolset to enable, and `orbit tool run`, activities and plugin callbacks reach every tool \
@@ -188,7 +189,7 @@ pub struct ServeArgs {
     /// Serve only one role's toolsets: `operator` (every toolset), `manager`, `resident`, `agent` or `reader`. Replaces the `machine.mcp.role` host config. A role limits what is advertised and callable over MCP; it grants no authority. Without a role the server advertises the default surface. `orbit tool list --role <ROLE>` lists a role's tools and size.
     #[arg(long, value_name = "ROLE")]
     pub role: Option<String>,
-    /// Advertise these toolsets beside the role's, or beside the default surface without a role, as a comma-separated list such as `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, `notice`, `tasks-write` or `dispatch`; `default` names the default surface and `all` every toolset. Replaces the `machine.mcp.toolsets` host config. `orbit tool list` shows each tool's toolset.
+    /// Advertise these toolsets beside the role's, or beside the default surface without a role, as a comma-separated list such as `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, `notice`, `resident`, `tasks-write` or `dispatch`; `default` names the default surface and `all` every toolset. Replaces the `machine.mcp.toolsets` host config. `orbit tool list` shows each tool's toolset.
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
 }

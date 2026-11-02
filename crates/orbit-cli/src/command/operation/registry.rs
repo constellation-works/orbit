@@ -541,6 +541,10 @@ impl Commands {
             Commands::Notice(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Notice))
             }
+            // Resident mandates are registry-driven like notices.
+            Commands::Resident(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Resident))
+            }
             // Experiments are registry-driven like friction.
             Commands::Experiment(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Experiment))

@@ -504,6 +504,10 @@ impl OrbitRuntime {
                 self.apply_model_answer_review(request, answer_id, note, actor_label, via)?;
                 Ok(None)
             }
+            DecisionGate::ResidentAuthority => {
+                self.apply_resident_grant_answer(request, answer_id, actor_label)?;
+                Ok(None)
+            }
         }
     }
 

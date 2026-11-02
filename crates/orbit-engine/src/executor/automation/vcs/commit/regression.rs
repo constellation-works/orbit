@@ -55,12 +55,17 @@ fn resolve_one<H: RuntimeHost + ?Sized>(
         return Some(RegressionLandedCommit { sha, subject });
     }
     let marker = format!("[{target}]");
-    let sha = commits_matching(workspace, &marker, &["HEAD"])
+    // Message matches may only quote the marker in another task's Fixes trailer.
+    // A fallback match establishes ownership only in the commit's own subject.
+    commits_matching(workspace, &marker, &["HEAD"])
         .ok()?
         .into_iter()
-        .next()?;
-    let subject = commit_subject(workspace, &sha)?;
-    Some(RegressionLandedCommit { sha, subject })
+        .find_map(|sha| {
+            let subject = commit_subject(workspace, &sha)?;
+            subject
+                .contains(&marker)
+                .then_some(RegressionLandedCommit { sha, subject })
+        })
 }
 
 fn commit_subject(workspace: &Path, sha: &str) -> Option<String> {
