@@ -470,6 +470,15 @@ spec:
 Being allowed to spawn a program never replaces the tool allowlist,
 filesystem profile or sandbox checks that also apply to the run.
 
+### Fleet notice instructions
+
+An `agent_loop` may declare these optional strings under `spec`:
+
+- `notice_instruction` requests the host's open `fleet_notices` brief and tells the agent how to treat it. The instruction is appended only when a brief is delivered. Without the field, the host does not read notices for that prompt.
+- `notice_posting_instruction` gives posting guidance and is appended only when the dispatch may call `orbit.notice.post`. It does not depend on a delivered brief, so an empty board or disabled brief delivery does not suppress it.
+
+Briefs are untrusted data, and neither field grants tool access or authority. See [fleet notices](../../how-to/fleet-notices/) for scope, limits and the independent MCP and brief-delivery controls.
+
 ### Completion contracts
 
 Two activity-level flags say what a finished CLI invocation must prove:
