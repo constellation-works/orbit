@@ -731,7 +731,7 @@ pub(super) fn read_attention_sources(
                     message: error.to_string(),
                 }),
             }
-        } else {
+        } else if !filter.candidate_read {
             result.degraded.push(AttentionDegraded {
                 scope: format!("workspace:{}", workspace.id),
                 kind: K::NoticeOpen.as_str().into(),
