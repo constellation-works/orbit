@@ -137,8 +137,11 @@ pub(super) struct Phase<'a> {
 }
 
 /// The `RLIMIT_*` limits of one script run (script steps §3 Resources).
-/// Each is set as both the soft and the hard limit, so the script cannot
-/// raise it, and never above the hard limit this process already holds.
+/// `RLIMIT_CPU` uses `cpu_seconds` as its soft limit and up to
+/// `cpu_grace_seconds` later as its hard limit, both clamped to the inherited
+/// hard limit; the script can raise the soft limit only up to that hard limit.
+/// `RLIMIT_NOFILE` uses the same clamped value for its soft and hard limits, so
+/// the script cannot raise it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProcessLimits {
     /// `RLIMIT_CPU` in seconds of CPU time per process: the soft limit
