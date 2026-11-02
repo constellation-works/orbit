@@ -1262,18 +1262,18 @@ completion and usage projection. Assistant messages carry their own `usage`, and
 the `StructuredOutput` call quotes the envelope, so neither reaches the answer
 or the token totals; a stream with no `result` has no answer.
 
-**What the schema cannot say.** The status/error correlation — `failed`
-requiring a non-empty `error.code` — is absent from the schema and stays in
-`parse_json_envelope`'s Rust checks. This is a constraint, not a preference:
-expressing it needs a conditional subschema, and Anthropic's structured-output
-subset rejects those outright with `input_schema does not support oneOf, allOf,
-or anyOf at the top level`. The rejection surfaces mid-run rather than at argv
-parse, so getting it wrong is expensive. After [ORB-10770], `error` is typed
-as an object (`code` + `message`) and omitted on success — Serde's
-`#[serde(default)]` already treats a missing field as `None`. The schema
-still cannot express "require the object on `failed`, omit it on
-`success`", so the Rust correlation checks remain load-bearing rather than
-redundant.
+**Status/error correlation.** The provider schema nests `anyOf` inside
+`allOf` to associate each status with its error shape without putting a
+conditional at the top level, which Anthropic's structured-output subset
+rejects. For `success`, `error` must be absent or JSON null; for `failed` and
+`timeout`, it must be an object with `code` and `message` strings. The
+branches use the `\S` pattern to require a non-blank value for each string,
+because the provider subset rejects string-length constraints. The top-level
+`error` property does not itself declare an object type; the status branches
+do. `parse_json_envelope` enforces the correlation as a second layer for
+transports without schema-constrained output: it rejects an error object on
+`success` and requires an error with non-blank `code` and `message` on both
+`failed` and `timeout`.
 
 The earlier untyped property plus a description that said "null when status
 is success" made Claude's constrained decoder emit the JSON *string*
