@@ -120,6 +120,39 @@ impl DecisionRequestState {
     }
 }
 
+/// Risk of an answer. Unknown is conservative for absent or future values.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRiskTier {
+    /// No lasting effect.
+    Routine,
+    /// Reversible through the normal path.
+    Reversible,
+    /// Cannot be undone through the normal path.
+    Irreversible,
+    /// Widens authority.
+    Authority,
+    /// Commits additional spend.
+    Spend,
+    /// Undeclared or unrecognised.
+    #[default]
+    Unknown,
+}
+
+impl<'de> Deserialize<'de> for DecisionRiskTier {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some("routine") => Self::Routine,
+            Some("reversible") => Self::Reversible,
+            Some("irreversible") => Self::Irreversible,
+            Some("authority") => Self::Authority,
+            Some("spend") => Self::Spend,
+            _ => Self::Unknown,
+        })
+    }
+}
+
 /// One allowed answer to a [`DecisionRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecisionAnswer {
@@ -129,6 +162,9 @@ pub struct DecisionAnswer {
     pub label: String,
     /// One-line consequence of choosing this answer.
     pub consequence: String,
+    /// Risk declared for this answer.
+    #[serde(default)]
+    pub risk_tier: DecisionRiskTier,
     /// What choosing the answer changes, when it is a one-click option:
     /// a field rewrite, an action, or both. Absent on approval and
     /// pilot-admission answers and on requests raised before options existed.
@@ -148,6 +184,7 @@ impl DecisionAnswer {
             label: label.into(),
             consequence: consequence.into(),
             option: None,
+            risk_tier: DecisionRiskTier::Unknown,
         }
     }
 }
@@ -339,6 +376,7 @@ pub fn decision_option_answers(
                 id: number.to_string(),
                 label: summary.clone(),
                 consequence,
+                risk_tier: DecisionRiskTier::Unknown,
                 option: Some(DecisionOption {
                     summary,
                     rewrite,
@@ -646,6 +684,12 @@ pub struct DecisionRequest {
     pub gate: DecisionGate,
     /// Allowed answers, in the order surfaces present them.
     pub answers: Vec<DecisionAnswer>,
+    /// Most severe answer risk, or unknown for a legacy request.
+    #[serde(default)]
+    pub risk_tier: DecisionRiskTier,
+    /// Category fixed when raised; absent on legacy requests.
+    #[serde(default)]
+    pub category: Option<String>,
     /// One or two plain-language sentences naming the decision needed,
     /// readable without opening the code. Absent on older requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -688,17 +732,50 @@ impl DecisionRequest {
     pub fn new(
         task_id: String,
         gate: DecisionGate,
-        answers: Vec<DecisionAnswer>,
+        mut answers: Vec<DecisionAnswer>,
         binding: DecisionBinding,
         raised_by: String,
         raised_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         let id = Self::new_id(&task_id, &binding, raised_at);
+        for answer in &mut answers {
+            answer.risk_tier = match gate {
+                DecisionGate::ReviewApproval => DecisionRiskTier::Irreversible,
+                DecisionGate::ProposedApproval | DecisionGate::PilotAdmission => {
+                    DecisionRiskTier::Authority
+                }
+                DecisionGate::BlockTriage => match answer
+                    .option
+                    .as_ref()
+                    .and_then(|option| option.action.as_ref())
+                {
+                    Some(DecisionAction::Reject) => DecisionRiskTier::Irreversible,
+                    Some(_) => DecisionRiskTier::Reversible,
+                    None if answer.id == "dismiss" => DecisionRiskTier::Routine,
+                    None if answer
+                        .option
+                        .as_ref()
+                        .is_some_and(|option| option.rewrite.is_some()) =>
+                    {
+                        DecisionRiskTier::Reversible
+                    }
+                    None => DecisionRiskTier::Unknown,
+                },
+                DecisionGate::AgentRequest => answer.risk_tier,
+            };
+        }
+        let risk_tier = answers
+            .iter()
+            .map(|answer| answer.risk_tier)
+            .max()
+            .unwrap_or_default();
         Self {
             id,
             task_id,
             gate,
             answers,
+            risk_tier,
+            category: None,
             summary: None,
             recommended: None,
             human_action: None,
@@ -711,6 +788,22 @@ impl DecisionRequest {
             state: DecisionRequestState::Open,
             resolution: None,
         }
+    }
+
+    /// Fix the category at raise time for this workspace.
+    pub fn with_category(mut self, workspace: &str) -> Self {
+        let kind = if self.gate == DecisionGate::AgentRequest {
+            let file = self
+                .topic
+                .as_deref()
+                .map(|topic| topic.split('/').next().unwrap_or(topic))
+                .unwrap_or("untopiced");
+            format!("agent_request/{file}")
+        } else {
+            self.gate.as_str().to_string()
+        };
+        self.category = Some(format!("{workspace}/{kind}"));
+        self
     }
 
     /// This request with the short summary and the recommended answer id.

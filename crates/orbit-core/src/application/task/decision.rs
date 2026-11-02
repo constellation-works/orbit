@@ -56,6 +56,8 @@ pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
             "id": request.id,
             "task_id": request.task_id,
             "gate": request.gate.as_str(),
+            "risk_tier": request.risk_tier,
+            "category": request.category,
             "state": request.state.as_str(),
         })
     })
@@ -72,6 +74,8 @@ pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
     let mut entry = json!({
         "id": request.id,
         "gate": request.gate.as_str(),
+        "risk_tier": request.risk_tier,
+        "category": request.category,
         "answers": request
             .answers
             .iter()
@@ -85,6 +89,7 @@ pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
                     "id": answer.id,
                     "label": answer.label,
                     "consequence": answer.consequence,
+                    "risk_tier": answer.risk_tier,
                     "recommended": recommended == Some(answer.id.as_str()),
                 })
             })

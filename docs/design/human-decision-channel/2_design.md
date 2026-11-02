@@ -73,8 +73,8 @@ the plugin stays a pure transport.
 | `id` | Opaque request id (`dr-<random>`); the token binds to it, mail subjects carry it |
 | `task_id` | The held task |
 | `gate` | `block_triage` \| `pilot_admission` \| `proposed_approval` \| `review_approval` \| `agent_request`; proposed: `model_answer_review` (§11.3) |
-| `answers[]` | Allowed answers (the request's options): stable `id`, short `label`, one-line `consequence` (rendered in mail and dashboard); proposed: per-answer `risk_tier` (§11.1) |
-| `risk_tier`, `category` | Proposed (§11.1): the most severe answer tier, `unknown` when undeclared; the stored category the request is measured under |
+| `answers[]` | Allowed answers (the request's options): stable `id`, short `label`, one-line `consequence` (rendered in mail and dashboard); per-answer `risk_tier` (§11.1) |
+| `risk_tier`, `category` | The most severe answer tier (§11.1), `unknown` when undeclared; the stored category the request is measured under |
 | `binding` | Stale-guard binding (§5): per gate, the episode/operation/revision the request was raised against |
 | `raised_by`, `raised_at` | The mechanism that raised it (`block_triage`, `task_pilot`, `digest`, `agent_request`) and when |
 | `topic`, `filer` | Agent-raised requests only: an exact-match structured topic (or corpus rule id) and the raising agent's writer label (the per-filer cap counts by it) |

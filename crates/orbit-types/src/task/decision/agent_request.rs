@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::request::DecisionAnswer;
+use super::request::{DecisionAnswer, DecisionRiskTier};
 
 /// Fewest options an agent-raised decision request offers.
 pub const AGENT_DECISION_MIN_OPTIONS: usize = 2;
@@ -29,6 +29,9 @@ pub enum AgentDecisionRequestError {
     /// A label or consequence spans lines or is too long.
     #[error("{0} must be one line of at most 240 characters")]
     NotOneLine(String),
+    /// An unrecognised risk tier was declared.
+    #[error("unrecognised risk tier `{0}`")]
+    RiskTier(String),
     /// The topic is not a short token.
     #[error(
         "`topic` must be 1-64 characters of letters, digits and `.`, `_`, `:`, `/`, `-`, starting with a letter or digit"
@@ -44,6 +47,9 @@ pub struct AgentDecisionOptionInput {
     pub label: String,
     /// One-line consequence of choosing it.
     pub consequence: String,
+    /// Optional declared risk tier.
+    #[serde(default)]
+    pub risk_tier: Option<String>,
     /// Whether the agent recommends this option. Exactly one option does.
     #[serde(default)]
     pub recommended: bool,
@@ -72,11 +78,18 @@ pub fn agent_decision_answers(
             let label = one_line(&option.label, &format!("option {number} label"))?;
             let consequence =
                 one_line(&option.consequence, &format!("option {number} consequence"))?;
-            Ok(DecisionAnswer::plain(
-                number.to_string(),
-                label,
-                consequence,
-            ))
+            let risk_tier = match option.risk_tier.as_deref() {
+                None => DecisionRiskTier::Unknown,
+                Some("routine") => DecisionRiskTier::Routine,
+                Some("reversible") => DecisionRiskTier::Reversible,
+                Some("irreversible") => DecisionRiskTier::Irreversible,
+                Some("authority") => DecisionRiskTier::Authority,
+                Some("spend") => DecisionRiskTier::Spend,
+                Some(other) => return Err(AgentDecisionRequestError::RiskTier(other.to_string())),
+            };
+            let mut answer = DecisionAnswer::plain(number.to_string(), label, consequence);
+            answer.risk_tier = risk_tier;
+            Ok(answer)
         })
         .collect::<Result<Vec<_>, AgentDecisionRequestError>>()?;
     Ok((answers, "1".to_string()))

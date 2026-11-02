@@ -824,7 +824,8 @@ impl OrbitRuntime {
                     binding,
                     "task_pilot".to_string(),
                     now,
-                );
+                )
+                .with_category(&self.workspace_id()?);
                 self.stores().task_records().update(
                     task_id,
                     super::super::TaskRecordUpdateParams {

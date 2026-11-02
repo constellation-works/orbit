@@ -499,7 +499,10 @@ human crew that is not `done`, `archived` or `rejected`. Inputs:
 - `options`: two to four `{label, consequence, recommended}` objects. `label` and
   `consequence` are one line each, and exactly one option has
   `recommended: true`; it is listed first as answer `1`, the rest follow as `2`
-  to `4`.
+  to `4`. Each option may declare `risk_tier` as `routine`, `reversible`,
+  `irreversible`, `authority` or `spend`. An omitted tier is `unknown`;
+  unrecognised values are refused. The request records its most severe tier
+  and a category derived at raise. These fields do not answer the request.
 - `topic` (optional): a structured token of 1-64 characters (letters, digits and
   `. _ : / -`), or a corpus rule id. `orbit_decision_list` filters by exact
   `topic`.

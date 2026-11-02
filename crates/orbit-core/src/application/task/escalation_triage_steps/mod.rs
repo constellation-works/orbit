@@ -325,6 +325,7 @@ impl OrbitRuntime {
                         ),
                         summary,
                         vec![DecisionAnswer {
+                            risk_tier: Default::default(),
                             id: "done".to_string(),
                             label: "Done — approve into backlog".to_string(),
                             consequence: "Confirms the action was taken; the task is approved \
@@ -370,7 +371,8 @@ impl OrbitRuntime {
                 "pilot_warning_triage".to_string(),
                 Utc::now(),
             )
-            .with_summary(summary.clone(), recommended.clone());
+            .with_summary(summary.clone(), recommended.clone())
+            .with_category(&self.workspace_id()?);
             if let Some(action) = &human_action {
                 decision = decision.with_human_action(action.clone());
             }

@@ -140,6 +140,7 @@ fn rogue_plugin() -> DecisionSubmitCaller {
 
 fn decision_answer(id: &str, label: &str, consequence: &str) -> DecisionAnswer {
     DecisionAnswer {
+        risk_tier: Default::default(),
         id: id.into(),
         label: label.into(),
         consequence: consequence.into(),
@@ -939,6 +940,14 @@ fn the_digest_raises_one_proposed_approval_per_proposed_task_idempotently() {
     assert_eq!(raised, both);
     for request in &digest.raised {
         assert_eq!(request.gate, DecisionGate::ProposedApproval);
+        assert_eq!(
+            request.risk_tier,
+            orbit_types::task::DecisionRiskTier::Authority
+        );
+        assert_eq!(
+            request.category.as_deref(),
+            Some(format!("{}/proposed_approval", fx.runtime.workspace_id().unwrap()).as_str())
+        );
         assert_eq!(request.raised_by, "digest");
         assert_eq!(request.state, DecisionRequestState::Open);
         let answers: Vec<&str> = request.answers.iter().map(|a| a.id.as_str()).collect();
@@ -1173,6 +1182,14 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     let digest = fx.digest(Fixture::plugin_caller()).unwrap();
     let first = request_for(&digest.raised, &task);
     assert_eq!(first.gate, DecisionGate::ReviewApproval);
+    assert_eq!(
+        first.risk_tier,
+        orbit_types::task::DecisionRiskTier::Irreversible
+    );
+    assert_eq!(
+        first.category.as_deref(),
+        Some(format!("{}/review_approval", fx.runtime.workspace_id().unwrap()).as_str())
+    );
     assert_eq!(first.state, DecisionRequestState::Open);
     let (candidate, status) = revision(&first);
     assert_eq!(status, &TaskStatus::Review);

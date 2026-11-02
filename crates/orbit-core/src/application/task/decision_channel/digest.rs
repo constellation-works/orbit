@@ -161,7 +161,8 @@ impl OrbitRuntime {
                     binding,
                     "digest".to_string(),
                     chrono::Utc::now(),
-                );
+                )
+                .with_category(&self.workspace_id()?);
                 self.stores().task_records().update(
                     task_id,
                     TaskRecordUpdateParams {

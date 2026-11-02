@@ -177,7 +177,7 @@ const RAISE_PARAMS: &[ParamSpec] = &[
     required(both(
         "options",
         ParamType::Array,
-        "Two to four options as an array of {label, consequence, recommended} objects. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
+        "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
         CliArgKind::flag("options"),
         "The options as a JSON array of {label, consequence, recommended}",
     )),

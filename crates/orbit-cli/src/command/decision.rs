@@ -276,6 +276,8 @@ fn list_blocks(value: &Value) -> Vec<Block> {
         Column::new("TASK").fixed(),
         Column::new("GATE").fixed(),
         Column::new("STATE").fixed(),
+        Column::new("RISK").fixed(),
+        Column::new("CATEGORY"),
         Column::new("ANSWERS"),
         Column::new("EXPIRES").fixed(),
     ])
@@ -293,6 +295,8 @@ fn list_blocks(value: &Value) -> Vec<Block> {
             text(&request["task_id"]),
             text(&request["gate"]),
             text(&request["state"]),
+            text(&request["risk_tier"]),
+            text(&request["category"]),
             answers,
             text(&request["expires_at"]),
         ]);
@@ -321,7 +325,7 @@ fn digest_blocks(value: &Value) -> Vec<Block> {
 
 fn show_blocks(value: &Value) -> Vec<Block> {
     let mut out = format!(
-        "{} ({}, {})\ntask {} · raised by {} at {} · expires {}",
+        "{} ({}, {})\ntask {} · raised by {} at {} · expires {}\nrisk: {} · category: {}",
         text(&value["id"]),
         text(&value["gate"]),
         text(&value["state"]),
@@ -329,6 +333,8 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         text(&value["raised_by"]),
         text(&value["raised_at"]),
         text(&value["expires_at"]),
+        text(&value["risk_tier"]),
+        text(&value["category"]),
     );
     for (index, answer) in value["answers"]
         .as_array()
@@ -338,10 +344,11 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     {
         let _ = write!(
             out,
-            "\n{}. {} (`{}`) — {}",
+            "\n{}. {} (`{}`; {}) — {}",
             index + 1,
             text(&answer["label"]),
             text(&answer["id"]),
+            text(&answer["risk_tier"]),
             text(&answer["consequence"]),
         );
     }
