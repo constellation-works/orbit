@@ -165,13 +165,23 @@ impl OrbitRuntime {
             let Some(epoch) = epoch else {
                 break;
             };
+            let subject = std::cell::RefCell::new(None::<String>);
             let processed = service.process_next_assistance_checked(
                 &workspace,
                 PRECEDENT_DECISION_USE_CASE,
-                |enqueued| self.precedent_work_is_current(enqueued, &epoch),
+                |enqueued| {
+                    *subject.borrow_mut() = Some(enqueued.evidence_packet.subject_id.clone());
+                    self.precedent_work_is_current(enqueued, &epoch)
+                },
             )?;
-            if processed.is_none() {
+            let Some(work_id) = processed else {
                 break;
+            };
+            // Seal at the settlement boundary, before the next item runs, so
+            // queue latency or a later failure never moves the timestamp.
+            if let Some(subject_id) = subject.into_inner() {
+                let path = receipt_path(self, &subject_id)?;
+                seal_settled_receipt(&path, service, Some(&work_id))?;
             }
         }
         self.seal_settled_precedent_decisions(service)
@@ -222,28 +232,7 @@ impl OrbitRuntime {
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let did_seal = with_receipt(&path, || {
-                let Some(mut receipt) = read_receipt(&path)? else {
-                    return Ok(false);
-                };
-                if receipt.sealed_at.is_some() {
-                    return Ok(false);
-                }
-                let Some(work_id) = receipt.work_id.clone() else {
-                    return Ok(false);
-                };
-                let Some(record) =
-                    service.assistance_assessment(&work_id, &receipt.source_digest)?
-                else {
-                    return Ok(false);
-                };
-                if !record.settled || record.result.is_none() {
-                    return Ok(false);
-                }
-                receipt.sealed_at = Some(Utc::now());
-                write_receipt(&path, &receipt)?;
-                Ok(true)
-            })?;
+            let did_seal = seal_settled_receipt(&path, service, None)?;
             if did_seal {
                 sealed += 1;
             }
@@ -357,6 +346,38 @@ impl OrbitRuntime {
         settings.validate_assistance_settings()?;
         Ok(settings.limits.max_request_bytes as usize)
     }
+}
+
+/// Stamp `sealed_at` on a receipt whose assessment has settled. `expected_work`
+/// restricts the seal to that work id. Returns whether it sealed.
+fn seal_settled_receipt(
+    path: &std::path::Path,
+    service: &AssistanceService,
+    expected_work: Option<&str>,
+) -> Result<bool, OrbitError> {
+    with_receipt(path, || {
+        let Some(mut receipt) = read_receipt(path)? else {
+            return Ok(false);
+        };
+        if receipt.sealed_at.is_some() {
+            return Ok(false);
+        }
+        let Some(work_id) = receipt.work_id.clone() else {
+            return Ok(false);
+        };
+        if expected_work.is_some_and(|expected| expected != work_id) {
+            return Ok(false);
+        }
+        let Some(record) = service.assistance_assessment(&work_id, &receipt.source_digest)? else {
+            return Ok(false);
+        };
+        if !record.settled || record.result.is_none() {
+            return Ok(false);
+        }
+        receipt.sealed_at = Some(Utc::now());
+        write_receipt(path, &receipt)?;
+        Ok(true)
+    })
 }
 
 struct BuiltPacket {

@@ -35,9 +35,14 @@ use serde_json::{Value, json};
 
 type FixtureResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
+type EvaluationHook = Box<dyn FnOnce() + Send>;
+
 struct SyntheticAdapter {
     calls: AtomicUsize,
     seen: Mutex<Vec<AssistanceRequest>>,
+    /// One-shot callbacks run inside the adapter call for the request whose
+    /// question matches, so a fixture can act while a later item is evaluated.
+    hooks: Mutex<Vec<(String, EvaluationHook)>>,
 }
 
 impl AssistanceAdapter for SyntheticAdapter {
@@ -65,6 +70,20 @@ impl AssistanceAdapter for SyntheticAdapter {
     ) -> AssistanceResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(claim.work.request.clone());
+        let question = claim.work.request.evidence_packet.fields["request"]["question"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let hook = {
+            let mut hooks = self.hooks.lock().unwrap();
+            hooks
+                .iter()
+                .position(|(key, _)| *key == question)
+                .map(|index| hooks.remove(index).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
         let mut answers = std::collections::BTreeMap::new();
         for (name, question) in &claim.work.request.contract.questions {
             let answer = match question {
@@ -245,6 +264,18 @@ fn policy(workspace_id: &str, mode: AssistanceMode) -> FixtureResult<AssistanceP
         evidence_ref_prefixes: vec!["task:".into(), "decision:".into()],
         credential_env: "ORBIT_ASSISTANCE_SYNTHETIC".into(),
     })
+}
+
+fn join_counted(
+    runtime: &OrbitRuntime,
+    service: &AssistanceService,
+    category: &str,
+    field: &str,
+) -> FixtureResult<u64> {
+    let join = runtime.precedent_decision_join_with_service(service)?;
+    Ok(join["categories"][category]["counted"][field]
+        .as_u64()
+        .unwrap_or(0))
 }
 
 fn receipt(runtime: &OrbitRuntime, id: &str) -> FixtureResult<Option<PrecedentDecisionReceipt>> {
@@ -484,6 +515,7 @@ fn fixture(root: &Path) -> FixtureResult {
     let adapter = Arc::new(SyntheticAdapter {
         calls: AtomicUsize::new(0),
         seen: Mutex::new(Vec::new()),
+        hooks: Mutex::new(Vec::new()),
     });
     let config_root = global.clone();
     let service = AssistanceService::new(
@@ -759,6 +791,115 @@ fn fixture(root: &Path) -> FixtureResult {
     assert!(!encoded.contains("Approve the higher price"));
     assert!(!encoded.contains(secret));
     assert!(!encoded.contains("Reject the higher price"));
+
+    // A prediction is sealed when its own assessment settles, not when the
+    // whole batch ends: answering A during B's evaluation must still score A.
+    let (root_global, root_workspace) = (global.clone(), workspace.clone());
+    let early_task = runtime.add_task(TaskAddParams {
+        title: "Price the early answer".into(),
+        description: "Decide the early answer.".into(),
+        acceptance_criteria: vec!["A settled prediction is scored.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let early_a = raise(&runtime, &early_task.id, "Which early price settles first?")?;
+    let slow_task = runtime.add_task(TaskAddParams {
+        title: "Price the slow evaluation".into(),
+        description: "Decide the slow evaluation.".into(),
+        acceptance_criteria: vec!["A later item does not move the earlier seal.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let slow_b = raise(&runtime, &slow_task.id, "Which slow price settles second?")?;
+    let answer_a = early_a.id.clone();
+    adapter.hooks.lock().unwrap().push((
+        "Which slow price settles second?".into(),
+        Box::new(move || {
+            thread::sleep(Duration::from_millis(20));
+            let other = OrbitRuntime::from_roots(&root_global, &root_workspace).unwrap();
+            other
+                .answer_decision_request_as_human(
+                    &answer_a,
+                    "1",
+                    None,
+                    "human:fixture".into(),
+                    Some("cli".into()),
+                )
+                .unwrap();
+        }),
+    ));
+    let leaked_before = join_counted(&runtime, &service, &category, "leaked")?;
+    runtime.run_precedent_decision_with_service(&service)?;
+    let early_receipt = receipt(&runtime, &early_a.id)?.ok_or("missing early receipt")?;
+    let early_sealed = early_receipt.sealed_at.ok_or("early prediction unsealed")?;
+    let slow_sealed = receipt(&runtime, &slow_b.id)?
+        .and_then(|r| r.sealed_at)
+        .ok_or("slow prediction unsealed")?;
+    assert!(early_sealed < slow_sealed, "A settled before B finished");
+    let join = runtime.precedent_decision_join_with_service(&service)?;
+    let scored = join["categories"][&category]["scored"].to_string();
+    assert!(
+        scored.contains(&early_a.id),
+        "A settled before the human answer and is scored"
+    );
+    assert!(!scored.contains(&slow_b.id), "B is still open");
+    assert_eq!(
+        join_counted(&runtime, &service, &category, "leaked")?,
+        leaked_before,
+        "A is not counted as leaked"
+    );
+
+    // A failure while processing later work leaves an earlier seal as it was.
+    let first_task = runtime.add_task(TaskAddParams {
+        title: "Price the first survivor".into(),
+        description: "Decide the first survivor.".into(),
+        acceptance_criteria: vec!["An earlier seal survives a later failure.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let first_c = raise(
+        &runtime,
+        &first_task.id,
+        "Which survivor price settles first?",
+    )?;
+    let failing_task = runtime.add_task(TaskAddParams {
+        title: "Price the failing item".into(),
+        description: "Decide the failing item.".into(),
+        acceptance_criteria: vec!["A later failure is reported.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let failing_d = raise(
+        &runtime,
+        &failing_task.id,
+        "Which failing price settles second?",
+    )?;
+    let config_path = global.join("config.toml");
+    let original_config = std::fs::read(&config_path)?;
+    let hook_path = config_path.clone();
+    adapter.hooks.lock().unwrap().push((
+        "Which failing price settles second?".into(),
+        Box::new(move || {
+            std::fs::write(&hook_path, b"not = [valid").unwrap();
+        }),
+    ));
+    let failed = runtime.run_precedent_decision_with_service(&service);
+    std::fs::write(&config_path, &original_config)?;
+    assert!(failed.is_err(), "the later item's failure is reported");
+    let first_sealed = receipt(&runtime, &first_c.id)?
+        .and_then(|r| r.sealed_at)
+        .ok_or("earlier completion was not sealed before the failure")?;
+    runtime.run_precedent_decision_with_service(&service)?;
+    assert_eq!(
+        receipt(&runtime, &first_c.id)?.and_then(|r| r.sealed_at),
+        Some(first_sealed),
+        "a later tick keeps the earlier completion time"
+    );
+    assert!(
+        receipt(&runtime, &failing_d.id)?
+            .and_then(|r| r.sealed_at)
+            .is_some_and(|at| at > first_sealed)
+    );
     std::io::stdout().write_all(
         b"{\"fixture\":\"precedent-decision/1\",\"status\":\"passed\",\"external_network_calls\":0,\"labels\":\"synthetic\"}\n",
     )?;
