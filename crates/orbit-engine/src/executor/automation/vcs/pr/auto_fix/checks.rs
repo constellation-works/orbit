@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -204,14 +204,10 @@ fn recorded_base_red<H: RuntimeHost + ?Sized>(
 ) -> bool {
     auto_fix.task_ids.iter().any(|task| {
         host.get_task_history(task).is_ok_and(|history| {
-            history.iter().any(|entry| {
-                entry.event == "pr_auto_fix_base_red"
-                    && entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                        .is_some_and(|note| note["failed_head"] == head)
-            })
+            history
+                .iter()
+                .filter_map(PrAutoFixBaseRed::from_entry)
+                .any(|record| record.failed_head == head)
         })
     })
 }

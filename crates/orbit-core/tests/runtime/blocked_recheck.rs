@@ -15,7 +15,8 @@ use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, MergedPullRequest, PullRequestBlockers, TaskPrForge,
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{TaskDecision, TaskHistoryEntry};
+use orbit_types::workflow::{PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed};
 use serde_json::json;
 
 /// A forge whose only pull request, #17, is merged (or not) as configured.
@@ -136,9 +137,38 @@ impl TaskPrForge for GreenForge {
     }
 }
 
+/// Persisted representations the blocked recheck must continue to open.
+#[derive(Clone, Copy, Debug)]
+enum BaseRedStorage {
+    Typed,
+    LegacyRich,
+    LegacyMinimal,
+}
+
+const BASE_RED_STORAGE: [BaseRedStorage; 3] = [
+    BaseRedStorage::Typed,
+    BaseRedStorage::LegacyRich,
+    BaseRedStorage::LegacyMinimal,
+];
+
 /// Record `head`'s failure as inherited from the base, as the auto-fix poll
 /// does while a run is watching the pull request.
-fn record_base_red(fx: &Fixture, task: &str, head: &str) {
+fn record_base_red(fx: &Fixture, task: &str, head: &str, storage: BaseRedStorage) {
+    let (note, decision) = match storage {
+        BaseRedStorage::Typed => (
+            // The note asserts the opposite head: only the decision owns it.
+            json!({"failed_head": if head == HEAD { "other-head" } else { HEAD }, "reason": "base_red"}),
+            Some(TaskDecision::PrAutoFixBaseRed(
+                PrAutoFixBaseRed::for_failed_head(head.into(), "base_red".into()),
+            )),
+        ),
+        BaseRedStorage::LegacyRich => (
+            json!({"failed_head": head, "landed_base": "base-tip", "base_branch": "agent-main",
+                "source": "latest_push", "path": "known_red_base", "checks": [{"base_commit": "base-tip"}]}),
+            None,
+        ),
+        BaseRedStorage::LegacyMinimal => (json!({"failed_head": head, "reason": "base_red"}), None),
+    };
     RuntimeHost::apply_task_automation_update(
         &fx.runtime,
         task,
@@ -146,12 +176,12 @@ fn record_base_red(fx: &Fixture, task: &str, head: &str) {
             append_history: vec![TaskHistoryEntry {
                 at: chrono::Utc::now(),
                 by: "system".into(),
-                event: "pr_auto_fix_base_red".into(),
-                note: Some(json!({"failed_head": head, "reason": "base_red"}).to_string()),
+                event: PR_AUTO_FIX_BASE_RED_EVENT.into(),
+                note: Some(note.to_string()),
                 from_status: None,
                 to_status: None,
                 operation_id: None,
-                decision: None,
+                decision,
             }],
             ..Default::default()
         },
@@ -161,10 +191,10 @@ fn record_base_red(fx: &Fixture, task: &str, head: &str) {
 
 /// A run of `task` that blocks it as a failed run does, after recording a
 /// base-red failure for `base_red_head` when given.
-fn run_blocks(fx: &Fixture, task: &str, base_red_head: Option<&str>) {
+fn run_blocks(fx: &Fixture, task: &str, base_red_head: Option<&str>, storage: BaseRedStorage) {
     fx.update(json!({"id": task, "status": "in_progress"}));
     if let Some(head) = base_red_head {
-        record_base_red(fx, task, head);
+        record_base_red(fx, task, head, storage);
     }
     RuntimeHost::apply_task_automation_update(
         &fx.runtime,
@@ -190,56 +220,80 @@ fn green_fixture(head: &str) -> Fixture {
 
 #[test]
 fn a_base_red_block_on_the_current_head_requeues_once_the_checks_pass() {
-    let fx = green_fixture(HEAD);
-    let task = fx.task(&[]);
-    fx.record_pull_request(&task, 17);
-    run_blocks(&fx, &task, Some(HEAD));
+    for storage in BASE_RED_STORAGE {
+        let fx = green_fixture(HEAD);
+        let task = fx.task(&[]);
+        fx.record_pull_request(&task, 17);
+        run_blocks(&fx, &task, Some(HEAD), storage);
 
-    let settled = fx.runtime.recheck_blocked_tasks().unwrap();
-    assert_eq!(settled.len(), 1, "{settled:?}");
-    assert_eq!(settled[0].kind, RecheckKind::ChecksGreen);
-    assert_eq!(fx.status(&task), "backlog");
-    let history = fx.runtime.get_task_history(&task).unwrap();
-    assert!(
-        history
+        let before = fx.runtime.get_task_history(&task).unwrap();
+        let held = before
             .iter()
-            .any(|entry| entry.event == "blocked_task_rechecked"
-                && entry
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| note.starts_with("kind=checks_green"))),
-        "{history:?}"
-    );
+            .find(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+            .unwrap();
+        assert_eq!(
+            PrAutoFixBaseRed::from_entry(held).unwrap().failed_head,
+            HEAD,
+            "{storage:?}"
+        );
+        let settled = fx.runtime.recheck_blocked_tasks().unwrap();
+        assert_eq!(settled.len(), 1, "{settled:?}");
+        assert_eq!(settled[0].kind, RecheckKind::ChecksGreen);
+        assert_eq!(fx.status(&task), "backlog");
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        let retained = history
+            .iter()
+            .find(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+            .unwrap();
+        assert_eq!(
+            retained.note, held.note,
+            "{storage:?}: recheck preserves persisted legacy bytes"
+        );
+        assert_eq!(retained.decision, held.decision);
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry.event == "blocked_task_rechecked"
+                    && entry
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.starts_with("kind=checks_green"))),
+            "{history:?}"
+        );
+    }
 }
 
 #[test]
 fn a_block_that_base_red_history_did_not_cause_stays_blocked_with_green_checks() {
-    // Base-red evidence from an earlier run, then a block for another reason.
-    let fx = green_fixture(HEAD);
-    let earlier = fx.task(&[]);
-    fx.record_pull_request(&earlier, 17);
-    run_blocks(&fx, &earlier, Some(HEAD));
-    fx.update(json!({"id": earlier, "status": "backlog"}));
-    run_blocks(&fx, &earlier, None);
+    for storage in BASE_RED_STORAGE {
+        // Base-red evidence from an earlier run, then a block for another reason.
+        let fx = green_fixture(HEAD);
+        let earlier = fx.task(&[]);
+        fx.record_pull_request(&earlier, 17);
+        run_blocks(&fx, &earlier, Some(HEAD), storage);
+        fx.update(json!({"id": earlier, "status": "backlog"}));
+        run_blocks(&fx, &earlier, None, storage);
 
-    // Base-red evidence for a head the pull request has since left.
-    let moved = fx.task(&[]);
-    fx.record_pull_request(&moved, 17);
-    run_blocks(
-        &fx,
-        &moved,
-        Some("fedcba9876543210fedcba9876543210fedcba98"),
-    );
+        // Base-red evidence for a head the pull request has since left.
+        let moved = fx.task(&[]);
+        fx.record_pull_request(&moved, 17);
+        run_blocks(
+            &fx,
+            &moved,
+            Some("fedcba9876543210fedcba9876543210fedcba98"),
+            storage,
+        );
 
-    // Base-red evidence from an earlier run, then a final-recovery escalation.
-    let escalated = fx.task(&[]);
-    fx.record_pull_request(&escalated, 17);
-    run_blocks(&fx, &escalated, Some(HEAD));
-    fx.update(json!({"id": escalated, "status": "backlog"}));
-    fx.escalate(&escalated);
+        // Base-red evidence from an earlier run, then a final-recovery escalation.
+        let escalated = fx.task(&[]);
+        fx.record_pull_request(&escalated, 17);
+        run_blocks(&fx, &escalated, Some(HEAD), storage);
+        fx.update(json!({"id": escalated, "status": "backlog"}));
+        fx.escalate(&escalated);
 
-    assert!(fx.runtime.recheck_blocked_tasks().unwrap().is_empty());
-    for task in [&earlier, &moved, &escalated] {
-        assert_eq!(fx.status(task), "blocked", "{task}");
+        assert!(fx.runtime.recheck_blocked_tasks().unwrap().is_empty());
+        for task in [&earlier, &moved, &escalated] {
+            assert_eq!(fx.status(task), "blocked", "{task}");
+        }
     }
 }

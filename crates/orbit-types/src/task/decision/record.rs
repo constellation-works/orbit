@@ -70,6 +70,9 @@ pub enum TaskDecision {
     /// One bounded wait for a throttled pull-request log read, recorded on
     /// `pr_auto_fix_read_deferred`.
     PrAutoFixReadDeferred(crate::workflow::PrAutoFixReadDeferral),
+    /// A failed head held for an inherited base failure, recorded on
+    /// `pr_auto_fix_base_red`.
+    PrAutoFixBaseRed(crate::workflow::PrAutoFixBaseRed),
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),

@@ -75,8 +75,8 @@ pub(super) use checks::{
     repair_failed_checks,
 };
 pub(super) use ledger::{
-    attach_evidence, record_base_path, record_landed_repair, record_published_repair,
-    reserve_base_refresh,
+    attach_evidence, record_base_path, record_base_red, record_landed_repair,
+    record_published_repair, reserve_base_refresh,
 };
 pub(super) use publication::{LocalRepair, publish_local_repair};
 pub(super) use published_head::adopt_published_repairs;
