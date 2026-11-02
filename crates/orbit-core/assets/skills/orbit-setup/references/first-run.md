@@ -131,11 +131,14 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Only `crew_performance_refresh` is seeded enabled.** Every other routine and
-  auto-task ships disabled: the automation layer is installed but dark until
-  someone reviews and opts in. `crew_performance_refresh` no-ops while
+- **Only `crew_performance_refresh` and `host-health` are seeded enabled.** Every
+  other routine and auto-task ships disabled: the automation layer is installed
+  but dark until someone reviews and opts in. `crew_performance_refresh` no-ops while
   `workflow.crew_performance` is `off`, but it still records a job run each hour,
-  so a fresh workspace that seeds the default routines schedules it. → [automation.md](automation.md)
+  so a fresh workspace that seeds the default routines schedules it. The
+  `host-health` auto-task files a daily host-health review on the workspace
+  owner once the host clock is installed; `orbit auto-task toggle host-health off`
+  turns it off. → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.

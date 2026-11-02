@@ -372,6 +372,13 @@ plugin being removed.
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
 except any you deleted (see [Deleting a definition](#deleting-a-definition)).
+`host-health` is the one exception: it seeds enabled. In an existing
+workspace, `orbit workspace sync` or `orbit workspace init` turns on a
+`host-health` no operator has configured (its file still holds the bytes Orbit
+wrote and no `orbit auto-task toggle` set its flag); `orbit init` leaves
+existing files alone. After a toggle or a file edit, that choice decides:
+`orbit auto-task toggle host-health off` keeps it off. Only the workspace
+owner mints it; a replica never does.
 For ongoing selection and reconciliation, follow [Seeding policy](configuration.md#seeding-policy):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -526,7 +533,7 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
-- **`host-health`** (`hard`) — disabled-by-default daily review of host-local
+- **`host-health`** (`hard`) — enabled-by-default daily review of host-local
   `orbit doctor --json` findings and Orbit service logs. It groups normalized
   signatures, files standing doctor findings and recurring log errors, and
   routes operator fixes with runnable `## Resolve` steps.

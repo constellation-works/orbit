@@ -1351,8 +1351,10 @@ fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
     let (mut deliveries, mut preconditions, mut tool_calls, mut run_reads) = (0, 0, 0, 0);
     for name in names {
         let definition = fixture.json(&["auto-task", "show", name, "--json"]);
+        // [ORB-21596] host-health is the one default approved to seed enabled.
         assert_eq!(
-            definition["enabled"], false,
+            definition["enabled"],
+            name == "host-health",
             "[ORB-10549] seeding must not opt the workspace into {name}"
         );
         assert!(

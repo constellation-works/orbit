@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: host-health
 description: Daily doctor and recurring service-log findings with owner dedupe, human routing and executable resolution steps
-enabled: false
+enabled: true
 schedule:
   cron: 10 7 * * *
 template:

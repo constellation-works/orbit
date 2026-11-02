@@ -13,7 +13,8 @@ use crate::application::auto_tasks::demoted::release_demoted_auto_tasks;
 use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
-    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, render_default_auto_task,
+    DEFAULT_AUTO_TASK_FILES, ENABLED_BY_DEFAULT_AUTO_TASKS, auto_tasks_dir, cursor_state_path,
+    render_default_auto_task,
 };
 use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
@@ -270,9 +271,11 @@ fn reconcile_managed_artifacts(
                         "default auto-task `{name}` failed validation: {error}"
                     ))
                 })?;
-                if definition.name != name || definition.enabled {
+                let ships_enabled = ENABLED_BY_DEFAULT_AUTO_TASKS.contains(&name);
+                if definition.name != name || definition.enabled != ships_enabled {
+                    let state = if ships_enabled { "enabled" } else { "disabled" };
                     return Err(OrbitError::InvalidInput(format!(
-                        "default auto-task `{name}` must have the matching name and ship disabled"
+                        "default auto-task `{name}` must have the matching name and ship {state}"
                     )));
                 }
                 Ok(rendered)
