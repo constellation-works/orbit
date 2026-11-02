@@ -122,7 +122,7 @@ assigned to a human crew with `orbit decision raise`.
 
 | Command | Purpose |
 |---|---|
-| `orbit decision list` | List open decision requests. `--gate agent_request\|block_triage\|pilot_admission\|proposed_approval\|review_approval` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
+| `orbit decision list` | List open decision requests. `--gate agent_request\|block_triage\|model_answer_review\|pilot_admission\|proposed_approval\|resident_authority\|review_approval\|script_grant` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
 | `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
 | `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
 | `orbit decision raise --task <id> --question <text> --options <json>` | Raise a multiple-choice decision on a human-crew task. `--options` is a JSON array of `{label, consequence, recommended}` objects with two to four options and exactly one recommended. Each option may set `risk_tier` (`routine`, `reversible`, `irreversible`, `authority` or `spend`); omitted means `unknown`, and any other value is refused. `--topic` is an optional structured topic or corpus rule id. The MCP tool is `orbit.decision.raise`. See [Decisions an agent raises on a human task](../../how-to/decision-channels/#decisions-an-agent-raises-on-a-human-task). |
@@ -204,6 +204,9 @@ keeps running leaves. `orbit run show` reports the claim stages.
 | `orbit notice list` / `show` | List open fleet notices (or `--status closed`, `expired`, `all`), or show one with its history. |
 | `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
 | `orbit resident show <task>` / `list` | Show a mandate, its effective authority, grant history and open grant requests, or list mandates (`--all` includes ended ones). |
+| `orbit resident checkpoint <task> --record <json>` | Append the live cycle's `resident.checkpoint` record. It needs a matching live, unexpired cycle and writes nothing for a stale or duplicate record. |
+
+The mandate format and the authority rules are described in [Resident mandates](../resident-mandates/).
 
 See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
 listener authentication and examples.

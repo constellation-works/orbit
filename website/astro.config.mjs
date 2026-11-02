@@ -230,6 +230,7 @@ export default defineConfig({
             { slug: 'reference/application-consent', label: 'Application consent' },
             { slug: 'reference/executor-yaml', label: 'Executor YAML' },
             { slug: 'reference/scoping', label: 'Scoping rules' },
+            { slug: 'reference/resident-mandates', label: 'Resident mandates' },
           ],
         },
         {
