@@ -508,6 +508,10 @@ impl OrbitRuntime {
                 self.apply_resident_grant_answer(request, answer_id, actor_label)?;
                 Ok(None)
             }
+            DecisionGate::ScriptGrant => {
+                self.apply_script_grant_answer(request, answer_id, actor_label, via)?;
+                Ok(None)
+            }
         }
     }
 

@@ -24,6 +24,7 @@ mod run;
 mod run_stage;
 mod run_worktree;
 pub(crate) mod script_attach;
+pub(crate) mod script_grant_request;
 pub(crate) mod script_inputs;
 pub(crate) mod script_outputs;
 pub(crate) mod script_step;

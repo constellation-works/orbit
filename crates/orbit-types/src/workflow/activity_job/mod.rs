@@ -32,6 +32,7 @@ pub mod provider_sandbox;
 pub mod retired;
 pub mod schema_header;
 pub mod script;
+pub mod script_grant_request;
 pub mod tool_allowlist;
 pub mod trusted_host;
 
@@ -228,6 +229,10 @@ pub use script::{
     script_interpreter_from_shebang, script_output_media_type, script_output_set_id,
     script_output_total_cap, script_refusal, script_sha256_hex, validate_script_arg_template,
     validate_script_interpreter, validate_script_spec,
+};
+pub use script_grant_request::{
+    SCRIPT_GRANT_DIFF_MAX_BYTES, SCRIPT_GRANT_TASK_TAG, ScriptGrantCapabilities,
+    ScriptGrantRequest, script_file_diff, script_grant_diff,
 };
 pub use tool_allowlist::{
     ActivityToolDenyPolicy, ActivityToolPolicyMode, ToolAllowlistError,

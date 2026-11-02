@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-01
 status: Draft
 stage: building
-next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task"
+next: "Phases 1, 2 and 4 landed ([ORB-19983], [ORB-19985], [ORB-21299]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task; an explicit raise surface for script_grant requests and phase 5 (network) are not yet filed"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1 and 2 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
+Status: proposed; phases 1, 2 and 4 (Phasing) have landed, and phase 3 has landed on Linux. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
@@ -24,7 +24,11 @@ findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
 refuse with `script_sandbox_unavailable`. [ORB-20866] added declared output files
 (`files.outputs`, §4 Files out) from phase 3, and [ORB-21297] added the rest of
 phase 3 on Linux: declared input files (`files.inputs`, §4 Files in) and the
-`attach_script_files` action that attaches a step's output files to a task. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+`attach_script_files` action that attaches a step's output files to a task. Phase 4
+([ORB-21299]) raises a `script_grant` decision request when a step is refused for a
+missing, stale or insufficient grant, applies a human or registered-channel answer as a
+digest-bound grant, and adds the dashboard Scripts view with its operator-only grant
+action. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
@@ -370,6 +374,28 @@ forged row has no matching witness.
    plugin. Only the human funnel or a registered decision channel's
    `orbit.decision.submit` can answer it. The request is superseded when the digest
    changes.
+
+   As landed in phase 4 ([ORB-21299]), a script step refused with `grant_missing`,
+   `grant_stale` or `grant_insufficient` raises the request itself, best-effort: the
+   refusal stands either way and its message names the request. A witness failure,
+   a sandbox gap or a changed interpreter raises nothing, since a grant would not
+   clear them. The request carries the script name, the digest it would grant (and
+   the refused grant's digest), the manifest and entry digests, the diff against the
+   last granted bytes (cut at 32 KiB), and the requested against granted capability
+   sets. A repeat refusal for the same digest and capability set reuses the open
+   request, and a newer request for the same script supersedes the older one.
+   Requests live on one `someday` holder task per script, titled
+   ``Script grant requests: `<name>` `` and tagged `script-grant`, which no agent
+   dispatches. The answers are `grant` and `reject`. A `grant` answer re-reads the
+   catalog: when the script's digest or requested capabilities no longer match the
+   binding, the answer is refused as superseded and nothing is written. Otherwise it
+   writes the grant with the answering human as grantor and `cli`, `dashboard` or
+   `decision-channel <name>` as provenance. The request is an Authority-tier
+   decision, so no precedent or model answer applies to it. A grant answer binds
+   the bytes in the workspace catalog (the primary checkout). A step that ran in a
+   worktree whose bytes differ from the catalog's is refused as superseded until
+   those bytes land. Phase 4 adds no tool to raise a `script_grant` request by hand;
+   the orbit-office proposal flow in §9.1 still needs one.
 
 `orbit.script.grant` and `orbit.script.revoke` are governed operations whose catalog
 rows have no Agent capability, so `classify_agent_tool_grant` makes them operator-only.
@@ -723,7 +749,7 @@ the run, isn't kept with the run and can't be read from another host's dashboard
 | Talks to Orbit | Through `orbit_tools` callbacks | Never; later steps do |
 
 A plugin that only wraps one script, as `office.script-run` does, should become a
-script step once phase 4 ships.
+script step now that phase 4 has shipped.
 
 **Why.** It keeps one execution surface per kind of code. A plugin answers "share
 this tool", and a script step answers "run this chore here".
@@ -826,7 +852,14 @@ set (§4 Files out).
 - **Doctor.** A `script sandbox` row, plus one finding per `stale` or `revoked` script
   that a job still references.
 - **Dashboard.** A Scripts view in the Automation area with grant state and diffs, and
-  the operator-only grant and revoke actions. The run view shows `script_execution`.
+  the operator-only grant and revoke actions. Phase 4 ([ORB-21299]) shipped the view
+  (`GET /api/scripts`) with each script's state (granted, stale with the commit
+  that changed it, ungranted, revoked), digests, requested against granted
+  capabilities, the open `script_grant` request and the diff, plus the grant action
+  (`POST /api/scripts/<name>/grant`). The grant action is bound to the digest the
+  operator reviewed and answers the open request when there is one. Revoke stays on
+  the CLI. Answering a `script_grant` request from the dashboard's decision
+  surface also takes an operator session. The run view shows `script_execution`.
 - **MCP.** `orbit.script.list` and `orbit.script.show` are read-only and grantable to
   agents. Grant and revoke are operator-only (§2).
 
@@ -1083,9 +1116,12 @@ A script that rewrites itself during a run changes nothing for that run (§2,
    `macos-sandbox-script-v1` profile (inputs copied rather than bound), `RLIMIT_*`
    limits, the root probes and TCC reporting, and nested-sandbox refusal. With
    them it covers use case B, and orbit-office items 4 and 5.
-4. **Grant requests.** Not yet filed. This phase adds the `script_grant` decision request, answers
-   from registered channels (orbit-office item 1), and the dashboard Scripts view with
-   its grant action. `office.script-run` can then become a thin wrapper.
+4. **Grant requests.** Landed in [ORB-21299]. This phase adds the `script_grant`
+   decision request, raised automatically by a step refused for a missing, stale or
+   insufficient grant; answers from the CLI, the dashboard and registered channels
+   (orbit-office item 1); and the dashboard Scripts view with its grant action (§2).
+   An explicit raise surface for orbit-office proposals is not yet filed;
+   `office.script-run` becomes a thin wrapper once it lands.
 5. **Network.** Not yet filed. `https` and `any` on Linux, with `env_pass` and the redaction of passed
    values. It covers the off-site part of use case A.
 6. **Later.** Each of these is filed only when needed: a grant-time `prepare` (fetch)
@@ -1159,6 +1195,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-19294] — designs script steps (this doc).
 - [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
+- [ORB-21299] — phase 4: `script_grant` decision requests raised by refused steps, human and channel answers that write digest-bound grants, and the dashboard Scripts view.
 - [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
 - [ORB-21178] — filed the remaining phases of this doc.

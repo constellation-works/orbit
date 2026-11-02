@@ -15,6 +15,7 @@ import {
 } from './operations-shared.js';
 import { configureOperationsRoutines, renderClock, renderRoutineRows, scopedRoutines, updateRoutineFailureBadge } from './operations-routines.js';
 import { fetchAndRenderAutoTasks, syncAutoTaskSchedulerNote } from './operations-auto-tasks.js';
+import { fetchAndRenderScripts } from './operations-scripts.js';
 import { lastJobs, renderJobs } from './operations-jobs.js';
 import { startFleetIndicatorRefresh } from './operations-fleet.js';
 
@@ -64,6 +65,10 @@ function throwFirstPanelError(results) {
 export async function fetchAndRenderOperations(subtab = operationsState.context.getOperationsSubtab()) {
   if (subtab === "auto-tasks") {
     await fetchAndRenderAutoTasks();
+    return;
+  }
+  if (subtab === "scripts") {
+    await fetchAndRenderScripts();
     return;
   }
   const routines = fetchJson(withInactivePlugins("/api/routines"));

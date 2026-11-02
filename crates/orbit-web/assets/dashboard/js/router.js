@@ -55,7 +55,7 @@ const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "f
 const COST_TABS = ["spend", "exploration"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts"];
 const JOBS_SUBTABS = ["live", "history", "catalogue"];
 // Health views that replace the list panel with their own full-width <main>.
 const HEALTH_MAINS = {
@@ -368,6 +368,8 @@ function setOperationsSubtabImpl(ctx, name) {
   const autoTasks = $("operations-auto-tasks-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
+  const scripts = $("operations-scripts-main");
+  if (scripts) scripts.hidden = name !== "scripts";
 }
 
 function setJobsSubtabImpl(ctx, name) {

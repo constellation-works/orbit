@@ -811,7 +811,7 @@
     "parameters": [
       {
         "name": "gate",
-        "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority or review_approval.",
+        "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant.",
         "param_type": "string",
         "required": false
       },

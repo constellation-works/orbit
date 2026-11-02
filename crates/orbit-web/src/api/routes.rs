@@ -99,6 +99,8 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/tasks/{id}/archive", post(tasks::archive_task_action))
         .route("/decisions", get(decisions::list_decisions))
         .route("/decisions/{id}/answer", post(decisions::answer_decision))
+        .route("/scripts", get(scripts::list_scripts))
+        .route("/scripts/{name}/grant", post(scripts::grant_script))
         .route("/tasks/{id}/pilot", post(tasks::pilot::pilot_task_action))
         .route(
             "/tasks/{id}/triage",

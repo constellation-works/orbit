@@ -39,6 +39,7 @@ impl OrbitRuntime {
                 request.gate,
                 orbit_types::task::DecisionGate::ModelAnswerReview
                     | orbit_types::task::DecisionGate::ResidentAuthority
+                    | orbit_types::task::DecisionGate::ScriptGrant
             )
         {
             return;

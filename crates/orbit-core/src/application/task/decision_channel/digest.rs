@@ -137,7 +137,8 @@ impl OrbitRuntime {
                     | DecisionGate::PilotAdmission
                     | DecisionGate::AgentRequest
                     | DecisionGate::ModelAnswerReview
-                    | DecisionGate::ResidentAuthority => {
+                    | DecisionGate::ResidentAuthority
+                    | DecisionGate::ScriptGrant => {
                         return Ok(());
                     }
                 };

@@ -113,6 +113,7 @@ pub(super) fn question_text(request: &DecisionRequest) -> String {
         DecisionGate::AgentRequest => "Which option answers this request?",
         DecisionGate::ModelAnswerReview => "Should the model's answer stand?",
         DecisionGate::ResidentAuthority => "Should the resident's authority be widened?",
+        DecisionGate::ScriptGrant => "Should this script be granted at this digest?",
     }
     .to_string()
 }

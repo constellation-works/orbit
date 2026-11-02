@@ -972,3 +972,87 @@ fn decision_cli_shows_digests_and_vetoes_a_model_answer() {
     let task = fixture.json(&["task", "show", &task_id, "--json"]);
     assert_eq!(task["status"], "backlog", "{task}");
 }
+
+/// `orbit decision show` on a `script_grant` request prints what an answer
+/// consents to (script, digests, refusal, capabilities and the diff), and
+/// `orbit decision answer <id> grant` writes the grant bound to that digest.
+#[test]
+fn decision_cli_shows_and_answers_a_script_grant_request() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_cli_shows_and_answers_a_script_grant_request",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap()).to_path_buf();
+    let repo = fixture.repo.clone();
+    std::fs::create_dir_all(repo.join("tools")).unwrap();
+    std::fs::write(repo.join("tools/report.sh"), "#!/bin/sh\necho '{}'\n").unwrap();
+    // This fixture's orbit root sits outside the repo: the catalog reads the
+    // root's manifests and a step snapshot the checkout's, so write both.
+    for scripts in [
+        workspace_root.join("resources/scripts"),
+        repo.join(".orbit/resources/scripts"),
+    ] {
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(
+            scripts.join("report.yaml"),
+            "schemaVersion: 1\nkind: Script\nmetadata:\n  name: report\nspec:\n  description: Fixture report.\n  entry: tools/report.sh\n",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        repo.join("sweep.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: sweep\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run\n      target: script:report\n",
+    )
+    .unwrap();
+    let runtime = || {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        OrbitRuntime::from_roots(&fixture.root, &workspace_root).unwrap()
+    };
+    let refused = format!(
+        "{:?}",
+        runtime().run_job_v2_from_yaml(&repo.join("sweep.yaml"), serde_json::json!({}))
+    );
+    assert!(refused.contains("grant_missing"), "{refused}");
+
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    let request = &listed["requests"][0];
+    assert_eq!(request["gate"], "script_grant", "{listed}");
+    let request_id = request["id"].as_str().unwrap().to_string();
+    let digest = request["script_grant"]["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let output = fixture
+        .command(&["decision", "show", &request_id])
+        .assert()
+        .success();
+    let plain = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    for expected in [
+        "script: report (entry tools/report.sh)".to_string(),
+        format!("digest: {digest} (granted: none)"),
+        "refusal: grant_missing".to_string(),
+        "+echo '{}'".to_string(),
+    ] {
+        assert!(plain.contains(&expected), "want {expected:?}: {plain}");
+    }
+
+    fixture
+        .command(&["decision", "answer", &request_id, "grant", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    let grant = runtime()
+        .verified_script_grant("report")
+        .unwrap()
+        .expect("the answer wrote the grant");
+    assert_eq!(grant.digest, digest);
+    assert_eq!(grant.provenance, "cli");
+}

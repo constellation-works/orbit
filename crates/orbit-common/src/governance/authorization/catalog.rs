@@ -513,6 +513,15 @@ pub const DASHBOARD_PLUGIN_DISABLE: GovernedOperation = GovernedOperation {
     rationale: "disabling a plugin removes its tools and scheduled contributions",
 };
 
+/// Grant a workspace script at the digest the operator reviewed, from the
+/// dashboard Scripts view (script steps §2, route 2).
+pub const DASHBOARD_SCRIPT_GRANT: GovernedOperation = GovernedOperation {
+    id: "script.grant",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "a script grant lets unattended job steps run those exact bytes on this host",
+};
+
 /// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
 pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
     id: "claim.recover",
@@ -1226,6 +1235,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HOST_FORWARD,
     DASHBOARD_PLUGIN_ENABLE,
     DASHBOARD_PLUGIN_DISABLE,
+    DASHBOARD_SCRIPT_GRANT,
     PLUGIN_TOOL_READ_ONLY,
     PLUGIN_TOOL_MUTATING,
     PLUGIN_TOOL_AGENT_CALLABLE,
