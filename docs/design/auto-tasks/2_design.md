@@ -756,6 +756,19 @@ separate policy. Routine toggle and the clock capabilities are on the routines
 list response instead. The legacy `controls_authorized` field remains for existing
 API consumers and still answers only for toggle and mint.
 
+`POST /api/auto-tasks/schedule` decodes the body, binds the trusted caller and
+records the audit row, then runs the observed profile of the shared
+`auto_task_schedule_command`. The command owns the rest: a missing definition
+is a 404 `auto_task_not_found`, a schedule that differs from `expected_schedule`
+is a 409 `stale_auto_task_schedule` carrying `actual_schedule`, and a request the
+stored schedule already satisfies answers `changed: false`; none of those
+validates, writes, stamps or audits. Only a real change reaches the write, which
+rejects retired coverage, rechecks `expected_schedule` under the cursor lock
+(a later mismatch is an ordinary control error, not the 409), validates and
+stamps. The ordinary `update` tool runs the unconditional profile steps inside
+its single locked edit, so a schedule combined with other fields is still one
+write and always validates and stamps.
+
 One session-access explanation appears above Operations. Dashboard authority
 comes from the **server process**, not from opening a browser or terminal.
 For deliberate operator access, restart the server with

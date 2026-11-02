@@ -27,6 +27,8 @@
 //!   checkpoints, parking and the step-bound start guard (ORB-20158).
 //! - [`toggle`] — the one toggle command; the tool, the checked operator
 //!   control and the dashboard are its profiles.
+//! - [`schedule_edit`] — the one schedule edit command; the ordinary update
+//!   and the dashboard schedule editor are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
@@ -46,6 +48,7 @@ mod read;
 pub(crate) mod retired;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
+pub mod schedule_edit;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
@@ -59,6 +62,7 @@ pub use loader::{
     definition_path,
 };
 pub use schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
+pub use schedule_edit::{AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile};
 pub use scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, ListedAutoTask, SchedulerOptions,
     open_auto_task_instance, run_auto_task_scheduler_at,

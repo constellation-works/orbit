@@ -40,6 +40,7 @@ use crate::OrbitRuntime;
 
 use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, definition_path};
 use super::schedule::validate_schedule;
+use super::schedule_edit::{admit_schedule, stage_schedule};
 use super::scheduler::mint_task;
 use super::state::cursor_state_path;
 
@@ -194,24 +195,6 @@ fn in_scope_lookup_name(name: &str) -> bool {
     }
 }
 
-/// New schedules cannot select the retired QA coverage. Loading a definition
-/// that already names it stays allowed, so a not-yet-refreshed workspace copy
-/// does not fail every clock tick.
-fn reject_retired_delivery_coverage(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
-    if let AutoTaskSchedule::Deliveries {
-        deliveries_landed, ..
-    } = schedule
-        && deliveries_landed.coverage
-            == orbit_types::workflow::automation::CoverageClass::IntegratedQaV1
-    {
-        return Err(OrbitError::InvalidInput(
-            "coverage `integrated_qa_v1` is retired; delivery triggers use `landed_code_review_v1`"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 /// The fail-closed rule for one discovery pass: an error only when nothing
 /// loaded, each skipped file logged either way.
 pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), OrbitError> {
@@ -257,7 +240,7 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
-            reject_retired_delivery_coverage(&params.schedule)?;
+            admit_schedule(&params.schedule)?;
             params.template.required_tools =
                 normalize_required_tools(params.template.required_tools);
             let now = chrono::Utc::now().to_rfc3339();
@@ -406,15 +389,15 @@ impl OrbitRuntime {
         }
 
         if let Some(schedule) = &params.schedule {
-            reject_retired_delivery_coverage(schedule)?;
+            admit_schedule(schedule)?;
         }
 
-        self.edit_auto_task(name, |definition| {
+        self.try_edit_auto_task(name, |definition| {
             if let Some(description) = params.description {
                 definition.description = description;
             }
             if let Some(schedule) = params.schedule {
-                definition.schedule = schedule;
+                stage_schedule(definition, None, schedule)?;
             }
             if let Some(dedupe) = params.dedupe {
                 definition.dedupe = dedupe;
@@ -425,6 +408,7 @@ impl OrbitRuntime {
             if let Some(enabled) = params.enabled {
                 definition.enabled = enabled;
             }
+            Ok(())
         })
     }
 
@@ -443,29 +427,6 @@ impl OrbitRuntime {
             Err(error) if waived => Ok(vec![error.to_string()]),
             Err(error) => Err(error),
         }
-    }
-
-    /// Compare and replace the schedule while holding the scheduler cursor
-    /// lock: the schedule half of [`Self::auto_task_update`], with the same
-    /// coverage and definition validation, for a caller that must not
-    /// overwrite a schedule it did not observe.
-    pub fn auto_task_set_schedule_checked(
-        &self,
-        name: &str,
-        expected: &AutoTaskSchedule,
-        schedule: AutoTaskSchedule,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        reject_retired_delivery_coverage(&schedule)?;
-        self.try_edit_auto_task(name, |definition| {
-            if &definition.schedule != expected {
-                return Err(OrbitError::InvalidInput(
-                    "auto-task schedule changed; refresh before retrying".into(),
-                ));
-            }
-            definition.schedule = schedule;
-            Ok(())
-        })
     }
 
     /// Mint one task from a definition on demand — the manual counterpart to a
@@ -650,17 +611,6 @@ impl OrbitRuntime {
     /// patches the latest committed definition, so neither drops the other's
     /// change. Like manual mint, this never loads or saves the cursor, so a
     /// malformed cursor cannot block the kill-switch.
-    fn edit_auto_task(
-        &self,
-        name: &str,
-        edit: impl FnOnce(&mut AutoTaskDefinition),
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.try_edit_auto_task(name, |definition| {
-            edit(definition);
-            Ok(())
-        })
-    }
-
     pub(super) fn try_edit_auto_task(
         &self,
         name: &str,

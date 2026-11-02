@@ -14,6 +14,9 @@ use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER,
 };
+use orbit_core::application::auto_tasks::{
+    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile,
+};
 use orbit_core::application::routines::{
     RoutineToggleRefusal, RoutineTriggerEditOutcome, edit_listed_routine_trigger,
 };
@@ -260,51 +263,48 @@ pub(super) async fn set_auto_task_schedule(
         Err(response) => return *response,
     };
     let started = Instant::now();
-    let current = match blocking("auto-task show", {
+    let outcome = match blocking("auto-task schedule", {
         let runtime = runtime.clone();
         let name = body.name.clone();
-        move || runtime.auto_task_show(&name)
+        let profile = AutoTaskScheduleProfile::Observed {
+            expected_schedule: Box::new(expected),
+        };
+        move || Ok(runtime.auto_task_schedule_command(&name, schedule, profile))
     })
     .await
     {
-        Ok(Some(definition)) => definition,
-        Ok(None) => {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
+    let updated = match outcome {
+        Ok(AutoTaskScheduleOutcome::Written(updated)) => updated,
+        Ok(AutoTaskScheduleOutcome::AlreadySet(current)) => {
+            return Json(json!({
+                "name": body.name,
+                "schedule": current.schedule,
+                "changed": false,
+                "message": "Auto-task schedule already matched",
+            }))
+            .into_response();
+        }
+        Ok(AutoTaskScheduleOutcome::Stale { actual_schedule }) => {
+            return conflict(json!({
+                "error": "auto-task schedule changed while this edit was open; refresh before retrying",
+                "code": "stale_auto_task_schedule",
+                "actual_schedule": actual_schedule,
+            }));
+        }
+        Ok(AutoTaskScheduleOutcome::NotFound) => {
             return named_entity_not_found(
                 "auto_task_not_found",
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(response) => return *response,
-    };
-    if current.schedule != expected {
-        return conflict(json!({
-            "error": "auto-task schedule changed while this edit was open; refresh before retrying",
-            "code": "stale_auto_task_schedule",
-            "actual_schedule": current.schedule,
-        }));
-    }
-    if current.schedule == schedule {
-        return Json(json!({
-            "name": body.name,
-            "schedule": current.schedule,
-            "changed": false,
-            "message": "Auto-task schedule already matched",
-        }))
-        .into_response();
-    }
-    let updated = match blocking("auto-task schedule", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        move || Ok(runtime.auto_task_set_schedule_checked(&name, &expected, schedule))
-    })
-    .await
-    {
-        Ok(Ok(updated)) => updated,
-        Ok(Err(error)) => {
+        Err(AutoTaskScheduleError::Read(error)) => return map_runtime_error(error),
+        Err(AutoTaskScheduleError::Write(error)) => {
             audit(Some(&caller), None, Some(error.to_string()), started).await;
             return auto_task_control_error(error);
         }
-        Err(response) => return *response,
     };
     audit(Some(&caller), None, None, started).await;
     Json(json!({
