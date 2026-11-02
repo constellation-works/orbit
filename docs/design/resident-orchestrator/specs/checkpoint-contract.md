@@ -69,6 +69,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
   "notes": "ORB-21183 waits on DR-…; recheck CI on ORB-21181 next cycle.",
   "next_wake": {"reason": "heartbeat", "not_before": "2026-11-02T12:10:00Z"},
   "continuity": "resumed",
+  "conversation_ref": "conv-…",
   "outcome": "progress",
   "probe": false
 }
@@ -85,6 +86,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 | `costs[]` | Cost events ([evolution-ledger](./evolution-ledger.md)); an empty list when none |
 | `notes` | ≤ 2,000 characters, for the next cycle and the human |
 | `continuity` | `resumed`, `rebuilt` (conversation expired or absent) or `off` |
+| `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none); core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
 | `outcome` | `progress`, `idle` (woke, nothing to do), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
 
 Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reaches a limit does
@@ -188,7 +190,10 @@ The brief `resident_observe` builds, in order:
 reconstructed, because nothing else is authoritative. A conversation the adapter can resume
 (`conversation_ref` in the previous checkpoint, with `continuity: prefer`) receives the same brief
 as its next message. The checkpoint records `resumed` or `rebuilt`, and a resumed cycle must not
-act on anything the brief contradicts.
+act on anything the brief contradicts. Each cycle carries the reference forward by copying
+`brief.conversation_ref` into its own checkpoint's `conversation_ref`; a checkpoint that omits
+it drops the live reference and the following cycle rebuilds even though the conversation was
+still resumable.
 
 ## Agent Signature
 
