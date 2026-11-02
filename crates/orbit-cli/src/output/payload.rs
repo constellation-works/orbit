@@ -66,6 +66,7 @@ impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
+            Self::Notice(text) => f.debug_tuple("Notice").field(text).finish(),
             Self::Table(_) => f.write_str("Table"),
             Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
         }
@@ -121,6 +122,11 @@ pub enum Block {
     /// Text the command formatted itself. Written verbatim; any color in it
     /// was already gated by the sink when the command built it.
     Text(String),
+    /// A non-record notice — health prose, a status or count trailer — that
+    /// is not part of the record stream. The renderer writes it to stderr in
+    /// every mode (`output-modes.md` §5), so a pipe receives only records
+    /// while a human still sees the notice.
+    Notice(String),
     /// A grid the renderer lays out: width, color, header suppression, and the
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
@@ -140,6 +146,17 @@ impl Block {
             text.pop();
         }
         Self::Text(text)
+    }
+
+    /// A stderr notice block, for the common single-`String` case. Like
+    /// [`Block::text`], one trailing newline is dropped because the renderer
+    /// adds its own when it prints the block.
+    pub fn notice(text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        Self::Notice(text)
     }
 
     /// A grid block.

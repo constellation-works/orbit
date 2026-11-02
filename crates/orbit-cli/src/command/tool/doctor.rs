@@ -50,7 +50,7 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
 
     let mut blocks = vec![Block::table(table)];
     if issues == 0 {
-        blocks.push(Block::text(format!(
+        blocks.push(Block::notice(format!(
             "\n{}",
             crate::output::color::text("All tools healthy.", Role::Ok)
         )));

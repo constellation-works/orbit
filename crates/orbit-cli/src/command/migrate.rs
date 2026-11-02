@@ -276,7 +276,7 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
 
     Ok(Payload::blocks(
         doc,
-        vec![Block::table(table), Block::text(status_trailer(status))],
+        vec![Block::table(table), Block::notice(status_trailer(status))],
     )
     .into())
 }
