@@ -248,6 +248,24 @@ impl OrbitRuntime {
         self.stores().tasks().observe_task_candidates(filter, limit)
     }
 
+    /// [`Self::list_task_metadata`] under the observational terms of
+    /// [`Self::observe_task_candidates`]:
+    /// bodyless envelope metadata with no commit-boundary recovery, index
+    /// repair or persisted freshness proofs. An observational caller (such
+    /// as attention) must use this route so a pending task commit is left
+    /// for an ordinary operational read to settle.
+    pub fn observe_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .observe_task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
+            .into_iter()
+            .map(metadata_task)
+            .collect())
+    }
+
     /// [`Self::task_candidates`] answered by the generated index alone, for a
     /// filter it fully covers: the selected ids and creation times, with no
     /// envelope read. `None` sends the caller to [`Self::task_candidates`].
