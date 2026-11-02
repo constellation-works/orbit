@@ -1245,7 +1245,6 @@ fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
     let validator = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
     let valid = [
         json!({"schemaVersion": 1, "status": "success", "result": {}}),
-        json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null}),
         json!({"schemaVersion": 1, "status": "success", "result": {}, "durationMs": 12}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
                "error": {"code": "FAILURE", "message": "work failed"}}),
@@ -1261,6 +1260,8 @@ fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
         );
     }
     let invalid = [
+        json!({"schemaVersion": 1, "status": "failed", "result": {}, "error": "{}"}),
+        json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
                "error": {"code": "", "message": "work failed"}}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
@@ -1316,6 +1317,17 @@ fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
             "parser must reject schema-violating envelope: {stdout}"
         );
     }
+
+    // A schema-less transport may still send `error: null` on success; the
+    // parser treats JSON null as "no error" (ORB-21612).
+    let stdout =
+        json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null}).to_string();
+    assert!(
+        ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .is_ok(),
+        "parser must accept a null error on success: {stdout}"
+    );
 }
 
 fn execution(stdout: String) -> ExecutionResult {

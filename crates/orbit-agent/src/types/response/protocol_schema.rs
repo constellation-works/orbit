@@ -24,7 +24,7 @@ pub const RESPONSE_ENVELOPE_STATUSES: [&str; 3] = ["success", "failed", "timeout
 /// a 400 error, failing every invocation ([ORB-21567]). The `super::envelope`
 /// parser enforces it instead: `success` carries no error object (absent or
 /// `null`), while `failed` and `timeout` must carry one. The schema still pins
-/// the error object's shape, and expresses non-blank `code` and `message` with
+/// `error` to an object and its shape ([ORB-21612]), and expresses non-blank `code` and `message` with
 /// a `pattern` because the Claude structured-output subset rejects
 /// string-length constraints (`minLength`/`maxLength`) (see "JSON Schema
 /// limitations" in the Claude structured-outputs docs).
@@ -53,6 +53,7 @@ pub fn response_envelope_json_schema() -> Value {
                      whose output is purely durable side effects.",
             },
             "error": {
+                "type": "object",
                 "description":
                     "Present only when status is \"failed\" or \"timeout\". Object with \
                      non-empty \"code\" and \"message\". Omit this field when status is \
