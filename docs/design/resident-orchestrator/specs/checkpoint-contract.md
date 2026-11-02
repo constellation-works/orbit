@@ -27,7 +27,10 @@ on write.
 The checkpoint is the resident's whole memory between cycles. If its shape were free prose, every
 cycle would re-interpret the last one, metrics could not count decisions or reversals, and a crash
 would leave no trace of what was half done. A validated record with action keys makes recovery
-mechanical and the evolution and metrics passes possible.
+mechanical and the evolution and metrics passes possible. The keys here are the cycle's
+caller-supplied keys, which slice 3 ([ORB-21244]) adds to the cycle's mutating tools: action-key
+idempotence is internal to automation admission until then, so no dedupe applies before that slice
+lands.
 
 ## `resident.checkpoint` v1
 
@@ -80,10 +83,11 @@ the point.
 ### Synthesized checkpoint
 
 When the agent wrote no valid checkpoint, `resident_finalize` writes one with `outcome:
-incomplete`, `actions[]` rebuilt from audit rows under this cycle's action keys (with `result` from
-the audit row), empty `decisions`, `costs` and `notes`, and an `error` field naming why (agent
-failed, budget exhausted, invalid record refused). If finalize itself never ran (process killed),
-the next observe treats the cycle as dead and the recovery cycle's checkpoint carries `recovery_of`.
+incomplete`, `actions[]` rebuilt from audit rows under this cycle's action keys (the caller-supplied
+keys slice 3 adds; with `result` from the audit row), empty `decisions`, `costs` and `notes`, and an
+`error` field naming why (agent failed, budget exhausted, invalid record refused). If finalize
+itself never ran (process killed), the next observe treats the cycle as dead and the recovery
+cycle's checkpoint carries `recovery_of`.
 
 ## `resident.request` v1
 
@@ -142,6 +146,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 
 - [ORB-21229] — designed the checkpoint and resume contract
 - [ORB-21243] — implements the checkpoint tool and the request/answer shapes
+- [ORB-21244] — adds the caller-supplied action key on the cycle's mutating tools (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
