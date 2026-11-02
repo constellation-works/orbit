@@ -7,8 +7,8 @@ pub use classification::{LOCK_BUSY_ERROR_CODE, is_lock_busy_message};
 pub use kinds::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
     DecisionRefusalCode, DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind,
-    PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
-    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    WorkspaceClaimHeld,
+    NoticeRefusalCode, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
+    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention,
+    StorageLayer, WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

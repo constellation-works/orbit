@@ -344,6 +344,10 @@ const ROOT_OPERATE: &[GroupedRow] = &[
     ),
     ("lease", "Coordinate path leases with the workspace owner"),
     (
+        "notice",
+        "Post, close and list fleet notices other agents and operators see",
+    ),
+    (
         "tool",
         "Manage and run Orbit tools, including external MCP plugins",
     ),

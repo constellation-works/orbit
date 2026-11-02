@@ -32,17 +32,20 @@ pub enum McpToolset {
     /// Agent invocation (`orbit.agent.invoke`). A managed implement or
     /// review-repair run that is offered explorer delegation enables it.
     AgentInvoke,
+    /// Fleet notices: post, close, list and show.
+    Notice,
 }
 
 impl McpToolset {
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Default,
         Self::Leases,
         Self::Experiments,
         Self::Analytics,
         Self::DecisionChannel,
         Self::AgentInvoke,
+        Self::Notice,
     ];
 
     /// The name a selection uses.
@@ -54,6 +57,7 @@ impl McpToolset {
             Self::Analytics => "analytics",
             Self::DecisionChannel => "decision-channel",
             Self::AgentInvoke => "agent-invoke",
+            Self::Notice => "notice",
         }
     }
 

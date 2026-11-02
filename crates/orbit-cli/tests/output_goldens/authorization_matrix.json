@@ -1522,6 +1522,58 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.notice.close",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.notice.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.notice.post",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.notice.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.orchestrator.scorecard",
     "required_any": [],
     "verdicts": {

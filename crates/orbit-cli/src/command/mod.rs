@@ -22,6 +22,7 @@ pub mod locks;
 pub mod log;
 pub mod mcp;
 pub mod migrate;
+pub mod notice;
 pub mod operation;
 pub mod orchestrator;
 pub use operation::args as operation_args;
@@ -110,6 +111,7 @@ Operate:
   script       Grant and inspect workspace scripts a job step may run
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
+  notice       Post, close and list fleet notices other agents and operators see
   tool         Manage and run Orbit tools, including external MCP plugins
   gc           Inspect and explicitly reap Orbit-managed garbage
 
@@ -182,6 +184,7 @@ pub enum Commands {
     Script(script::ScriptCommand),
     Experiment(experiment::ExperimentCommand),
     Lease(lease::LeaseCommand),
+    Notice(notice::NoticeCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 

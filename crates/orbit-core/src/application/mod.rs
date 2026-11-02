@@ -39,6 +39,7 @@ pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
 pub(crate) mod mock_admission;
+pub mod notice;
 pub mod plugin;
 pub mod precedent_decision;
 pub(crate) mod pull_drain;

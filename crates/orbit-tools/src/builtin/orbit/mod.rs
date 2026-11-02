@@ -10,6 +10,7 @@ mod domain_control;
 pub mod drain;
 mod experiment;
 pub mod lease;
+mod notice;
 pub mod operation;
 mod orchestrator;
 pub mod pipeline;

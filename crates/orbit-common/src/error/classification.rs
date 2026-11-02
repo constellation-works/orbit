@@ -2,8 +2,8 @@ use std::path::Path;
 
 use super::{
     ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SourceRepairAuthorityRefusal,
-    SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
+    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -15,11 +15,20 @@ impl OrbitError {
         }
     }
 
+    /// Construct a fleet-notice refusal with its stable code.
+    pub fn notice_refused(code: NoticeRefusalCode, message: impl Into<String>) -> Self {
+        Self::NoticeRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
     /// Whether this is a policy denial, including a typed decision-channel refusal.
     pub fn is_policy_denial(&self) -> bool {
         match self {
             Self::PolicyDenied(_) => true,
             Self::DecisionRefused { code, .. } => code.is_policy_denial(),
+            Self::NoticeRefused { code, .. } => code.is_policy_denial(),
             _ => false,
         }
     }

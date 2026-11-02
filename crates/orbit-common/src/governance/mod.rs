@@ -9,6 +9,7 @@ pub mod drain;
 pub mod experiment;
 pub mod friction;
 pub mod lease;
+pub mod notice;
 pub mod operation;
 pub mod orchestrator;
 pub mod search;

@@ -775,12 +775,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_landed_diff_reviewable_lines,
     },
+    // Fleet notices slice 1: the notice table and its post and close
+    // history. New tables only, which an older binary never reads or writes.
+    Migration {
+        version: 85,
+        name: "notices",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_notices,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 84;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 85;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

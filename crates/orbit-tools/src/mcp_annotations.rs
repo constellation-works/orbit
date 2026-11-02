@@ -32,6 +32,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
+        | "orbit.notice.list"
+        | "orbit.notice.show"
         | "orbit.orchestrator.scorecard"
         | "orbit.orchestrator.show"
         | "orbit.search"
@@ -52,6 +54,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // Edits that set the fields given and touch nothing else.
         "orbit.auto_task.update" => A::additive(true),
 
+        // A repeated close returns the notice unchanged.
+        "orbit.notice.close" => A::additive(true),
+
         // A task edit can append a note or comment, so a repeat is not a no-op.
         "orbit.task.update" => A::additive(false),
 
@@ -59,6 +64,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // A friction edit with `rehome_to` moves the record and resolves the
         // original, so a repeat is refused rather than a no-op.
         "orbit.friction.update" => A::destructive(false),
+        // A post whose key an open notice holds replaces that notice's
+        // content; repeating it matches the same notice and changes nothing.
+        "orbit.notice.post" => A::destructive(true),
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also

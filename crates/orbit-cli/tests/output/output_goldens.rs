@@ -645,6 +645,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.lease.renew", Placement::Advertised),
     ("orbit.lease.request", Placement::Advertised),
     ("orbit.lease.show", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `notice` toolset.
+    ("orbit.notice.close", Placement::Advertised),
+    ("orbit.notice.post", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     // Script grants are reached via `orbit script grant|revoke`; phase 1
@@ -747,10 +750,11 @@ fn authorization_matrix_matches_live_registry() {
         .iter()
         .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
     {
-        if operation.id.starts_with("orbit.lease.") {
-            // Interactive agents coordinate their own paths. Lease governance
-            // is an identity floor, while owner placement and lease policy
-            // constrain their requests.
+        if operation.id.starts_with("orbit.lease.") || operation.id.starts_with("orbit.notice.") {
+            // Interactive agents coordinate their own paths and post their
+            // own notices. Lease and notice governance is an identity floor,
+            // while owner placement, lease policy and the poster class core
+            // derives constrain their requests.
             let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
             assert!(
                 authorize(operation, &unidentified).is_err(),

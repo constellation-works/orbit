@@ -99,6 +99,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
         OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
         OrbitError::DecisionRefused { code, .. } => code.as_str(),
+        OrbitError::NoticeRefused { code, .. } => code.as_str(),
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",

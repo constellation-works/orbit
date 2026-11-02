@@ -972,7 +972,7 @@ fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
 /// `machine.mcp.toolsets` host config restores exactly the named groups.
 #[test]
 fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
-    const OPT_IN: [(&str, &str); 7] = [
+    const OPT_IN: [(&str, &str); 9] = [
         ("orbit_lease_list", "leases"),
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
@@ -980,6 +980,8 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
         ("orbit_crew_ladder", "analytics"),
         ("orbit_decision_digest", "decision-channel"),
         ("orbit_agent_invoke", "agent-invoke"),
+        ("orbit_notice_post", "notice"),
+        ("orbit_notice_list", "notice"),
     ];
     let workspace = McpWorkspace::init();
     for (case, args) in [
@@ -1017,12 +1019,43 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     let mut flagged = workspace.serve_with_args(&[
         "--operator",
         "--toolset",
-        "leases,experiments,analytics,decision-channel,agent-invoke",
+        "leases,experiments,analytics,decision-channel,agent-invoke,notice",
     ]);
     let listed = flagged.tools_list();
     let names = tool_names(&listed);
     for (tool, _) in OPT_IN {
         assert!(names.contains(&tool), "--toolset did not restore {tool}");
+    }
+
+    let mut everything = workspace.serve_with_args(&["--operator", "--toolset", "all"]);
+    let listed = everything.tools_list();
+    let names = tool_names(&listed);
+    for (tool, _) in OPT_IN {
+        assert!(names.contains(&tool), "--toolset all did not list {tool}");
+    }
+
+    // `orbit tool run` reaches a toolset's tools without enabling it.
+    let listed = stdout_json(&tool_ok_at(
+        &workspace.work,
+        &workspace.home,
+        "orbit.notice.list",
+        json!({}),
+    ));
+    assert!(
+        listed["notices"].is_array(),
+        "orbit tool run notice list: {listed}"
+    );
+
+    set_host_toolsets(&workspace, &["notice"]);
+    let mut noticed = workspace.serve_with_args(&["--operator"]);
+    let listed = noticed.tools_list();
+    let names = tool_names(&listed);
+    for (tool, toolset) in OPT_IN {
+        assert_eq!(
+            names.contains(&tool),
+            toolset == "notice",
+            "machine.mcp.toolsets = [\"notice\"] must restore exactly the notice tools: {tool}"
+        );
     }
 
     set_host_toolsets(&workspace, &["leases"]);

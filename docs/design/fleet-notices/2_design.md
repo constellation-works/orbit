@@ -9,15 +9,15 @@ doc_role: design
 type: design
 summary: "Design of fleet notices: a stored owner record, the NOTICE operation noun and notice toolset, managed-agent posting, brief delivery, configuration, the maintenance dispatch-hold extension point, and implementation slices"
 tags: [fleet-notices]
-paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/notice/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs"]
+paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs"]
 related_features: [fleet-notices, operator-attention, federated-mcp, mid-run-steering, explore-brief, distributed-drain, operations-as-data]
 related_artifacts: [ORB-21207]
 ---
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Nothing
-is built yet; module names are placement proposals the slices confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. Slice 1
+([ORB-21211]) is built; module names for later slices are placement proposals they confirm. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -47,18 +47,18 @@ client of the API and lives in its own repository.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md). No new cross-crate dependency is
 needed: every crate below already depends on the ones it would call.
 
-| Concern | Location (proposed) |
+| Concern | Location (slice 1 built; the rest proposed) |
 |---|---|
-| `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/notice/` |
-| The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | a planned `notice.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations as data) |
+| `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
+| The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
 | Registration in the `notice` toolset | `operation::register_noun_in_toolset(registry, &NOTICE, McpToolset::Notice)` in `crates/orbit-tools/src/builtin/orbit/register.rs`; `McpToolset::Notice` in `crates/orbit-types/src/tool/mcp_toolset.rs`; `orbit.notice.list`/`show` annotated read-only in `crates/orbit-tools/src/mcp_annotations.rs` |
-| Authorization catalog entries (Agent and Operator; poster-class resolution in core) | `crates/orbit-common/src/governance/authorization/catalog.rs` |
-| Store table and migration; repository contract | a planned `notices.rs` migration under `crates/orbit-store/src/driver/sqlite/migration/`, a planned notice repository contract under `crates/orbit-store/src/contracts/`, the store schema golden |
+| Authorization catalog entries for `post` and `close` (Agent, Operator and Runner as an identity floor, like leases; poster-class resolution in core; `list` and `show` are open reads) | `crates/orbit-common/src/governance/authorization/catalog.rs` |
+| Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
-| Closure materializer | the owner's task-status transition to `done`, and the existing scheduler sweep |
+| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed. The scheduler sweep pass is not built yet |
 | Brief block | a new required `RuntimeHost` method (`notices_for_agent_input`) implemented by Core beside `regression_risk_for_agent_input`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs` like `attach_explore_brief` |
 | `[notice]` configuration | `crates/orbit-config` registry settings |
-| CLI | registry-derived `orbit notice` (a planned `notice.rs` under `crates/orbit-cli/src/command/` holds only its `prepare`/`render` tables) |
+| CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |
 | Dashboard banner and view | `crates/orbit-web` |
 | Attention kind `notice_open` | an adapter under the planned `crates/orbit-core/src/application/attention/sources/` ([ORB-21168] creates the module) |
 

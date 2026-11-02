@@ -13,6 +13,7 @@ use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::lease::LeaseVerb;
+use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -145,6 +146,8 @@ pub enum OrbitBuiltinAction {
     WorkspaceClaim(WorkspaceClaimVerb),
     /// Principal-held path leases on the workspace owner.
     Lease(LeaseVerb),
+    /// Fleet notices held by the home workspace's owner.
+    Notice(NoticeVerb),
     /// Visual capture verbs: the implementer's mock self-check.
     Visual(VisualVerb),
 }
@@ -206,6 +209,12 @@ impl From<DrainVerb> for OrbitBuiltinAction {
 impl From<LeaseVerb> for OrbitBuiltinAction {
     fn from(verb: LeaseVerb) -> Self {
         Self::Lease(verb)
+    }
+}
+
+impl From<NoticeVerb> for OrbitBuiltinAction {
+    fn from(verb: NoticeVerb) -> Self {
+        Self::Notice(verb)
     }
 }
 

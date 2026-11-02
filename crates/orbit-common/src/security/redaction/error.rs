@@ -147,6 +147,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             code,
             message: redact(&message),
         },
+        OrbitError::NoticeRefused { code, message } => OrbitError::NoticeRefused {
+            code,
+            message: redact(&message),
+        },
         OrbitError::ClaimRefused { kind, message } => OrbitError::ClaimRefused {
             kind,
             message: redact(&message),

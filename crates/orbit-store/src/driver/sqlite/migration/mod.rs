@@ -28,6 +28,7 @@ mod job_runs;
 mod landed_diff_stats;
 mod learning;
 mod ledger;
+mod notices;
 mod operation_mode;
 mod plugins;
 mod resource_minutes;
@@ -82,6 +83,7 @@ use job_runs::{
 };
 use landed_diff_stats::{apply_landed_diff_reviewable_lines, apply_landed_diff_stats};
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
+use notices::apply_notices;
 use operation_mode::apply_remove_operation_mode;
 use plugins::{
     apply_audit_brokered_call, apply_audit_plugin_secret_updates, apply_audit_plugin_secrets,

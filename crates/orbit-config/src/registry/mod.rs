@@ -192,7 +192,8 @@ pub(crate) use settings::resolve_percent;
 pub use settings::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
     ExploreBriefSettings, ExploreSettings, MachineSettings, MidRunSteeringSettings,
-    RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+    NoticeKindHours, NoticeSettings, RegressionRiskSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings,
 };
 pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
 pub(crate) use settings::{
