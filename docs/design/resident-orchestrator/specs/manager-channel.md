@@ -65,11 +65,15 @@ a wake event.
 Input: `{task, action: pause|resume|stop|wake|takeover|release, reason: string, status_request?: bool, by_session?: string}`.
 Output: `{state, effective_at}`.
 
+Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant, completes,
+checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at the next
+cycle boundary, within at most one agent budget.
+
 | Action | From state | To state | Effect |
 |---|---|---|---|
-| `pause` | `active` | `paused` | No fires; a live cycle finishes |
+| `pause` | `active` | `paused` | No new cycle starts; a live cycle follows the boundary semantics above. |
 | `resume` | `paused` | `active` | Due on the next tick |
-| `stop` | any but `ended` | `ended` | No fires; a live cycle finishes its current tool call and checkpoints; the assignment moves to `review` with a synthesized handoff |
+| `stop` | any but `ended` | `ended` | No new cycle starts; a live cycle follows the boundary semantics above, then the assignment moves to `review` with a synthesized handoff. |
 | `wake` | `active` | `active` | Due on the next tick, ignoring the heartbeat (not the floor); `status_request` makes the cycle checkpoint even when idle |
 | `takeover` | `active`, `paused` | `taken_over` | No fires; records who took over |
 | `release` | `taken_over` | `active` | Due on the next tick; the cycle reads takeover-period comments as new |

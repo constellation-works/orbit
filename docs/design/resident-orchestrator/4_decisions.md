@@ -167,11 +167,14 @@ honesty and reading comprehension the security boundary.
 
 Any change that reduces what a resident may do (removing a right, dropping a workspace, shortening a
 deadline, pausing, stopping, a maintenance notice going observe-only) may be made by any actor that
-can write the mandate, takes effect at the next cycle, and is recorded. Any change that increases it
-takes effect only when the human records it: directly with operator authority, or by answering a
-`resident_authority` decision request that quotes the relay verbatim. No relay, notice, direction,
-config default or resident decision widens authority. This rule applies to every future authority
-dimension added to residents.
+can write the mandate and is recorded. It takes effect for cycle execution at the next cycle
+boundary. Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant,
+completes, checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at
+the next cycle boundary, within at most one agent budget. A stop then hands the assignment to
+`review`. Any change that increases authority takes effect only when the human records it: directly
+with operator authority, or by answering a `resident_authority` decision request that quotes the
+relay verbatim. No relay, notice, direction, config default or resident decision widens authority.
+This rule applies to every future authority dimension added to residents.
 
 ### Consequences
 

@@ -178,10 +178,14 @@ with `outcome: ended` and the reason:
   is checkable (all watched tasks `done`, for example). The resident moves the assignment to
   `review` with an execution summary; the human closes it.
 - **deadline passed**. The resident stops dispatching, writes a handoff and moves to `review`.
-- **human stop** (`orbit resident control stop`, through the manager or directly). Firing stops at
-  once; a live cycle finishes its current tool call, checkpoints and exits.
+- **human stop** (`orbit resident control stop`, through the manager or directly). The stop then
+  hands the assignment to `review`.
 - **takeover**. The human or an interactive session takes the mandate; firing stops until `release`
   ([§6](#6-the-manager--resident-channel)).
+
+Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant, completes,
+checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at the next
+cycle boundary, within at most one agent budget.
 
 ### 4.5 Handoff to the human
 
@@ -223,9 +227,13 @@ result today. Slice 3 ([ORB-21244]) exposes a caller-supplied key on the cycle's
 lands, a recovery cycle that retries an action with the dead cycle's key gets the existing result.
 
 **Crash recovery.** A killed cycle leaves a held lease that expires (lease TTL = agent budget + 5
-min) and no checkpoint. The finalize step of the killed cycle never ran, so the next observe treats
-it as described above. Cost of a crash: one heartbeat or floor interval of delay, plus one recovery
-cycle; it is measured ([§9](#9-metrics-that-gate-widening)).
+min, 35 min by default from lease acquisition) and no checkpoint. The next cycle cannot start
+before expiry. With the default 10 min cadence floor, the floor has elapsed by then; if a wake digest
+is pending, recovery starts on the next eligible clock tick (60 sec default). Otherwise the next
+heartbeat makes the unchanged mandate due within 2 h of its last checkpoint. The finalize step of the
+killed cycle never ran, so the next observe treats it as described above. Recovery therefore waits
+for the remaining lease TTL and may wait longer for a due heartbeat or eligible clock tick; it is not
+bounded by one floor interval. Recovery cost is measured ([§9](#9-metrics-that-gate-widening)).
 
 **Checkpoint and resume contract.** The checkpoint carries the cycle id, the wake reasons and digest,
 actions with keys and results, decisions taken with their class and reversibility, open requests,
