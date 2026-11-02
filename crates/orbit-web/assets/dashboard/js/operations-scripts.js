@@ -2,7 +2,7 @@
 // the last grant and its open grant request. Granting is an operator-session
 // action bound to the digest the operator reviewed here.
 
-import { el, fetchJson, postJson, requestPanel } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, requestJson, requestPanel } from './common.js';
 import { actionReason, explainUnavailable, feedback, setRailSubtabCount } from './operations-shared.js';
 
 const STATE_LABELS = {
@@ -62,13 +62,34 @@ function grantButton(payload, script) {
   }
   button.addEventListener("click", async () => {
     button.disabled = true;
+    // Pin the host and workspace the operator reviewed: the request stays
+    // bound to this visit even when the operator switches scope mid-flight,
+    // and a late reply never paints or refreshes another visit (A→B→A is a
+    // new visit, so returning to the same id is still stale).
+    const visit = captureWorkspaceVisit();
+    const grantPath = `/api/scripts/${encodeURIComponent(script.name)}/grant`;
+    const grantBody = { digest: script.current_digest };
     try {
-      await postJson(`/api/scripts/${encodeURIComponent(script.name)}/grant`, { digest: script.current_digest });
-      feedback("script-operation-feedback", "success", `Granted ${script.name} at ${short(script.current_digest)}.`);
-      await fetchAndRenderScripts();
+      await requestJson(grantPath, "POST", grantBody, visit);
     } catch (error) {
+      if (!visit.isCurrent() || error?.code === "stale_workspace_visit") return;
       button.disabled = false;
       feedback("script-operation-feedback", "error", `Grant refused: ${error.message || error}`);
+      return;
+    }
+    if (!visit.isCurrent()) return;
+    feedback("script-operation-feedback", "success", `Granted ${script.name} at ${short(script.current_digest)}.`);
+    try {
+      await fetchAndRenderScripts();
+    } catch (error) {
+      // A successful grant followed by a failed readback keeps the grant
+      // outcome: the refresh failure is a separate warning, not a refusal,
+      // and the stale Grant button stays disabled so it cannot invite a
+      // duplicate write. Mirrors runOperation's refresh-failure handling.
+      if (!visit.isCurrent()) return;
+      document.getElementById("script-operation-feedback")?.appendChild(el("span", {
+        text: `\nRefresh failed: ${error.message || error}. The grant succeeded; refresh before granting again.`,
+      }));
     }
   });
   return button;

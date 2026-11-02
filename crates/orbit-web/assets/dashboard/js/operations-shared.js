@@ -30,7 +30,7 @@ function resetOperationsForWorkspace() {
   operationsState.lastAutoTasks = null;
   operationsState.lastAutoDrain = null;
   for (const reset of operationsResetCallbacks) reset();
-  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
+  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback"]) feedback(id, "", "");
 }
 
 export const OPERATION_FEEDBACK_CLEAR_MS = 60000;
