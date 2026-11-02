@@ -50,29 +50,15 @@ pub(super) fn validate_step_recovery_mutation(
     )
 }
 
+pub(super) use super::checkpoints::StepCheckpoint;
+
 pub(super) fn checkpoint_step(
     runtime: &OrbitRuntime,
-    run_id: &str,
-    step_index: u32,
-    step_id: &str,
-    output: &serde_json::Value,
-    compound_outputs: &std::collections::BTreeMap<String, serde_json::Value>,
-    script_outputs: &std::collections::BTreeMap<
-        String,
-        orbit_types::workflow::activity_job::ScriptOutputSet,
-    >,
+    checkpoint: &StepCheckpoint<'_>,
 ) -> Result<(), orbit_engine::DispatchError> {
-    super::checkpoints::checkpoint_step(
-        runtime,
-        run_id,
-        step_index,
-        step_id,
-        output,
-        compound_outputs,
-        script_outputs,
-    )?;
+    super::checkpoints::checkpoint_step(runtime, checkpoint)?;
     // The step is durable, so this is a safe point to yield to an upgrade.
-    runtime.yield_run_at_step_boundary(run_id);
+    runtime.yield_run_at_step_boundary(checkpoint.run_id);
     Ok(())
 }
 

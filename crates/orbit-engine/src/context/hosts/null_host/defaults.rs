@@ -871,6 +871,25 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// A host without a skip marker checkpoints the skipped step like any
+    /// other with a null output.
+    fn checkpoint_skipped_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_step(
+            self,
+            run_id,
+            step_index,
+            step_id,
+            &Value::Null,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+    }
+
     fn observe_auto_task_step(
         &self,
         _run_id: &str,

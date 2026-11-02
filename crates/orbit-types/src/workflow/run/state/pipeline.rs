@@ -1,6 +1,6 @@
 //! Persistent pipeline state for a job run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,14 @@ pub struct PipelineState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub script_output_sets:
         BTreeMap<u32, BTreeMap<String, crate::workflow::activity_job::ScriptOutputSet>>,
+    /// Top-level steps whose `when:` was false, by global step index. Such a
+    /// step checkpoints as `success` with a null output, which every reader
+    /// of `step_states` relies on; this marker tells resume it never ran, so
+    /// later templates see it absent, as the uninterrupted run did, instead
+    /// of an executed step's null output. Absent in checkpoints recorded
+    /// before the marker existed; those restore the null.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub skipped_steps: BTreeSet<u32>,
     /// Per-step pipeline patches keyed by global step index.
     /// Successful steps merge these patches into `pipeline`.
     #[serde(default)]
@@ -237,6 +245,7 @@ impl PipelineState {
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
             script_output_sets: BTreeMap::new(),
+            skipped_steps: BTreeSet::new(),
             pipeline_patches: BTreeMap::new(),
             step_output_pointers: BTreeMap::new(),
             step_states: BTreeMap::new(),
@@ -558,7 +567,9 @@ impl PipelineState {
         if !matches!(run_state, JobRunState::Success | JobRunState::Cancelled) {
             return false;
         }
-        let mut compacted = !self.pipeline_patches.is_empty() || !self.compound_outputs.is_empty();
+        let mut compacted = !self.pipeline_patches.is_empty()
+            || !self.compound_outputs.is_empty()
+            || !self.skipped_steps.is_empty();
         let pipeline = &self.pipeline;
         let pointers = &mut self.step_output_pointers;
         self.step_outputs.retain(|index, output| {
@@ -571,6 +582,7 @@ impl PipelineState {
         });
         self.pipeline_patches.clear();
         self.compound_outputs.clear();
+        self.skipped_steps.clear();
         compacted
     }
 
@@ -582,6 +594,18 @@ impl PipelineState {
             self.compound_outputs.remove(&step_index);
         } else {
             self.compound_outputs.insert(step_index, outputs);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Mark whether the top-level step at `step_index` was skipped by its
+    /// `when:` (see [`Self::skipped_steps`]); a step re-checkpointed after it
+    /// ran clears an earlier pass's mark.
+    pub fn record_step_skipped(&mut self, step_index: u32, skipped: bool) {
+        if skipped {
+            self.skipped_steps.insert(step_index);
+        } else {
+            self.skipped_steps.remove(&step_index);
         }
         self.updated_at = Utc::now();
     }

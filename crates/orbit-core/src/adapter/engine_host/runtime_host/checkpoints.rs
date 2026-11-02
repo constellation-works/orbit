@@ -8,6 +8,21 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::runtime::recovery_authority::RecoveryAuthority;
 
+/// One completed top-level step's checkpoint, as the engine hands it over.
+#[derive(Clone, Copy)]
+pub(super) struct StepCheckpoint<'a> {
+    pub(super) run_id: &'a str,
+    pub(super) step_index: u32,
+    pub(super) step_id: &'a str,
+    pub(super) output: &'a Value,
+    pub(super) compound_outputs: &'a BTreeMap<String, Value>,
+    pub(super) script_outputs:
+        &'a BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    /// The step's `when:` was false: it records a null output and the
+    /// `skipped_steps` marker; any other checkpoint clears that marker.
+    pub(super) skipped: bool,
+}
+
 /// [ORB-10002] Persist a per-step checkpoint into the run's
 /// `PipelineState` so an interrupted run can be resumed without
 /// re-executing completed steps. The step's output lands in
@@ -20,13 +35,17 @@ use crate::runtime::recovery_authority::RecoveryAuthority;
 /// there is nothing durable to checkpoint into.
 pub(super) fn checkpoint_step(
     runtime: &OrbitRuntime,
-    run_id: &str,
-    step_index: u32,
-    step_id: &str,
-    output: &Value,
-    compound_outputs: &BTreeMap<String, Value>,
-    script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    checkpoint: &StepCheckpoint<'_>,
 ) -> Result<(), DispatchError> {
+    let StepCheckpoint {
+        run_id,
+        step_index,
+        step_id,
+        output,
+        compound_outputs,
+        script_outputs,
+        skipped,
+    } = *checkpoint;
     // [ORB-11253] Read-modify-write in one transaction rather than a
     // separate read and write: an operator run control written into this
     // same state document between the two would otherwise be silently
@@ -41,6 +60,7 @@ pub(super) fn checkpoint_step(
                 Some(output.clone()),
                 None,
             );
+            state.record_step_skipped(step_index, skipped);
             state.record_compound_outputs(step_index, compound_outputs.clone());
             state.record_script_output_sets(step_index, script_outputs.clone());
             for (key, value) in compound_outputs {

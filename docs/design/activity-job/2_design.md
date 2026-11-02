@@ -1359,7 +1359,7 @@ Direct agent responses are advisory audit/diagnostic data. Workflows gate on dur
 
 ### 8.2 `when` and `retry`
 
-`when` is evaluated once, before retry. A skipped step is a successful no-op and does not retry.
+`when` is evaluated once, before retry. A skipped step is a successful no-op and does not retry. It records no output, so a later `steps.<id>.output` reference fails as described below. Its top-level checkpoint is still `success` with a null output, the shape every reader of completed steps relies on, plus a `PipelineState.skipped_steps` marker: a resumed run skips the step again and leaves its output absent, exactly as the uninterrupted run did, while an executed step's genuine `null` output is restored (ORB-21581). Checkpoints written before the marker existed restore the null.
 
 The proposed CEL `wait_until` and `expire_when` fields in §8.14 are distinct from
 this guard. They must not change existing `when` grammar, skip behavior or the
@@ -1679,6 +1679,15 @@ bare SHA on a legacy `already_committed` output. Unknown commits,
 branch moves and stale evidence still reach the immutable setup-checkpoint
 refusal; no provider history is adopted or rewritten. The existing final-recovery
 repair-commit receipt and generic-resume/source-repair rules remain separate.
+
+A typed stop keeps its type when the retry after step recovery reaches it, as
+it does when the first attempt does (ORB-21581). A settled review awaiting
+external evidence holds the run, and a cancelled child cancels it; neither
+attempts the step again, runs final recovery or the failure handoff, or
+reaches a later publication step. The cancellation message keeps the original
+error before recovery, and the `step.post_recovery_attempt` audit event records
+the retry's outcome as `held` or `cancelled`. Delivery refusals, forge holds and
+absorbed candidates keep their existing post-recovery handling.
 
 
 ---

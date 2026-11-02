@@ -1,33 +1,59 @@
 use super::*;
 
 pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcome, DispatchError> {
-    // `when:` evaluated once, before retry. A skipped step doesn't retry.
-    if let Some(expr) = &step.when {
-        let tctx = ctx.template_ctx();
-        let matched = evaluate_bool_expr(expr, &tctx)
-            .map_err(|err| DispatchError::JobExecution(format!("when expr: {err}")))?;
-        if !matched {
-            emit_job_event_lossy(
-                &ctx.audit,
-                ctx.task_id(),
-                V2AuditEventKind::StepSkipped {
-                    step_id: step.id.clone(),
-                    reason: when_false_skip_reason(expr),
-                },
-            );
-            // A skipped auto-task step stays `skipped` to later waits: a
-            // successful no-op is not accepted prerequisite evidence.
-            if let Some(name) = step.auto_task_name() {
-                record_skipped_auto_task_step(step, name, ctx)?;
-            }
-            return Ok(StepOutcome {
-                success: true,
-                output: Value::Null,
-                message: None,
-            });
-        }
+    if step_skipped_by_when(step, ctx)? {
+        return Ok(skipped_step_outcome());
     }
+    run_admitted_step(step, ctx)
+}
 
+/// What a step its `when:` skipped returns: a successful no-op with a null
+/// output. It records no pipeline entry, so later templates see it absent.
+pub(super) fn skipped_step_outcome() -> StepOutcome {
+    StepOutcome {
+        success: true,
+        output: Value::Null,
+        message: None,
+    }
+}
+
+/// Evaluate the step's `when:` once, before retry (a skipped step doesn't
+/// retry). True when it is false: the skip is audited, and a skipped
+/// auto-task step recorded, before returning.
+pub(super) fn step_skipped_by_when(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+) -> Result<bool, DispatchError> {
+    let Some(expr) = &step.when else {
+        return Ok(false);
+    };
+    let tctx = ctx.template_ctx();
+    let matched = evaluate_bool_expr(expr, &tctx)
+        .map_err(|err| DispatchError::JobExecution(format!("when expr: {err}")))?;
+    if matched {
+        return Ok(false);
+    }
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepSkipped {
+            step_id: step.id.clone(),
+            reason: when_false_skip_reason(expr),
+        },
+    );
+    // A skipped auto-task step stays `skipped` to later waits: a
+    // successful no-op is not accepted prerequisite evidence.
+    if let Some(name) = step.auto_task_name() {
+        record_skipped_auto_task_step(step, name, ctx)?;
+    }
+    Ok(true)
+}
+
+/// Run a step whose `when:` admitted it (or that has none).
+pub(super) fn run_admitted_step(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+) -> Result<StepOutcome, DispatchError> {
     let step_event_id = emit_job_event(
         &ctx.audit,
         ctx.task_id(),
