@@ -58,6 +58,12 @@ Everything here is speculation labelled as such; the committed scope is in
 8. **Change reason in deltas.** The cursor cannot tell "new" from "changed" because it holds
    hashes. If consumers want that distinction, the cursor would need ids, trading size for a
    `change` field.
+9. **Resident orchestrators as a source.** The rewritten
+   [resident-orchestrator](../resident-orchestrator/2_design.md#6-the-manager--resident-channel)
+   design reports through attention: resident escalations are `decision_open`, handoffs
+   `review_waiting`, and it proposes one new kind, `resident_stalled` (no checkpoint for twice the
+   heartbeat, or three incomplete cycles in a row), filed as [ORB-21245]. The manager session reads
+   attention instead of keeping an inbox.
 
 ## 2. Prior Work
 
@@ -93,6 +99,7 @@ shared store.
 
 ## Task References
 
+- [ORB-21245] — resident-orchestrator slice 4: proposes the `resident_stalled` attention kind
 - [ORB-21164] — recorded the deferred directions
 - [ORB-21091] — added decision-request risk tier and category
 

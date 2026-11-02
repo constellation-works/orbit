@@ -284,6 +284,7 @@ Retired features are removed from this table along with their folder.
 | Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
+| Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | claude |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |

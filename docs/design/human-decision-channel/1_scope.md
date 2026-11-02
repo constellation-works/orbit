@@ -223,6 +223,12 @@ requests in operator-enabled categories can be answered without the human.
 [consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
 rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are proposed.
 
+Proposed, not built: resident orchestrators use this channel as their human path
+([resident-orchestrator](../resident-orchestrator/2_design.md#3-authority)). A new
+`resident_authority` gate carries a manager-relayed authority grant, quoted verbatim, and the
+grant applies only when the human answers it. Resident escalations compose the existing
+agent-raised requests on human-crew tasks. Slice [ORB-21242] is proposed.
+
 ## Open questions
 
 1. **Token placement: subject, body, or reply-to address?** A `Reply-To` of
@@ -257,6 +263,7 @@ rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are proposed.
 
 ## Task References
 
+- [ORB-21242] — resident-orchestrator slice 1: proposes the `resident_authority` decision gate
 - [ORB-21097] — proposes category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
 - [ORB-21091] — proposes per-answer risk tier and a stored category on decision requests.

@@ -65,6 +65,12 @@ and validation evidence, not by drifting in.
    next due) over the dashboard HTTP API [ORB-10138], so a stopped sweep is visible remotely
    without box ssh. True cross-host *aggregation* (one surface querying every box's store)
    remains open; state *sync* is still explicitly not the answer.
+7. **Resident orchestrators on the clock.** The
+   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design proposes a
+   `resident_due` state kind, a seeded disabled `resident-cycle-<workspace>` routine and a weekly
+   `evolution-pass-<workspace>` routine. A resident is a state routine with a deterministic
+   observation, not a daemon, so it keeps the no-resident-daemon decision. Filed as [ORB-21244] and
+   [ORB-21249].
 
 ### Graduated
 
@@ -137,6 +143,8 @@ External:
 
 ## Task References
 
+- [ORB-21244] — resident-orchestrator slice 3: proposes the `resident_due` kind and cycle routine
+- [ORB-21249] — resident-orchestrator slice 8: proposes the evolution-pass routine
 - [ORB-10001] authored the routines design proposal (historical citation).
 - [ORB-10021] implemented routines v1 and its OS clock integration.
 - [ORB-10138] exposed routine and clock health through the dashboard API.

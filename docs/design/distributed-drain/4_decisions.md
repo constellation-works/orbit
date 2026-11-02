@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-11-02
 last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
@@ -204,8 +204,10 @@ top-tier crew*, read by crew selection and ignored by admission.
 
 - One admission path, one footprint rule (a task's own `context_files`), one leaf pipeline.
 - Large work is one leaf; its size shows up as slot time, not as special machinery.
-- `docs/design/resident-orchestrator/` is removed; its drain-window and slot-refill work lives on
-  in `workspace_auto_pipeline`.
+- The epic-owning resident-orchestrator design was removed; its drain-window and slot-refill work
+  lives on in `workspace_auto_pipeline`. [ORB-21229] rewrote the resident orchestrator from scratch
+  as coordination only (no worktree, no pinned drain slot, no admission path):
+  [resident-orchestrator](../resident-orchestrator/1_overview.md). This decision stands under it.
 - Cost: a big task no longer gets a stable, reattachable worktree across runs; a crash mid-epic
   restarts from the branch, like any other leaf.
 
@@ -803,5 +805,6 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
 - [ORB-13642] — made sandboxed claimed implementations hand off through structured output.
 - [ORB-13897] — added typed final-recovery decisions and the deterministic applier.
 - [ORB-13989] — made the before-PR reviewer repair findings in a second commit.
+- [ORB-21229] — rewrote the resident orchestrator as coordination only, under the epic-is-a-tag decision.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

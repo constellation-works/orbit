@@ -128,7 +128,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]) and declared output files ([ORB-20866]); the rest of phase 3 (files.inputs, the attach action, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (9)
+### Designing (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -138,6 +138,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | Approve and build slice 1, ORB-21211 (notice store, tools, CLI and the notice toolset) | claude |
 | [Operator Attention](./design/operator-attention/1_overview.md) | Approve and build slice 1, ORB-21168 (tool, CLI, filters, cursor over task-level kinds) | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Approve and build slice 1, ORB-21242 (mandate record and operator-only authority grant) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
@@ -242,6 +243,7 @@ a conservative title/status fallback.
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | One manager session is the human's front door; each mandate gets a resident orchestrator that runs as bounded, checkpointed Orbit activity cycles on the existing clock, coordination only | Draft | claude |
 | [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Implemented | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
