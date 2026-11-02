@@ -6,6 +6,7 @@ pub mod codebase;
 pub mod crew;
 pub mod decision;
 pub mod drain;
+pub mod evolution;
 pub mod experiment;
 pub mod friction;
 pub mod lease;

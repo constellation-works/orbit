@@ -1,0 +1,20 @@
+Record and inspect capability gaps and their measured costs
+
+Usage: orbit evolution [OPTIONS] <COMMAND>
+
+Commands:
+  add      Record an interactive cost event
+  list     List evolution signatures and summed costs
+  show     Show an evolution record and its occurrences
+  decline  Suppress proposals for a signature (operator only)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

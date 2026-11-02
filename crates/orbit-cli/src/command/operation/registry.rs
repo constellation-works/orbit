@@ -542,6 +542,9 @@ impl Commands {
                 registry_operation(&command.command, runtime_dispatch!(Notice))
             }
             // Resident mandates are registry-driven like notices.
+            Commands::Evolution(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Evolution))
+            }
             Commands::Resident(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Resident))
             }

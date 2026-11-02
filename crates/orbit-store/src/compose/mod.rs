@@ -318,3 +318,9 @@ pub fn review_store(
 ) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
     Ok(Arc::new(store))
 }
+
+/// Evolution ledger over the owning host's SQLite handle; every operation
+/// requires the runtime-bound workspace partition.
+pub fn evolution_store(store: Store) -> Arc<dyn crate::contracts::EvolutionStoreBackend> {
+    Arc::new(store)
+}

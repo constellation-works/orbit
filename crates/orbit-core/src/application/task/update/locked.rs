@@ -623,6 +623,8 @@ impl OrbitRuntime {
             Ok((updated.clone(), event))
         })?;
 
+        self.ingest_checkpoint_costs(&append_comments)?;
+
         if evidence_attached {
             self.resume_review_evidence(id)?;
             updated = self.get_task(id)?;

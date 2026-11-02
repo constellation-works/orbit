@@ -332,6 +332,15 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         },
         // A grant's quote is free text carried to the human verbatim; each
         // parameter redacts per its declared class.
+        OrbitBuiltinAction::Evolution(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            nested_objects: &[NestedObjectPolicy {
+                object_key: "event",
+                free_text_fields: &["what", "wished"],
+                free_text_arrays: &[],
+            }],
+            ..NO_REDACTION
+        },
         OrbitBuiltinAction::Resident(verb) => ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION

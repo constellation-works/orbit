@@ -34,6 +34,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.tags"
         | "orbit.notice.list"
         | "orbit.notice.show"
+        | "orbit.evolution.list"
+        | "orbit.evolution.show"
         | "orbit.resident.list"
         | "orbit.resident.show"
         | "orbit.orchestrator.scorecard"
@@ -51,6 +53,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.auto_task.add"
         | "orbit.auto_task.mint"
         | "orbit.friction.add"
+        | "orbit.evolution.add"
         | "orbit.task.add" => A::additive(false),
 
         // Edits that set the fields given and touch nothing else.

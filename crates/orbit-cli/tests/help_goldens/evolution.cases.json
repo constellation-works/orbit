@@ -1,0 +1,36 @@
+[
+  {
+    "argv": [
+      "evolution"
+    ],
+    "golden": "evolution/root.txt"
+  },
+  {
+    "argv": [
+      "evolution",
+      "add"
+    ],
+    "golden": "evolution/add.txt"
+  },
+  {
+    "argv": [
+      "evolution",
+      "list"
+    ],
+    "golden": "evolution/list.txt"
+  },
+  {
+    "argv": [
+      "evolution",
+      "show"
+    ],
+    "golden": "evolution/show.txt"
+  },
+  {
+    "argv": [
+      "evolution",
+      "decline"
+    ],
+    "golden": "evolution/decline.txt"
+  }
+]

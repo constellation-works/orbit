@@ -658,7 +658,7 @@ Proposals that the slices confirm:
 
 | Concern | Proposed home |
 |---|---|
-| Mandate, authority, checkpoint and evolution shapes | `crates/orbit-types/src/workflow/resident/` and `crates/orbit-types/src/record/evolution/` |
+| Mandate, authority, checkpoint and evolution shapes | `crates/orbit-types/src/workflow/resident/` and `crates/orbit-types/src/record/evolution.rs` |
 | `resident_authority` gate | `DecisionGate` in `crates/orbit-types/src/task/decision/request.rs` |
 | `resident_due` kind and observation | `StateTriggerKind` in `crates/orbit-types/src/workflow/automation/members.rs`; observation beside the existing rules in `crates/orbit-core/src/application/automation/members/member_host/observation.rs` |
 | Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/application/resident/` |

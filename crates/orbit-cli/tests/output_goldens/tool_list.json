@@ -1128,6 +1128,93 @@
     "mcp_toolset": "local"
   },
   {
+    "name": "orbit.evolution.add",
+    "description": "Record an interactive cost event in the bound workspace. Signature events corroborate one non-terminal evolution record; unsigned costs are retained without creating a capability gap. Returns {event, record}. Does not create friction or propose work.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "event",
+        "description": "Cost event: kind (workaround, manual_step, retry, wait), what (one line), minutes, retries, slot_minutes (nonnegative integers), wished (required for workaround/manual_step), signature (optional kebab-case key, 3-64 characters).",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "name": "mandate",
+        "description": "Optional assignment task for this occurrence.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "cycle",
+        "description": "Optional cycle identifier; requires mandate.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
+    "name": "orbit.evolution.list",
+    "description": "List evolution signatures in the bound workspace, sorted by summed minutes plus slot_minutes. Returns {count, records}; each includes occurrence_count, distinct_cycles, distinct_mandates, cycle_count, mandate_count, minutes, retries and slot_minutes derived over the requested window. Friction is excluded. Declined signatures become eligible when suppression expires or window cost doubles.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "state",
+        "description": "Filter open, proposed, declined or resolved; omitted returns all states.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "since",
+        "description": "RFC 3339 lower bound for occurrence aggregates. Records without occurrences in the window are omitted.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
+    "name": "orbit.evolution.show",
+    "description": "Show one evolution record in the bound workspace, its occurrences, proposal state, suppression window and all-time aggregates. Friction identifiers are not accepted.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "Evolution record identifier.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
     "name": "orbit.experiment.abandon",
     "description": "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks. A fresh admission applies no overlay from the abandoned experiment; runs and claims already admitted keep the treatment they captured. Operator only: an agent session is refused.",
     "enabled": true,

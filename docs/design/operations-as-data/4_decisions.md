@@ -1028,4 +1028,13 @@ different contracts; a future equivalent surface can use this shape.
   opt-in `resident` toolset. Agent, operator and runner capabilities provide
   identification; core checks the mandate's live cycle under the task lock.
 
+- [ORB-21248] — adds the evolution noun through the shared registry. Add/list/show
+  are advertised in the opt-in `resident` toolset; cost recording is additive,
+  like friction reporting. `orbit.evolution.decline` is an operator-only,
+  unadvertised write reached through `orbit evolution decline`. The operator,
+  manager and resident role budgets each gain exactly three tools and 1,000
+  approximate tokens for add/list/show: these roles need to read the shared
+  ledger and record interactive costs without enabling the entire default
+  tool tier. Agent, reader and default budgets stay unchanged.
+
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

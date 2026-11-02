@@ -506,6 +506,9 @@ fn resident_stale_comment_is_refused_without_writes() {
     record["requests"] =
         json!([{"id": "q1", "decision_request": "DR-example", "task": id, "blocking": false}]);
     record["costs"] = json!([{"kind": "manual_step", "what": "Checked the schema", "minutes": 1, "retries": 0, "slot_minutes": 0, "wished": "Automatic schema check", "signature": "manual-schema-check"}]);
+    record["costs"].as_array_mut().unwrap().push(
+        json!({"kind":"wait", "what":"Waited on CI", "minutes":2, "retries":0, "slot_minutes":0, "wished":null, "signature":null}),
+    );
     let written = call(
         &runtime,
         "orbit.resident.checkpoint",
@@ -514,6 +517,30 @@ fn resident_stale_comment_is_refused_without_writes() {
     )
     .unwrap();
     assert_eq!(written["checkpoint"], record);
+    let ledger = call(&runtime, "orbit.evolution.list", json!({}), &operator()).unwrap();
+    assert_eq!(
+        ledger["count"], 1,
+        "checkpoint costs must reach the capability-gap ledger"
+    );
+    assert_eq!(ledger["records"][0]["minutes"], 1);
+    use orbit_store::contracts::EvolutionStoreBackend;
+    assert_eq!(
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .evolution_costs(&runtime.workspace_id().unwrap())
+            .unwrap()
+            .len(),
+        2,
+        "every checkpoint cost, including unsigned costs, is retained"
+    );
+    runtime.reconcile_evolution_checkpoint(&id).unwrap();
+    let ledger_again = call(&runtime, "orbit.evolution.list", json!({}), &operator()).unwrap();
+    assert_eq!(
+        ledger_again, ledger,
+        "checkpoint projection replay must not duplicate costs"
+    );
+    evolution_corroboration_and_suppression(&runtime, &id, &ledger["records"][0]);
     assert_eq!(show(&runtime, &id)["latest_checkpoint"], record);
     assert_eq!(
         show(&runtime, &id)["authority"]["revision"],
@@ -650,3 +677,100 @@ crate::scenario_table!(
     any_task_writer_narrows_and_is_recorded,
     losing_the_resident_tag_clears_effective_authority_but_keeps_history,
 );
+
+fn evolution_corroboration_and_suppression(
+    runtime: &OrbitRuntime,
+    mandate_id: &str,
+    original: &Value,
+) {
+    use orbit_types::record::EvolutionState;
+    let id = original["id"].as_str().unwrap();
+    let proposal = runtime
+        .add_task(TaskAddParams {
+            title: "Automatic schema checking".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let add = |minutes: u64, slot: u64, mandate: &str| {
+        call(runtime, "orbit.evolution.add", json!({"event": {"kind":"manual_step", "what":"Checked the schema", "minutes":minutes, "slot_minutes":slot, "retries":1, "wished":"Automatic schema check", "signature":"manual-schema-check"}, "mandate":mandate}), &orchestrator()).unwrap()
+    };
+    let second = add(9, 0, &proposal.id);
+    assert_eq!(second["record"]["id"], id);
+    assert_eq!(second["record"]["occurrence_count"], 2);
+    assert_eq!(second["record"]["mandate_count"], 2);
+    assert_eq!(second["record"]["minutes"], 10);
+    let frictions = runtime.run_tool("orbit.friction.list", json!({})).unwrap();
+    assert!(frictions.as_array().is_some_and(|rows| rows.is_empty()));
+    assert!(
+        runtime
+            .run_tool("orbit.friction.resolve", json!({"id":id}))
+            .is_err(),
+        "evolution cannot be resolved as friction"
+    );
+    assert!(
+        call(
+            runtime,
+            "orbit.task.update",
+            json!({"id":proposal.id,"relations":[{"type":"resolves","target":id}]}),
+            &orchestrator()
+        )
+        .is_err(),
+        "friction resolves relations cannot target evolution"
+    );
+    runtime.propose_evolution_record(id, &proposal.id).unwrap();
+    let denied = call(
+        runtime,
+        "orbit.evolution.decline",
+        json!({"id":id}),
+        &orchestrator(),
+    );
+    assert!(denied.is_err(), "only the operator may suppress proposals");
+    runtime.decline_evolution_record(id, 30).unwrap();
+    assert!(runtime.propose_evolution_record(id, &proposal.id).is_err());
+    add(9, 0, mandate_id);
+    assert!(
+        runtime.propose_evolution_record(id, &proposal.id).is_err(),
+        "19 minutes must not double a 10 minute baseline"
+    );
+    add(0, 1, mandate_id);
+    let reopened = runtime.propose_evolution_record(id, &proposal.id).unwrap();
+    assert_eq!(
+        reopened.state,
+        EvolutionState::Proposed,
+        "minutes plus slot minutes reaching twice the decline baseline permits a proposal"
+    );
+    let all = call(
+        runtime,
+        "orbit.evolution.list",
+        json!({"state":"proposed"}),
+        &operator(),
+    )
+    .unwrap();
+    assert_eq!(all["count"], 1);
+    assert_eq!(all["records"][0]["occurrence_count"], 4);
+    assert_eq!(all["records"][0]["minutes"], 19);
+    assert_eq!(all["records"][0]["slot_minutes"], 1);
+    assert_eq!(
+        call(
+            runtime,
+            "orbit.evolution.list",
+            json!({"since":"2099-01-01T00:00:00Z"}),
+            &operator()
+        )
+        .unwrap()["count"],
+        0
+    );
+    let unsigned = call(runtime, "orbit.evolution.add", json!({"event":{"kind":"wait", "what":"Waited on CI", "minutes":3, "retries":0, "slot_minutes":0}}), &orchestrator()).unwrap();
+    assert!(unsigned["record"].is_null());
+    assert_eq!(
+        call(runtime, "orbit.evolution.list", json!({}), &operator()).unwrap()["count"],
+        1
+    );
+    let invalid = call(
+        runtime,
+        "orbit.evolution.add",
+        json!({"event":{"kind":"manual_step", "what":"Bad event", "minutes":1, "retries":0, "slot_minutes":0, "signature":"Wrong_Key"}}),
+        &orchestrator(),
+    );
+    assert!(invalid.is_err());
+}

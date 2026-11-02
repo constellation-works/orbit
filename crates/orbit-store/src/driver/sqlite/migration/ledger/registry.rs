@@ -783,12 +783,19 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_notices,
     },
+    // Separate, additive capability-gap ledger; older binaries leave it alone.
+    Migration {
+        version: 86,
+        name: "evolution",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_evolution,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 85;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 86;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

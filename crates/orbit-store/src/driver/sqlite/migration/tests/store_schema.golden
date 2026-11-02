@@ -527,3 +527,10 @@ v85 notices
 + ["table","notice_events","notice_events","CREATE TABLE notice_events (\n                seq INTEGER PRIMARY KEY AUTOINCREMENT,\n                workspace_id TEXT NOT NULL,\n                notice_id TEXT NOT NULL,\n                at TEXT NOT NULL,\n                action TEXT NOT NULL,\n                poster_class TEXT NOT NULL,\n                poster_crew TEXT,\n                poster_task_id TEXT,\n                detail_json TEXT NOT NULL\n            )"]
 + ["table","notices","notices","CREATE TABLE notices (\n                id TEXT PRIMARY KEY,\n                workspace_id TEXT NOT NULL,\n                scope TEXT NOT NULL,\n                kind TEXT NOT NULL,\n                dedupe_key TEXT NOT NULL,\n                author_class TEXT NOT NULL,\n                author_crew TEXT,\n                author_task_id TEXT,\n                linked_task_id TEXT,\n                close_on_linked_done INTEGER NOT NULL,\n                expires_at TEXT NOT NULL,\n                opened_at TEXT NOT NULL,\n                updated_at TEXT NOT NULL,\n                closed_at TEXT,\n                revision INTEGER NOT NULL,\n                record_json TEXT NOT NULL\n            )"]
 
+v86 evolution
++ ["index","evolution_active_signature","evolution_records","CREATE UNIQUE INDEX evolution_active_signature ON evolution_records(workspace_id, signature) WHERE state <> 'resolved'"]
++ ["index","sqlite_autoindex_evolution_costs_1","evolution_costs",null]
++ ["index","sqlite_autoindex_evolution_records_1","evolution_records",null]
++ ["table","evolution_costs","evolution_costs","CREATE TABLE evolution_costs (\n        workspace_id TEXT NOT NULL, source_key TEXT NOT NULL, record_id TEXT,\n        event_json TEXT NOT NULL, PRIMARY KEY(workspace_id, source_key))"]
++ ["table","evolution_records","evolution_records","CREATE TABLE evolution_records (\n        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, signature TEXT NOT NULL,\n        state TEXT NOT NULL, record_json TEXT NOT NULL)"]
+

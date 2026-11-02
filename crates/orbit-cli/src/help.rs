@@ -328,6 +328,10 @@ const ROOT_KNOWLEDGE: &[GroupedRow] = &[
         "List, show and answer human decision requests on held work",
     ),
     ("friction", "Report, list, and triage friction records"),
+    (
+        "evolution",
+        "Record and inspect capability gaps and their measured costs",
+    ),
     ("search", "Search tasks and frictions"),
 ];
 
