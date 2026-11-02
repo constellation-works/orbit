@@ -261,6 +261,28 @@ outer suite, truncated output, or another validation failure stays `FAIL` and
 still keeps those notices. Required `NOT_RUN` or `FAIL` coverage makes sign-off
 `INCOMPLETE`.
 
+The browser scenario `ux-measurement-browser` runs
+`node --test --test-reporter=tap` over the four existing UX measurement
+regression files (`scripts/ux-rules/tests/text-occlusion.test.mjs`,
+`text-overflow.test.mjs`, `undersized-text.test.mjs` and
+`aligned-starts-browser.test.mjs`). It is an ordinary reporting scenario in
+this sweep: it adds no required status check, merge gate or human-only step.
+The runner passes the verified kit to the Node child through
+`PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH` and the declared loader/font
+inputs (`browser_env`), so the cases measure against real Chromium rather
+than the stubbed `page.evaluate` contexts in the same files. Those mock cases
+still run, but they are reporting-only: only the TAP cases named in the
+scenario's `required_cases` are measurement evidence. The row retains
+`executed_cases`, `skipped_cases`, `failed_cases` and `node_test_counts`
+alongside the retained browser evidence directory. A skipped required case
+(including a Chromium launch failure a test converts to a skip) stays
+`NOT_RUN`; an absent or renamed required case, a failing case, a timeout or
+a nonzero child stays `FAIL`; missing kit stays `NOT_RUN`. None of these
+earns `PASS`. The named cases include the genuine-failure controls (for
+example a displaced start or an opaque overlay still fails), the
+byte-identical whole-line-scroll equivalence case, and the explicit
+unavailable-geometry cases.
+
 Rust execution evidence requires an outer libtest frame for each Cargo target
 announcement, complete named result rows, and matching suite counts. Captured
 `--show-output` diagnostics belong to an identified outer test and close at the

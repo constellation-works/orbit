@@ -634,6 +634,44 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+        # UX measurement selection: a Node exit alone is not measurement
+        # evidence. Only an executed (not skipped/missing/failed) required
+        # browser case earns PASS; absent kit stays NOT_RUN.
+        (repo / "ux-fixture.mjs").write_text(
+            "import { readFileSync } from 'node:fs';\n"
+            "import test from 'node:test';\n"
+            "const mode = JSON.parse(readFileSync('mode.json', 'utf8'));\n"
+            "test('mock case runs without a browser', () => {});\n"
+            "if (mode === 'ux-executed') test('ux browser case executes', () => {});\n"
+            "else if (mode === 'ux-skipped') test('ux browser case executes', { skip: true }, () => {});\n"
+            "else if (mode === 'ux-missing') test('renamed browser case', () => {});\n"
+            "else if (mode === 'ux-failed') test('ux browser case executes', () => { throw new Error('genuine failure'); });\n"
+            "else if (mode === 'ux-launch-failed') test('ux browser case executes', (t) => { t.skip('Chromium launch failed'); });\n")
+        ux = {"id": "ux-measurement-browser", "required": True, "capability": "browser", "kind": "command",
+              "command": ["node", "--test", "--test-reporter=tap", "ux-fixture.mjs"],
+              "assertions": ["ux-browser-case-executed"], "required_cases": ["ux browser case executes"],
+              "behavior": ["normal", "failure"]}
+        report = sweep([ux], "ux-executed", browser_args)
+        ux_row = row(report, "ux-measurement-browser")
+        assert report["decision"] == "PASS" and ux_row["outcome"] == "PASS", report
+        assert ux_row["executed_cases"] == ["mock case runs without a browser", "ux browser case executes"], ux_row
+        assert ux_row["retained_evidence"]["files"], ux_row
+        for mode, expected in [("ux-skipped", "NOT_RUN"), ("ux-launch-failed", "NOT_RUN"),
+                               ("ux-missing", "FAIL"), ("ux-failed", "FAIL")]:
+            report = sweep([ux], mode, browser_args)
+            ux_row = row(report, "ux-measurement-browser")
+            assert report["decision"] == "INCOMPLETE" and ux_row["outcome"] == expected, (mode, ux_row)
+            assert not ux_row["assertions"], (mode, ux_row)
+            if mode in ("ux-skipped", "ux-launch-failed"):
+                assert ux_row["skipped_cases"] == ["ux browser case executes"], (mode, ux_row)
+                assert ux_row["missing_capabilities"], (mode, ux_row)
+            if mode == "ux-missing":
+                assert "did not execute the required browser cases" in ux_row["stderr"], ux_row
+            if mode == "ux-failed":
+                assert ux_row["exit_code"] != 0 and ux_row["failed_cases"] == ["ux browser case executes"], ux_row
+        report = sweep([ux], "ux-executed")
+        assert row(report, "ux-measurement-browser")["outcome"] == "NOT_RUN", report
+        assert report["decision"] == "INCOMPLETE", report
 
 
 
