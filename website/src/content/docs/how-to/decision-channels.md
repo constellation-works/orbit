@@ -146,7 +146,11 @@ The raise checks these rules before it writes anything:
 
 - `--options` is a JSON array of two to four objects. Each has a one-line
   `label`, a one-line `consequence` and a `recommended` boolean. Exactly one
-  option is recommended.
+  option is recommended. An option may also set `risk_tier` to `routine`,
+  `reversible`, `irreversible`, `authority` or `spend`. Omitting it stores
+  `unknown`, and any other value refuses the raise. The request takes the
+  highest tier among its options. `unknown` ranks above `spend`, so one option
+  without a tier makes the whole request `unknown`.
 - `--question` is one or two sentences, at most 600 characters.
 - `--topic` is optional. It names a structured topic or a corpus rule id. When
   it names a current rule the operator has set to auto, the request is answered
