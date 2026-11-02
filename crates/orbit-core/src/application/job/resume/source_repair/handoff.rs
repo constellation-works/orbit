@@ -57,18 +57,59 @@ impl OrbitRuntime {
             || !definition.resolved_failure_activity.as_ref().is_some_and(|a|
                 matches!(&a.spec, ActivityV2Spec::Deterministic(s) if s.action == "pr_failure_handoff"))
             || checkpoint.activity_name != "pr_failure_handoff"
-            || state.step_states.get(&(failed_index as u32)) != Some(&JobRunState::Failed)
-            || field(output, "phase")? != "failure_handoff"
-            || !matches!(field(output, "decision")?, "blocked_failure_pr" | "blocked_conflict_pr")
-            || field(output, "task_id")? != task.id
-            || field(output, "handoff_run_id")? != source.run_id
+        {
+            return Err(refuse(
+                "failure-handoff activity disagrees: the source definition and checkpoint do not \
+                 both name the pr_failure_handoff action; retain the original host receipt",
+            ));
+        }
+        // The executor checkpoints only steps that completed, so the step that
+        // failed has no recorded state; a recorded `failed` is equally valid. A
+        // step recorded as anything else completed and cannot be the failed one.
+        let failed_state = state.step_states.get(&(failed_index as u32));
+        if !matches!(failed_state, None | Some(JobRunState::Failed))
             || field(output, "failed_step_id")? != checkpoint.failed_step_id
+        {
+            return Err(refuse(format!(
+                "failure-handoff failed step disagrees: step `{}` is recorded as {} and the \
+                 receipt names `{}`; retain the original host receipt",
+                checkpoint.failed_step_id,
+                failed_state.map_or_else(|| "not completed".to_string(), |s| format!("{s:?}")),
+                field(output, "failed_step_id")?,
+            )));
+        }
+        if field(output, "phase")? != "failure_handoff"
+            || !matches!(
+                field(output, "decision")?,
+                "blocked_failure_pr" | "blocked_conflict_pr"
+            )
+        {
+            return Err(refuse(
+                "failure-handoff receipt disagrees: it is not a published blocked-pull-request \
+                 handoff; retain the original host receipt",
+            ));
+        }
+        if field(output, "task_id")? != task.id
+            || field(output, "handoff_run_id")? != source.run_id
             || field(output, "checkpoint_owner")? != owner.run_id
             || field(worktree, "job_run_id")? != owner.run_id
-            || field(output, "original_base_sha")? != field(worktree, "base_sha")?
-            || !task.spec_digest_matches(field(output, "task_spec_digest")?)
         {
-            return Err(refuse("failure-handoff ownership, failed step or task specification disagrees; retain the original host receipt"));
+            return Err(refuse(
+                "failure-handoff ownership disagrees: the receipt's task, handoff run or \
+                 checkpoint owner is not this task's run; retain the original host receipt",
+            ));
+        }
+        if field(output, "original_base_sha")? != field(worktree, "base_sha")? {
+            return Err(refuse(
+                "failure-handoff base disagrees: the receipt's original base is not the run's \
+                 worktree base; retain the original host receipt",
+            ));
+        }
+        if !task.spec_digest_matches(field(output, "task_spec_digest")?) {
+            return Err(refuse(
+                "failure-handoff task specification digest disagrees: the task's description or \
+                 acceptance criteria changed after the handoff; retain the original host receipt",
+            ));
         }
         let branch = field(output, "branch")?;
         let head = field(output, "head_sha")?;
