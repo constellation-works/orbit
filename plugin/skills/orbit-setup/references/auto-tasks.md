@@ -294,7 +294,8 @@ reset before it stays applied, recorded as its own audited reset.
   `orbit doctor` does not report it missing. Use this to drop the code
   sweeps from a workspace whose repository holds no code.
 - `orbit auto-task restore <name>` is the way back for a deleted shipped
-  default. It writes the shipped content (disabled, as shipped) and clears the
+  default. It writes the shipped content, with the shipped `enabled` value
+  (disabled, except `host-health`, which ships enabled), and clears the
   opt-out, so later reseeds manage it again. `restore` refuses a name Orbit
   does not ship and a definition that already exists. `auto-task add` under a
   deleted default's name creates your own definition instead; the opt-out
