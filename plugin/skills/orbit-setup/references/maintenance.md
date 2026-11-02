@@ -465,7 +465,13 @@ opens or migrates it to version 8; do this as one coordinated rollout and keep
 old clients stopped. See [Upgrading a workspace together](multi-host.md#upgrading-a-workspace-together)
 for the host-by-host order. On each host, `orbit --version` confirms the
 installed binary, while `orbit update --check` only reports available releases
-and does not verify layout compatibility. Use `orbit migrate` to inspect pending
+and does not verify layout compatibility. `orbit update` run inside an
+initialized workspace immediately runs `migrate --confirm` followed by
+`workspace sync` as post-replacement convergence, so during the coordinated
+rollout run the per-host updates from a directory that is not inside any
+initialized workspace (with no `--root` or `ORBIT_ROOT` override); the JSON
+report showing `"workspace_root": null` with both steps skipped confirms no
+migration ran yet. Use `orbit migrate` to inspect pending
 changes, then apply them with `orbit migrate --confirm` when needed. After the
 upgrade, use `orbit doctor` on each host and `orbit migrate` to confirm no
 migration remains pending.

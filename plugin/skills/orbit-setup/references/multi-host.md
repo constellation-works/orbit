@@ -54,14 +54,29 @@ In version 0.43.0, layout version 8 stores script output files and parallel
 script-branch checkpoints as durable run artifacts. Once a workspace has been
 upgraded to version 8, older Orbit binaries refuse to open it. Before any host
 opens or migrates that workspace to version 8, update the Orbit binary on every
-host that can access it, including replicas. Plan one coordinated rollout:
+host that can access it, including replicas. Plan one coordinated rollout.
+
+`orbit update` run inside an initialized workspace immediately runs
+`migrate --confirm` followed by `workspace sync` as post-replacement
+convergence. Run from a directory that is not inside any initialized workspace
+(with no `--root` or `ORBIT_ROOT` selecting one), both steps report skipped
+and no migration is applied. For the lockstep below, update every host first
+from outside the workspace, then migrate once:
 
 1. Inventory the owner and every host with a checkout that can open the
    workspace. Stop active Orbit clients as required by the [upgrade
    procedure](maintenance.md#persistent-mcp-clients-during-upgrades).
-2. Update Orbit on each host while clients remain stopped. Check each installed
+2. On each host, from a directory that is not inside an initialized Orbit
+   workspace (for example `$HOME`), with no `--root` or `ORBIT_ROOT` override,
+   update Orbit while clients remain stopped. Check each installed
    version with `orbit --version`; `orbit update --check` reports release
-   availability, not workspace compatibility.
+   availability, not workspace compatibility. The JSON report showing
+   `"workspace_root": null` with the `migrate --confirm` and
+   `workspace sync` steps skipped is the expected signal that no migration
+   ran yet. Do not run `orbit update` from inside the shared workspace
+   checkout until every host is updated: that migrates the workspace on the
+   first host, ahead of the lockstep order, and the step 3 inspection then
+   reports nothing pending.
 3. After every host is on a compatible binary, use `orbit migrate` to inspect
    pending changes and apply them with `orbit migrate --confirm` when needed.
    Do not let an older host open a workspace after it reaches layout version 8.
