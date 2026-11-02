@@ -4,14 +4,407 @@
 use orbit_core::application::task::{
     DecisionSubmitCaller, DecisionSubmitParams, TaskAddParams, TaskUpdateParams,
 };
-use orbit_core::{Task, TaskComplexity, TaskStatus};
-use orbit_types::task::{PilotAdmissionVerdict, TaskDecision};
+use orbit_core::{Task, TaskComplexity, TaskPriority, TaskStatus};
+use orbit_engine::RuntimeHost;
+use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_types::task::{
+    DecisionGate, DecisionRequest, DecisionRequestState, PilotAdmissionVerdict, TaskArtifact,
+    TaskComment, TaskDecision, TaskHistoryEntry,
+};
 use serde_json::json;
 
 use super::Workspace;
 
 fn backlog_task(workspace: &Workspace) -> Task {
     task_at_status(workspace, TaskStatus::Backlog)
+}
+
+fn hu(workspace: &Workspace, task: &Task, params: TaskUpdateParams) {
+    hu_by(workspace, task, params, "human:fixture");
+}
+fn hu_by(workspace: &Workspace, task: &Task, params: TaskUpdateParams, by: &str) {
+    workspace
+        .runtime
+        .update_task_as_human(&task.id, params, by.into())
+        .unwrap();
+}
+fn hu_err(workspace: &Workspace, task: &Task, params: TaskUpdateParams) -> orbit_core::OrbitError {
+    workspace
+        .runtime
+        .update_task_as_human(&task.id, params, "human:fixture".into())
+        .unwrap_err()
+}
+fn human_comment(workspace: &Workspace, task: &Task, comment: String) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            comment: Some(comment),
+            ..Default::default()
+        },
+    );
+}
+fn human_comment_err(
+    workspace: &Workspace,
+    task: &Task,
+    comment: String,
+) -> orbit_core::OrbitError {
+    hu_err(
+        workspace,
+        task,
+        TaskUpdateParams {
+            comment: Some(comment),
+            ..Default::default()
+        },
+    )
+}
+fn agent_update(workspace: &Workspace, task: &Task, params: TaskUpdateParams) {
+    workspace
+        .runtime
+        .update_task_with_identity(
+            &task.id,
+            params,
+            Some("codex".into()),
+            Some("gpt-6.1-sol".into()),
+        )
+        .unwrap();
+}
+fn agent_comment(workspace: &Workspace, task: &Task, comment: String) {
+    agent_update(
+        workspace,
+        task,
+        TaskUpdateParams {
+            comment: Some(comment),
+            ..Default::default()
+        },
+    );
+}
+fn bump_priority(workspace: &Workspace, task: &Task) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            priority: Some(TaskPriority::High),
+            ..Default::default()
+        },
+    );
+}
+fn hist(workspace: &Workspace, task: &Task) -> Vec<TaskHistoryEntry> {
+    workspace.runtime.get_task_history(&task.id).unwrap()
+}
+fn has_event(workspace: &Workspace, task: &Task, event: &str) -> bool {
+    hist(workspace, task)
+        .iter()
+        .any(|entry| entry.event == event)
+}
+fn event_count(workspace: &Workspace, task: &Task, event: &str) -> usize {
+    hist(workspace, task)
+        .iter()
+        .filter(|entry| entry.event == event)
+        .count()
+}
+fn assert_event(workspace: &Workspace, task: &Task, event: &str) {
+    assert!(has_event(workspace, task, event), "{event}");
+}
+fn assert_no_event(workspace: &Workspace, task: &Task, event: &str) {
+    assert!(!has_event(workspace, task, event), "{event}");
+}
+fn task_comments(workspace: &Workspace, task: &Task) -> Vec<TaskComment> {
+    workspace.runtime.get_task_comments(&task.id).unwrap()
+}
+fn last_audit(workspace: &Workspace, task: &Task) -> serde_json::Value {
+    serde_json::from_str(
+        task_comments(workspace, task)
+            .last()
+            .unwrap()
+            .receipt()
+            .unwrap()
+            .body,
+    )
+    .unwrap()
+}
+fn got(workspace: &Workspace, task: &Task) -> Task {
+    workspace.runtime.get_task(&task.id).unwrap()
+}
+fn verdicts(workspace: &Workspace, task: &Task) -> Vec<PilotAdmissionVerdict> {
+    hist(workspace, task)
+        .into_iter()
+        .filter_map(|entry| match entry.decision {
+            Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
+            _ => None,
+        })
+        .collect()
+}
+fn assert_workflow_admitted(workspace: &Workspace, task: &Task) {
+    assert_eq!(
+        RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+            .unwrap()
+            .status,
+        TaskStatus::InProgress
+    );
+}
+fn workflow_refusal(workspace: &Workspace, task: &Task) -> String {
+    RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+        .unwrap_err()
+        .to_string()
+}
+fn update_task_history(workspace: &Workspace, task: &Task, params: TaskHistoryUpdateParams) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(&task.id, params)
+    .unwrap();
+}
+fn seed_legacy(workspace: &Workspace, task: &Task, audit: &serde_json::Value, operation: &str) {
+    let note = if operation == "legacy-host-pilot" {
+        "host_operational (operation_id=legacy-host-pilot)".to_string()
+    } else {
+        format!("legacy assessment (operation_id={operation})")
+    };
+    let at = chrono::Utc::now();
+    update_task_history(
+        workspace,
+        task,
+        TaskHistoryUpdateParams {
+            actor: "task-pilot".into(),
+            append_comments: vec![TaskComment {
+                at,
+                by: "task-pilot".into(),
+                message: format!("operation_id={operation}\n{audit}"),
+                operation_id: None,
+            }],
+            append_history: vec![TaskHistoryEntry {
+                at,
+                by: "task-pilot".into(),
+                event: "task_pilot_applied".into(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    );
+}
+fn answer_req(
+    workspace: &Workspace,
+    request_id: &str,
+    answer: &str,
+    note: Option<String>,
+) -> DecisionRequest {
+    workspace
+        .runtime
+        .answer_decision_request_as_human(
+            request_id,
+            answer,
+            note,
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .unwrap()
+}
+fn assert_answered(request: &DecisionRequest, answer: &str) {
+    assert_eq!(request.state, DecisionRequestState::Answered);
+    assert_eq!(request.resolution.as_ref().unwrap().answer_id, answer);
+}
+fn to_backlog(workspace: &Workspace, task: &Task) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        },
+    );
+}
+fn priority_comment(workspace: &Workspace, task: &Task, comment: &'static str) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            priority: Some(TaskPriority::High),
+            comment: Some(comment.into()),
+            ..Default::default()
+        },
+    );
+}
+fn event_note(workspace: &Workspace, task: &Task, event: &str) -> serde_json::Value {
+    let history = hist(workspace, task);
+    let entry = history.iter().find(|entry| entry.event == event).unwrap();
+    serde_json::from_str(entry.note.as_deref().unwrap()).unwrap()
+}
+fn assert_proposed_to_backlog(workspace: &Workspace, task: &Task) {
+    assert!(
+        hist(workspace, task)
+            .iter()
+            .any(|entry| entry.from_status == Some(TaskStatus::Proposed)
+                && entry.to_status == Some(TaskStatus::Backlog)
+                && entry.by == "human:fixture")
+    );
+}
+fn assert_event_by(workspace: &Workspace, task: &Task, event: &str) {
+    assert!(
+        hist(workspace, task)
+            .iter()
+            .any(|entry| entry.event == event && entry.by == "human:fixture"),
+        "{event}"
+    );
+}
+fn assert_open(request: &DecisionRequest) {
+    assert_eq!(request.state, DecisionRequestState::Open);
+}
+fn attach_passed_eval(workspace: &Workspace, task: &Task) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            upsert_artifacts: vec![TaskArtifact::from_text(
+                "operator-evaluation.json",
+                json!({"criterion": 1, "tool": "orbit.pipeline.invoke", "outcome": "passed"})
+                    .to_string(),
+            )],
+            ..Default::default()
+        },
+    );
+}
+fn answer_req_refused(
+    workspace: &Workspace,
+    request_id: &str,
+    answer: &str,
+    note: Option<String>,
+    msg: &'static str,
+) -> String {
+    workspace
+        .runtime
+        .answer_decision_request_as_human(
+            request_id,
+            answer,
+            note,
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .expect_err(msg)
+        .to_string()
+}
+fn set_deps(workspace: &Workspace, task: &Task, deps: Vec<String>) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            dependencies: Some(deps),
+            ..Default::default()
+        },
+    );
+}
+fn tool_update(workspace: &Workspace, value: serde_json::Value) {
+    workspace
+        .runtime
+        .run_tool("orbit.task.update", value)
+        .unwrap();
+}
+fn add_fixture_task(
+    workspace: &Workspace,
+    title: &str,
+    description: &str,
+    criterion: &str,
+    status: TaskStatus,
+    complexity: TaskComplexity,
+    context: &str,
+) -> Task {
+    workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: description.into(),
+            acceptance_criteria: vec![criterion.into()],
+            status: Some(status),
+            complexity,
+            context_files: vec![context.into()],
+            ..Default::default()
+        })
+        .unwrap()
+}
+fn answer_ids(request: &DecisionRequest) -> Vec<&str> {
+    request
+        .answers
+        .iter()
+        .map(|answer| answer.id.as_str())
+        .collect()
+}
+fn channel_held(field: &str, reason: &str) -> (Workspace, Task, DecisionRequest) {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some(field));
+    assert_admission(&workspace, &task, Some(reason));
+    let request = decision_requests(&workspace, &task).pop().unwrap();
+    (workspace, task, request)
+}
+fn assert_snapshot_unchanged(
+    workspace: &Workspace,
+    task: &Task,
+    comments: &[TaskComment],
+    history: &[TaskHistoryEntry],
+) {
+    assert_eq!(
+        task_comments(workspace, task),
+        comments,
+        "a refused answer writes no comment"
+    );
+    assert_eq!(
+        hist(workspace, task),
+        history,
+        "a refused answer writes no resolution or answered marker"
+    );
+}
+fn assert_req0(requirements: &serde_json::Value, criterion: u64) {
+    assert_eq!(requirements[0]["criterion"], criterion);
+    assert_eq!(requirements[0]["tool"], "orbit.pipeline.invoke");
+}
+fn last_comment_record(workspace: &Workspace, task: &Task) -> serde_json::Value {
+    let comments = task_comments(workspace, task);
+    serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap()
+}
+fn channel_token(workspace: &Workspace, request_id: &str) -> String {
+    workspace
+        .runtime
+        .register_decision_channel("email", "human:fixture", "decision-mail", vec![])
+        .unwrap();
+    workspace
+        .runtime
+        .mint_decision_token("email", request_id)
+        .unwrap()
+}
+fn fresh_backlog() -> (Workspace, Task) {
+    let workspace = Workspace::new();
+    let task = backlog_task(&workspace);
+    (workspace, task)
+}
+fn fresh_validation(criterion: &str) -> (Workspace, Task) {
+    let workspace = Workspace::new();
+    let task = human_approved_validation_task(&workspace, criterion);
+    (workspace, task)
+}
+fn set_criteria(workspace: &Workspace, task: &Task, criteria: Vec<String>) {
+    hu(
+        workspace,
+        task,
+        TaskUpdateParams {
+            acceptance_criteria: Some(criteria),
+            ..Default::default()
+        },
+    );
 }
 
 fn task_at_status(workspace: &Workspace, status: TaskStatus) -> Task {
@@ -43,7 +436,7 @@ fn assess_disposition(
     disposition: &str,
 ) {
     let prepared = workspace.prepare(&[&task.id]);
-    let current = workspace.runtime.get_task(&task.id).unwrap();
+    let current = got(workspace, task);
     let mut assessment = json!({
         "task_id": task.id,
         "context_files_before": current.context_files,
@@ -82,10 +475,7 @@ fn assess_disposition(
     assert_eq!(applied["status"], "succeeded", "{applied}");
     assert_eq!(applied["applied_count"], 1, "{applied}");
     assert_eq!(applied["tasks"][0]["task_id"], task.id, "{applied}");
-    assert_eq!(
-        workspace.runtime.get_task(&task.id).unwrap().status,
-        current.status
-    );
+    assert_eq!(got(workspace, task).status, current.status);
 }
 
 fn host_operational_holds_human_approved_work_until_a_current_operator_decision() {
@@ -93,156 +483,77 @@ fn host_operational_holds_human_approved_work_until_a_current_operator_decision(
         let workspace = Workspace::new();
         let task = task_at_status(&workspace, TaskStatus::Proposed);
         // Even a no-diff task needs an operator decision for this disposition.
-        workspace.runtime.update_task_as_human(&task.id, TaskUpdateParams {
-            tags: Some(vec!["no-diff-expected".into()]),
-            comment: Some(format!("task-pilot-admission: {decision}\nA prior decision cannot release a future assessment.")),
-            ..Default::default()
-        }, "human:fixture".into()).unwrap();
-        assess_disposition(&workspace, &task, None, "host_operational");
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::Backlog),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
-        assert_admission(&workspace, &task, Some("host_operational_handoff"));
-        let history = workspace.runtime.get_task_history(&task.id).unwrap();
-        assert!(
-            history
-                .iter()
-                .any(|entry| entry.from_status == Some(TaskStatus::Proposed)
-                    && entry.to_status == Some(TaskStatus::Backlog)
-                    && entry.by == "human:fixture")
+        hu(
+            &workspace,
+            &task,
+            TaskUpdateParams {
+                tags: Some(vec!["no-diff-expected".into()]),
+                comment: Some(format!(
+                    "task-pilot-admission: {decision}\nA prior decision cannot release a future assessment."
+                )),
+                ..Default::default()
+            },
         );
-        let records = history
-            .iter()
-            .filter(|entry| entry.event == "host_operational_held")
-            .collect::<Vec<_>>();
+        assess_disposition(&workspace, &task, None, "host_operational");
+        to_backlog(&workspace, &task);
+        assert_admission(&workspace, &task, Some("host_operational_handoff"));
+        assert_proposed_to_backlog(&workspace, &task);
         assert_eq!(
-            records.len(),
+            event_count(&workspace, &task, "host_operational_held"),
             1,
             "repeated admission must not duplicate the handoff"
         );
-        let record: serde_json::Value =
-            serde_json::from_str(records[0].note.as_deref().unwrap()).unwrap();
+        let record = event_note(&workspace, &task, "host_operational_held");
         assert_eq!(record["disposition"], "host_operational");
         let evidence = record["hold"]["evidence"].as_str().unwrap();
         assert!(!evidence.is_empty());
-        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-        let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+        let audit = last_audit(&workspace, &task);
         assert_eq!(audit["host_operational_hold"], record["hold"]);
         assert_eq!(audit["assessment"]["evidence"], evidence);
-        let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
-            &workspace.runtime,
-            &task.id,
-            "worktree_setup",
-        )
-        .unwrap_err();
+        let refused = workflow_refusal(&workspace, &task);
         assert!(
-            refused.to_string().contains("host_operational")
-                && refused.to_string().contains(evidence),
+            refused.contains("host_operational") && refused.contains(evidence),
             "{refused}"
         );
-        assert_eq!(
-            workspace.runtime.get_task(&task.id).unwrap().status,
-            TaskStatus::Backlog
-        );
+        assert_eq!(got(&workspace, &task).status, TaskStatus::Backlog);
 
         let comment = format!(
             "task-pilot-admission: {decision}\nThe operator accepts the owner-side repair; see operator-evaluation.json."
         );
-        workspace
-            .runtime
-            .update_task_with_identity(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(comment.clone()),
-                    ..Default::default()
-                },
-                Some("codex".into()),
-                Some("gpt-6.1-sol".into()),
-            )
-            .unwrap();
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    priority: Some(orbit_core::TaskPriority::High),
-                    comment: Some("The operator is still reviewing this finding.".into()),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(format!("task-pilot-admission: {decision}")),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap_err();
+        agent_comment(&workspace, &task, comment.clone());
+        priority_comment(
+            &workspace,
+            &task,
+            "The operator is still reviewing this finding.",
+        );
+        human_comment_err(
+            &workspace,
+            &task,
+            format!("task-pilot-admission: {decision}"),
+        );
         if decision == "evaluated" {
-            workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(comment.clone()),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap_err();
+            human_comment_err(&workspace, &task, comment.clone());
         }
         assert_admission(&workspace, &task, Some("host_operational_handoff"));
-        assert!(
-            !workspace
-                .runtime
-                .get_task_history(&task.id)
-                .unwrap()
-                .iter()
-                .any(|entry| entry.event == "host_operational_resolved")
-        );
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(comment),
-                    upsert_artifacts: if decision == "evaluated" {
-                        vec![orbit_types::task::TaskArtifact::from_text(
-                            "operator-evaluation.json",
-                            "Owner-side repair verified.",
-                        )]
-                    } else {
-                        vec![]
-                    },
-                    ..Default::default()
+        assert_no_event(&workspace, &task, "host_operational_resolved");
+        hu(
+            &workspace,
+            &task,
+            TaskUpdateParams {
+                comment: Some(comment),
+                upsert_artifacts: if decision == "evaluated" {
+                    vec![TaskArtifact::from_text(
+                        "operator-evaluation.json",
+                        "Owner-side repair verified.",
+                    )]
+                } else {
+                    vec![]
                 },
-                "human:fixture".into(),
-            )
-            .unwrap();
-        assert_admission(&workspace, &task, None);
-        assert!(
-            workspace
-                .runtime
-                .get_task_history(&task.id)
-                .unwrap()
-                .iter()
-                .any(|entry| entry.event == "host_operational_resolved"
-                    && entry.by == "human:fixture")
+                ..Default::default()
+            },
         );
+        assert_admission(&workspace, &task, None);
+        assert_event_by(&workspace, &task, "host_operational_resolved");
         // A new finding is not covered by the previous operator decision.
         assess_disposition(&workspace, &task, None, "host_operational");
         assert_admission(&workspace, &task, Some("host_operational_handoff"));
@@ -257,139 +568,47 @@ fn host_operational_material_and_newer_dispositions_control_admission() {
         assess_disposition(&workspace, &task, None, "host_operational");
         assert_admission(&workspace, &task, Some("host_operational_handoff"));
         if release == "rescope" {
-            workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        acceptance_criteria: Some(vec![
-                            "The repository fixture repair is observable.".into(),
-                        ]),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap();
+            set_criteria(
+                &workspace,
+                &task,
+                vec!["The repository fixture repair is observable.".into()],
+            );
             assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
             assess_disposition(&workspace, &task, None, "selectors");
         } else {
             assess_disposition(&workspace, &task, None, release);
         }
         assert_admission(&workspace, &task, None);
-        assert_eq!(
-            orbit_engine::RuntimeHost::admit_task_for_workflow(
-                &workspace.runtime,
-                &task.id,
-                "worktree_setup"
-            )
-            .unwrap()
-            .status,
-            TaskStatus::InProgress
-        );
+        assert_workflow_admitted(&workspace, &task);
     }
 }
 
 fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() {
-    let workspace = Workspace::new();
-    let task = human_approved_validation_task(&workspace, "The owner-side repair is observable.");
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &workspace.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    let backends = orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        workspace.runtime.workspace_id().unwrap(),
-        workspace.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap()
-    .task;
-    let at = chrono::Utc::now();
+    let (workspace, task) = fresh_validation("The owner-side repair is observable.");
     let audit = json!({"assessment": {
         "disposition": "host_operational", "evidence": "The operator must repair the owner-side definition.",
         "duplicate_of": null, "already_landed": null,
     }});
-    backends
-        .history
-        .update_task_history(
-            &task.id,
-            orbit_store::contracts::TaskHistoryUpdateParams {
-                actor: "task-pilot".into(),
-                append_comments: vec![orbit_types::task::TaskComment {
-                    at,
-                    by: "task-pilot".into(),
-                    message: format!("operation_id=legacy-host-pilot\n{audit}"),
-                    operation_id: None,
-                }],
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at,
-                    by: "task-pilot".into(),
-                    event: "task_pilot_applied".into(),
-                    note: Some("host_operational (operation_id=legacy-host-pilot)".into()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    seed_legacy(&workspace, &task, &audit, "legacy-host-pilot");
     // Old receipts must not mistake metadata edits before the first admission
     // for a re-scope of the host-operational work.
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                priority: Some(orbit_core::TaskPriority::High),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    bump_priority(&workspace, &task);
     assert_admission(&workspace, &task, Some("host_operational_handoff"));
     assert_admission(&workspace, &task, Some("host_operational_handoff"));
-    let records = workspace
-        .runtime
-        .get_task_history(&task.id)
-        .unwrap()
-        .into_iter()
-        .filter(|entry| entry.event == "host_operational_held")
-        .collect::<Vec<_>>();
-    assert_eq!(records.len(), 1);
-    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    assert_eq!(event_count(&workspace, &task, "host_operational_held"), 1);
+    let comments = task_comments(&workspace, &task);
     let (header, record) = comments.last().unwrap().message.split_once('\n').unwrap();
     assert_eq!(header, "host-operational-handoff");
     let record: serde_json::Value = serde_json::from_str(record).unwrap();
     assert_eq!(record["disposition"], "host_operational");
     assert_eq!(record["hold"]["evidence"], audit["assessment"]["evidence"]);
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                priority: Some(orbit_core::TaskPriority::High),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    bump_priority(&workspace, &task);
     assert_admission(&workspace, &task, Some("host_operational_handoff"));
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                acceptance_criteria: Some(vec![
-                    "The repository fixture repair is observable.".into(),
-                ]),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    set_criteria(
+        &workspace,
+        &task,
+        vec!["The repository fixture repair is observable.".into()],
+    );
     assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
     assess(&workspace, &task, None);
     assert_admission(&workspace, &task, None);
@@ -446,25 +665,19 @@ fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
         ("duplicate_of", "pilot_duplicate"),
         ("already_landed", "pilot_already_landed"),
     ] {
-        let workspace = Workspace::new();
-        let task = backlog_task(&workspace);
+        let (workspace, task) = fresh_backlog();
         assert_admission(&workspace, &task, None);
         assess(&workspace, &task, Some(field));
         assert_admission(&workspace, &task, Some(reason));
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    description: Some(
-                        "Edited scope still needs a decision about the finding.".into(),
-                    ),
-                    comment: Some("The operator is reviewing the assessment.".into()),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
+        hu(
+            &workspace,
+            &task,
+            TaskUpdateParams {
+                description: Some("Edited scope still needs a decision about the finding.".into()),
+                comment: Some("The operator is reviewing the assessment.".into()),
+                ..Default::default()
+            },
+        );
         assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
         assess(&workspace, &task, None);
         assert_admission(&workspace, &task, None);
@@ -477,47 +690,15 @@ fn human_pilot_decisions_release_only_the_current_assessment() {
             ("duplicate_of", "pilot_duplicate"),
             ("already_landed", "pilot_already_landed"),
         ] {
-            let workspace = Workspace::new();
-            let task = backlog_task(&workspace);
+            let (workspace, task) = fresh_backlog();
             let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
             // A decision made before an assessment cannot approve future findings.
-            workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(comment.clone()),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap();
+            human_comment(&workspace, &task, comment.clone());
             assess(&workspace, &task, Some(field));
             // Canonical agent provenance cannot forge the human release path.
-            workspace
-                .runtime
-                .update_task_with_identity(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(comment.clone()),
-                        ..Default::default()
-                    },
-                    Some("codex".into()),
-                    Some("gpt-6.1-sol".into()),
-                )
-                .unwrap();
+            agent_comment(&workspace, &task, comment.clone());
             assert_admission(&workspace, &task, Some(reason));
-            workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(comment),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap();
+            human_comment(&workspace, &task, comment);
             assert_admission(&workspace, &task, None);
             assess(&workspace, &task, Some(field));
             assert_admission(&workspace, &task, Some(reason));
@@ -572,17 +753,8 @@ fn human_approved_validation_task_with_criteria(
             ..Default::default()
         })
         .unwrap();
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Backlog),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap()
+    to_backlog(workspace, &task);
+    task
 }
 
 fn human_approved_validation_task_with_tools(
@@ -612,85 +784,28 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
             "task-pilot-admission: {decision}\nOperator reviewed operator-evaluation.json and accepts this validation."
         );
         // A decision before the pilot cannot approve a future assessment.
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(comment.clone()),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
+        human_comment(&workspace, &task, comment.clone());
         assess(&workspace, &task, None);
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
-        let history = workspace.runtime.get_task_history(&task.id).unwrap();
-        assert!(
-            history
-                .iter()
-                .any(|entry| entry.from_status == Some(TaskStatus::Proposed)
-                    && entry.to_status == Some(TaskStatus::Backlog)
-                    && entry.by == "human:fixture")
-        );
-        let hold = history
-            .iter()
-            .find(|entry| entry.event == "operator_validation_held")
-            .unwrap();
-        let hold: serde_json::Value = serde_json::from_str(hold.note.as_deref().unwrap()).unwrap();
-        assert_eq!(hold["hold"]["requirements"][0]["criterion"], 1);
-        assert_eq!(
-            hold["hold"]["requirements"][0]["tool"],
-            "orbit.pipeline.invoke"
-        );
-        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-        let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+        assert_proposed_to_backlog(&workspace, &task);
+        let hold = event_note(&workspace, &task, "operator_validation_held");
+        assert_req0(&hold["hold"]["requirements"], 1);
+        let audit = last_audit(&workspace, &task);
         assert_eq!(
             audit["operator_validation_hold"]["requirements"],
             hold["hold"]["requirements"]
         );
 
         // Even a queued run bypassing selection meets the hold at admission.
-        let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
-            &workspace.runtime,
-            &task.id,
-            "worktree_setup",
-        )
-        .unwrap_err();
-        assert!(
-            refused
-                .to_string()
-                .contains("criterion 1 requires `orbit.pipeline.invoke`")
+        let refused = workflow_refusal(&workspace, &task);
+        assert!(refused.contains("criterion 1 requires `orbit.pipeline.invoke`"));
+        assert_eq!(got(&workspace, &task).status, TaskStatus::Backlog);
+        priority_comment(
+            &workspace,
+            &task,
+            "Discussing the finding does not resolve it.",
         );
-        assert_eq!(
-            workspace.runtime.get_task(&task.id).unwrap().status,
-            TaskStatus::Backlog
-        );
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    priority: Some(orbit_core::TaskPriority::High),
-                    comment: Some("Discussing the finding does not resolve it.".into()),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
-        workspace
-            .runtime
-            .update_task_with_identity(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(comment.clone()),
-                    ..Default::default()
-                },
-                Some("codex".into()),
-                Some("gpt-6.1-sol".into()),
-            )
-            .unwrap();
+        agent_comment(&workspace, &task, comment.clone());
         // The registered agent tool cannot mint an operator decision even
         // when a caller omits provenance on a human-owned runtime.
         let _ = workspace.runtime.run_tool(
@@ -698,38 +813,15 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
             json!({"id": task.id, "comment": comment}),
         );
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
-        assert!(
-            !workspace
-                .runtime
-                .get_task_history(&task.id)
-                .unwrap()
-                .iter()
-                .any(|entry| entry.event == "operator_validation_resolved")
+        assert_no_event(&workspace, &task, "operator_validation_resolved");
+        human_comment_err(
+            &workspace,
+            &task,
+            format!("task-pilot-admission: {decision}"),
         );
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(format!("task-pilot-admission: {decision}")),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap_err();
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
         if decision == "evaluated" {
-            let missing_artifact = workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(comment.clone()),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap_err();
+            let missing_artifact = human_comment_err(&workspace, &task, comment.clone());
             assert!(
                 missing_artifact
                     .to_string()
@@ -740,7 +832,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
         let resolution = TaskUpdateParams {
             comment: Some(comment),
             upsert_artifacts: if decision == "evaluated" {
-                vec![orbit_types::task::TaskArtifact::from_text(
+                vec![TaskArtifact::from_text(
                     "operator-evaluation.json",
                     json!({"criterion": 1, "tool": "orbit.pipeline.invoke", "outcome": "passed"})
                         .to_string(),
@@ -756,10 +848,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
                 .update_task_with_identity(&task.id, resolution, None, None)
                 .unwrap();
         } else {
-            workspace
-                .runtime
-                .update_task_as_human(&task.id, resolution, "human:fixture".into())
-                .unwrap();
+            hu(&workspace, &task, resolution);
         }
         if decision == "evaluated" {
             assert!(
@@ -771,40 +860,18 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
             );
         }
         assert_admission(&workspace, &task, None);
-        assert!(
-            workspace
-                .runtime
-                .get_task_history(&task.id)
-                .unwrap()
-                .iter()
-                .any(|entry| entry.event == "operator_validation_resolved"
-                    && entry.by == "human:fixture")
-        );
+        assert_event_by(&workspace, &task, "operator_validation_resolved");
         assess(&workspace, &task, None);
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
-        workspace
-            .runtime
-            .update_task_as_human(
-                &task.id,
-                TaskUpdateParams {
-                    acceptance_criteria: Some(vec![
-                        "Observe the fixture repair through the runtime boundary.".into(),
-                    ]),
-                    ..Default::default()
-                },
-                "human:fixture".into(),
-            )
-            .unwrap();
+        set_criteria(
+            &workspace,
+            &task,
+            vec!["Observe the fixture repair through the runtime boundary.".into()],
+        );
         assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
         assess(&workspace, &task, None);
         assert_admission(&workspace, &task, None);
-        let admitted = orbit_engine::RuntimeHost::admit_task_for_workflow(
-            &workspace.runtime,
-            &task.id,
-            "worktree_setup",
-        )
-        .unwrap();
-        assert_eq!(admitted.status, TaskStatus::InProgress);
+        assert_workflow_admitted(&workspace, &task);
     }
 }
 
@@ -828,9 +895,7 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
         let workspace = Workspace::new();
         let task = human_approved_validation_task(&workspace, criterion);
         assess(&workspace, &task, None);
-        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-        let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+        let audit = last_audit(&workspace, &task);
         assert_eq!(
             !audit["assessment"]["validation_tool_warnings"]
                 .as_array()
@@ -842,101 +907,40 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
         assert!(audit["operator_validation_hold"].is_null(), "{audit}");
         assert_admission(&workspace, &task, None);
     }
-    let workspace = Workspace::new();
-    let task = human_approved_validation_task(&workspace, "The repair is observable.");
+    let (workspace, task) = fresh_validation("The repair is observable.");
     assess(&workspace, &task, Some("utility_warnings"));
     assert_admission(&workspace, &task, None);
 }
 
 fn changed_criteria_make_the_pilot_validation_assessment_stale() {
-    let workspace = Workspace::new();
-    let task =
-        human_approved_validation_task(&workspace, "Evaluate through `orbit.pipeline.invoke`.");
+    let (workspace, task) = fresh_validation("Evaluate through `orbit.pipeline.invoke`.");
     assess(&workspace, &task, None);
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                acceptance_criteria: Some(vec![
-                    "Evaluate the revised scenario through `orbit.pipeline.invoke`.".into(),
-                ]),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    set_criteria(
+        &workspace,
+        &task,
+        vec!["Evaluate the revised scenario through `orbit.pipeline.invoke`.".into()],
+    );
     assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
     assess(&workspace, &task, None);
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 }
 
 fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() {
-    let workspace = Workspace::new();
-    let task = human_approved_validation_task(&workspace, "Evaluate with `orbit.pipeline.invoke`.");
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &workspace.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    let backends = orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        workspace.runtime.workspace_id().unwrap(),
-        workspace.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap()
-    .task;
-    let at = chrono::Utc::now();
+    let (workspace, task) = fresh_validation("Evaluate with `orbit.pipeline.invoke`.");
     let audit = json!({"assessment": {
         "validation_tool_warnings": ["acceptance criterion requires `orbit.pipeline.invoke`, a governed operation reserved for the operator capability; route validation to an operator"],
         "duplicate_of": null, "already_landed": null,
     }});
-    backends
-        .history
-        .update_task_history(
-            &task.id,
-            orbit_store::contracts::TaskHistoryUpdateParams {
-                actor: "task-pilot".into(),
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at,
-                    by: "task-pilot".into(),
-                    event: "task_pilot_applied".into(),
-                    note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
-                append_comments: vec![orbit_types::task::TaskComment {
-                    at,
-                    by: "task-pilot".into(),
-                    message: format!("operation_id=legacy-pilot\n{audit}"),
-                    operation_id: None,
-                }],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    seed_legacy(&workspace, &task, &audit, "legacy-pilot");
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
     assert_eq!(
-        history
-            .iter()
-            .filter(|entry| entry.event == "operator_validation_held")
-            .count(),
+        event_count(&workspace, &task, "operator_validation_held"),
         1
     );
-    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let record: serde_json::Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
-    assert_eq!(record["hold"]["requirements"][0]["criterion"], 1);
-    assert_eq!(
-        record["hold"]["requirements"][0]["tool"],
-        "orbit.pipeline.invoke"
-    );
+    let record = last_comment_record(&workspace, &task);
+    assert_req0(&record["hold"]["requirements"], 1);
     let mut session = orbit_types::tool::ToolSessionContext::default();
     session
         .effective_capabilities
@@ -982,9 +986,7 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
     let workspace = Workspace::new();
     let task = human_approved_validation_task_with_criteria(&workspace, criteria.clone(), vec![]);
     assess(&workspace, &task, None);
-    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: serde_json::Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit = last_audit(&workspace, &task);
     let warnings = audit["assessment"]["validation_tool_warnings"]
         .as_array()
         .unwrap();
@@ -997,110 +999,42 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
         }),
         "governed operation warning must be dropped by the cap: {warnings:?}"
     );
-    let hold_requirements = audit["operator_validation_hold"]["requirements"]
-        .as_array()
-        .unwrap();
-    assert_eq!(hold_requirements.len(), 1);
-    assert_eq!(hold_requirements[0]["criterion"], 4);
-    assert_eq!(hold_requirements[0]["tool"], "orbit.pipeline.invoke");
+    assert_eq!(
+        audit["operator_validation_hold"]["requirements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_req0(&audit["operator_validation_hold"]["requirements"], 4);
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 
     // 2. Legacy pilot assessment backfill also derives the hold directly, independent of the warning cap.
     let workspace2 = Workspace::new();
     let task2 = human_approved_validation_task_with_criteria(&workspace2, criteria, vec![]);
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &workspace2.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    let backends = orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        workspace2.runtime.workspace_id().unwrap(),
-        workspace2.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap()
-    .task;
-    let at = chrono::Utc::now();
     let legacy_audit = json!({"assessment": {
         "validation_tool_warnings": warnings,
         "duplicate_of": null, "already_landed": null,
     }});
-    backends
-        .history
-        .update_task_history(
-            &task2.id,
-            orbit_store::contracts::TaskHistoryUpdateParams {
-                actor: "task-pilot".into(),
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at,
-                    by: "task-pilot".into(),
-                    event: "task_pilot_applied".into(),
-                    note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
-                append_comments: vec![orbit_types::task::TaskComment {
-                    at,
-                    by: "task-pilot".into(),
-                    message: format!("operation_id=legacy-pilot\n{legacy_audit}"),
-                    operation_id: None,
-                }],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    seed_legacy(&workspace2, &task2, &legacy_audit, "legacy-pilot");
     assert_admission(&workspace2, &task2, Some("operator_validation_handoff"));
-    let history2 = workspace2.runtime.get_task_history(&task2.id).unwrap();
     assert_eq!(
-        history2
-            .iter()
-            .filter(|entry| entry.event == "operator_validation_held")
-            .count(),
+        event_count(&workspace2, &task2, "operator_validation_held"),
         1
     );
-    let comments2 = workspace2.runtime.get_task_comments(&task2.id).unwrap();
-    let record2: serde_json::Value = serde_json::from_str(
-        comments2
-            .last()
-            .unwrap()
-            .message
-            .split_once('\n')
-            .unwrap()
-            .1,
-    )
-    .unwrap();
-    assert_eq!(record2["hold"]["requirements"][0]["criterion"], 4);
-    assert_eq!(
-        record2["hold"]["requirements"][0]["tool"],
-        "orbit.pipeline.invoke"
-    );
+    let record2 = last_comment_record(&workspace2, &task2);
+    assert_req0(&record2["hold"]["requirements"], 4);
 }
 
 /// Append `message` as `by`'s comment at `at`, as a binary that predates
 /// typed decisions recorded it.
 fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, message: &str) {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &workspace.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        workspace.runtime.workspace_id().unwrap(),
-        workspace.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap()
-    .task
-    .history
-    .update_task_history(
-        &task.id,
-        orbit_store::contracts::TaskHistoryUpdateParams {
+    update_task_history(
+        workspace,
+        task,
+        TaskHistoryUpdateParams {
             actor: by.into(),
-            append_comments: vec![orbit_types::task::TaskComment {
+            append_comments: vec![TaskComment {
                 at: at.parse().unwrap(),
                 by: by.into(),
                 message: message.into(),
@@ -1108,34 +1042,20 @@ fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, messag
             }],
             ..Default::default()
         },
-    )
-    .unwrap();
+    );
 }
 
-fn append_history(workspace: &Workspace, task: &Task, entry: orbit_types::task::TaskHistoryEntry) {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &workspace.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        workspace.runtime.workspace_id().unwrap(),
-        workspace.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap()
-    .task
-    .history
-    .update_task_history(
-        &task.id,
-        orbit_store::contracts::TaskHistoryUpdateParams {
-            actor: entry.by.clone(),
+fn append_history(workspace: &Workspace, task: &Task, entry: TaskHistoryEntry) {
+    let actor = entry.by.clone();
+    update_task_history(
+        workspace,
+        task,
+        TaskHistoryUpdateParams {
+            actor,
             append_history: vec![entry],
             ..Default::default()
         },
-    )
-    .unwrap();
+    );
 }
 
 fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
@@ -1149,8 +1069,7 @@ fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed
         ] {
             // The first open by this binary records the store's boundary.
             let first_open = chrono::Utc::now();
-            let workspace = Workspace::new();
-            let task = backlog_task(&workspace);
+            let (workspace, task) = fresh_backlog();
             let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
             // Overrides an older binary wrote: before typed decisions shipped,
             // on the day they shipped before this host upgraded, and on a host
@@ -1179,29 +1098,13 @@ fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed
             // an override needs no explanation below its header.
             assess(&workspace, &task, Some(field));
             assert_admission(&workspace, &task, Some(reason));
-            workspace
-                .runtime
-                .update_task_as_human(
-                    &task.id,
-                    TaskUpdateParams {
-                        comment: Some(format!("task-pilot-admission: {decision}")),
-                        ..Default::default()
-                    },
-                    "human:fixture".into(),
-                )
-                .unwrap();
+            human_comment(
+                &workspace,
+                &task,
+                format!("task-pilot-admission: {decision}"),
+            );
             assert_admission(&workspace, &task, None);
-            let decided = workspace
-                .runtime
-                .get_task_history(&task.id)
-                .unwrap()
-                .into_iter()
-                .filter_map(|entry| match entry.decision {
-                    Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(decided, vec![verdict]);
+            assert_eq!(verdicts(&workspace, &task), vec![verdict]);
         }
     }
 }
@@ -1243,10 +1146,7 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
     }
 }
 
-fn decision_requests(
-    workspace: &Workspace,
-    task: &Task,
-) -> Vec<orbit_types::task::DecisionRequest> {
+fn decision_requests(workspace: &Workspace, task: &Task) -> Vec<DecisionRequest> {
     workspace
         .runtime
         .get_task_decision_requests(&task.id)
@@ -1269,7 +1169,7 @@ fn an_enabled_pilot_hold_raises_one_open_decision_request() {
     let requests = decision_requests(&workspace, &task);
     assert_eq!(requests.len(), 1, "{requests:?}");
     let request = &requests[0];
-    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    assert_open(request);
     assert_eq!(
         request.risk_tier,
         orbit_types::task::DecisionRiskTier::Authority
@@ -1284,18 +1184,8 @@ fn an_enabled_pilot_hold_raises_one_open_decision_request() {
             .as_str()
         )
     );
-    assert_eq!(
-        request.gate,
-        orbit_types::task::DecisionGate::PilotAdmission
-    );
-    assert_eq!(
-        request
-            .answers
-            .iter()
-            .map(|answer| answer.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["approve_anyway", "clear"]
-    );
+    assert_eq!(request.gate, DecisionGate::PilotAdmission);
+    assert_eq!(answer_ids(request), vec!["approve_anyway", "clear"]);
     assert!(
         matches!(&request.binding, orbit_types::task::DecisionBinding::PilotOperation { operation_id } if !operation_id.is_empty()),
         "{request:?}"
@@ -1307,81 +1197,41 @@ fn an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_
         ("duplicate_of", "pilot_duplicate"),
         ("already_landed", "pilot_already_landed"),
     ] {
-        let workspace = decision_channel_workspace();
-        let task = backlog_task(&workspace);
-        assess(&workspace, &task, Some(field));
-        assert_admission(&workspace, &task, Some(reason));
-        let request = decision_requests(&workspace, &task).pop().unwrap();
+        let (workspace, task, request) = channel_held(field, reason);
         assert_eq!(
-            request
-                .answers
-                .iter()
-                .map(|answer| answer.id.as_str())
-                .collect::<Vec<_>>(),
+            answer_ids(&request),
             vec!["approve_anyway", "clear"],
             "{field}: evaluated does not resolve this hold, so it is not offered"
         );
-        let comments_before = workspace.runtime.get_task_comments(&task.id).unwrap();
-        let history_before = workspace.runtime.get_task_history(&task.id).unwrap();
-        let refused = workspace
-            .runtime
-            .answer_decision_request_as_human(
-                &request.id,
-                "evaluated",
-                None,
-                "human:fixture".into(),
-                Some("dashboard".into()),
-            )
-            .expect_err("evaluated is not an answer for a finding hold");
-        let message = refused.to_string();
+        let comments_before = task_comments(&workspace, &task);
+        let history_before = hist(&workspace, &task);
+        let message = answer_req_refused(
+            &workspace,
+            &request.id,
+            "evaluated",
+            None,
+            "evaluated is not an answer for a finding hold",
+        );
         assert!(
             message.contains("answer_not_allowed") && message.contains("nothing was applied"),
             "{field}: {message}"
         );
-        assert_eq!(
-            workspace.runtime.get_task_comments(&task.id).unwrap(),
-            comments_before,
-            "{field}: a refused answer writes no comment"
-        );
-        assert_eq!(
-            workspace.runtime.get_task_history(&task.id).unwrap(),
-            history_before,
-            "{field}: a refused answer writes no resolution or answered marker"
-        );
+        assert_snapshot_unchanged(&workspace, &task, &comments_before, &history_before);
         let open = decision_requests(&workspace, &task);
         assert_eq!(open.len(), 1, "{field}");
         assert_eq!(open[0].id, request.id);
-        assert_eq!(open[0].state, orbit_types::task::DecisionRequestState::Open);
+        assert_open(&open[0]);
         assert!(open[0].resolution.is_none(), "{field}");
         assert_admission(&workspace, &task, Some(reason));
 
-        let answered = workspace
-            .runtime
-            .answer_decision_request_as_human(
-                &request.id,
-                "clear",
-                None,
-                "human:fixture".into(),
-                Some("dashboard".into()),
-            )
-            .unwrap();
-        assert_eq!(
-            answered.state,
-            orbit_types::task::DecisionRequestState::Answered
-        );
-        assert_eq!(answered.resolution.unwrap().answer_id, "clear");
+        let answered = answer_req(&workspace, &request.id, "clear", None);
+        assert_answered(&answered, "clear");
         assert_admission(&workspace, &task, None);
-        let decided = workspace
-            .runtime
-            .get_task_history(&task.id)
-            .unwrap()
-            .into_iter()
-            .filter_map(|entry| match entry.decision {
-                Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(decided, vec![PilotAdmissionVerdict::Clear], "{field}");
+        assert_eq!(
+            verdicts(&workspace, &task),
+            vec![PilotAdmissionVerdict::Clear],
+            "{field}"
+        );
     }
 }
 
@@ -1389,14 +1239,10 @@ fn an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_
 /// Answering it must refuse before the comment and the answered marker, and
 /// the same request must still accept a verdict that releases the hold.
 fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
-    let workspace = decision_channel_workspace();
-    let task = backlog_task(&workspace);
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    let current = decision_requests(&workspace, &task).pop().unwrap();
-    let older_offer = orbit_types::task::DecisionRequest::new(
+    let (workspace, task, current) = channel_held("duplicate_of", "pilot_duplicate");
+    let older_offer = DecisionRequest::new(
         task.id.clone(),
-        orbit_types::task::DecisionGate::PilotAdmission,
+        DecisionGate::PilotAdmission,
         PilotAdmissionVerdict::decision_answers(),
         current.binding.clone(),
         "task_pilot".into(),
@@ -1405,15 +1251,9 @@ fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
     append_history(&workspace, &task, older_offer.history_entry("task-pilot"));
     let requests = decision_requests(&workspace, &task);
     assert_eq!(requests.len(), 2, "{requests:?}");
-    assert_eq!(
-        requests[0].state,
-        orbit_types::task::DecisionRequestState::Superseded
-    );
+    assert_eq!(requests[0].state, DecisionRequestState::Superseded);
     let request_id = requests[1].id.clone();
-    assert_eq!(
-        requests[1].state,
-        orbit_types::task::DecisionRequestState::Open
-    );
+    assert_open(&requests[1]);
     assert!(
         requests[1]
             .answers
@@ -1421,8 +1261,8 @@ fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
             .any(|answer| answer.id == "evaluated"),
         "the pre-fix offer still lists evaluated: {requests:?}"
     );
-    let comments_before = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let history_before = workspace.runtime.get_task_history(&task.id).unwrap();
+    let comments_before = task_comments(&workspace, &task);
+    let history_before = hist(&workspace, &task);
     let refused = workspace
         .runtime
         .answer_decision_request_as_human(
@@ -1439,101 +1279,73 @@ fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
         "{message}"
     );
     assert_eq!(
-        workspace.runtime.get_task_comments(&task.id).unwrap(),
+        task_comments(&workspace, &task),
         comments_before,
         "a refused answer writes no comment"
     );
     assert_eq!(
-        workspace.runtime.get_task_history(&task.id).unwrap(),
+        hist(&workspace, &task),
         history_before,
         "a refused answer writes no resolution or answered marker"
     );
     let still = decision_requests(&workspace, &task);
-    assert_eq!(
-        still[1].state,
-        orbit_types::task::DecisionRequestState::Open
-    );
+    assert_open(&still[1]);
     assert!(still[1].resolution.is_none());
     assert_eq!(still[1].id, request_id);
     assert_admission(&workspace, &task, Some("pilot_duplicate"));
 
-    let answered = workspace
-        .runtime
-        .answer_decision_request_as_human(
-            &request_id,
-            "approve_anyway",
-            Some("Not a duplicate: the deliverables differ.".into()),
-            "human:fixture".into(),
-            Some("dashboard".into()),
-        )
-        .unwrap();
-    assert_eq!(
-        answered.state,
-        orbit_types::task::DecisionRequestState::Answered
+    let answered = answer_req(
+        &workspace,
+        &request_id,
+        "approve_anyway",
+        Some("Not a duplicate: the deliverables differ.".into()),
     );
-    assert_eq!(answered.resolution.unwrap().answer_id, "approve_anyway");
-    assert_admission(&workspace, &task, None);
-}
-
-fn answering_a_pilot_request_records_the_verdict_and_releases_the_hold() {
-    let workspace = decision_channel_workspace();
-    let task = backlog_task(&workspace);
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    let request = decision_requests(&workspace, &task).pop().unwrap();
-    let answered = workspace
-        .runtime
-        .answer_decision_request_as_human(
-            &request.id,
-            "approve_anyway",
-            Some("Not a duplicate: the deliverables differ.".into()),
-            "human:fixture".into(),
-            Some("dashboard".into()),
-        )
-        .unwrap();
-    assert_eq!(
-        answered.state,
-        orbit_types::task::DecisionRequestState::Answered
-    );
-    assert_eq!(answered.resolution.unwrap().answer_id, "approve_anyway");
-    // The verdict comment the human path recorded is what admission reads:
-    // the hold is released without a new assessment.
+    assert_answered(&answered, "approve_anyway");
     assert_admission(&workspace, &task, None);
 }
 
 fn a_disabled_pilot_hold_writes_no_decision_request() {
-    let workspace = Workspace::new();
-    let task = backlog_task(&workspace);
+    let (workspace, task) = fresh_backlog();
     assess(&workspace, &task, Some("duplicate_of"));
     assert_admission(&workspace, &task, Some("pilot_duplicate"));
     assert!(decision_requests(&workspace, &task).is_empty());
 }
 
 fn a_changed_pilot_hold_supersedes_its_request_without_a_new_request() {
-    for change in ["operator_clear", "clear_assessment", "replacement_hold"] {
-        let workspace = decision_channel_workspace();
-        let task = backlog_task(&workspace);
-        assess(&workspace, &task, Some("duplicate_of"));
-        assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    for change in [
+        "operator_clear",
+        "clear_assessment",
+        "replacement_hold",
+        "second_hold",
+    ] {
+        let (workspace, task, _first) = channel_held("duplicate_of", "pilot_duplicate");
         match change {
             "operator_clear" => {
-                workspace
-                    .runtime
-                    .update_task_as_human(
-                        &task.id,
-                        TaskUpdateParams {
-                            comment: Some(
-                                "task-pilot-admission: clear\nThe finding no longer applies."
-                                    .into(),
-                            ),
-                            ..Default::default()
-                        },
-                        "human:fixture".into(),
-                    )
-                    .unwrap();
+                human_comment(
+                    &workspace,
+                    &task,
+                    "task-pilot-admission: clear\nThe finding no longer applies.".into(),
+                );
             }
             "clear_assessment" => assess(&workspace, &task, None),
             _ => assess(&workspace, &task, Some("duplicate_of")),
+        }
+        if change == "second_hold" {
+            assert_admission(&workspace, &task, Some("pilot_duplicate"));
+            let requests = decision_requests(&workspace, &task);
+            assert_eq!(requests.len(), 2, "{requests:?}");
+            assert_eq!(requests[0].state, DecisionRequestState::Superseded);
+            assert_open(&requests[1]);
+            assert_ne!(requests[0].binding.key(), requests[1].binding.key());
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.state == DecisionRequestState::Open)
+                    .count(),
+                1,
+                "at most one request per task is open"
+            );
+            continue;
         }
         // Reading must invalidate the old binding before admission raises anything else.
         let requests = decision_requests(&workspace, &task);
@@ -1544,38 +1356,10 @@ fn a_changed_pilot_hold_supersedes_its_request_without_a_new_request() {
         );
         assert_eq!(
             requests[0].state,
-            orbit_types::task::DecisionRequestState::Superseded,
+            DecisionRequestState::Superseded,
             "{change}"
         );
     }
-}
-
-fn a_second_pilot_hold_supersedes_the_first() {
-    let workspace = decision_channel_workspace();
-    let task = backlog_task(&workspace);
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    let requests = decision_requests(&workspace, &task);
-    assert_eq!(requests.len(), 2, "{requests:?}");
-    assert_eq!(
-        requests[0].state,
-        orbit_types::task::DecisionRequestState::Superseded
-    );
-    assert_eq!(
-        requests[1].state,
-        orbit_types::task::DecisionRequestState::Open
-    );
-    assert_ne!(requests[0].binding.key(), requests[1].binding.key());
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.state == orbit_types::task::DecisionRequestState::Open)
-            .count(),
-        1,
-        "at most one request per task is open"
-    );
 }
 
 fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
@@ -1596,9 +1380,7 @@ fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
         })
         .unwrap();
     assess_disposition(&workspace, &task, None, "host_operational");
-    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: serde_json::Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit = last_audit(&workspace, &task);
     assert!(
         !audit["host_operational_hold"].is_null(),
         "one assessment persists the host-operational hold: {audit}"
@@ -1613,36 +1395,17 @@ fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
     );
     assert_admission(&workspace, &task, Some("host_operational_handoff"));
     let first = decision_requests(&workspace, &task).pop().unwrap();
-    assert_eq!(first.state, orbit_types::task::DecisionRequestState::Open);
+    assert_open(&first);
 
-    let answered_first = workspace
-        .runtime
-        .answer_decision_request_as_human(
-            &first.id,
-            "clear",
-            Some("The operator accepts the owner-side operation.".into()),
-            "human:fixture".into(),
-            Some("dashboard".into()),
-        )
-        .unwrap();
-    assert_eq!(
-        answered_first.state,
-        orbit_types::task::DecisionRequestState::Answered
+    let answered_first = answer_req(
+        &workspace,
+        &first.id,
+        "clear",
+        Some("The operator accepts the owner-side operation.".into()),
     );
-    assert_eq!(answered_first.resolution.unwrap().answer_id, "clear");
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
-    assert!(
-        history
-            .iter()
-            .any(|entry| entry.event == "host_operational_resolved"),
-        "the first answer resolves only the host-operational hold"
-    );
-    assert!(
-        !history
-            .iter()
-            .any(|entry| entry.event == "operator_validation_resolved"),
-        "the first answer must not resolve the operator-validation hold"
-    );
+    assert_answered(&answered_first, "clear");
+    assert_event(&workspace, &task, "host_operational_resolved");
+    assert_no_event(&workspace, &task, "operator_validation_resolved");
 
     // Repeating admission exposes the remaining hold and raises a fresh
     // request for it, without a new assessment or a raw decision comment.
@@ -1650,17 +1413,10 @@ fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
     let requests = decision_requests(&workspace, &task);
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_eq!(requests[0].id, first.id);
-    assert_eq!(
-        requests[0].state,
-        orbit_types::task::DecisionRequestState::Answered
-    );
+    assert_answered(&requests[0], "clear");
     let second = requests[1].clone();
     assert_ne!(second.id, first.id, "the next hold gets a fresh request");
-    assert_eq!(
-        second.state,
-        orbit_types::task::DecisionRequestState::Open,
-        "the fresh request is usable: {requests:?}"
-    );
+    assert_open(&second);
     assert_eq!(
         second.binding, first.binding,
         "both requests bind to the same pilot operation"
@@ -1671,86 +1427,41 @@ fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
     );
 
     // Replay of the answered request is refused and changes nothing.
-    let replay = workspace
-        .runtime
-        .answer_decision_request_as_human(
-            &first.id,
-            "clear",
-            Some("A stale replay must not target the next hold.".into()),
-            "human:fixture".into(),
-            Some("dashboard".into()),
-        )
-        .expect_err("an answered request refuses a replay");
+    let replay = answer_req_refused(
+        &workspace,
+        &first.id,
+        "clear",
+        Some("A stale replay must not target the next hold.".into()),
+        "an answered request refuses a replay",
+    );
     assert!(
-        replay.to_string().contains("request_superseded")
-            && replay.to_string().contains("nothing was applied"),
+        replay.contains("request_superseded") && replay.contains("nothing was applied"),
         "{replay}"
     );
     let requests = decision_requests(&workspace, &task);
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_eq!(requests[1].id, second.id);
-    assert_eq!(
-        requests[1].state,
-        orbit_types::task::DecisionRequestState::Open
-    );
-    assert!(
-        !workspace
-            .runtime
-            .get_task_history(&task.id)
-            .unwrap()
-            .iter()
-            .any(|entry| entry.event == "operator_validation_resolved"),
-        "the replay must not resolve the remaining hold"
-    );
+    assert_open(&requests[1]);
+    assert_no_event(&workspace, &task, "operator_validation_resolved");
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
-                    "operator-evaluation.json",
-                    json!({"criterion": 1, "tool": "orbit.pipeline.invoke", "outcome": "passed"})
-                        .to_string(),
-                )],
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
-    let answered_second = workspace
-        .runtime
-        .answer_decision_request_as_human(
-            &second.id,
-            "evaluated",
-            Some("Operator reviewed operator-evaluation.json and accepts this validation.".into()),
-            "human:fixture".into(),
-            Some("dashboard".into()),
-        )
-        .unwrap();
-    assert_eq!(
-        answered_second.state,
-        orbit_types::task::DecisionRequestState::Answered
+    attach_passed_eval(&workspace, &task);
+    let answered_second = answer_req(
+        &workspace,
+        &second.id,
+        "evaluated",
+        Some("Operator reviewed operator-evaluation.json and accepts this validation.".into()),
     );
-    assert_eq!(answered_second.resolution.unwrap().answer_id, "evaluated");
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    assert_answered(&answered_second, "evaluated");
     for event in ["host_operational_resolved", "operator_validation_resolved"] {
         assert_eq!(
-            history.iter().filter(|entry| entry.event == event).count(),
+            event_count(&workspace, &task, event),
             1,
             "each typed hold resolves exactly once: {event}"
         );
     }
-    let decided = history
-        .into_iter()
-        .filter_map(|entry| match entry.decision {
-            Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        decided,
+        verdicts(&workspace, &task),
         vec![
             PilotAdmissionVerdict::Clear,
             PilotAdmissionVerdict::Evaluated
@@ -1763,7 +1474,7 @@ fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
     assert!(
         requests
             .iter()
-            .all(|request| request.state == orbit_types::task::DecisionRequestState::Answered),
+            .all(|request| request.state == DecisionRequestState::Answered),
         "no request stays open after release: {requests:?}"
     );
 }
@@ -1773,7 +1484,7 @@ fn submit_pilot_answer(
     request_id: &str,
     token: &str,
     caller: DecisionSubmitCaller,
-) -> Result<orbit_types::task::DecisionRequest, orbit_core::OrbitError> {
+) -> Result<DecisionRequest, orbit_core::OrbitError> {
     workspace
         .runtime
         .submit_decision_via_channel(DecisionSubmitParams {
@@ -1793,19 +1504,8 @@ fn submit_pilot_answer(
 }
 
 fn a_registered_channel_submission_releases_the_pilot_hold_as_the_human() {
-    let workspace = decision_channel_workspace();
-    let task = backlog_task(&workspace);
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    let request = decision_requests(&workspace, &task).pop().unwrap();
-    workspace
-        .runtime
-        .register_decision_channel("email", "human:fixture", "decision-mail", vec![])
-        .unwrap();
-    let token = workspace
-        .runtime
-        .mint_decision_token("email", &request.id)
-        .unwrap();
+    let (workspace, task, request) = channel_held("duplicate_of", "pilot_duplicate");
+    let token = channel_token(&workspace, &request.id);
     let answered = submit_pilot_answer(
         &workspace,
         &request.id,
@@ -1815,10 +1515,7 @@ fn a_registered_channel_submission_releases_the_pilot_hold_as_the_human() {
         },
     )
     .unwrap();
-    assert_eq!(
-        answered.state,
-        orbit_types::task::DecisionRequestState::Answered
-    );
+    assert_eq!(answered.state, DecisionRequestState::Answered);
     let resolution = answered.resolution.unwrap();
     assert_eq!(resolution.answered_by, "human:fixture");
     assert!(
@@ -1834,19 +1531,8 @@ fn a_registered_channel_submission_releases_the_pilot_hold_as_the_human() {
 }
 
 fn agent_and_unregistered_submissions_leave_the_pilot_hold_held() {
-    let workspace = decision_channel_workspace();
-    let task = backlog_task(&workspace);
-    assess(&workspace, &task, Some("duplicate_of"));
-    assert_admission(&workspace, &task, Some("pilot_duplicate"));
-    let request = decision_requests(&workspace, &task).pop().unwrap();
-    workspace
-        .runtime
-        .register_decision_channel("email", "human:fixture", "decision-mail", vec![])
-        .unwrap();
-    let token = workspace
-        .runtime
-        .mint_decision_token("email", &request.id)
-        .unwrap();
+    let (workspace, task, request) = channel_held("duplicate_of", "pilot_duplicate");
+    let token = channel_token(&workspace, &request.id);
     // The §3.3 guard: a well-formed answer with a valid token, from an
     // agent envelope and from a plugin the channel is not bound to, is
     // refused both times and the hold stays held.
@@ -1869,7 +1555,7 @@ fn agent_and_unregistered_submissions_leave_the_pilot_hold_held() {
     assert_admission(&workspace, &task, Some("pilot_duplicate"));
     assert_eq!(
         decision_requests(&workspace, &task)[0].state,
-        orbit_types::task::DecisionRequestState::Open,
+        DecisionRequestState::Open,
         "the request is still open for the human"
     );
 }
@@ -1880,9 +1566,7 @@ crate::scenario_table!(
     an_enabled_pilot_hold_raises_one_open_decision_request,
     an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_it,
     an_evaluated_answer_still_listed_on_an_older_request_is_refused,
-    answering_a_pilot_request_records_the_verdict_and_releases_the_hold,
     a_disabled_pilot_hold_writes_no_decision_request,
-    a_second_pilot_hold_supersedes_the_first,
     a_changed_pilot_hold_supersedes_its_request_without_a_new_request,
     a_registered_channel_submission_releases_the_pilot_hold_as_the_human,
     agent_and_unregistered_submissions_leave_the_pilot_hold_held,
@@ -1903,34 +1587,29 @@ fn stale_detail(workspace: &Workspace, task: &Task) -> String {
 }
 
 fn set_tags(workspace: &Workspace, task: &Task, tags: &[&str]) {
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
-                ..Default::default()
-            },
-            "human:operator".into(),
-        )
-        .unwrap();
+    hu_by(
+        workspace,
+        task,
+        TaskUpdateParams {
+            tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+            ..Default::default()
+        },
+        "human:operator",
+    );
 }
 
 /// A backlog task whose description an operator rewrote after its pilot.
 fn stale_backlog_task(workspace: &Workspace) -> Task {
     let task = backlog_task(workspace);
     assess(workspace, &task, None);
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                description: Some("Repair the README fixture, as settled by the operator.".into()),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    hu(
+        workspace,
+        &task,
+        TaskUpdateParams {
+            description: Some("Repair the README fixture, as settled by the operator.".into()),
+            ..Default::default()
+        },
+    );
     assert_admission(workspace, &task, Some("pilot_assessment_stale"));
     task
 }
@@ -1956,16 +1635,7 @@ fn no_pilot_admits_a_stale_assessment_until_the_tag_is_removed() {
     assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
     set_tags(&workspace, &task, &["no-pilot"]);
     assert_admission(&workspace, &task, None);
-    assert_eq!(
-        orbit_engine::RuntimeHost::admit_task_for_workflow(
-            &workspace.runtime,
-            &task.id,
-            "worktree_setup"
-        )
-        .unwrap()
-        .status,
-        TaskStatus::InProgress
-    );
+    assert_workflow_admitted(&workspace, &task);
 }
 
 /// [ORB-21238] Only an operator adds `no-pilot` to an assessed task. The
@@ -1986,13 +1656,13 @@ fn only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited() {
         refused.contains("only an operator can add `no-pilot`"),
         "{refused}"
     );
-    let stored = workspace.runtime.get_task(&task.id).unwrap();
+    let stored = got(&workspace, &task);
     assert!(stored.tags.is_empty(), "the refused write must not apply");
     assert_eq!(stored.priority, task.priority);
     assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
 
     set_tags(&workspace, &task, &["no-pilot"]);
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    let history = hist(&workspace, &task);
     let skips = history
         .iter()
         .filter(|entry| entry.event == "pilot_skipped")
@@ -2000,7 +1670,7 @@ fn only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited() {
     assert_eq!(skips.len(), 1, "{history:?}");
     assert_eq!(skips[0].by, "human:operator");
     let note: serde_json::Value = serde_json::from_str(skips[0].note.as_deref().unwrap()).unwrap();
-    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let comments = task_comments(&workspace, &task);
     let (operation_id, audit) = comments
         .iter()
         .rev()
@@ -2027,21 +1697,15 @@ fn only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited() {
 
     // Keeping the tag is no new skip, and a never-piloted task stays open to
     // every writer, as filing with the tag is.
-    workspace
-        .runtime
-        .run_tool(
-            "orbit.task.update",
-            json!({"id": task.id, "model": "codex", "tags": ["no-pilot", "docs"]}),
-        )
-        .unwrap();
+    tool_update(
+        &workspace,
+        json!({"id": task.id, "model": "codex", "tags": ["no-pilot", "docs"]}),
+    );
     let fresh = backlog_task(&workspace);
-    workspace
-        .runtime
-        .run_tool(
-            "orbit.task.update",
-            json!({"id": fresh.id, "model": "codex", "tags": ["no-pilot"]}),
-        )
-        .unwrap();
+    tool_update(
+        &workspace,
+        json!({"id": fresh.id, "model": "codex", "tags": ["no-pilot"]}),
+    );
     for id in [&task.id, &fresh.id] {
         let skips = workspace
             .runtime
@@ -2086,42 +1750,19 @@ fn no_pilot_keeps_every_other_admission_rule() {
         );
     };
 
-    let blocker = workspace
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Prerequisite".into(),
-            description: "Land first.".into(),
-            acceptance_criteria: vec!["The prerequisite is observable.".into()],
-            status: Some(TaskStatus::Backlog),
-            complexity: TaskComplexity::Low,
-            context_files: vec!["file:docs/other.md".into()],
-            ..Default::default()
-        })
-        .unwrap();
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                dependencies: Some(vec![blocker.id.to_string()]),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    let blocker = add_fixture_task(
+        &workspace,
+        "Prerequisite",
+        "Land first.",
+        "The prerequisite is observable.",
+        TaskStatus::Backlog,
+        TaskComplexity::Low,
+        "file:docs/other.md",
+    );
+    set_deps(&workspace, &task, vec![blocker.id.to_string()]);
     unready(&task);
     assert_eq!(readiness_reason(&task), "unmet_dependency");
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                dependencies: Some(Vec::new()),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
+    set_deps(&workspace, &task, Vec::new());
     let admitted = workspace.action("list_backlog_tasks", json!({}));
     assert!(
         admitted["task_ids"]
@@ -2131,18 +1772,15 @@ fn no_pilot_keeps_every_other_admission_rule() {
         "{admitted}"
     );
 
-    workspace
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Holds the README lock".into(),
-            description: "Running work on the same file.".into(),
-            acceptance_criteria: vec!["The holder is observable.".into()],
-            status: Some(TaskStatus::InProgress),
-            complexity: TaskComplexity::Low,
-            context_files: vec!["file:README.md".into()],
-            ..Default::default()
-        })
-        .unwrap();
+    add_fixture_task(
+        &workspace,
+        "Holds the README lock",
+        "Running work on the same file.",
+        "The holder is observable.",
+        TaskStatus::InProgress,
+        TaskComplexity::Low,
+        "file:README.md",
+    );
     unready(&task);
     assert_eq!(readiness_reason(&task), "context_lock_conflict");
 
