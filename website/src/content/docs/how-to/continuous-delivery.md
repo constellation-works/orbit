@@ -32,7 +32,7 @@ evidence when the code disproves the finding.
 
 - **Agent:** ask your agent to pilot the proposed tasks.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
-  `task_pilot_pipeline`. To pilot new and edited tasks automatically, turn on
+  `task_pilot_pipeline`. To pilot eligible new tasks automatically, turn on
   the `task_pilot` routine in **Automation → Routines**. It is off by default
   and runs on the host scheduler clock.
 - **CLI:**
@@ -46,8 +46,31 @@ evidence when the code disproves the finding.
 Without task IDs, the pilot picks up `proposed` and `backlog` tasks whose
 `context_files` is empty or whose complexity is unassessed. It skips a task it
 already found to have no in-workspace targets while that assessment is fresh;
-editing the task's description, criteria, status, or source makes it eligible
-again, and naming its ID always audits it again.
+name its ID to audit it again.
+
+The routine selects eligible never-assessed tasks for their first automatic
+pilot. Once an assessment has applied, editing requirements does not request
+another one. Description or criteria edits can hold dispatch as
+`pilot_assessment_stale`. After a material edit, an operator on the owner can
+request a fresh assessment for a proposed or backlog task:
+
+```bash
+orbit task repilot "$TASK_ID"
+# Request a full assessment explicitly instead:
+orbit task repilot "$TASK_ID" --full
+```
+
+When the latest assessment holds promotion and qualifies for re-check, the
+pilot re-examines its holding findings and changed fields, keeping unaffected
+fields. Otherwise it runs a full assessment: for example, when the receipt is
+too old or was itself a re-check, the footprint's source changed, or the scope
+changed substantially. `--full` always requests a full assessment. A pending
+or running pilot, live delivery, human crew, or replica checkout refuses the
+request. Repiloting neither approves nor dispatches the task.
+
+An operator can instead skip pilot admission by adding `no-pilot`; see
+[Skip pilot in Readiness](../dashboard/#skip-pilot-in-readiness) for the
+authority boundary, history and other holds.
 
 When preparation selects no tasks, the run skips agent dispatch and applies
 an empty result collection successfully, retaining any held-task skip details.
