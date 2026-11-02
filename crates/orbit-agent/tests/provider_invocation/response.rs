@@ -1178,11 +1178,11 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
     assert!(!format!("{:?}", trace.tool_calls).contains(patch));
 }
 
-/// The serialized provider schema itself enforces the status/error
-/// correlation, the Claude CLI argv carries that same schema, and the
-/// parser keeps enforcing the correlation for schema-less transports.
+/// The serialized provider schema stays inside the Claude structured-output
+/// subset (no top-level conditional), the Claude CLI argv carries that same
+/// schema, and the parser enforces the status/error correlation ([ORB-21567]).
 #[test]
-fn provider_schema_enforces_status_error_correlation() {
+fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
     let schema = response_envelope_json_schema();
     let arg = response_envelope_json_schema_arg();
     assert_eq!(
@@ -1200,6 +1200,10 @@ fn provider_schema_enforces_status_error_correlation() {
     assert!(
         schema.get("oneOf").is_none(),
         "oneOf must stay nested: {schema}"
+    );
+    assert!(
+        schema.get("allOf").is_none(),
+        "allOf must stay nested: {schema}"
     );
     fn assert_supported_keywords(value: &Value) {
         match value {
@@ -1257,10 +1261,6 @@ fn provider_schema_enforces_status_error_correlation() {
         );
     }
     let invalid = [
-        json!({"schemaVersion": 1, "status": "success", "result": {},
-               "error": {"code": "FAILURE", "message": "work failed"}}),
-        json!({"schemaVersion": 1, "status": "failed", "result": {}}),
-        json!({"schemaVersion": 1, "status": "failed", "result": {}, "error": null}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
                "error": {"code": "", "message": "work failed"}}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
@@ -1269,8 +1269,6 @@ fn provider_schema_enforces_status_error_correlation() {
                "error": {"code": "FAILURE", "message": ""}}),
         json!({"schemaVersion": 1, "status": "failed", "result": {},
                "error": {"code": "FAILURE"}}),
-        json!({"schemaVersion": 1, "status": "timeout", "result": {}}),
-        json!({"schemaVersion": 1, "status": "timeout", "result": {}, "error": null}),
         json!({"schemaVersion": 1, "status": "timeout", "result": {},
                "error": {"code": "", "message": "agent timed out"}}),
     ];
@@ -1281,7 +1279,7 @@ fn provider_schema_enforces_status_error_correlation() {
         );
     }
 
-    // Parser-side validation remains the second layer.
+    // The parser owns the status/error correlation.
     for (stdout, exit_code) in [
         (
             json!({"schemaVersion": 1, "status": "success", "result": {},
@@ -1294,7 +1292,17 @@ fn provider_schema_enforces_status_error_correlation() {
             Some(1),
         ),
         (
+            json!({"schemaVersion": 1, "status": "failed", "result": {}, "error": null})
+                .to_string(),
+            Some(1),
+        ),
+        (
             json!({"schemaVersion": 1, "status": "timeout", "result": {}}).to_string(),
+            Some(1),
+        ),
+        (
+            json!({"schemaVersion": 1, "status": "timeout", "result": {}, "error": null})
+                .to_string(),
             Some(1),
         ),
     ] {

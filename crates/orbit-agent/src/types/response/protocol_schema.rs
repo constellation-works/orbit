@@ -18,18 +18,16 @@ pub const RESPONSE_ENVELOPE_STATUSES: [&str; 3] = ["success", "failed", "timeout
 ///
 /// # Status/error correlation
 ///
-/// The `allOf` → `anyOf` nesting below ties `status` to `error` at the
-/// provider boundary: `success` carries no error object (absent or `null`,
-/// matching the parser), while `failed` and `timeout` must carry an error
-/// object whose `code` and `message` are non-blank. The conditional stays
-/// nested rather than at the top level, and uses only the Claude
-/// structured-output subset: `anyOf`/`allOf` and `const` are supported, and
-/// non-blank is expressed with a `pattern` because that subset rejects
-/// string-length constraints (`minLength`/`maxLength`) with a 400 error
-/// (see "JSON Schema limitations" in the Claude structured-outputs docs).
-/// The `super::envelope` parser still validates the same correlation when
-/// parsing provider output, as the second layer for transports without a
-/// schema.
+/// The schema does not tie `status` to `error`. Expressing that correlation
+/// needs a conditional on the root object, and the Claude API rejects
+/// `oneOf`, `allOf` and `anyOf` at the top level of a tool `input_schema` with
+/// a 400 error, failing every invocation ([ORB-21567]). The `super::envelope`
+/// parser enforces it instead: `success` carries no error object (absent or
+/// `null`), while `failed` and `timeout` must carry one. The schema still pins
+/// the error object's shape, and expresses non-blank `code` and `message` with
+/// a `pattern` because the Claude structured-output subset rejects
+/// string-length constraints (`minLength`/`maxLength`) (see "JSON Schema
+/// limitations" in the Claude structured-outputs docs).
 ///
 /// `durationMs` is not declared here and passes through as an unconstrained
 /// additional property.
@@ -75,49 +73,6 @@ pub fn response_envelope_json_schema() -> Value {
             },
         },
         "required": ["schemaVersion", "status", "result"],
-        // Nested conditional (see the doc comment above): exactly one branch
-        // matches the declared `status`, and each branch pins the `error`
-        // shape that status allows. `error: null` is accepted on success
-        // because the parser treats JSON null as "no error".
-        "allOf": [{
-            "anyOf": [
-                {
-                    "properties": {
-                        "status": { "const": "success" },
-                        "error": { "type": "null" },
-                    },
-                    "required": ["status"],
-                },
-                {
-                    "properties": {
-                        "status": { "const": "failed" },
-                        "error": {
-                            "type": "object",
-                            "properties": {
-                                "code": { "type": "string", "pattern": "\\S" },
-                                "message": { "type": "string", "pattern": "\\S" },
-                            },
-                            "required": ["code", "message"],
-                        },
-                    },
-                    "required": ["status", "error"],
-                },
-                {
-                    "properties": {
-                        "status": { "const": "timeout" },
-                        "error": {
-                            "type": "object",
-                            "properties": {
-                                "code": { "type": "string", "pattern": "\\S" },
-                                "message": { "type": "string", "pattern": "\\S" },
-                            },
-                            "required": ["code", "message"],
-                        },
-                    },
-                    "required": ["status", "error"],
-                },
-            ],
-        }],
     })
 }
 
