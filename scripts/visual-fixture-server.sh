@@ -115,6 +115,38 @@ if [ "$seed_rows" = "1" ]; then
   first_task="$(head -n 1 "$scratch/task-ids" 2>/dev/null || true)"
 fi
 
+# Open fleet notices, one per line of "<kind>\t<title>\t<body>", posted
+# through the real CLI so the Notices view reads them from the backend.
+# Under faketime they are posted at the frozen instant the server reads,
+# so their age and expiry stay in range. Notices are operator writes;
+# ORBIT_OPERATOR=1 grants that only to these seeding commands against the
+# disposable fixture root.
+if [ "$seed_rows" = "1" ]; then
+  notice_rows="$(node -e '
+    const fs = require("fs");
+    const seed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const notices = seed.notices ?? [];
+    if (!Array.isArray(notices)) throw new Error("seed.notices must be an array");
+    for (const notice of notices) {
+      for (const value of [notice.kind, notice.title, notice.body]) {
+        if (typeof value !== "string" || !value.trim() || /[\t\r\n]/.test(value)) {
+          throw new Error("seed notice fields must be non-empty single-line strings");
+        }
+      }
+      process.stdout.write([notice.kind, notice.title, notice.body].join("\t") + "\n");
+    }
+  ' "$seed")"
+  printf '%s\n' "$notice_rows" | while IFS="$(printf '\t')" read -r kind title body; do
+    [ -n "$title" ] || continue
+    if command -v faketime >/dev/null 2>&1; then
+      seed_ts="$(date -u -d "$frozen" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || printf '%s' "$frozen" | sed -e 's/T/ /' -e 's/Z$//')"
+      (cd "$work" && env ORBIT_OPERATOR=1 TZ=UTC faketime -f "$seed_ts" "$orbit" --root "$root" notice post --kind "$kind" --title "$title" --body "$body" >/dev/null)
+    else
+      (cd "$work" && ORBIT_OPERATOR=1 run_orbit notice post --kind "$kind" --title "$title" --body "$body" >/dev/null)
+    fi
+  done
+fi
+
 first_experiment=""
 if [ "$seed_rows" = "1" ] && [ "$fixture" = "experiments" ]; then
   first_experiment="$(node -e 'const f=require(process.argv[1]); process.stdout.write(f.experiment.id)' "$seed")"
