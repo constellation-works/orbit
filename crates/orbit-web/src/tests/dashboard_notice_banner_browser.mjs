@@ -165,3 +165,136 @@ export async function assertNoticeBannerScope(browser, origin, evidence) {
     await context.close();
   }
 }
+
+// ORB-21548: a numeric revision bump must refresh the banner even when the
+// displayed expiry label is unchanged. `text()` maps every numeric revision
+// to "", so the old `${text(revision)}:${expiryLabel}` hash kept the keyed
+// old node until the label itself changed. The hash now covers the numeric
+// revision, the rendered content (kind/title/scope) and both clock labels
+// (age/expiry), while titles still render as text nodes.
+export async function assertNoticeBannerRevision(browser, origin, evidence) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const scenarios = [];
+  try {
+    await page.route('**/api/**', async route => {
+      const url = new URL(route.request().url());
+      let body = { items: [], total: 0, limit: 50 };
+      if (url.pathname === '/api/workspaces') body = [
+        { id: 'one', name: 'one', status: 'active', is_default: true },
+      ];
+      else if (url.pathname === '/api/crews') body = { default_crew: null, crews: [] };
+      else if (url.pathname === '/api/routines') body = { routines: [], clock: {} };
+      else if (url.pathname === '/api/tasks') body = { items: [], total: 0, limit: 50 };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+
+    await page.goto(`${origin}/?workspace=one#tasks`);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      await import('/app.js');
+    });
+    await page.waitForSelector('#notice-banner', { state: 'attached' });
+
+    const render = (script, arg) => page.evaluate(script, arg);
+    const bannerState = () => page.evaluate(() => ({
+      title: document.querySelector('.notice-banner-title')?.textContent,
+      meta: document.querySelector('.notice-banner-meta')?.textContent,
+      chip: document.querySelector('.notice-banner-row .notice-chip')?.textContent,
+      rowClass: document.querySelector('.notice-banner-row')?.className,
+      hash: document.querySelector('.notice-banner-row')?.dataset.hash,
+      titleChildren: document.querySelector('.notice-banner-title')?.children.length,
+      titleHtml: document.querySelector('.notice-banner-title')?.innerHTML,
+      hidden: document.getElementById('notice-banner').hidden,
+    }));
+    const capture = async (state) => {
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+        await page.screenshot({ path: path.join(evidence, `notice-banner-revision-${state}-dark-${width}.png`) });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    };
+
+    // Freeze the clock so both renders share one expiry label.
+    await render(async () => {
+      const now = Date.parse('2026-11-02T12:00:00Z');
+      globalThis.__revisionNow = now;
+      globalThis.__revisionRealNow = Date.now;
+      Date.now = () => globalThis.__revisionNow;
+      const notices = await import('/js/notices.js');
+      globalThis.__renderBanner = payload => notices.renderNoticeBanner(payload);
+      globalThis.__bannerBase = {
+        id: 'ntc_review', kind: 'incident', scope: 'workspace', status: 'open',
+        opened_at: '2026-11-02T11:00:00Z',
+        expires_at: '2026-11-02T14:00:00Z',
+      };
+      const first = { ...globalThis.__bannerBase, revision: 1, title: 'Original incident' };
+      globalThis.__renderBanner({ open: [first], banner: [first] });
+    });
+    try {
+      const first = await bannerState();
+      check(first.title === 'Original incident', `revision fixture must start on Original incident: ${JSON.stringify(first)}`);
+      check(first.meta === 'workspace · 1h old · expires in 2h', `unexpected first banner meta: ${JSON.stringify(first)}`);
+      check(first.chip === 'incident', `unexpected first banner chip: ${JSON.stringify(first)}`);
+      scenarios.push('revision 1 shows Original incident with its clock labels');
+      await capture('before');
+
+      await render(async () => {
+        const second = { ...globalThis.__bannerBase, revision: 2, title: 'Updated incident' };
+        globalThis.__renderBanner({ open: [second], banner: [second] });
+      });
+      const second = await bannerState();
+      check(second.hash !== first.hash, `numeric revision 1 to 2 must change the banner hash: ${JSON.stringify({ first, second })}`);
+      check(second.title === 'Updated incident', `revision 2 kept the stale title ${JSON.stringify(second.title)} with the same expiry label (numeric revision hash): ${JSON.stringify(second)}`);
+      check(second.meta === 'workspace · 1h old · expires in 2h', `revision 2 must keep the shared clock labels: ${JSON.stringify(second)}`);
+      scenarios.push('revision 2 updates the title with the same expiry label');
+      await capture('after');
+
+      await render(async () => {
+        const kindScope = { ...globalThis.__bannerBase, revision: 2, title: 'Updated incident', kind: 'info', scope: 'global' };
+        globalThis.__renderBanner({ open: [kindScope], banner: [kindScope] });
+      });
+      const kindScope = await bannerState();
+      check(kindScope.chip === 'info', `kind change must update the banner chip: ${JSON.stringify(kindScope)}`);
+      check(kindScope.meta === 'global · 1h old · expires in 2h', `scope change must update the banner meta: ${JSON.stringify(kindScope)}`);
+      check(kindScope.rowClass.includes('notice-info'), `kind change must update the banner row class: ${JSON.stringify(kindScope)}`);
+      scenarios.push('kind and scope update the banner with the same revision and expiry label');
+
+      await render(async () => {
+        const aged = { ...globalThis.__bannerBase, revision: 2, title: 'Updated incident', kind: 'info', scope: 'global', opened_at: '2026-11-02T11:50:00Z' };
+        globalThis.__renderBanner({ open: [aged], banner: [aged] });
+      });
+      const aged = await bannerState();
+      check(aged.meta === 'global · 10m old · expires in 2h', `age-label change must update the banner with the same expiry label: ${JSON.stringify(aged)}`);
+      scenarios.push('age label updates the banner with the same expiry label');
+
+      const markupTitle = '<b>markup</b> & "quoted"';
+      await render(async (title) => {
+        const markup = { ...globalThis.__bannerBase, revision: 3, title, kind: 'info', scope: 'global', opened_at: '2026-11-02T11:50:00Z' };
+        globalThis.__renderBanner({ open: [markup], banner: [markup] });
+      }, markupTitle);
+      const markup = await bannerState();
+      check(markup.title === markupTitle, `markup title must render its text: ${JSON.stringify(markup)}`);
+      check(markup.titleChildren === 0, `banner title must stay a text node, not markup: ${JSON.stringify(markup)}`);
+      check(!markup.titleHtml.includes('<b>'), `banner title must escape markup: ${JSON.stringify(markup)}`);
+      scenarios.push('banner title renders markup as text');
+    } finally {
+      await render(() => {
+        Date.now = globalThis.__revisionRealNow;
+        delete globalThis.__revisionNow;
+        delete globalThis.__revisionRealNow;
+        delete globalThis.__renderBanner;
+        delete globalThis.__bannerBase;
+      });
+    }
+
+    check(errors.length === 0, `Notice banner revision checks raised page errors: ${errors.join('\n')}`);
+    fs.writeFileSync(path.join(evidence, 'notice-banner-revision-result.json'), JSON.stringify({ passed: true, checks: scenarios }, null, 2));
+  } finally {
+    await context.close();
+  }
+}
