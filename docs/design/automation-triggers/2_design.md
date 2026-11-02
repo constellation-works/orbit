@@ -339,9 +339,11 @@ them. Missing selectors are one reason for a first assessment. Description or
 acceptance-criteria edits after an assessment queue a fresh automatic pilot
 when no live execution claim or unresolved failed pilot holds the task. Other
 material or policy changes never request another automatic pilot through the
-routine (an `--approve-proposed` drain or scheduled discovery still repilots a
-stale assessment automatically when its certified description/criteria or other
-material drifted). Tasks in progress, review, terminal, withdrawn, or
+routine. An `--approve-proposed` drain repilots a stale assessment automatically
+when its certified description/criteria or other material drifted; scheduled
+discovery does so only when its certified description/criteria drifted. Both
+require that no live execution claim or unresolved failed pilot holds the task.
+Tasks in progress, review, terminal, withdrawn, or
 human-blocked are not automatic pilot candidates. Preparing proposed work does
 not approve it.
 
@@ -403,13 +405,16 @@ receipt as evidence that the task has already been piloted, including an
 unready verdict and evidence from an explicit pilot. Routine windows report
 `fresh` or `fresh_unready` without another provider run or consumer-local
 receipt. Description/criteria edits renew automatic preparation eligibility for
-proposed and backlog tasks; unrelated material or policy changes never renew
-automatic routine pilot eligibility. An `--approve-proposed` drain (or scheduled
-discovery) also queues a fresh pilot automatically for a stale assessment whose
+proposed and backlog tasks without an applied assessment. For tasks with an
+applied assessment, this scheduling reuse is independent of dispatch freshness:
+edits never renew automatic routine pilot eligibility. An `--approve-proposed`
+drain still queues a fresh pilot automatically for a stale assessment whose
 certified description/criteria or other material drifted and no live execution
-claim holds it. Active pilots and live execution claims keep their holds, and
-failed attempts retain their retry bounds before reuse. An operator can also
-request another pilot explicitly:
+claim holds it, while scheduled discovery still queues one automatically only
+for a stale assessment whose certified description/criteria drifted and no live
+execution claim holds it. Active pilots and live execution claims keep their
+holds, and failed attempts retain their retry bounds before reuse. Every later
+routine pilot needs an explicit operator request:
 `orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
 or a decision option action `re_pilot`. The explicit legacy command
 `orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
