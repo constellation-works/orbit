@@ -119,9 +119,12 @@ with `resident_scope_refused`.
 
 `orbit.resident.grant --remove <right>… / --drop-workspace <ws>…`, `orbit.resident.control
 pause|stop`, and a deadline shortened in the mandate are narrowing. Any caller that can write the
-assignment may narrow, including the resident's own cycle. Narrowing applies at the next cycle start
-(a live cycle keeps its frozen grant until it ends, at most one agent budget). Each narrowing is
-recorded in `narrowed[]` with its caller.
+assignment may narrow, including the resident's own cycle. Narrowing takes effect for cycle
+execution at the next cycle boundary, and each narrowing is recorded in `narrowed[]` with its
+caller. Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant,
+completes, checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at
+the next cycle boundary, within at most one agent budget. A stop then hands the assignment to
+`review`.
 
 ## Failure modes
 
