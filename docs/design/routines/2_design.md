@@ -291,7 +291,7 @@ Optional `freshness` resolves each key from the routine, then
 `source_sensitivity: ignore`. Thus an ordinary branch-head move or retagging
 does not change the default material fingerprint. `context_files` and `any` are
 the other source sensitivities. These fields guard preparation/apply drift;
-changing them never automatically re-pilots an already assessed task. Neither
+changing them never automatically re-pilots an already assessed task through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Neither
 block configures finding verification. See
 [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
@@ -369,7 +369,7 @@ triage state routines render the same owner and branch placeholders. The
 prepare/apply drift contract is `[workflow.task_pilot_freshness]` in `config.toml`
 (default: title, description, criteria, plan and selectors; head moves ignored),
 overridable by the routine's optional `trigger.state.freshness` block [ORB-13638].
-Only the first pilot is automatic; edits and policy changes never request a later one. Auto-task definitions
+Only the first routine pilot is automatic; edits and policy changes never queue another one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
 `enabled` field controls scheduled capability in the workspace; the performance
 refresh is the single seeded-enabled exception described above.
@@ -880,11 +880,11 @@ diagnostics without persisting state or dispatching work.
   settling for `debounce_minutes` or reaching `max_wait_minutes`. Admission rechecks
   eligibility and freezes member fingerprints/source, retry budget and deadline.
   Deterministic per-member apply evidence settles assessments, including fresh
-  unready results; wrapper success is not an assessment. Only the first pilot is
+  unready results; wrapper success is not an assessment. Only the first routine pilot is
   automatic. Edits make evidence stale for dispatch but create no new automatic
-  pilot debt. Later pilots require `orbit task repilot <id>` (also available as
+  routine pilot debt; an `--approve-proposed` drain still repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it. Later routine pilots require `orbit task repilot <id>` (also available as
   `orbit.task.repilot`, task update `repilot: true`, or decision action `re_pilot`).
-  Shared admission withholds edited requirements until an explicit assessment
+  Shared admission withholds edited requirements until a new assessment
   completes, unless an operator adds `no-pilot` to skip reassessment for an
   assessed or preparing task. The skip bypasses pilot holds, but other holds,
   including an unverified-finding hold, still apply. If the assessment remains
