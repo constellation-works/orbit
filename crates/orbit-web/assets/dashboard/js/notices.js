@@ -7,7 +7,7 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 
-import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, postJson, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -46,18 +46,33 @@ function noticeLink(notice) {
   return link;
 }
 
+function setRailNoticeCount(count) {
+  const railCount = $("rail-count-notices");
+  if (railCount) railCount.textContent = count ? String(count) : "";
+}
+
+function hideNoticeBanner() {
+  const banner = $("notice-banner");
+  if (!banner) return;
+  banner.hidden = true;
+  banner.replaceChildren();
+}
+
+// The banner and its rail count belong to the workspace visit that read them.
+// A scope switch clears both, so a read still in flight for the previous scope
+// cannot restore them, and a failed read for the new scope shows none of them.
+onWorkspaceChange(() => {
+  setRailNoticeCount(0);
+  hideNoticeBanner();
+});
+
 export function renderNoticeBanner(payload) {
   const banner = $("notice-banner");
   if (!banner) return;
-  const railCount = $("rail-count-notices");
-  if (railCount) {
-    const open = Array.isArray(payload?.open) ? payload.open.length : 0;
-    railCount.textContent = open ? String(open) : "";
-  }
+  setRailNoticeCount(Array.isArray(payload?.open) ? payload.open.length : 0);
   const notices = Array.isArray(payload?.banner) ? payload.banner : [];
   if (!notices.length) {
-    banner.hidden = true;
-    banner.replaceChildren();
+    hideNoticeBanner();
     return;
   }
   const now = Date.now();
@@ -79,11 +94,17 @@ export function renderNoticeBanner(payload) {
 export async function fetchAndRenderNoticeBanner() {
   const banner = $("notice-banner");
   if (!banner) return;
+  const revision = getWorkspaceRevision();
+  let payload;
   try {
-    renderNoticeBanner(await fetchJson(noticesPath()));
+    payload = await fetchJson(noticesPath());
   } catch (_) {
-    // A failed banner read never replaces a view: keep the last banner.
+    // A failed read keeps the banner of its own visit. A failed read from a
+    // visit the operator has left changes nothing.
+    return;
   }
+  // A reply from a visit the operator has left must not replace this one's banner or count.
+  if (revision === getWorkspaceRevision()) renderNoticeBanner(payload);
 }
 
 function endedText(notice) {
