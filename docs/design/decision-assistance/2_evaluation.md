@@ -14,9 +14,12 @@ tags: [decision-assistance]
 # Evaluation protocol: bounded decision assistance
 
 Status: the offline evaluator is implemented ([ORB-19720]); nothing here enables a
-runtime service, live calls, or advisory display. Implementation:
+runtime service, live calls, or advisory display. The precedent-decision
+contract below is the same kind of offline addition: selecting it does not
+enable that consumer. Implementation:
 `scripts/evaluate-decision-assistance.py` (contract + scoring),
-`scripts/test-evaluate-decision-assistance.py` (public CLI verification).
+`scripts/precedent_decision_eval.py` (`/4` only),
+`scripts/test-evaluate-decision-assistance.py` (public CLI verification for `/1` and `/2`).
 
 ## Frozen contracts (versions `decision-assistance-eval/1` and `/2`)
 
@@ -30,6 +33,7 @@ adds the first labeler's recorded `value` to the import so rewriting
 `format_version` at `/1` for evidence-envelope compatibility and lists
 both legacy versions alongside `/3` under `supported_format_versions`, and `seed` defaults to `/1` with
 an opt-in `--format-version` for `/2` synthetic fixtures.
+`decision-assistance-eval/4` is not part of that schema object; its contract is below.
 
 - **Consumers/questions.** `failure_categorization`: one choice question
   `failure_category` over `product_defect`, `misclassified_hold`, `provider`,
@@ -495,19 +499,149 @@ A separate fresh working directory is for an independent fixture run, never a wo
 for an opened human holdout. Fixture targets intentionally exceed fixture sample size;
 the opening reports unmet sizes and no accuracy eligibility.
 
-## Precedent-decision contract (`decision-assistance-eval/4`, proposed)
+## Precedent-decision contract (`decision-assistance-eval/4`)
 
-Not implemented. The [precedent-decision proposal](specs/precedent-decisions.md#evaluator-contract-decision-assistance-eval4)
-([ORB-21089]) defines an additive `/4` contract for consumer `precedent_decision`,
-to be built by [ORB-21096]. It adds `recorded_human_decision` label provenance
-(the answer a human writer recorded on a decision request, never a `precedent` or
-`model` actor answer), prospective time-window holdouts with predictions sealed
-before the human answer, and per-category targets registered before the window
-opens: operating threshold, `min_samples`, `min_accuracy` (Wilson lower bound),
-`min_coverage` and `max_ece`. Scoring adds coverage, accuracy with its interval,
-calibration (ECE over 10 bins and Brier) and citation agreement. The rules
-above still hold: no tuning after the readout, and any change needs a new
-registration and window. `/1`–`/3` are unchanged.
+This additive offline contract scores consumer `precedent_decision` and question
+set `precedent-decision/1`. It does not change `/1`–`/3` commands, their schema
+object, seed defaults, or scoring. `precedent-schema` emits only `/4`. Every
+other new behavior is selected by `format_version` `decision-assistance-eval/4`
+on the document the command reads. With the contract unselected, an existing
+evaluation request reads as before. Nothing here authorizes shadow mode, a live
+call, or a category answering on its own.
+
+### Label provenance
+
+`recorded_human_decision` is the answer a human writer recorded on a decision
+request, with `decided_by`, `answered_at`, `channel`, and `value`. It is not
+relabelled after the fact (`relabelled: true` is refused). It is holdout-eligible
+only for consumer `precedent_decision`, and only when `automation` is false and
+`answered_by` is `human` or `human_confirmed`. `answered_by` of `model`,
+`precedent`, or `automation` is not a holdout label.
+
+`score` refuses an in-window label with one of those actors, or `automation:
+true`, and prints `{ok: false, errors}` with exit 2. It does not emit a readout
+for that dataset. A model or precedent label on a request raised before
+`window_start` is outside the holdout and does not by itself refuse the score.
+Synthetic provenance is mechanics only. A synthetic label with
+`human_ground_truth: true` is refused. `check-split` accepts an in-window case
+only when its provenance is an eligible `recorded_human_decision`.
+
+### Prospective window
+
+The holdout is the half-open window `[window_start, window_end)`. Family is the
+category plus the topic. The same family may appear before the window and inside
+it; this contract does not use the `/1`–`/2` family-disjoint rule. `score` scores
+only requests raised inside the window whose prediction `sealed_at` is strictly
+before the label `answered_at`. A missing seal is `unsealed`. A seal at or after
+the answer is `leaked`. `superseded` and `expired` requests are counted under
+`excluded` and are not scored. When a citation includes `decided_at`, that
+instant must be strictly before the case `raised_at`, so a holdout decision is
+a precedent for a later request only through that request's own as-of retrieval.
+
+`check-targets` records nothing. `check-split` records a successful open, and
+only then, under `.decision-assistance-eval/precedent-windows/` in the working
+directory. It does not write `.decision-assistance-eval/holdouts/`, which remains
+the `/1`–`/2` ledger. Repeating a `holdout_id`, or passing it in
+`--prior-holdout-ids`, is refused. Run the check from a directory whose records
+should be kept with the evaluation.
+
+### Targets before the window opens
+
+`check-targets` requires `registered_at`, `window_start`, `window_end` (the end
+strictly after the start), `policy_digest` (`sha256:` and 64 lowercase hex
+digits), and a non-empty `categories` list. Every category object needs all of
+these keys:
+
+| Key | Rule |
+| --- | --- |
+| `threshold` | Finite operating threshold in `(0, 1]`. |
+| `min_samples` | Integer ≥ 30. |
+| `min_accuracy` | Number in `[0.95, 1]`, the Wilson lower bound the readout must clear. |
+| `min_coverage` | Number in `[0.30, 1]`. |
+| `max_ece` | Number in `[0, 0.05]`. |
+
+A registration may tighten any of those floors and may not loosen them. A
+missing key, a value outside its range, or `registered_at` at or after
+`window_start` exits 2 with `{ok, errors}` and writes nothing. Optional
+`--holdout-opened-at` adds a second deadline: `registered_at` must also be
+strictly before that instant. It does not replace the window-start check.
+`/1`–`/2` keys such as `min_precision` are not this contract.
+
+### Scoring
+
+`score` requires `--dataset`, `--answers`, and `--targets`. It reports
+`precedent-decision-readout/1` for each registered category and does not roll
+categories up into one fleet score. It does not decide that the registered
+targets were met.
+
+- **Coverage** at the category `threshold`: the share of scored requests with a
+  non-abstaining `decision_choice`, probability greater than or equal to the
+  threshold, and at least one citation with `supports_choice: true`.
+- **Accuracy** on those covered requests, with a Wilson 95% interval
+  (`method: Wilson`). The interval's lower bound is what `min_accuracy` names.
+- **ECE** over 10 equal-width probability bins on `[0, 1]` (the last bin
+  includes 1) and the **Brier** score of `decision_choice`,
+  mean `(probability - correct)^2`. Both use every scored non-abstaining choice,
+  including choices below the threshold. Abstentions have no choice probability
+  and stay out of both.
+- **Abstention**: disposition other than `suggested`, or choice
+  `insufficient_precedent`, divided by scored requests.
+- **Conflict rate**: share of scored requests whose `precedents_conflict` is
+  true or at least 0.5, plus accuracy on the non-abstaining flagged requests.
+- **Citation agreement**: share of covered correct answers whose citations all
+  have `same_consequence: true`. That boolean is the recorded human check. The
+  scorer does not judge consequences itself.
+
+`evidence_status` says when every scored label is synthetic. Those numbers are
+mechanics, not human ground truth and not an adoption readout.
+
+### Reproducible fixture
+
+Run from a fresh directory under `.orbit/tmp/` so window records stay in
+scratch. Set `ROOT` to this checkout before changing directory. No network or
+model is used. The seed is synthetic mechanics and is not a passing readout:
+its larger category is four correct out of five covered requests, so the Wilson
+lower bound is below the 0.95 floor.
+
+```bash
+ROOT="$PWD"
+mkdir -p .orbit/tmp/precedent-demo
+cd .orbit/tmp/precedent-demo
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" precedent-schema > schema.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" seed --format-version decision-assistance-eval/4 > dataset.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" seed --format-version decision-assistance-eval/4 --answers > answers.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" seed --format-version decision-assistance-eval/4 --targets > targets.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" check-targets --targets targets.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" score --dataset dataset.json --answers answers.json --targets targets.json > report.json
+```
+
+`check-targets` on that registration exits 0. The report's
+`ws_orbit:agent_request` category scores 7 requests: coverage 5/7, accuracy 4/5
+with a Wilson interval, ECE and Brier over 6 choice probabilities, abstention
+1/7, conflict rate 1/7, citation agreement 3/4. One leaked prediction, one
+superseded request, and one pre-window `answered_by: model` label are excluded.
+`ws_orbit:final_recovery` scores one covered correct request. Deleting any
+per-category key, setting `min_samples` below 30, or setting `registered_at` to
+`window_start` makes `check-targets` exit 2. Setting an in-window label's
+`answered_by` to `model` or `precedent` makes `score` exit 2 and print no
+category metrics.
+
+`check-split` is the prospective-holdout gate, so the synthetic seed does not
+pass it. A one-case recorded label does. From a fresh directory, write
+`recorded.json` with `format_version` `/4`, `consumer` `precedent_decision`,
+`question_set` `precedent-decision/1`, and one in-window case whose label
+provenance is `recorded_human_decision`, `answered_by` `human`, `automation`
+false, and `decided_by`, `answered_at`, `channel`, and `value` filled. Write
+`window.json` with the same format, a new `holdout_id`, and `registered_at`
+strictly before `window_start`. Then:
+
+```bash
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" check-split --dataset recorded.json --manifest window.json
+```
+
+The first run exits 0 and creates the precedent-window record. The same
+`holdout_id` exits 2 the next time. A `model` or `precedent` actor on that
+in-window label exits 2 and does not open the window.
 
 ## Live activation and budget handoff (not authorized here)
 
@@ -522,8 +656,8 @@ operator-coordinated evidence, not prerequisites for this offline delivery.
 
 ## Task References
 
-- [ORB-21096] — proposes the `/4` precedent-decision evaluator contract.
-- [ORB-21089] — designs the precedent-decision consumer and its `/4` contract.
+- [ORB-21096] — adds the offline `/4` precedent-decision evaluator contract.
+- [ORB-21089] — designs the precedent-decision consumer and the `/4` contract.
 - [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.
 - [ORB-20000] — proposes separate delivery-quality questions and evaluation; no evaluator changes in that task.
 - [ORB-19760] — scopes which `check-targets` checks the command enforces; the remaining target registration rules are manual steps.

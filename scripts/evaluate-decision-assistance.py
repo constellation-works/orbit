@@ -9,6 +9,9 @@ distinguishes them). V1 second-label holdouts without a recorded first
 value are legacy/unverified and never eligible; v2 records the first
 value so rewriting `expected` cannot hide disagreement. Additive delivery-quality
 v3 contracts and CLI dispatch live in the sibling delivery_quality_* modules.
+Additive precedent-decision v4 is opt-in (`decision-assistance-eval/4`) and
+lives in precedent_decision_eval.py. The `/1` schema object, seed defaults
+and `/1`–`/3` scoring do not include it.
 """
 import argparse, hashlib, json, math, os, sys
 from collections import Counter, defaultdict
@@ -16,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import delivery_quality_eval as delivery
+import precedent_decision_eval as precedent
 
 FORMAT_V1 = "decision-assistance-eval/1"
 FORMAT_V2 = "decision-assistance-eval/2"
@@ -714,6 +718,9 @@ def emit(obj, code=0): print(json.dumps(obj, indent=2, sort_keys=True)); return 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    precedent_result = precedent.precedent_cli(argv)
+    if precedent_result is not None:
+        return precedent_result
     delivery_result = delivery.delivery_cli(argv)
     if delivery_result is not None:
         return delivery_result
