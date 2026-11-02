@@ -1630,6 +1630,10 @@ def is_node_test(command):
             and "--test" in command)
 
 
+class NodeTestSkipped(ValueError):
+    """Node evidence is otherwise valid but includes unavailable cases."""
+
+
 def validate_node_test_evidence(command, evidence, required_cases=()):
     """Require named Node TAP cases to have actually executed and passed.
 
@@ -1675,16 +1679,16 @@ def validate_node_test_evidence(command, evidence, required_cases=()):
         raise ValueError("node test output was truncated; behavioral evidence is incomplete")
     if failed or summary.get("fail"):
         raise ValueError(f"node test reported failing cases: {sorted(set(failed))}")
-    if not executed:
-        raise ValueError("node test executed zero passing cases; check the selection")
-    skipped_required = sorted(set(required_cases) & set(skipped))
-    if skipped_required:
-        raise ValueError(f"required browser case skipped: {skipped_required}")
-    if skipped:
-        raise ValueError(f"node test skipped cases: {sorted(set(skipped))}")
-    missing = sorted(set(required_cases) - set(executed))
+    missing = sorted(set(required_cases) - set(executed) - set(skipped))
     if missing:
         raise ValueError(f"node test did not execute the required browser cases: {missing}")
+    skipped_required = sorted(set(required_cases) & set(skipped))
+    if skipped_required:
+        raise NodeTestSkipped(f"required browser case skipped: {skipped_required}")
+    if skipped:
+        raise NodeTestSkipped(f"node test skipped cases: {sorted(set(skipped))}")
+    if not executed:
+        raise ValueError("node test executed zero passing cases; check the selection")
 
 
 def scenario_decision(inventory, results, candidate_id):
@@ -3986,8 +3990,7 @@ def main():
                     # An exit-zero Node run whose only defect is a skipped case
                     # is an unavailable capability, not a failure: surface it
                     # as a SKIP notice so finalize_result keeps NOT_RUN.
-                    if (failure is None and evidence.get("exit_code") == 0
-                            and evidence.get("skipped_cases") and not evidence.get("failed_cases")):
+                    if failure is None and isinstance(error, NodeTestSkipped):
                         evidence["stderr"] = (evidence.get("stderr") or "") + f"\nSKIP: {error}"
                     else:
                         failure = str(error) if failure is None else failure + "; " + str(error)
