@@ -155,7 +155,7 @@ open notice in scope the block is omitted entirely.
 
 ## Dashboard
 
-Slice 5 adds:
+Slice 5 added:
 
 - a banner at the top of every dashboard view while an `incident` or `maintenance` notice is open in
   the workspaces the dashboard shows (title, scope, age, time to expiry, link to the notice);

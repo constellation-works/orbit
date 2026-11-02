@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (13)
+### Building (12)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -124,10 +124,9 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
-| [Fleet Notices](./design/fleet-notices/1_overview.md) | Slice 5, ORB-21215: dashboard banner and view, attention kind | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | Deliver runtime sources (slice 2), provider sources (slice 3), and cross-host federation (slice 4) | claude |
-| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243 | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | Land slice 3, ORB-21170: ci_red and friction_untriaged kinds (in review) | claude |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Slice 10, ORB-21251: pilot one mandate against an interactive baseline (backlog) | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
@@ -143,7 +142,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 
-### Shipped (38)
+### Shipped (39)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -160,6 +159,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
+| [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed | claude |

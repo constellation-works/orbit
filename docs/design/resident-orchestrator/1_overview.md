@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243"
+next: "Slice 10, ORB-21251: pilot one mandate against an interactive baseline (backlog)"
 feature: resident-orchestrator
 doc_role: overview
 type: design
@@ -98,8 +98,8 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Slice 1 ([ORB-21242]) is in review and not yet landed; slices 2–10 are approved (`backlog`). Locations are placement proposals that the slices confirm
-([2_design.md §12](./2_design.md#12-placement-in-the-code)).
+Slices 1–9 ([ORB-21242] to [ORB-21250]) have landed; slice 10, the pilot ([ORB-21251]), is approved (`backlog`).
+Planned code locations are in [2_design.md §12](./2_design.md#12-placement-in-the-code).
 
 | Concern | File | Task |
 |---------|------|------|

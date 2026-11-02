@@ -16,8 +16,8 @@ related_artifacts: [ORB-21207]
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–4
-([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214]) are built; module names for the remaining slices are placement proposals they confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. All five slices
+([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214], [ORB-21215]) are built; only the maintenance dispatch hold (§7) is unfiled. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -47,7 +47,7 @@ client of the API and lives in its own repository.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md). No new cross-crate dependency is
 needed: every crate below already depends on the ones it would call.
 
-| Concern | Location (slices 1–4 built; the rest proposed) |
+| Concern | Location |
 |---|---|
 | `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
 | The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
@@ -55,12 +55,12 @@ needed: every crate below already depends on the ones it would call.
 | Authorization catalog entries for `post` and `close` (Agent, Operator and Runner as an identity floor, like leases; poster-class resolution in core; `list` and `show` are open reads) | `crates/orbit-common/src/governance/authorization/catalog.rs` |
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
-| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed. The scheduler sweep pass is not built yet |
+| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `application/routines/sweep.rs`) materializes cross-workspace closures |
 | Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs` beside `regression_risk_for_agent_input`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs` like `attach_explore_brief`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
 | `[notice]` configuration | `crates/orbit-config` registry settings |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |
-| Dashboard banner and view | `crates/orbit-web` |
-| Attention kind `notice_open` | an adapter under the planned `crates/orbit-core/src/application/attention/sources/` ([ORB-21168] creates the module) |
+| Dashboard banner and view | `crates/orbit-web` (`assets/dashboard/js/notices.js`, `css/notices.css`) |
+| Attention kind `notice_open` | `crates/orbit-core/src/application/attention/sources.rs` |
 
 The core service is one set of functions over a runtime handle. The tool handlers, the CLI, the
 dashboard, the brief builder and the attention adapter all call it, so they cannot disagree about
@@ -180,7 +180,7 @@ extension adds is to *withhold* new unattended work on named hosts, bounded by t
 
 ## 8. Slices
 
-Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (slices 1–4 done, slice 5 in `backlog`);
+Each slice is a `ws_orbit` task tagged `fleet-notices` with acceptance criteria (all five done);
 dependencies run top to bottom, and ids are in Task References.
 
 1. **Notice store, tools, CLI and the `notice` toolset** ([ORB-21211], done). Types; store migration and
@@ -200,7 +200,7 @@ dependencies run top to bottom, and ids are in Task References.
    per-owner fan-out for workspace-less lists with `degraded` hosts, global aggregation, the
    closure materializer in the sweep for cross-workspace links, the federated-mcp doc amendment.
    Depends on 1; reuses attention's fan-out when [ORB-21171] has landed.
-5. **Dashboard and attention** ([ORB-21215], backlog). Banner, Notices view and forms; the `notice_open`
+5. **Dashboard and attention** ([ORB-21215], done). Banner, Notices view and forms; the `notice_open`
    attention kind with its severity rule and the attention spec amendment. Depends on 1, and on
    [ORB-21168] for the attention part.
 
