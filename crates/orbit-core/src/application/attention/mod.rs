@@ -3,6 +3,7 @@
 //! live with the operation in `orbit_common::governance::attention`, so the
 //! federated aggregator applies the same rules once over every host.
 mod host;
+mod runtime_sources;
 mod sources;
 
 use crate::{
@@ -55,6 +56,7 @@ pub fn attention_query(
     let filter = AttentionFilter::parse(input)?;
     let reads_host_health = filter.selected(AttentionKind::HostUnhealthy)
         && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
+    let operator = resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let settings = runtime.context.settings().attention_settings();
     let machine = orbit_config::load_machine_settings(&runtime.global_root())?;
     let host = AttentionHost {
@@ -198,7 +200,10 @@ pub fn attention_query(
         ) {
             Ok(candidates) => candidates,
             Err(error) => {
-                for kind in &filter.kinds {
+                for kind in filter.kinds.iter().filter(|kind| {
+                    AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
+                        || **kind == AttentionKind::NoticeOpen
+                }) {
                     degraded.push(AttentionDegraded {
                         scope: format!("workspace:{}", workspace.id),
                         kind: kind.as_str().into(),
@@ -206,9 +211,22 @@ pub fn attention_query(
                         message: error.to_string(),
                     });
                 }
-                continue;
+                sources::AttentionCandidates {
+                    items: Vec::new(),
+                    degraded: Vec::new(),
+                    timings: BTreeMap::new(),
+                }
             }
         };
+        runtime_sources::read_runtime_attention(
+            selected,
+            &workspace,
+            &host,
+            &filter,
+            now,
+            operator,
+            &mut candidates,
+        );
         if reads_host_health {
             let owner = selected.coordination_task_reads_visible();
             match host::read_doctor_host_item(runtime, selected, &workspace, &host, owner) {

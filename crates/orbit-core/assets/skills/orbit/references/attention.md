@@ -1,8 +1,24 @@
 # Operator attention
 
-`orbit attention` / `orbit.attention` is a read-only derived view. It lists `pilot_warning`, `pilot_hold`, `blocked`, `decision_open`, `review_waiting`, `host_unhealthy` and `notice_open`. Reading it never dispatches or approves work. Open decisions fold into the hold, block or review they decide. `next` suggests a command and, when available, its exact tool/input; `needs` names arguments the operator must supply.
+`orbit attention` / `orbit.attention` is a read-only derived view. It lists `pilot_warning`, `pilot_hold`, `blocked`, `decision_open`, `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`, `host_unhealthy` and `notice_open`. Reading it never dispatches or approves work. Open decisions fold into the hold, block or review they decide. `next` suggests a command and, when available, its exact tool/input; `needs` names arguments the operator must supply.
 
-Scope defaults to the current workspace; `--workspace` repeats, and `--all` reads every active workspace. On a machine with registered hosts (`orbit host list`), `--all`, `--host`, `--workspace` or a call from outside any workspace reads every in-scope host in parallel within `attention.fanout_budget_seconds`; the federated MCP server does the same for a call without a host-qualified selector. Each host reports only what it is authoritative for: an owner its task-level kinds, every host its own health. Every item names its `host`, and federated items carry the workspace `selector`. A host that does not answer, answers under another machine id, or lacks the tool is a `host_unhealthy` item (`critical` when it owns an in-scope workspace) plus a `degraded` entry; `--exclude-kind host_unhealthy` hides the item, never the `degraded` entry. Runtime and provider kinds (`run_failed`, `run_stuck`, `claim_stale`, `ci_red`, `friction_untriaged`) are later slices. A bound MCP session refuses `all`, `host` and other workspaces with `scope_not_permitted`. Agents can read task-level kinds; `host_unhealthy` needs the Operator capability and otherwise reports `degraded` code `capability`. Replica records are never substituted for their owner.
+Scope defaults to the current workspace; `--workspace` repeats, and `--all` reads every active workspace. On a machine with registered hosts (`orbit host list`), `--all`, `--host`, `--workspace` or a call from outside any workspace reads every in-scope host in parallel within `attention.fanout_budget_seconds`; the federated MCP server does the same for a call without a host-qualified selector. Each host reports only what it is authoritative for: an owner its task-level kinds, every host its own health. Every item names its `host`, and federated items carry the workspace `selector`. A host that does not answer, answers under another machine id, or lacks the tool is a `host_unhealthy` item (`critical` when it owns an in-scope workspace) plus a `degraded` entry; `--exclude-kind host_unhealthy` hides the item, never the `degraded` entry. Provider kinds (`ci_red`, `friction_untriaged`) are later slices. A bound MCP session refuses `all`, `host` and other workspaces with `scope_not_permitted`. Agents can read task-level kinds; `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy` need the Operator capability and otherwise reports `degraded` code `capability`. Replica records are never substituted for their owner.
+
+Runtime kinds read stored runs without reconciliation. `run_failed` reports recent failed,
+timed-out or interrupted runs, suppressing older attempts superseded by a newer submission
+of the same job/task and runs already named by a blocked item. `run_stuck` detects a gone
+owner before reconciliation or a run beyond `attention.run_stuck_after_minutes`. Linux uses
+`/proc` start identity with PID-namespace fencing; macOS uses libproc with a bounded `ps`
+fallback. Unavailable identity is not proof of death; the age bound still applies. Active
+runs remain visible beyond the failure window `attention.run_window_hours`.
+
+`claim_stale` uses owner-side claim inspection and says “possibly stale”: reservation expiry,
+a missing/terminal local bound run, unresolved merge intent or invalidated landing are
+diagnostics. A remote run missing locally proves nothing. Its recovery advice uses
+`orbit.task.recover_claim`, with `claim_id` and `workspace` known; `needs` declares `reason`,
+`request_key`, `expected_phase` and `status` (blocked/backlog). Read `detail.phase` and inspect
+the claim before supplying operator inputs. Attention never executes recovery, resume or
+cancellation. Generic resume advice preserves the action's ordinary admission guards.
 
 Local `host_unhealthy` reports failing or warning default `orbit doctor` workspace checks, which include a follower's pull drain ending on protocol skew. On a federated read it also reports a registered host whose binary version or pull-protocol fingerprint differs from this one.
 

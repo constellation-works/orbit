@@ -17,7 +17,7 @@ related_artifacts: [ORB-21164, ORB-21171]
 # Operator Attention — Design
 
 This document describes how `orbit attention` fits together and where it lands in the code.
-The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; federation and `host_unhealthy` in slice 4. The runtime and provider sources remain later slices. The prescriptive contracts live in the specs:
+The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; federation and `host_unhealthy` in slice 4. Slice 2 implements the runtime sources; provider sources remain a later slice. The prescriptive contracts live in the specs:
 [attention-item](./specs/attention-item.md) (kinds, schema, severity),
 [attention-filters](./specs/attention-filters.md),
 [attention-cursor](./specs/attention-cursor.md) and
@@ -37,8 +37,9 @@ and no background job. Three properties follow and are tested as invariants:
 - **One condition, one item.** The same underlying fact never appears twice. An open decision
   request folds into the item it decides ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)).
 - **Same inputs, same list.** Derivation is deterministic given the stores and `generated_at`;
-  the only time-dependent outputs are `age_seconds` and the severity thresholds, and the
-  fingerprint ignores time except through `severity`.
+  time-dependent outputs are `age_seconds`, condition thresholds (including reservation expiry
+  and the stuck-run bound) and severity. Fingerprints cover condition state and severity, never
+  elapsed time itself.
 
 The kinds were chosen from conditions that already exist in Orbit's records and already have
 a resolving action. A condition without a source (a stall detected by heartbeat, a notion of
@@ -80,7 +81,7 @@ needed, which the slice verifies before it merges.
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | the planned `attention.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
-| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for the task-level kinds, `host.rs` for local `host_unhealthy`) |
+| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for task-level kinds, `runtime_sources.rs` for runs and claims, `host.rs` for local `host_unhealthy`) |
 | Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
 | Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
@@ -150,7 +151,7 @@ References below; each is a proposed `ws_orbit` task tagged `operator-attention`
    Owns the FULL shared `[attention]` configuration: typed settings, validated defaults, registry, resolution and readback for every §5 key. Later slices consume this owner and create no competing schemas.
 2. **Runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
    `degraded` reporting for sessions without the Operator capability; liveness check
-   confirmed per platform. Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   documented per platform (the probe and its limitations are described below). Consumes the shared §5 settings from slice 1. Depends on slice 1.
 3. **Provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
    read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
 4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
@@ -178,9 +179,39 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - **Thresholds are judgement.** The severity table and defaults are a first reading of how bad
   each condition is. They will be tuned from use; the fingerprint's inclusion of severity means
   a retune can re-inject items once.
-- **`run_stuck` has no heartbeat.** Jobs record a pid and a start time, not progress. The kind
-  is a liveness check plus a wall-clock bound, which misses a live but wedged process inside
-  the bound. A progress signal would be a separate change to the run store.
+- **Runtime observation never reconciles.** Run adapters read raw job-store rows, not the
+  ordinary listing/show or resume planner (which can repair journals or interrupt runs).
+  `run_failed` uses the newest submission per job and subject task, so a newer successful,
+  pending or running attempt supersedes a failure. `run_window_hours` bounds failure history;
+  active rows remain eligible for `run_stuck` beyond that window. Blocked items fold their
+  referenced runs before runtime filtering. Runtime kinds require Operator capability, with
+  one workspace-scoped `degraded` entry per selected unreadable kind otherwise.
+- **`run_stuck` has no heartbeat.** `run_owner_liveness` compares the persisted pid/start token
+  through the existing job owner classifier. Linux obtains stable process start identity from
+  `/proc/<pid>/stat` and `/proc/stat` (boot time), including the PID namespace in v2 tokens.
+  macOS reads libproc `proc_pidinfo(PROC_PIDTBSDINFO)` first, with a bounded UTC/C-locale
+  `ps -o lstart=` fallback; legacy tokens use the existing legacy matcher. Both Unix paths
+  use `kill(pid, 0)` as the fallback presence check: an unavailable identity probe with a
+  present PID is not proof of death. A missing process or mismatched start token is stopped;
+  a foreign PID namespace is unknown. Non-Unix liveness is unknown. Unknown identity still
+  permits the wall-clock bound, never a dead-owner assertion. Pending rows without a recorded
+  pid wait for the bound; running rows without an owner count as stopped. Only host-local run
+  rows are probed. This detects dead owners before reconciliation records `Interrupted`, and
+  live owners past `run_stuck_after_minutes`, but misses live wedged processes inside the bound.
+  These are existing platform paths, not a new heartbeat or process-control implementation.
+- **Claim inspection is diagnostic.** Only the workspace owner derives `claim_stale`, using
+  the non-repairing inspection behind `orbit.drain.claims`. Unsettled claims qualify on expired
+  reservation, absent/terminal host-local bound run, unresolved merge intent or invalidated
+  landing. A bound remote run's absence from the owner's store proves nothing and is not a
+  diagnostic. `since` is the inspection's last event time (`updated_at`). Advice says
+  “possibly stale”; recovery is never called. `needs` uses exact tool keys `reason`,
+  `request_key`, `expected_phase`, and `status` (operator chooses blocked or backlog);
+  the observed phase is exposed in `detail.phase`, not invented in the proposed input.
+- **Resume advice is conservative.** Failed-run advice suggests generic resume only when
+  a pinned or catalog definition is readable, no claim bound the run, input does not carry
+  one-shot trusted-host/reconciliation/source-repair authority, and an interrupted run's owner
+  is not confirmed alive. Other runs suggest inspection. The ordinary resume action retains
+  all checkpoint, lineage and admission guards; attention never invokes its planner.
 - **`review_waiting` uses settled evidence.** Status must be `review`, the review certificate must name the lineage’s latest attempt under its current reset, that attempt must be `Settled`, and no attempt may be `Open` or have `reviewer_running`. A passing verdict awaits approval; a nonpassing verdict with `remaining_at(now).seconds == 0` awaits a budget reset. `since` is the certificate’s `issued_at`. A missing or unreadable certificate/ledger reports `source_unavailable`; a status or approval request alone is insufficient evidence of settlement.
 - **Pilot hold coverage follows the hold enum.** `pilot_hold` reflects the holds the pilot
   admission code knows. A new hold type that is not added to the adapter is invisible; the
