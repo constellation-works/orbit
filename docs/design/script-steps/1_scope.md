@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 last_validated: 2026-11-01
 status: Draft
 stage: building
-next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]) and declared output files ([ORB-20866]); the rest of phase 3 (files.inputs, the attach action, macOS profile) is not yet filed"
+next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task"
 feature: script-steps
 doc_role: scope
 type: design
@@ -22,7 +22,9 @@ findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
 `linux-bwrap-script-v1` (no network, `env_pass` or `files.inputs` yet), with the
 `script.execution` audit, `orbit run show` and `orbit script history`; other hosts
 refuse with `script_sandbox_unavailable`. [ORB-20866] added declared output files
-(`files.outputs`, §4 Files out) from phase 3. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+(`files.outputs`, §4 Files out) from phase 3, and [ORB-21297] added the rest of
+phase 3 on Linux: declared input files (`files.inputs`, §4 Files in) and the
+`attach_script_files` action that attaches a step's output files to a task. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
@@ -542,16 +544,31 @@ unless the operator listed it.
 | Exit 0, stdout not JSON, over the cap, or failing `output_schema_json` | `Err(script_output_invalid)` | No (validation bypasses retry, as `RetrySpec` documents) |
 | Nonzero exit or killed by a signal | `Ok(success = false)`; `message` names the exit code or signal and the last stderr lines; `output` is `{exit_code, signal}` | Yes, per the step's `retry` |
 | `script_timeout`, scope memory or task breach | `Ok(success = false)` with the code | Yes |
-| Refusals: `grant_missing`, `grant_stale`, `grant_insufficient`, `interpreter_changed`, `script_sandbox_unavailable`, `script_root_unavailable`, `script_follower_refused` | `Err`, non-retryable | No; another attempt meets the same refusal |
+| Refusals: `grant_missing`, `grant_stale`, `grant_insufficient`, `interpreter_changed`, `script_sandbox_unavailable`, `script_root_unavailable`, `script_follower_refused`, `script_file_input_unavailable` | `Err`, non-retryable | No; another attempt meets the same refusal |
 
   The nonzero-exit row restores the `Ok(success = false)` leaf that ORB-00374 removed.
   The job executor still supports it: `StepOutcome.success`, parallel, fan-out and
   loop aggregation, and the retry loop are unchanged. Phase 2 adds the coverage of the
   audit-message path whose loss that decision recorded as a cost.
-- **Files in.** `files.inputs` lists `{from, as}`. `from` is templated and must
-  resolve physically inside the cwd tree or a granted `read_root`. Each one is
-  bind-mounted (Linux) or copied (macOS) read-only at `in/<as>`. A missing input
-  refuses the step before spawn.
+- **Files in.** Implemented on Linux ([ORB-21297]). `files.inputs` lists `{from, as}`.
+  `from` is templated against the step input like `args`, a relative path
+  resolves against the cwd, and the result must resolve physically (symlinks
+  followed) to a regular file or directory inside the cwd tree or a granted
+  `read_root`. Each one is bind-mounted (Linux) or copied (macOS, not yet built)
+  read-only at `in/<as>`. `as` is a plain name, unique in the manifest. A missing
+  input, one that resolves anywhere else, one that is, contains or lies within a
+  masked tree (`.orbit/`, the global root) or a credential path, and a directory
+  holding an entry that is not a file, directory or symlink all refuse the step
+  before spawn with `script_file_input_unavailable`, naming the input. The binds
+  at `in/<as>` are not covered by the masks and credential denies, which apply at
+  host paths, so the overlap refusal stands in for them. Admission runs after the
+  grant checks and before the profile probe.
+  - **Record.** Each attempt's `script.execution` entry carries `input_files`:
+    `[{name, source, kind, bytes, sha256}]`, beside `output_files`. A file's
+    `sha256` is of its bytes; a directory's is a tree digest over every entry's
+    relative path, kind and content (`orbit.script.input-tree.v1`, at most 100,000
+    entries). The digest is taken at admission and the bind is made at spawn, so
+    the record states what the input was when admitted, not a lock on it.
 - **Files out.** Implemented ([ORB-20866]). A script opts in by declaring
   `files.outputs` caps; a manifest without them keeps the JSON-only behavior and its
   `out/` is discarded with the scratch. After exit 0 with valid stdout, Orbit collects
@@ -582,6 +599,17 @@ unless the operator listed it.
     `script_outputs_invalid`, and a store write failure with
     `script_outputs_unavailable`. All three are non-retryable, and the step exposes no
     file. A nonzero exit, a timeout or invalid stdout collects nothing.
+
+- **Attaching outputs to a task.** Implemented ([ORB-21297]). The deterministic
+  `attach_script_files` action (shipped activity of the same name) takes
+  `task_id`, `step` (a direct, earlier, successful script step of the same job),
+  optional `files` (names; all by default) and optional `path_prefix`. It reads
+  the set from the dispatching run's own checkpoint by step id, honours it only
+  through `verify_script_output_set`, then reads each file again from its store
+  path and attaches exactly those bytes, which must match the recorded size and
+  SHA-256. A changed file, a name outside the set, a file over the 1 MiB
+  task-artifact limit, a reserved artifact path, or a loop, fan-out or parallel
+  producer refuses the step, and nothing is attached.
 
 `steps.<id>.files` is a second key beside `output` in the step map. The set is
 checkpointed with the step in the run state (`script_output_sets`), and the
@@ -1047,11 +1075,14 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
    It covers use cases A (without network) and C, and lands the decision record that
    supersedes ORB-00374's removal.
-3. **Files and macOS.** Declared output files (`files.outputs` with `steps.<id>.files`)
-   landed in [ORB-20866]; the rest is not yet filed. This phase adds `files.inputs`, a deterministic action that attaches those files to a task as
-   artifacts, the `macos-sandbox-script-v1` profile, `RLIMIT_*` limits, the
-   root probes and TCC reporting, and nested-sandbox refusal. It covers use case B, and
-   orbit-office items 4 and 5.
+3. **Files and macOS.** The Linux part has landed: declared output files
+   (`files.outputs` with `steps.<id>.files`) in [ORB-20866], and declared input
+   files (`files.inputs`, read-only at `in/<as>` with their digests recorded) and
+   the `attach_script_files` action that attaches a step's output files to a task
+   as artifacts in [ORB-21297]. The macOS part is a separate task: the
+   `macos-sandbox-script-v1` profile (inputs copied rather than bound), `RLIMIT_*`
+   limits, the root probes and TCC reporting, and nested-sandbox refusal. With
+   them it covers use case B, and orbit-office items 4 and 5.
 4. **Grant requests.** Not yet filed. This phase adds the `script_grant` decision request, answers
    from registered channels (orbit-office item 1), and the dashboard Scripts view with
    its grant action. `office.script-run` can then become a thin wrapper.
@@ -1129,6 +1160,8 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
 - [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
+- [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
+- [ORB-21178] — filed the remaining phases of this doc.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and

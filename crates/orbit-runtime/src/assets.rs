@@ -145,6 +145,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/file_rule_findings.yaml"),
     ),
     (
+        "attach_script_files",
+        include_str!("../../orbit-core/assets/activities/attach_script_files.yaml"),
+    ),
+    (
         "agent_invoke",
         include_str!("../../orbit-core/assets/activities/agent_invoke.yaml"),
     ),

@@ -1,0 +1,52 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: attach_script_files
+spec:
+  type: deterministic
+  description: >
+    Attach the declared output files an earlier script step of the same job
+    kept (steps.<step>.files) to a task as task artifacts. The output set is
+    taken from the dispatching run's own checkpoint by step id, never from
+    the input, and honoured only for that run or a run it resumes, while its
+    producer record matches and every file re-hashes to its recorded size
+    and SHA-256. Each artifact is written from the exact bytes that were
+    verified; a file whose bytes no longer match its recorded digest, a name
+    outside the set, a file over the task-artifact limit or a reserved
+    artifact path refuses the step and attaches nothing. The producer must be
+    a direct, earlier, successful script step; loop, fan-out and parallel
+    producers are refused.
+  input_schema_json:
+    type: object
+    required: [task_id, step]
+    properties:
+      task_id:
+        type: string
+        description: The task that receives the artifacts.
+      step:
+        type: string
+        description: Id of the direct, earlier script step whose output files to attach.
+      files:
+        type: array
+        items:
+          type: string
+        description: Output file names to attach; every file of the set when absent.
+      path_prefix:
+        type: string
+        description: Prepended to each file name to form its artifact path (for example `script-outputs/`).
+  output_schema_json:
+    type: object
+    required: [task_id, step, set_id, attached]
+    properties:
+      task_id:
+        type: string
+      step:
+        type: string
+      set_id:
+        type: string
+        description: Identity of the attached output set.
+      attached:
+        type: array
+        description: One {name, path, bytes, media_type, sha256} entry per attached artifact.
+  action: attach_script_files
+  config: {}

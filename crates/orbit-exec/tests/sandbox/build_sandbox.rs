@@ -304,6 +304,7 @@ fn script_grants_cannot_override_state_or_git_protections() {
         writable: &writable,
         masked: &masked,
         home: None,
+        inputs: &[],
     };
     let args =
         compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile profile");
@@ -366,6 +367,7 @@ fn script_read_grants_cannot_expose_enclosing_state() {
             writable: &[],
             masked: &masked,
             home: None,
+            inputs: &[],
         };
         compile_linux_script_argv(&spec, &[], &["/bin/true".into()])
     };
@@ -428,6 +430,7 @@ fn script_profile_preserves_masks_with_overlapping_grant() {
             writable: &writable,
             masked: &masked,
             home: None,
+            inputs: &[],
         },
         argv: &argv,
         env: &[],
@@ -557,6 +560,7 @@ mod script_linked_worktree {
             writable: &[],
             masked: &[],
             home: None,
+            inputs: &[],
         };
         let argv = compile_linux_script_argv(&spec, &[], &["/usr/bin/true".to_string()])
             .expect("compile profile");
@@ -635,6 +639,7 @@ mod script_linked_worktree {
                 writable: &[],
                 masked: &[],
                 home: None,
+                inputs: &[],
             },
             argv: &argv,
             env: &env,
@@ -714,6 +719,7 @@ fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
         writable: &[],
         masked: &masked,
         home: Some(home.as_os_str()),
+        inputs: &[],
     };
 
     let args = compile_args(&spec);
@@ -770,4 +776,108 @@ fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
         orbit_exec::compile_linux_script_argv(spec, &[], &["/bin/true".into()])
             .expect("compile profile")
     }
+}
+
+/// A declared input is bound read-only at `in/<name>`, and one that overlaps
+/// a masked tree is refused, since the mask applies only at its host path.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_inputs_are_read_only_at_in_and_never_expose_masked_state() {
+    use orbit_exec::{
+        ScriptRunEnd, ScriptSandboxInput, ScriptSandboxRequest, ScriptSandboxSpec,
+        compile_linux_script_argv, run_script_sandboxed,
+    };
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let root = dir.path().canonicalize().expect("physical fixture");
+    let cwd = root.join("work");
+    let state = cwd.join(".orbit");
+    let scratch = root.join("scratch");
+    fs::create_dir_all(cwd.join("dist/sub")).expect("input tree");
+    fs::create_dir_all(&state).expect("state");
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(cwd.join("brief.txt"), "brief\n").expect("input file");
+    fs::write(cwd.join("dist/sub/a.txt"), "a\n").expect("nested input");
+    let masked = vec![state.clone()];
+    let inputs = vec![
+        ScriptSandboxInput {
+            source: cwd.join("brief.txt"),
+            name: "brief.txt".to_string(),
+        },
+        ScriptSandboxInput {
+            source: cwd.join("dist"),
+            name: "dist".to_string(),
+        },
+    ];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: true,
+        scratch: &scratch,
+        readable: &[],
+        writable: &[],
+        masked: &masked,
+        home: None,
+        inputs: &inputs,
+    };
+    let argv = compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile");
+    let bound = argv.windows(3).any(|w| {
+        w[0] == "--ro-bind"
+            && w[1] == cwd.join("dist").display().to_string()
+            && w[2] == "/orbit-script/in/dist"
+    });
+    assert!(bound, "the input is bound read-only at in/<name>: {argv:?}");
+    for exposing in [cwd.clone(), state.clone()] {
+        let leaking = vec![ScriptSandboxInput {
+            source: exposing.clone(),
+            name: "tree".to_string(),
+        }];
+        let spec = ScriptSandboxSpec {
+            inputs: &leaking,
+            ..spec
+        };
+        assert!(
+            compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+            "input {} overlaps the masked state tree",
+            exposing.display()
+        );
+    }
+
+    if !build_sandbox_available("script_inputs_are_read_only_at_in_and_never_expose_masked_state") {
+        return;
+    }
+    let script = "cat /orbit-script/in/brief.txt /orbit-script/in/dist/sub/a.txt \
+                  && ! sh -c 'echo x > /orbit-script/in/brief.txt' 2>/dev/null \
+                  && ! sh -c 'echo x > /orbit-script/in/dist/new' 2>/dev/null \
+                  && ! sh -c ': > /orbit-script/in/extra' 2>/dev/null \
+                  && echo writes-refused";
+    let argv = vec!["/bin/sh".into(), "-c".into(), script.to_string()];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: spec,
+        argv: &argv,
+        env: &path_env(),
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "brief\na\nwrites-refused\n"
+    );
+    assert_eq!(
+        fs::read_to_string(cwd.join("brief.txt")).unwrap(),
+        "brief\n"
+    );
+    assert!(!cwd.join("dist/new").exists());
 }

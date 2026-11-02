@@ -57,6 +57,7 @@ macro_rules! deterministic_action_catalog {
                 ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyFindingVerification => "apply_finding_verification",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
+                AttachScriptFiles => "attach_script_files",
                 AwaitApprovalPilot => "await_approval_pilot",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
                 ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
@@ -216,16 +217,17 @@ pub use job_v2::{
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
 pub use script::{
-    SCRIPT_GRANT_DIGEST_DOMAIN, SCRIPT_MANIFEST_SCHEMA_VERSION, SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES,
+    SCRIPT_GRANT_DIGEST_DOMAIN, SCRIPT_INPUT_MAX_TREE_ENTRIES, SCRIPT_INPUT_TREE_DOMAIN,
+    SCRIPT_MANIFEST_SCHEMA_VERSION, SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES,
     SCRIPT_OUTPUT_HARD_MAX_FILES, SCRIPT_OUTPUT_HARD_MAX_TOTAL_BYTES, SCRIPT_OUTPUT_MAX_NAME_BYTES,
     SCRIPT_OUTPUT_SET_DOMAIN, SCRIPT_PROFILE_LINUX, SCRIPT_STDOUT_CAP_BYTES, ScriptExecutionRecord,
     ScriptFileInput, ScriptFileOutputs, ScriptFiles, ScriptGrant, ScriptGrantLimits,
-    ScriptHostRole, ScriptNetwork, ScriptOutputFile, ScriptOutputSet, ScriptRequests, ScriptSpec,
-    ScriptValidationError, is_valid_script_name, is_valid_script_output_name,
-    script_content_digest, script_failure, script_grant_id, script_interpreter_from_shebang,
-    script_output_media_type, script_output_set_id, script_output_total_cap, script_refusal,
-    script_sha256_hex, validate_script_arg_template, validate_script_interpreter,
-    validate_script_spec,
+    ScriptHostRole, ScriptInputFile, ScriptNetwork, ScriptOutputFile, ScriptOutputSet,
+    ScriptRequests, ScriptSpec, ScriptValidationError, is_valid_script_name,
+    is_valid_script_output_name, script_content_digest, script_failure, script_grant_id,
+    script_interpreter_from_shebang, script_output_media_type, script_output_set_id,
+    script_output_total_cap, script_refusal, script_sha256_hex, validate_script_arg_template,
+    validate_script_interpreter, validate_script_spec,
 };
 pub use tool_allowlist::{
     ActivityToolDenyPolicy, ActivityToolPolicyMode, ToolAllowlistError,

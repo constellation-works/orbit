@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
-use crate::application::job::pipeline_actions;
+use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
@@ -211,6 +211,12 @@ pub(crate) fn run_deterministic(
         }
         CoreDeterministicAction::FileRuleFindings => {
             rule_findings_filing::file_rule_findings(runtime, input, owner_run_id(&tool_context))
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
+        // Attach an earlier script step's verified output files to a task,
+        // by the set the dispatching run's own checkpoint holds.
+        CoreDeterministicAction::AttachScriptFiles => {
+            script_attach::attach_script_files(runtime, input, owner_run_id(&tool_context))
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the

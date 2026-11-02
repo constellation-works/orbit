@@ -490,6 +490,26 @@ returns to the defaults. A step's whole set never exceeds 256 MiB. Output over
 the caps, a symlink, a subdirectory or an unsafe file name fails the step and
 exposes none of its files.
 
+To file a task that carries those files, a later step of the same job runs the
+shipped `attach_script_files` activity with `task_id` and `step` (the script
+step's id), and optionally `files` (names to attach; all by default) and
+`path_prefix` (prepended to each artifact path). It attaches each file as a
+task artifact from bytes that still match the recorded SHA-256. A changed file,
+a name outside the set, a file over the 1 MiB task-artifact limit or a script
+step that is not a direct, earlier step of the job refuses the step and
+attaches nothing.
+
+A manifest's `files.inputs` lists `{from, as}` entries. `from` may read the
+step input (`{{ input.<field> }}`) and resolves, symlinks followed, to a file
+or directory inside the step's cwd tree or a granted read root (`--read-root`).
+Each one appears read-only at `in/<as>` (`$ORBIT_SCRIPT_IN/<as>`). An input
+that is missing, resolves anywhere else, or overlaps the workspace's `.orbit/`
+or a credential path refuses the step before it runs with
+`script_file_input_unavailable`, naming the input. Each attempt records every
+input's name, source path and SHA-256 (for a directory, a digest over its whole
+tree) as `input_files` in the `--json` output of `orbit run show` and
+`orbit script history`.
+
 A granted script step runs only on Linux, under a sandbox with no network.
 Other hosts refuse the step. This build's script profile does not run network
 access or environment passthrough yet: a step is refused at run time when its

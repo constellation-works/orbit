@@ -550,3 +550,166 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
         "attached evidence remains independent of producer storage"
     );
 }
+
+// Unit admission (test_strategy criterion 3, fail-closed validation): the
+// attach action attaches only bytes that still match their recorded digest,
+// driven at the public `RuntimeHost::run_deterministic` boundary. The
+// crate-private output publisher and run-definition snapshot writer are its
+// only fixtures; a crate-root replay would need a real script run, which the
+// nested kernel sandbox refuses in agent lanes.
+#[test]
+#[cfg(unix)]
+fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
+    use orbit_engine::{RuntimeHost, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan};
+    use orbit_types::workflow::activity_job::{ScriptFileOutputs, script_sha256_hex};
+    use orbit_types::workflow::{JobRunState, PipelineState};
+    use serde_json::json;
+
+    use crate::application::task::TaskAddParams;
+
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes,
+    )) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let repo = root.path().join("repo");
+    let global = root.path().join("home/.orbit");
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    std::fs::create_dir_all(&global).unwrap();
+    let runtime = crate::OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let task = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                ..TaskAddParams::default()
+            })
+            .unwrap()
+            .id
+    };
+    let reviewed = task("Review the rendered report");
+
+    let row = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("attach_job", 1, chrono::Utc::now(), Some(json!({})), None)
+        .unwrap();
+    let run_id = row.run_id.clone();
+    let grant = ScriptGrant {
+        grant_id: "sg-fixture".to_string(),
+        workspace_id: runtime.workspace_id().unwrap(),
+        name: "render".to_string(),
+        digest: "digest".to_string(),
+        manifest_digest: "manifest".to_string(),
+        entry_digest: "entry".to_string(),
+        interpreter_paths: Vec::new(),
+        network: Default::default(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        env_pass: Vec::new(),
+        limits: ScriptGrantLimits::default(),
+        host_role: Default::default(),
+        grantor: "fixture".to_string(),
+        granted_at: "2026-11-01T00:00:00Z".to_string(),
+        provenance: "fixture".to_string(),
+        expires_at: None,
+    };
+    let out = root.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("report.json"), br#"{"ok":true}"#).unwrap();
+    let png: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3];
+    std::fs::write(out.join("shot.png"), png).unwrap();
+    let request = ScriptStepRequest {
+        run_id: run_id.clone(),
+        step_id: "render".to_string(),
+        script: "render".to_string(),
+        input: json!({}),
+        workspace_path: None,
+        timeout_seconds: None,
+    };
+    let mut ran = ScriptStepRan {
+        end: ScriptStepEnd::Exited(0),
+        stdout: b"{}".to_vec(),
+        stdout_over_cap: false,
+        output_schema: serde_json::Value::Null,
+        log: Vec::new(),
+        record: Default::default(),
+        outputs: ScriptStepOutputs::None,
+    };
+    crate::application::job::script_outputs::keep_declared_outputs(
+        &runtime,
+        &ScriptFileOutputs {
+            max_files: Some(8),
+            max_file_bytes: Some(1024),
+        },
+        &grant,
+        &request,
+        &out,
+        &mut ran,
+    );
+    let ScriptStepOutputs::Kept(set) = ran.outputs else {
+        panic!("outputs kept: {:?}", ran.outputs);
+    };
+
+    let yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: attach_job\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    \
+                - id: render\n      target: script:render\n    - id: attach\n      \
+                target: activity:attach_script_files\n";
+    runtime
+        .write_run_definition_snapshot(&run_id, yaml)
+        .unwrap();
+    let mut state = PipelineState::new(run_id.clone(), "attach_job".to_string(), json!({}));
+    state.record_step(0, JobRunState::Success, Some(json!({})), None);
+    state.next_step_index = 1;
+    state
+        .script_output_sets
+        .insert(0, [("render".to_string(), set.clone())].into());
+    runtime.write_run_state(&run_id, &state).unwrap();
+    let context = orbit_tools::ToolContext {
+        reservation_owner: Some(orbit_tools::ReservationOwnerContext {
+            owner_run_id: run_id.clone(),
+            owner_metadata_json: None,
+        }),
+        ..Default::default()
+    };
+    let attach = |input: serde_json::Value| {
+        RuntimeHost::run_deterministic(
+            &runtime,
+            "attach_script_files",
+            &json!({}),
+            &input,
+            context.clone(),
+        )
+    };
+
+    let output = attach(json!({"task_id": reviewed, "step": "render", "path_prefix": "render/"}))
+        .expect("attach the verified outputs");
+    assert_eq!(output["set_id"], set.set_id);
+    let mut artifacts = runtime.get_task_artifacts(&reviewed).unwrap();
+    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+    let paths: Vec<_> = artifacts.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(paths, ["render/report.json", "render/shot.png"]);
+    for (artifact, file) in artifacts.iter().zip(&set.files) {
+        assert_eq!(script_sha256_hex(&artifact.content), file.sha256);
+        assert_eq!(artifact.media_type, file.media_type);
+    }
+    assert_eq!(artifacts[1].content, png);
+
+    // A selected name outside the set, or a step that kept no files, refuses.
+    let refused = attach(json!({"task_id": reviewed, "step": "render", "files": ["other.txt"]}))
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("not an output file"), "{refused}");
+    let refused = attach(json!({"task_id": reviewed, "step": "attach"}))
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("not a script step"), "{refused}");
+
+    // Bytes that no longer match the recorded digest attach nothing.
+    let later = task("Review a tampered report");
+    std::fs::write(&set.files[1].path, b"not the png").unwrap();
+    let refused = attach(json!({"task_id": later, "step": "render"}))
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("changed"), "{refused}");
+    assert!(runtime.get_task_artifacts(&later).unwrap().is_empty());
+}

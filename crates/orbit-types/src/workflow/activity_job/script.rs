@@ -86,12 +86,41 @@ pub struct ScriptFiles {
 }
 
 /// One declared file input, mounted read-only at `in/<as>` at run time.
+///
+/// `from` is templated against the step input and must resolve physically
+/// inside the cwd tree or a granted read root, outside the masked trees and
+/// the credential denies; otherwise the step refuses before spawn with
+/// [`script_refusal::FILE_INPUT_UNAVAILABLE`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptFileInput {
     pub from: String,
     #[serde(rename = "as")]
     pub as_: String,
+}
+
+/// Domain separator for a directory input's tree digest.
+pub const SCRIPT_INPUT_TREE_DOMAIN: &str = "orbit.script.input-tree.v1";
+
+/// The most entries one directory input may hold; a larger tree refuses the
+/// step rather than be hashed without bound.
+pub const SCRIPT_INPUT_MAX_TREE_ENTRIES: usize = 100_000;
+
+/// What one declared input was when the attempt admitted it: recorded on the
+/// `script.execution` entry beside the output files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptInputFile {
+    /// The `as` name: the input appears at `in/<name>`.
+    pub name: String,
+    /// The physical source path that was mounted.
+    pub source: PathBuf,
+    /// `file` or `directory`.
+    pub kind: String,
+    /// Bytes of a file input, or the sum of a directory's regular files.
+    pub bytes: u64,
+    /// SHA-256 of a file's bytes, or for a directory the tree digest over
+    /// every entry's relative path, kind and content (lowercase hex).
+    pub sha256: String,
 }
 
 /// Caps on the files a script may return from its `out/` directory.
@@ -449,6 +478,8 @@ pub enum ScriptValidationError {
     InvalidTimeout,
     #[error("script file input `as` must be a plain file name, got `{0}`")]
     InvalidFileInputName(String),
+    #[error("script file input `as` name `{0}` is declared more than once")]
+    DuplicateFileInputName(String),
     #[error(
         "script `files.outputs` caps must be at least 1 and at most {SCRIPT_OUTPUT_HARD_MAX_FILES} files of {SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES} bytes, got {0}"
     )]
@@ -630,11 +661,24 @@ pub fn validate_script_spec(name: &str, spec: &ScriptSpec) -> Result<(), ScriptV
     for argument in &spec.args {
         validate_script_arg_template(argument)?;
     }
-    for input in &spec.files.inputs {
+    for (index, input) in spec.files.inputs.iter().enumerate() {
         validate_script_arg_template(&input.from)?;
         let as_name = input.as_.as_str();
-        if as_name.is_empty() || as_name.contains('/') || as_name == ".." || as_name == "." {
+        if as_name.is_empty()
+            || as_name.contains('/')
+            || as_name.contains('\0')
+            || as_name == ".."
+            || as_name == "."
+        {
             return Err(ScriptValidationError::InvalidFileInputName(
+                input.as_.clone(),
+            ));
+        }
+        if spec.files.inputs[..index]
+            .iter()
+            .any(|earlier| earlier.as_ == input.as_)
+        {
+            return Err(ScriptValidationError::DuplicateFileInputName(
                 input.as_.clone(),
             ));
         }
@@ -704,6 +748,10 @@ pub mod script_refusal {
     /// The step input fails the manifest's `input_schema_json`, or a
     /// templated argument does not render to one safe argv element.
     pub const INPUT_INVALID: &str = "script_input_invalid";
+    /// A declared `files.inputs` entry is missing, resolves outside the cwd
+    /// tree and the granted read roots, overlaps a masked tree or a
+    /// credential path, or cannot be read to record its digest.
+    pub const FILE_INPUT_UNAVAILABLE: &str = "script_file_input_unavailable";
 }
 
 /// Failure codes for a script that ran.
@@ -801,4 +849,8 @@ pub struct ScriptExecutionRecord {
     /// The kept output files with their sizes and SHA-256.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_files: Vec<ScriptOutputFile>,
+    /// The declared input files as admitted before spawn, with their
+    /// source paths and SHA-256.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_files: Vec<ScriptInputFile>,
 }

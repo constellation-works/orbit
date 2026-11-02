@@ -121,6 +121,8 @@ mod reviewable_lines;
 mod rule_findings_sweep;
 mod sandbox_off;
 mod scheduled_tasks;
+#[cfg(unix)]
+mod script_file_inputs;
 mod search_hydration;
 mod security_alert_sweep;
 mod session_events;
