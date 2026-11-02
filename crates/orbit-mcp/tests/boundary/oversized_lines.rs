@@ -20,13 +20,16 @@ const STDERR_SECRET: &str = "STDERR_SECRET_MUST_NOT_ESCAPE";
 const PEER: &str = r#"#!/usr/bin/env python3
 import json, os, sys
 case = os.environ['ORBIT_OVERSIZED_LINE_FIXTURE']
-with open('peer.pid', 'w') as file:
+fixture = os.environ['ORBIT_FIXTURE_DIR']
+with open(os.path.join(fixture, 'cwd'), 'w') as file:
+    file.write(os.getcwd())
+with open(os.path.join(fixture, 'peer.pid'), 'w') as file:
     file.write(str(os.getpid()))
 for line in sys.stdin:
     request = json.loads(line)
     if 'id' not in request:
         continue
-    with open('journal', 'a') as file:
+    with open(os.path.join(fixture, 'journal'), 'a') as file:
         file.write(request['method'] + '\n')
     if request['method'] == 'initialize' and case != 'initialize':
         result = {'protocolVersion': request['params']['protocolVersion']}
@@ -48,7 +51,7 @@ for line in sys.stdin:
         sys.stdout.write(prefix + 'PAYLOAD_SECRET_MUST_NOT_ESCAPE' + 'x' * 1100 + suffix)
         sys.stdout.flush()
         for remaining in sys.stdin:
-            with open('journal', 'a') as file:
+            with open(os.path.join(fixture, 'journal'), 'a') as file:
                 file.write('unexpected-replay\n')
         sys.exit(0)
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
@@ -60,74 +63,109 @@ fn oversized_lines_retain_safe_uncorrelated_context_without_replay() {
         exercise(&case);
         return;
     }
-    for case in [
-        "notification",
-        "peer-request",
-        "unparseable",
-        "bad-projection",
-        "metadata",
-        "initialize",
-        "normal",
-    ] {
-        let fixture = tempfile::tempdir().unwrap();
-        let bin = fixture.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let peer = bin.join("ssh");
-        fs::write(&peer, PEER).unwrap();
-        fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
-        let output = orbit_common::process::run_bounded(
-            Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "oversized_lines::oversized_lines_retain_safe_uncorrelated_context_without_replay",
-                    "--nocapture",
-                ])
-                .current_dir(fixture.path())
-                .env(CHILD, case)
-                .env("HOME", fixture.path())
-                .env(
-                    "PATH",
-                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-                ),
-            Duration::from_secs(15),
-        )
-        .unwrap();
-        let captured = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        for secret in [PAYLOAD_SECRET, ARGUMENT_SECRET, STDERR_SECRET] {
+    for long_home in [false, true] {
+        for case in [
+            "notification",
+            "peer-request",
+            "unparseable",
+            "bad-projection",
+            "metadata",
+            "initialize",
+            "normal",
+        ] {
+            let fixture = tempfile::Builder::new()
+                .prefix("orbit-oversized-lines-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            let home = if long_home {
+                let home = fixture.path().join("h".repeat(100));
+                fs::create_dir(&home).unwrap();
+                home
+            } else {
+                fixture.path().to_path_buf()
+            };
+            let expected_ssh_cwd = if long_home {
+                home.join(".orbit/ssh")
+            } else {
+                fixture.path().to_path_buf()
+            };
+            let bin = fixture.path().join("bin");
+            fs::create_dir(&bin).unwrap();
+            let peer = bin.join("ssh");
+            fs::write(&peer, PEER).unwrap();
+            fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = orbit_common::process::run_bounded(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "oversized_lines::oversized_lines_retain_safe_uncorrelated_context_without_replay",
+                        "--nocapture",
+                    ])
+                    .current_dir(fixture.path())
+                    .env(CHILD, case)
+                    .env("ORBIT_FIXTURE_DIR", fixture.path())
+                    .env("HOME", &home)
+                    .env(
+                        "PATH",
+                        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                    ),
+                Duration::from_secs(15),
+            )
+            .unwrap();
+            let captured = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for secret in [PAYLOAD_SECRET, ARGUMENT_SECRET, STDERR_SECRET] {
+                assert!(
+                    !captured.contains(secret),
+                    "{case}: diagnostic logs leaked a secret"
+                );
+            }
             assert!(
-                !captured.contains(secret),
-                "{case}: diagnostic logs leaked a secret"
+                output.status.success(),
+                "{case} with {} HOME: {captured}",
+                if long_home { "long" } else { "short" }
+            );
+            let actual_ssh_cwd = fs::read_to_string(fixture.path().join("cwd")).unwrap();
+            assert_eq!(
+                std::path::PathBuf::from(actual_ssh_cwd),
+                expected_ssh_cwd.canonicalize().unwrap(),
+                "{case}: verify the SSH socket-path cwd for the selected HOME length"
+            );
+            if long_home {
+                assert!(
+                    !expected_ssh_cwd.join("journal").exists()
+                        && !expected_ssh_cwd.join("peer.pid").exists(),
+                    "{case}: peer outputs must remain in the fixture root"
+                );
+            }
+            let journal = fs::read_to_string(fixture.path().join("journal")).unwrap();
+            assert_eq!(
+                journal,
+                if case == "initialize" {
+                    "initialize\n"
+                } else {
+                    "initialize\ntools/call\n"
+                },
+                "the transport must not replay the dispatched call or add a version probe"
+            );
+            let pid: i32 = fs::read_to_string(fixture.path().join("peer.pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            // SAFETY: signal zero observes existence without signaling a process.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "the SSH peer must be reaped"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
             );
         }
-        assert!(output.status.success(), "{case}: {captured}");
-        let journal = fs::read_to_string(fixture.path().join("journal")).unwrap();
-        assert_eq!(
-            journal,
-            if case == "initialize" {
-                "initialize\n"
-            } else {
-                "initialize\ntools/call\n"
-            },
-            "the transport must not replay the dispatched call or add a version probe"
-        );
-        let pid: i32 = fs::read_to_string(fixture.path().join("peer.pid"))
-            .unwrap()
-            .parse()
-            .unwrap();
-        // SAFETY: signal zero observes existence without signaling a process.
-        assert_eq!(
-            unsafe { libc::kill(pid, 0) },
-            -1,
-            "the SSH peer must be reaped"
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
     }
 }
 
