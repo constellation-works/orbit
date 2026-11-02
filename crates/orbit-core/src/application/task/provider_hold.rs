@@ -200,7 +200,31 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CrewPools,
     ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
-        let (candidates, source) = self.crew_candidates_before_holds(task, pools)?;
+        self.held_crew_candidates_for(task, pools, false)
+    }
+
+    /// Candidate routing for an owner-issued claimed leaf. Its snapshot is
+    /// authoritative for assignment provenance, while follower-local holds
+    /// still narrow the normal current pool.
+    pub(in crate::application) fn held_claimed_leaf_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+        self.held_crew_candidates_for(task, pools, true)
+    }
+
+    fn held_crew_candidates_for(
+        &self,
+        task: &Task,
+        pools: &CrewPools,
+        claimed_leaf: bool,
+    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+        let (candidates, source) = if claimed_leaf {
+            self.unheld_claimed_leaf_crew_candidates(task, pools)?
+        } else {
+            self.crew_candidates_before_holds(task, pools)?
+        };
         let Some(hold) = self.admission_provider_hold(task) else {
             return Ok((candidates, source, None));
         };
