@@ -104,14 +104,14 @@ fn extend_relations_schema(value: &mut Value) {
     relations.insert(
         "items".into(),
         json!({"type":"object","additionalProperties":false,"required":["type","target"],"properties":{
-            "type":{"type":"string","enum":["blocked_by","child_of","spawned_from","regression_from","supersedes","related_to","covered_by","produces","resolves"],"description":"Relation kind; only `regression_from` may carry a `regression` object"},
-            "target":{"type":"string","description":"Target task ID; `covered_by` also accepts a `github-pr:` reference and `produces`/`resolves` also accept a friction or ADR ID"},
-            "regression":{"type":"object","additionalProperties":false,"required":["nature","escape"],"description":"Classification of a `regression_from` link; accepted only on that relation type","properties":{
-                "nature":{"type":"string","enum":["broke_existing","defect_in_new","incomplete","merge_reintroduced","contract_drift","unclassified"],"description":"What kind of regression the link records"},
-                "escape":{"type":"string","enum":["no_test","test_not_selected","platform_only","review_missed","spec_ambiguous","nondeterministic","unclassified"],"description":"Why the delivery gates did not catch the defect"},
-                "severity":{"type":"string","enum":["critical","high","medium","low","nit"],"description":"How much the defect matters: critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic)"},
-                "severity_source":{"type":"string","enum":["filer","operator","backfill"],"description":"Who set the severity: filer (the default when a severity is given), operator or backfill. `verified` and `default` are recorded values that read back, not filer inputs"},
-                "sites":{"type":"array","items":{"type":"string"},"maxItems":8,"uniqueItems":true,"description":"Up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named"}
+            "type":{"type":"string","enum":["blocked_by","child_of","spawned_from","regression_from","supersedes","related_to","covered_by","produces","resolves"]},
+            "target":{"type":"string","description":"Target task ID; `covered_by` also takes a `github-pr:` reference, `produces`/`resolves` a friction or ADR ID"},
+            "regression":{"type":"object","additionalProperties":false,"required":["nature","escape"],"properties":{
+                "nature":{"type":"string","enum":["broke_existing","defect_in_new","incomplete","merge_reintroduced","contract_drift","unclassified"],"description":"Kind of regression the link records"},
+                "escape":{"type":"string","enum":["no_test","test_not_selected","platform_only","review_missed","spec_ambiguous","nondeterministic","unclassified"],"description":"Why the delivery gates missed the defect"},
+                "severity":{"type":"string","enum":["critical","high","medium","low","nit"],"description":"critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"},
+                "severity_source":{"type":"string","enum":["filer","operator","backfill"],"description":"filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"},
+                "sites":{"type":"array","items":{"type":"string"},"maxItems":8,"uniqueItems":true,"description":"Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"}
             }}
         }}),
     );

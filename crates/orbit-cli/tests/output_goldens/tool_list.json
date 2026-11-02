@@ -2603,7 +2603,7 @@
       },
       {
         "name": "relations",
-        "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a new classified link.",
+        "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
         "param_type": "array",
         "required": false
       },
@@ -3548,7 +3548,7 @@
       },
       {
         "name": "relations",
-        "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
+        "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
         "param_type": "array",
         "required": false
       },

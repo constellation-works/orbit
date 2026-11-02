@@ -307,7 +307,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a new classified link.",
+                "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
             ),
             both(
                 "crew",
@@ -507,7 +507,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
+                "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
             ),
             both(
                 "tags",

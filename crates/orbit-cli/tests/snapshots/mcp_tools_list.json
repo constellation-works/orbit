@@ -900,7 +900,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a new classified link.",
+          "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -921,12 +921,11 @@
                   "covered_by",
                   "produces",
                   "resolves"
-                ],
-                "description": "Relation kind; only `regression_from` may carry a `regression` object"
+                ]
               },
               "target": {
                 "type": "string",
-                "description": "Target task ID; `covered_by` also accepts a `github-pr:` reference and `produces`/`resolves` also accept a friction or ADR ID"
+                "description": "Target task ID; `covered_by` also takes a `github-pr:` reference, `produces`/`resolves` a friction or ADR ID"
               },
               "regression": {
                 "type": "object",
@@ -935,7 +934,6 @@
                   "nature",
                   "escape"
                 ],
-                "description": "Classification of a `regression_from` link; accepted only on that relation type",
                 "properties": {
                   "nature": {
                     "type": "string",
@@ -947,7 +945,7 @@
                       "contract_drift",
                       "unclassified"
                     ],
-                    "description": "What kind of regression the link records"
+                    "description": "Kind of regression the link records"
                   },
                   "escape": {
                     "type": "string",
@@ -960,7 +958,7 @@
                       "nondeterministic",
                       "unclassified"
                     ],
-                    "description": "Why the delivery gates did not catch the defect"
+                    "description": "Why the delivery gates missed the defect"
                   },
                   "severity": {
                     "type": "string",
@@ -971,7 +969,7 @@
                       "low",
                       "nit"
                     ],
-                    "description": "How much the defect matters: critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic)"
+                    "description": "critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"
                   },
                   "severity_source": {
                     "type": "string",
@@ -980,7 +978,7 @@
                       "operator",
                       "backfill"
                     ],
-                    "description": "Who set the severity: filer (the default when a severity is given), operator or backfill. `verified` and `default` are recorded values that read back, not filer inputs"
+                    "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                   },
                   "sites": {
                     "type": "array",
@@ -989,7 +987,7 @@
                     },
                     "maxItems": 8,
                     "uniqueItems": true,
-                    "description": "Up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named"
+                    "description": "Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"
                   }
                 }
               }
@@ -1577,7 +1575,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add a `regression` object (see its schema properties for the classification vocabulary); `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
+          "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -1598,12 +1596,11 @@
                   "covered_by",
                   "produces",
                   "resolves"
-                ],
-                "description": "Relation kind; only `regression_from` may carry a `regression` object"
+                ]
               },
               "target": {
                 "type": "string",
-                "description": "Target task ID; `covered_by` also accepts a `github-pr:` reference and `produces`/`resolves` also accept a friction or ADR ID"
+                "description": "Target task ID; `covered_by` also takes a `github-pr:` reference, `produces`/`resolves` a friction or ADR ID"
               },
               "regression": {
                 "type": "object",
@@ -1612,7 +1609,6 @@
                   "nature",
                   "escape"
                 ],
-                "description": "Classification of a `regression_from` link; accepted only on that relation type",
                 "properties": {
                   "nature": {
                     "type": "string",
@@ -1624,7 +1620,7 @@
                       "contract_drift",
                       "unclassified"
                     ],
-                    "description": "What kind of regression the link records"
+                    "description": "Kind of regression the link records"
                   },
                   "escape": {
                     "type": "string",
@@ -1637,7 +1633,7 @@
                       "nondeterministic",
                       "unclassified"
                     ],
-                    "description": "Why the delivery gates did not catch the defect"
+                    "description": "Why the delivery gates missed the defect"
                   },
                   "severity": {
                     "type": "string",
@@ -1648,7 +1644,7 @@
                       "low",
                       "nit"
                     ],
-                    "description": "How much the defect matters: critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic)"
+                    "description": "critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"
                   },
                   "severity_source": {
                     "type": "string",
@@ -1657,7 +1653,7 @@
                       "operator",
                       "backfill"
                     ],
-                    "description": "Who set the severity: filer (the default when a severity is given), operator or backfill. `verified` and `default` are recorded values that read back, not filer inputs"
+                    "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                   },
                   "sites": {
                     "type": "array",
@@ -1666,7 +1662,7 @@
                     },
                     "maxItems": 8,
                     "uniqueItems": true,
-                    "description": "Up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named"
+                    "description": "Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"
                   }
                 }
               }
