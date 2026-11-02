@@ -518,6 +518,7 @@ mod task_route {
 
 mod notice_aggregation {
     use super::*;
+    use orbit_types::workspace::WorkspaceStatus;
 
     const OTHER_MACHINE: &str = "hm_other";
     const DOWN_MACHINE: &str = "hm_down";
@@ -598,6 +599,78 @@ mod notice_aggregation {
             Arc::new(probe),
         );
         (host, log)
+    }
+
+    #[test]
+    fn workspaceless_notice_list_uses_a_healthy_addressable_owner_checkout() {
+        let mut broken = workspace("ws_broken", Some(OWNER_MACHINE));
+        broken.status = WorkspaceStatus::Invalid;
+        let unaddressable = workspace("legacy", Some(OWNER_MACHINE));
+        let good = workspace("ws_good", Some(OWNER_MACHINE));
+        let probe = ScriptedProbe::new()
+            .answering(
+                OWNER_MACHINE,
+                snapshot(OWNER_MACHINE, vec![broken, unaddressable, good]),
+            )
+            .on_call(
+                OWNER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [notice("ntc_owner", "info", "2026-11-02T09:00:00Z")],
+                    "degraded": [],
+                })),
+            );
+        let log = probe.call_log();
+        let host = FederatedMcpHost::new(
+            vec![destination("orbit-owner", OWNER_MACHINE)],
+            Arc::new(probe),
+        );
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({}),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        assert_eq!(answer["notices"][0]["id"], "ntc_owner", "{answer}");
+        assert_eq!(answer["degraded"], json!([]));
+        let calls = log.calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].2["workspace"], "ws_good");
+        assert_eq!(calls[0].2["all"], true);
+    }
+
+    #[test]
+    fn workspaceless_notice_list_degrades_an_owner_without_a_usable_checkout() {
+        let mut broken = workspace("ws_broken", Some(OWNER_MACHINE));
+        broken.status = WorkspaceStatus::Invalid;
+        let unaddressable = workspace("legacy", Some(OWNER_MACHINE));
+        let probe = ScriptedProbe::new().answering(
+            OWNER_MACHINE,
+            snapshot(OWNER_MACHINE, vec![broken, unaddressable]),
+        );
+        let log = probe.call_log();
+        let host = FederatedMcpHost::new(
+            vec![destination("orbit-owner", OWNER_MACHINE)],
+            Arc::new(probe),
+        );
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({}),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        assert_eq!(answer["notices"], json!([]));
+        assert!(
+            answer["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.as_str().unwrap().contains(OWNER_MACHINE)),
+            "{answer}"
+        );
+        assert!(log.calls().is_empty());
     }
 
     /// A workspace-less list reads each owner once with `all: true` and no
