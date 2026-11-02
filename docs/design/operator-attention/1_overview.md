@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Deliver runtime sources (slice 2), provider sources (slice 3), and cross-host federation (slice 4)"
+next: "Land slice 3, ORB-21170: ci_red and friction_untriaged kinds (in review)"
 feature: operator-attention
 doc_role: overview
 type: design

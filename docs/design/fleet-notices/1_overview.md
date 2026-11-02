@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
-stage: building
-next: "Slice 5, ORB-21215: dashboard banner and view, attention kind"
+stage: shipped
+next: "—"
 feature: fleet-notices
 doc_role: overview
 type: design
@@ -13,7 +13,7 @@ summary: "Fleet notices: short-lived, scoped, authored coordination notes (incid
 tags: [fleet-notices, federated-mcp, operator-attention]
 paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/notice_store.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice.rs", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-mcp/src/federated/**", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [operator-attention, federated-mcp, mid-run-steering, distributed-drain, path-leases, human-decision-channel]
-related_artifacts: [ORB-21207, ORB-21208, ORB-21164, ORB-21211, ORB-21214]
+related_artifacts: [ORB-21207, ORB-21208, ORB-21164, ORB-21211, ORB-21214, ORB-21215]
 ---
 
 # Fleet Notices — Overview
@@ -70,15 +70,15 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Slices 1–4 ([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214]) are built: the notice store, the
+All five slices ([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214], [ORB-21215]) are built: the notice store, the
 `orbit.notice.*` tools, `orbit notice`, the opt-in `notice` toolset, brief delivery of open
 notices into opted-in agent prompts as untrusted data, and managed-agent posting through a
 run's own task (the `notice.agent_posting` workspace switch, default on). Slice 4 makes notice
 tools `control_plane` so a replica refuses them, routes follower CLI and worker-bound calls to
 the owner by selector and owner route, aggregates a workspace-less list with one owner-local read
 per owner machine (an unreachable owner is a `degraded` entry), and has the scheduler sweep
-materialize same-owner cross-workspace linked-task closures. The dashboard is a later slice
-([2_design.md §8](./2_design.md#8-slices)); its location is a placement proposal.
+materialize same-owner cross-workspace linked-task closures. Slice 5 adds the dashboard banner and
+Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.md#8-slices)).
 
 | Concern | File | Task |
 |---------|------|------|
@@ -111,6 +111,6 @@ materialize same-owner cross-workspace linked-task closures. The dashboard is a 
 - [ORB-21212] — slice 2: brief delivery as untrusted data (done)
 - [ORB-21213] — slice 3: managed-agent posting (done)
 - [ORB-21214] — slice 4: federated reads and writes, global aggregation, sweep materializer (done)
-- [ORB-21215] — slice 5: dashboard banner and view, attention kind (backlog)
+- [ORB-21215] — slice 5: dashboard banner and view, attention kind (done)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -103,7 +103,7 @@ be identified as an agent, operator or runner; identification alone cannot bypas
 
 Core applies the same admission to `orbit.task.update` comments whose JSON `kind` is one of
 these three shapes. Write `resident.request` and `resident.answer` using that comment surface;
-the manager `relay` operation is a later slice. A relay answer must include `source` and
+the manager can also write an answer through `orbit.resident.relay` (slice 4). A relay answer must include `source` and
 `relayed_by`; only a human operator write without agent attribution may omit relay attribution. The quote's whitespace is
 preserved. A record containing sensitive text that requires redaction is refused, so redaction
 cannot silently change a verbatim quote. This includes secrets, sensitive environment values

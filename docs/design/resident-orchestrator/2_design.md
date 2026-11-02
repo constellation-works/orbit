@@ -17,7 +17,7 @@ related_artifacts: [ORB-21229, ORB-21263]
 # Resident Orchestrator — Design
 
 This document specifies how a resident orchestrator works and answers the nine design questions
-of [ORB-21229]. Slices 1 ([ORB-21242]) and 2 have landed; slice 3 ([ORB-21244], the cycle) is implemented as [§5.1](#51-slice-3-as-implemented) describes, and slices 4–10 are approved (`backlog`). Exact record shapes and tool contracts are in the specs:
+of [ORB-21229]. Slices 1–9 ([ORB-21242] to [ORB-21250]) have landed, slice 3 ([ORB-21244], the cycle) as [§5.1](#51-slice-3-as-implemented) describes; slice 10, the pilot ([ORB-21251]), is approved (`backlog`). Exact record shapes and tool contracts are in the specs:
 [mandate-and-authority](./specs/mandate-and-authority.md),
 [checkpoint-contract](./specs/checkpoint-contract.md),
 [manager-channel](./specs/manager-channel.md) and
@@ -679,7 +679,7 @@ Proposals that the slices confirm:
 
 ## 13. Slices
 
-Slices 1 and 2 have landed and slice 3 is implemented ([§5.1](#51-slice-3-as-implemented)); slices 4–10 are approved (`backlog`) tasks in ws_orbit tagged `resident-orchestrator`. Dependencies are
+Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describes); slice 10 is an approved (`backlog`) task. All are in ws_orbit tagged `resident-orchestrator`. Dependencies are
 `blocked_by` links inside ws_orbit; cross-workspace links (the [ORB-21178] baseline) are
 `related_to`.
 
