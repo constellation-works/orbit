@@ -407,14 +407,17 @@ unready verdict and evidence from an explicit pilot. Routine windows report
 receipt. Description/criteria edits renew automatic preparation eligibility for
 proposed and backlog tasks without an applied assessment. For tasks with an
 applied assessment, this scheduling reuse is independent of dispatch freshness:
-edits never renew automatic routine pilot eligibility. An `--approve-proposed`
+a description or acceptance-criteria edit queues a fresh automatic routine
+pilot when no live execution claim or unresolved failed pilot holds the task,
+and other material or policy edits do not. An `--approve-proposed`
 drain still queues a fresh pilot automatically for a stale assessment whose
 certified description/criteria or other material drifted and no live execution
 claim holds it, while scheduled discovery still queues one automatically only
 for a stale assessment whose certified description/criteria drifted and no live
 execution claim holds it. Active pilots and live execution claims keep their
-holds, and failed attempts retain their retry bounds before reuse. Every later
-routine pilot needs an explicit operator request:
+holds, and failed attempts retain their retry bounds before reuse. Other
+repilots, such as one for a material or policy-only change or one held by an
+unresolved failed attempt, need an explicit operator request:
 `orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
 or a decision option action `re_pilot`. The explicit legacy command
 `orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
