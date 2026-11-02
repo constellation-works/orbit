@@ -24,7 +24,7 @@ Adding a family is still a cross-cutting change: executor assets, sandbox behavi
 
 ## 2. Crew Registry
 
-Workspace config defines one concrete assignment under each `[crews.<name>]`: flat `model` and `provider` fields. A rendered activity input may select a named `crew`; without one, dispatch uses the run's resolved crew. Activity and job schemas reject the retired `role` key.
+Workspace config defines one concrete agent assignment under each agent `[crews.<name>]`: flat `model` and `provider` fields, with optional `effort`. A table with `kind = "human"` instead names an operator and accepts only `description` and `tags` alongside `kind`; agent dispatch refuses a human crew. A rendered activity input may select a named agent `crew`; without one, dispatch uses the run's resolved crew. Activity and job schemas reject the retired `role` key.
 
 `crates/orbit-config/src/raw.rs` owns the TOML shape, and `crates/orbit-config/src/resolved/crew.rs` materializes it into `Crew` values from `orbit-types`. Runtime loading rejects incomplete crews, retired `planner`/`implementer`/`reviewer` role sub-tables with guidance to write flat `model` and `provider` fields, and `[workflow].default_crew` values that do not name a defined crew. A retired `backend` key is accepted only as inert `cli` or rejected with migration guidance.
 
