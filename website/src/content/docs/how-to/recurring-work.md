@@ -6,9 +6,11 @@ sidebar:
 ---
 
 A per-machine **host scheduler clock** drives all scheduled work. On each tick, due
-**routines** start job runs and due **auto-tasks** file tasks. Every routine
-and auto-task Orbit seeds starts disabled. [Routines and Auto-Tasks](../../concepts/scheduling/) explains
-the model; this page is the procedure.
+**routines** start job runs and due **auto-tasks** file tasks. Most routines
+and auto-tasks ship disabled; the hourly crew-performance refresh routine and
+`host-health` auto-task ship enabled in new workspaces. [Routines and
+Auto-Tasks](../../concepts/scheduling/) explains the model; this page is the
+procedure.
 
 :::tip[Let your agent set it up]
 Ask your agent to **install the Orbit clock and turn on worktree GC**, or to
@@ -287,7 +289,8 @@ names those tasks; `--force` deletes anyway and leaves them alone.
 Deleting a shipped default, such as `code-review` in a repository with no
 code, also records an opt-out: later `orbit workspace init --force` and
 `orbit workspace sync` runs leave it out, and `orbit doctor` does not report it
-missing. `orbit auto-task restore <name>` brings it back, disabled as shipped.
+missing. `orbit auto-task restore <name>` brings it back with its shipped
+setting: `host-health` is enabled, and the other defaults are disabled.
 
 ### Repair a delivery-triggered definition
 
@@ -440,11 +443,14 @@ enabling a sweep does not approve them for you.
 ## Host-health auto-task
 
 `host-health` is a shipped auto-task that reads a machine's health and files
-tasks for what it finds. It ships **disabled**. Enable it on the
-workspace owner, from your registered owner checkout, and set its schedule
-(the default is daily at 07:10, host-local time):
+tasks for what it finds. New workspaces seed it enabled on the workspace owner.
+From your registered owner checkout, you can turn it off or on and set its
+schedule (the default is daily at 07:10, host-local time):
 
 ```bash
+# Pause scheduled passes:
+orbit auto-task toggle host-health off
+# Resume scheduled passes:
 orbit auto-task toggle host-health on
 orbit auto-task update host-health --cron '10 7 * * *'
 # Or run on an interval instead:
