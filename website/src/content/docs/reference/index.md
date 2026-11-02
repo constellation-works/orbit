@@ -28,6 +28,10 @@ sidebar:
     <h3>Plugin manifest</h3>
     <p>Author tools, permissions, conformance cases and dashboard panels.</p>
   </a>
+  <a class="orbit-card" href="./application-consent/">
+    <h3>Application consent</h3>
+    <p>Operator consent, private credentials and constrained calls for Unix service and CLI children.</p>
+  </a>
   <a class="orbit-card" href="./config/">
     <h3>Configuration</h3>
     <p><code>config.toml</code> layering, crews, and every settable key.</p>
