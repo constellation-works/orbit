@@ -1260,8 +1260,10 @@ Every image-input invocation first gets a canary: a generated PNG that shows a
 random six-character code. Orbit creates it for that invocation in scratch and
 never writes it to a task. The agent must return the code as `result.canary`.
 
-- A result without the code, or with another code, is a canary miss: a
-  retryable `[image_not_seen]` step failure. Each check emits an
+- A delivery result without the code, or with another code, is a canary miss:
+  a retryable `[image_not_seen]` step failure. The image-input probe records
+  the same miss on that crew's row and the probe run still completes, so one
+  crew does not fail the probe batch. Each check emits an
   `activity.image_canary_checked` audit event with the crew, the mode and whether
   the image was seen. The canary proves the image arrived, not that the model
   judged it well.
@@ -1298,7 +1300,7 @@ run with `orbit run show <run_id>`.
 | RESULT | Meaning | What to do |
 |---|---|---|
 | `seen` | The model returned the canary code. | Keep the declaration. The crew can take images. |
-| `image_not_seen` | The run finished without the code. | If the same model keeps missing, set `vision = false` on that crew. |
+| `image_not_seen` | The run finished without the code. The probe run itself still completes. | If the same model keeps missing, set `vision = false` on that crew. |
 | `no_image_input` | The crew's executor declares no `image_input`. | Add a candidate declaration as above, or leave the crew out of image work. |
 | `vision_off` | The crew sets `vision = false`, so it was not probed. | Set `vision` back to `true` and probe again. |
 | `no_cli_runtime` | The crew's provider has no CLI runtime on this host. | Check `orbit doctor providers`, then follow [Provider setup](providers.md#provider-setup). |

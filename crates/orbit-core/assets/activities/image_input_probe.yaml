@@ -5,7 +5,8 @@
 # and its `vision` setting before any session starts, renders a fresh canary
 # PNG with a random code into the run's scratch directory, and delivers it
 # the way the executor declares (`native_read` or `attach_args`). A result
-# that does not return the code fails as `image_not_seen`.
+# that does not return the code is reported as `image_not_seen` for this
+# crew and the probe run still completes. A delivery miss still fails its step.
 #
 # The response envelope is required because the canary code is this
 # activity's only product: no task, git or review artifact can show that a

@@ -1,6 +1,7 @@
 mod executor;
 mod job_pipeline;
 mod managed_assets;
+mod vision_probe;
 
 /// Re-execute one mutable fixture in a child with disposable user state.
 ///

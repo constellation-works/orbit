@@ -688,10 +688,11 @@ models misread the canary on a passing lane; those crews opt out with `vision = 
 
 Each review invocation receives, first, a canary image: a generated PNG showing a random
 six-character code in large type, created per invocation and never written to the task. The
-envelope must return the code in `canary`. A missing or wrong code refuses the result as
-`image_not_seen`, a retryable failure. A crew that fails the canary twice in a row is held
-for visual review like a [provider failure hold](../../CONFIG.md#provider-failure-holds),
-and the probe in phase 1 is the same check run outside a delivery.
+envelope must return the code in `canary`. A missing or wrong code on a delivery refuses
+the result as `image_not_seen`, a retryable failure. The probe runs the same check outside
+a delivery and records a miss on that crew's row; the probe run itself still completes, so
+one crew does not fail the batch. A crew that fails the canary twice in a row is held
+for visual review like a [provider failure hold](../../CONFIG.md#provider-failure-holds).
 
 This is the one place visual review reads agent output as truth, and it is bounded: the
 canary proves delivery, not judgement. Judgement is checked by verification (§11).
