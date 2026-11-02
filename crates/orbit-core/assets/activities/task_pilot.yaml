@@ -888,11 +888,10 @@ spec:
       criterion that contradicts the pinned code or contract (see Contract
       contradiction above). Every entry holds promotion and carries no
       `holds_promotion` field; leave it empty for a matching criterion.
-    - `blocked_by` and `adr_conflicts` are arrays of plain strings, never
-      objects, and every entry holds promotion. Each combines the finding and
-      its citation, for example "the module this task would change still
-      exports the type it removes (verified via rg -n 'pub use Bar' at
-      source_revision)".
+    - `adr_conflicts` is an array of strings combining each current conflict and
+      its citation, for example `Current module still exports Bar (path:line at
+      source_revision)`; each entry holds promotion. Keep `blocked_by` as
+      prerequisite task IDs under its rule above. Neither field accepts objects.
     - `utility_warnings` and `surface_warnings` are arrays of
       `{"text":"<finding and citation>","holds_promotion":true|false}`.
     - `duplicate_of`, `already_landed`, `release_action_required`,
