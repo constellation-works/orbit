@@ -245,6 +245,76 @@ fn application_consent_validates_an_optional_rate_limit() {
     assert!(stderr.contains("rate limit"), "{stderr}");
 }
 
+#[test]
+fn application_consent_prints_one_line_per_constrained_scope() {
+    let fixture = Fixture::new();
+    let expires = expires_in(7);
+    let mut limited = dismiss_scope();
+    limited["name"] = json!("limited-dismiss");
+    limited["rate_limit"] = json!({"admissions": 30, "window_seconds": 3600});
+    let body = json!({
+        "application_id": "office-app",
+        "expires_at": expires,
+        "scopes": [
+            dismiss_scope(),
+            limited,
+            {
+                "name": "exact-note",
+                "operation": {
+                    "tool": "orbit.task.update",
+                    "plugin": null,
+                    "input": {"id": "TST-1", "status": "rejected"}
+                },
+                "callbacks": []
+            }
+        ]
+    });
+    let input = fixture.home.join("summary-consent.json");
+    std::fs::write(&input, body.to_string()).unwrap();
+    let output = fixture
+        .operator_command(["application", "consent", "--input-file"])
+        .arg(&input)
+        .arg("--credential-file")
+        .arg(fixture.home.join("summary-credential"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    assert!(stdout.contains("Application consent issued:"), "{stdout}");
+    let dismiss = stdout
+        .lines()
+        .find(|line| line.starts_with("approval-dismiss:"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(dismiss.contains(&format!("expires {expires}")), "{dismiss}");
+    assert!(!dismiss.contains("rate limit"), "{dismiss}");
+    let limited_line = stdout
+        .lines()
+        .find(|line| line.starts_with("limited-dismiss:"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(
+        limited_line.contains(&format!("expires {expires}")),
+        "{limited_line}"
+    );
+    assert!(
+        limited_line.contains("rate limit 30 admissions per 3600 seconds"),
+        "{limited_line}"
+    );
+    assert!(
+        stdout.lines().all(|line| !line.starts_with("exact-note:")),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.contains(": admit "))
+            .count(),
+        2,
+        "{stdout}"
+    );
+}
+
 /// A private plugin whose one tool declares a task `id` and an artifact
 /// `sha256`, so a constrained entry can bind the artifact its callbacks read.
 fn install_proposal_plugin(fixture: &Fixture) -> Value {

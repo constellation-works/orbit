@@ -3,7 +3,6 @@
 
 use std::time::Instant;
 
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
@@ -104,6 +103,10 @@ where
     let _ = take_delivered_plugin_secret_names();
     let _ = take_plugin_secret_updates();
     let _ = crate::runtime::application_authority::take_application_audit();
+    // Minted before the tool runs so a callback it binds can record this
+    // row's id as `entry_execution_id`. The frame pops when this dispatch
+    // ends, including when the tool fails.
+    let execution_frame = DispatchAuditFrame::enter();
     let result = dispatch(input);
     let application = crate::runtime::application_authority::take_application_audit();
     crate::runtime::application_authority::finish_application_dispatch();
@@ -151,7 +154,7 @@ where
     };
 
     let params = AuditEventInsertParams {
-        execution_id: audit_execution_id("exec"),
+        execution_id: execution_frame.id().to_owned(),
         command: "tool".to_string(),
         subcommand: Some(entry_point.audit_subcommand().to_string()),
         tool_name: Some(name.to_string()),
@@ -263,4 +266,28 @@ where
     // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
     // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
+}
+
+/// This dispatch's audit execution id, pushed before the tool runs and popped
+/// when the dispatch ends so a nested callback sees it as the entry id.
+struct DispatchAuditFrame {
+    id: String,
+}
+
+impl DispatchAuditFrame {
+    fn enter() -> Self {
+        Self {
+            id: orbit_common::observability::audit_id::push_dispatch_execution_id(),
+        }
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for DispatchAuditFrame {
+    fn drop(&mut self) {
+        orbit_common::observability::audit_id::pop_dispatch_execution_id();
+    }
 }

@@ -91,6 +91,7 @@ impl Execute for AuditListArgs {
             lease_id: self.lease,
             before_id: None,
             exclude_unverified_success: false,
+            application_entry_execution_id: None,
             limit: self.limit,
             offset: 0,
         })?;

@@ -238,6 +238,56 @@ printf '{{"ok":true,"output":{{"accepted":"bound-accept-ok"}}}}\n'
         .filter(|(status, app)| status == "denied" && app["callback"] == true)
         .count();
     assert!(update_denials >= 2, "{update_denials}");
+
+    // Each callback row names the entry dispatch, and `orbit audit show` of
+    // that entry lists the callbacks.
+    let conn = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    let (entry_id, entry_execution_id): (i64, String) = conn
+        .query_row(
+            "SELECT id, execution_id FROM audit_events \
+             WHERE tool_name = 'proposal.accept' AND status = 'success' \
+               AND application_json IS NOT NULL \
+             ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    for tool in [
+        "orbit.task.show",
+        "orbit.task.artifact.get",
+        "orbit.task.update",
+    ] {
+        let rows = application_rows(&fixture, tool);
+        assert!(
+            rows.iter().any(|(status, app)| {
+                status == "success"
+                    && app["callback"] == true
+                    && app["entry_execution_id"] == entry_execution_id
+                    && app["scope_name"] == "proposal-accept"
+                    && app["match"] == "constrained"
+            }),
+            "{tool} callback must record the entry execution id {entry_execution_id}: {rows:?}"
+        );
+    }
+    let shown = String::from_utf8(
+        fixture
+            .command(["audit", "show", &entry_id.to_string()])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    assert!(
+        shown.contains("Scope:             proposal-accept (0)"),
+        "{shown}"
+    );
+    assert!(shown.contains("Match:             constrained"), "{shown}");
+    assert!(shown.contains("Callbacks:"), "{shown}");
+    assert!(shown.contains("orbit.task.show"), "{shown}");
+    assert!(shown.contains("orbit.task.artifact.get"), "{shown}");
+    assert!(!shown.contains("Entry execution:"), "{shown}");
 }
 
 /// Drive callbacks over a real host route without a sandboxed backend: the

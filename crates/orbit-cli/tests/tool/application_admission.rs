@@ -281,11 +281,109 @@ fn application_admission_enforces_a_scope_rate_limit_and_leaves_others_unlimited
         assert_eq!(status(&fixture, &id), "rejected");
     }
 
-    // The refused admission is audited.
-    assert!(
-        application_rows(&fixture)
-            .iter()
-            .any(|(status, app)| status == "denied"
-                && app["consent"]["scopes"][0]["name"] == "limited-dismiss")
+    // The refused admission is audited, naming the rate limit and not a field.
+    assert!(application_rows(&fixture).iter().any(|(status, app)| {
+        status == "denied"
+            && app["scope_name"] == "limited-dismiss"
+            && app["refused"]["constraint"] == "rate_limit"
+            && app["refused"].get("field").is_none()
+    }));
+}
+
+#[test]
+fn application_admission_audits_constrained_fields_and_audit_show_renders_them() {
+    let fixture = Fixture::new();
+    let (_, credential) = grant(
+        &fixture,
+        json!([dismiss_scope("approval-dismiss", "approval")]),
+        "audit-show",
     );
+    let id = task(&fixture, "Audit me", "approval", "review");
+    let marker = "payload-marker-audit-9c2e";
+    admitted(
+        &fixture,
+        &credential,
+        &json!({"id": id, "status": "rejected", "comment": marker}),
+    );
+    let stderr = refused(
+        &fixture,
+        &credential,
+        &json!({"id": id, "status": "rejected", "comment": marker}),
+    );
+    assert!(
+        stderr.contains("scope `approval-dismiss` field `id` failed `task`"),
+        "{stderr}"
+    );
+
+    let events = fixture.json([
+        "audit",
+        "list",
+        "--tool",
+        "orbit.task.update",
+        "--limit",
+        "20",
+    ]);
+    let events = events.as_array().expect("audit list is an array");
+    let success = events
+        .iter()
+        .find(|event| {
+            event["status"] == "success" && event["application"]["scope_name"] == "approval-dismiss"
+        })
+        .expect("admitted constrained call is audited");
+    assert_eq!(success["application"]["match"], "constrained");
+    assert_eq!(success["application"]["predicate"]["task"], id);
+    assert_eq!(success["application"]["predicate"]["status_seen"], "review");
+    assert!(success["application"].get("entry_execution_id").is_none());
+    assert!(success["application"].get("refused").is_none());
+    assert!(
+        !success["application"].to_string().contains(marker),
+        "an admitted row records the comment as a digest, not its text"
+    );
+
+    let denied = events
+        .iter()
+        .find(|event| {
+            event["status"] == "denied" && event["application"]["scope_name"] == "approval-dismiss"
+        })
+        .expect("refused constrained call is audited");
+    assert_eq!(denied["application"]["match"], "constrained");
+    assert_eq!(
+        denied["application"]["refused"]["scope_name"],
+        "approval-dismiss"
+    );
+    assert_eq!(denied["application"]["refused"]["field"], "id");
+    assert_eq!(denied["application"]["refused"]["constraint"], "task");
+    assert!(denied["application"].get("entry_execution_id").is_none());
+    let denied_application = denied["application"].to_string();
+    assert!(
+        !denied_application.contains(marker) && !denied_application.contains(&id),
+        "a refusal records the constraint, not the call: {denied_application}"
+    );
+
+    let success_show = audit_show_text(&fixture, &success["id"]);
+    assert!(success_show.contains("Scope:             approval-dismiss (0)"));
+    assert!(success_show.contains("Match:             constrained"));
+    assert!(success_show.contains(&format!("Predicate:         task {id} status review")));
+    assert!(!success_show.contains(marker), "{success_show}");
+
+    let denied_show = audit_show_text(&fixture, &denied["id"]);
+    assert!(
+        denied_show.contains("Refused:           scope approval-dismiss field id constraint task")
+    );
+    assert!(denied_show.contains("Match:             constrained"));
+    assert!(
+        !denied_show.contains(marker) && !denied_show.contains(&id),
+        "{denied_show}"
+    );
+}
+
+fn audit_show_text(fixture: &Fixture, id: &Value) -> String {
+    let output = fixture
+        .command(["audit", "show", &id.to_string()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8(output).unwrap()
 }

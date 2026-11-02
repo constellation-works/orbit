@@ -3,13 +3,13 @@
 mod application;
 mod definition;
 pub use application::{
-    APPLICATION_CONSENT_SCHEMA_V1, APPLICATION_CONSENT_SCHEMA_V2, ApplicationArtifactDigest,
-    ApplicationArtifactEvidence, ApplicationArtifactJson, ApplicationConsent,
-    ApplicationConsentRequest, ApplicationConstraint, ApplicationEmptyConstraint,
-    ApplicationInvocation, ApplicationOperation, ApplicationPluginConsent,
-    ApplicationPredicateEvidence, ApplicationRateLimit, ApplicationScope, ApplicationTaskPredicate,
-    ApplicationTextConstraint, ApplicationTextDigest, ApplicationTokenConstraint,
-    ApplicationTransition,
+    APPLICATION_CONSENT_SCHEMA_V1, APPLICATION_CONSENT_SCHEMA_V2, ApplicationAdmissionMatch,
+    ApplicationArtifactDigest, ApplicationArtifactEvidence, ApplicationArtifactJson,
+    ApplicationAuditRefusal, ApplicationConsent, ApplicationConsentRequest, ApplicationConstraint,
+    ApplicationEmptyConstraint, ApplicationInvocation, ApplicationOperation,
+    ApplicationPluginConsent, ApplicationPredicateEvidence, ApplicationRateLimit, ApplicationScope,
+    ApplicationTaskPredicate, ApplicationTextConstraint, ApplicationTextDigest,
+    ApplicationTokenConstraint, ApplicationTransition,
 };
 mod error;
 mod invocation;
