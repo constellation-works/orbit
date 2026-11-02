@@ -210,7 +210,7 @@ const METRICS_PARAMS: &[ParamSpec] = &[
     both(
         "baseline",
         ParamType::String,
-        "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero.",
+        "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero. Referenced tasks held by another workspace on this machine are read through their owner; unreachable ones are listed under references.unreachable instead of failing the report.",
         CliArgKind::flag("baseline"),
         "Compute the same measures for this interactive assignment task",
     ),
