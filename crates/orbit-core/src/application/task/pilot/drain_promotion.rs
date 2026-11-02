@@ -496,6 +496,22 @@ pub(crate) fn dispatched_child_pilot(
         .is_some_and(|trigger| trigger.kind == JobRunTriggerKind::Child))
 }
 
+/// The tasks a live execution claim holds, footprint-protecting phases only.
+/// The claim guard both stale-repilot selection sites share: while a claim
+/// holds a task, its meaning is still being executed against, so a stale
+/// assessment keeps holding instead of queueing a fresh pilot.
+pub(crate) fn live_execution_claim_tasks(
+    runtime: &OrbitRuntime,
+) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+    Ok(runtime
+        .inspect_execution_claims()?
+        .into_iter()
+        .map(|inspection| inspection.claim)
+        .filter(|claim| claim.phase.protects_footprint())
+        .map(|claim| claim.task_id)
+        .collect())
+}
+
 /// Why a child pilot must not call the provider for `task`, if it must not.
 ///
 /// An explicit or routine pilot already certified an assessment: a fresh one
@@ -508,7 +524,19 @@ pub(crate) fn reused_assessment_exclusion(
 ) -> Result<Option<&'static str>, OrbitError> {
     Ok(match classify_reuse(runtime, task, false)? {
         ExplicitAssessmentReuse::Promote { .. } => Some("assessment_already_applied"),
-        ExplicitAssessmentReuse::Hold { reason, .. } => Some(reason),
+        ExplicitAssessmentReuse::Hold { reason, .. } => {
+            // A stale assessment is not reused, but it is exactly what a
+            // drain child dispatched for a repilot must assess afresh: the
+            // drain selected the task because its meaning changed after the
+            // certified assessment. A live execution claim keeps the hold.
+            if reason == "changed_since_pilot"
+                && !live_execution_claim_tasks(runtime)?.contains(&task.id)
+            {
+                None
+            } else {
+                Some(reason)
+            }
+        }
         ExplicitAssessmentReuse::NotReusable => None,
     })
 }

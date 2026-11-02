@@ -465,9 +465,11 @@ mode, assessments, runs, median and total run seconds and tokens, plus
 re-checks later followed by a full pilot and the combined re-check-to-full
 rate.
 
-Description or acceptance-criteria edits make the assessment stale but never
-schedule another pilot. Dispatch fails closed as `pilot_assessment_stale` until
-`orbit task repilot <id>` completes against the edited requirements, unless an
+Description or acceptance-criteria edits make the assessment stale. The
+drain and scheduled discovery queue a fresh pilot automatically when no live
+execution claim holds the task, and a failed repilot holds it until its
+meaning changes again or an operator acts. Dispatch fails closed as `pilot_assessment_stale` until
+a new assessment completes against the edited requirements, unless an
 operator skips the pilot with `no-pilot` as described above. A held
 warning keeps its one pending decision across routine windows; routine ticks
 create no additional pilot, triage, or decision for that same assessment.

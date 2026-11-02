@@ -3,7 +3,10 @@
 # Scheduled and other zero-input runs leave discovery entirely to
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
 # proposed/backlog tasks in the active workspace with empty context_files or
-# unassessed complexity, excluding no-diff tasks. Explicit mode audits named
+# unassessed complexity, excluding no-diff tasks. A task whose description or
+# acceptance criteria changed after its applied assessment is discovered
+# again for a fresh pilot, unless a live execution claim holds it or a
+# repilot already failed. Explicit mode audits named
 # proposed/backlog tasks, including non-empty selectors. A child pilot, such
 # as one an approve-proposed drain dispatched, is not that request: when an
 # explicit or routine pilot already certified an assessment, the child does

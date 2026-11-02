@@ -107,6 +107,19 @@ fn replay_does_not_certify_operator_edits_as_pilot_output() {
                 .iter()
                 .all(|entry| entry.event != "proposal_approved")
         );
+        if expected_replay["classification"] == "changed_since_pilot" {
+            // The drain-held stale task is queued for a fresh pilot on the
+            // next pass instead of holding for an operator repilot.
+            workspace.finish(&pilot, JobRunState::Success);
+            let selection = workspace.select(&drain);
+            assert!(
+                selection["task_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(task.id)),
+                "{selection}"
+            );
+        }
     }
 }
 

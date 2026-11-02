@@ -50,9 +50,13 @@ name its ID to audit it again.
 
 The routine selects eligible never-assessed tasks for their first automatic
 pilot. Once an assessment has applied, editing requirements does not request
-another one. Description or criteria edits can hold dispatch as
+another one through the routine. The drain and scheduled discovery do queue a
+fresh pilot automatically when the description or criteria changed after the
+applied assessment and no live execution claim holds the task; a failed
+repilot holds it until its meaning changes again or an operator acts.
+Description or criteria edits can hold dispatch as
 `pilot_assessment_stale`. After a material edit, an operator on the owner can
-request a fresh assessment for a proposed or backlog task:
+also request a fresh assessment for a proposed or backlog task:
 
 ```bash
 orbit task repilot "$TASK_ID"

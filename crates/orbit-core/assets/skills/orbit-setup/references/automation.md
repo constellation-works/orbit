@@ -705,7 +705,8 @@ orbit run readiness <id> --json             # inspect task holds
 ```
 
 Description or criteria edits hold dispatch as `pilot_assessment_stale` until
-an explicit assessment completes, unless an authorized operator skips pilot
+a new assessment completes (the drain queues one automatically for an
+unclaimed task), unless an authorized operator skips pilot
 admission with `no-pilot`. Other readiness, dependency, lock and delivery gates
 still apply. For the operator's explicit `orbit task repilot <id>` procedure,
 no-pilot authority and bounded re-check/full behavior, follow
