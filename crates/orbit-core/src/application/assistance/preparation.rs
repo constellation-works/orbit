@@ -73,8 +73,12 @@ pub(super) fn prepare_assistance_work(
     }
     request = adapter.prepare_assistance_request(request, secrets, policy)?;
     request.validate_request()?;
+    if template.is_none() && super::templates::contract_has_packet_bound_choice(&request.contract) {
+        return Err(AssistanceReason::InvalidRequest);
+    }
     if let Some(template) = template {
         super::templates::validate_assistance_expansion(&request.contract, template)?;
+        super::templates::bind_packet_bound_choices(&mut request)?;
     }
     let contract = serde_json::to_vec(template.unwrap_or(&request.contract))
         .map_err(|_| AssistanceReason::InvalidRequest)?;

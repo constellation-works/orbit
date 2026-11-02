@@ -1,6 +1,7 @@
 //! Manual isolated public-boundary fixture. Pass the evaluator schema JSON.
 //! No live HTTP or promotional credits; no automated feature tests are added.
 mod fixture;
+mod packet_bound;
 use chrono::Duration;
 use fixture::{
     AssistanceFixture, CREDENTIAL, FixtureResult, SUPPLIED, SecondAssistanceAdapter,
@@ -1277,6 +1278,7 @@ fn main() -> FixtureResult {
         fixture_deadline_before_send_is_not_unknown(&root.join("deadline"), &schema)?;
         fixture_restart_retry(&root.join("restart"), &schema)?;
         fixture_validation(&root.join("validation"), &schema)?;
+        packet_bound::fixture_packet_bound_choice(&root.join("packet-bound"), &schema)?;
         fixture_budgets(&root.join("bounds"), &schema)?;
         fixture_modes_and_late_results(&root.join("modes"), &schema)?;
         fixture_config_and_compatibility(&root.join("config"))?;
