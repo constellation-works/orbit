@@ -6,15 +6,19 @@ spec:
   type: deterministic
   description: >
     Resume each owner-local delivery leaf (`task_pr_pipeline`) whose worker
-    died after it opened its pull request and promoted its task to `review`,
+    died or whose completion exhausted its bounded base chase after it opened
+    its pull request and promoted its task to `review`,
     so landing review, completion and auto-fix continue on that pull request
     instead of waiting for an operator. A leaf qualifies when its run ended
     within 24 hours of its last recorded activity (not at an upgrade boundary,
-    which the clock resumes), is not a claimed execution and not itself a
-    resumed attempt, has no retry yet, its pull request is still
-    open on the head branch it opened it on, every task it carries is still in
-    `review`, this drain holds the `completion` and `auto_fix` authority the
-    leaf was started with, and the ordinary checkpoint resume accepts it. At
+    which the clock resumes), is not a claimed execution, has no retry yet,
+    and is either an original interrupted attempt or a typed
+    `base_chase_exhausted` hold (including a resumed attempt). Other holds
+    stay parked. Its pull request must still be
+    open on the head branch it opened it on, every task it carries must still be
+    in `review`, this drain must hold the `completion` and `auto_fix` authority
+    the leaf was started with, and the ordinary checkpoint resume must accept
+    it. Each resumed completion has a fresh bounded chase budget. At
     most as many leaves are resumed as the drain has free slots; a stopped
     drain or a pass held by host resource pressure resumes none. Each adoption
     or final skip is decided once and audited. The step never fails on a

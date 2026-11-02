@@ -1566,8 +1566,18 @@ non-accept re-review, or a failed revalidation keeps the published PR and the
 task in review. When the base advances again between a step's conflict
 recovery and its retry, the retry carries the certified recovered head onto
 the new base, or recovers a conflicting advance once more, before handing the
-head to re-review; a step that has already followed its base twice fails as
-`base_chase_exhausted` [ORB-14393].
+head to re-review; a step follows its base at most twice per run
+[ORB-14393]. Exhaustion raises the typed `base_chase_exhausted` delivery
+hold, keeping the last certified recovery, published PR and task in review
+[ORB-21441]. The owner drain's next adoption pass resumes that held leaf
+through its checkpoints under the same completion and auto-fix grants,
+without spending an out-of-run repair admission. Each resumed run has its
+own bounded chase budget; the inherited recovery still requires the source
+host's certificate and same-job retry ancestry. A resumed run may yield
+again for this reason. Other held deliveries and repeatedly interrupted
+workers retain their existing recovery rules. Adoption still requires an
+open PR on the recorded branch, tasks in review, no live owner or existing
+retry, and available host capacity; claimed executions are excluded.
 `complete_pr` is skipped on review-only and no-diff routes, and a `when:` may
 not read a skippable step's output, so `re_review_gate_admit` and
 `re_review_gate_settle` always run: with `re_review_after: complete_pr` the
@@ -1803,7 +1813,7 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-14322] — a required pass replaces a superseded attempt of the same effective identity regardless of record order.
 - [ORB-14332] — a base move during re-review gets another review round instead of leaving a recovered conflict blocked.
 - [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
-- [ORB-14393] — a completion step that has already followed a moving base twice fails as `base_chase_exhausted`.
+- [ORB-14393, ORB-21441] — a completion step follows a moving base at most twice per run, then holds as `base_chase_exhausted` for the owner drain to resume.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.

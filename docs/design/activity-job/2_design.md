@@ -523,8 +523,12 @@ prepared. A conflicting advance is aborted and the rebase redone from the
 published head, the shape `pr_conflict_recovery` is admitted on, whose
 diagnostic names the earlier resolution. The distinct pinned bases the host
 reserved attempts for (`RuntimeHost::rebase_recovery_attempts`) bound the
-chase: past two chases per step the retry fails as `base_chase_exhausted`,
-keeping the last certified recovery and the PR in review.
+chase: past two chases per step per run, the retry yields the typed
+`base_chase_exhausted` delivery hold, keeping the last certified recovery
+and the PR in review. The next authorized owner drain adoption pass resumes
+the held leaf through its certified checkpoints with a fresh bounded chase
+budget [ORB-21441]. The source checkpoint's base counts as the resumed run's
+starting base, so resuming never grants a third chase within one run.
 
 The stopped index also contains the candidate's nonconflicting changes. Host
 continuation commits those staged paths normally; their disappearance from the
