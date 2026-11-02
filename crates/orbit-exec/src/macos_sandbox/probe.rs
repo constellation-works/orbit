@@ -76,6 +76,12 @@ static FORCED_SEATBELT_REFUSAL: AtomicBool = AtomicBool::new(false);
 /// Probe once per process, using a trusted absolute wrapper, a permissive
 /// profile and `/usr/bin/true`. The child has a ten-second deadline and capped
 /// output. This diagnostic does not change production sandbox behavior.
+///
+/// A permissive `(allow default)` profile can be applied nested inside
+/// another permissive profile, so the apply alone reports `Applied` for a
+/// process that is already sandboxed and whose real deny-default profile
+/// could never be applied there. `probe_platform` therefore also asks the
+/// kernel directly whether this process is already sandboxed.
 pub fn probe_sandbox_exec_apply() -> &'static SandboxExecApplyProbe {
     static PROBE: OnceLock<SandboxExecApplyProbe> = OnceLock::new();
     static FORCED: OnceLock<SandboxExecApplyProbe> = OnceLock::new();
@@ -145,12 +151,35 @@ pub(super) fn classify_apply_result(
     }
 }
 
+/// Whether the kernel reports this process already runs under Seatbelt.
+/// `sandbox_check` with no operation answers that for the calling process;
+/// it does not depend on whether a particular nested profile would apply.
+#[cfg(target_os = "macos")]
+fn current_process_is_sandboxed() -> bool {
+    unsafe extern "C" {
+        fn sandbox_check(
+            pid: libc::pid_t,
+            operation: *const libc::c_char,
+            filter_type: libc::c_int,
+            ...
+        ) -> libc::c_int;
+    }
+    // SAFETY: `sandbox_check` with a null operation takes no filter argument
+    // and only reads the calling process's sandbox state.
+    unsafe { sandbox_check(libc::getpid(), std::ptr::null(), 0) > 0 }
+}
+
 #[cfg(target_os = "macos")]
 fn probe_platform() -> SandboxExecApplyProbe {
     use orbit_common::process::run_bounded_capped;
     use std::process::Command;
     use std::time::Duration;
 
+    if current_process_is_sandboxed() {
+        return SandboxExecApplyProbe::ApplyRefused(
+            "sandbox_check reports this process already runs inside a Seatbelt sandbox".to_string(),
+        );
+    }
     let Some(path) = super::spawn::sandbox_exec_path() else {
         return classify_apply_result(None);
     };
