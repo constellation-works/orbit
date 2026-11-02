@@ -136,6 +136,11 @@ impl WorkspaceDescriptor {
         self.reachability == Reachability::Reachable
     }
 
+    /// Whether this row describes an active checkout.
+    pub(super) fn has_active_checkout(&self) -> bool {
+        self.checkout_health == CheckoutHealth::Active
+    }
+
     /// Whether this row's workspace advertises the control-plane class, so
     /// an owner-store read may be addressed through it.
     pub fn holds_control_plane(&self) -> bool {

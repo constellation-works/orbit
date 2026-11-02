@@ -194,8 +194,10 @@ impl FederatedMcpHost {
             let workspaces = owned_workspaces(&destination.machine_id);
             let selector = rows
                 .iter()
-                .find(|row| row.is_reachable() && row.holds_control_plane())
-                .and_then(|row| row.selector().map(ToOwned::to_owned));
+                .filter(|row| {
+                    row.is_reachable() && row.has_active_checkout() && row.holds_control_plane()
+                })
+                .find_map(|row| row.selector().map(ToOwned::to_owned));
             let answered = rows.iter().any(|row| row.is_reachable());
             if selector.is_none() && answered && workspaces.is_empty() {
                 // A reachable follower: its workspaces are read through
