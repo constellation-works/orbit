@@ -54,7 +54,7 @@ widening, applied), `requested` (a `resident_authority` decision request was rai
 for the same addition reused; nothing changed,
 [mandate-and-authority](./mandate-and-authority.md#widening)), `narrowed` or `unchanged`. One call
 may not both widen and narrow: it is refused, so a caller narrows first and then asks to widen.
-CLI: `orbit resident grant <task> --add … --workspace … --remove … --drop-workspace … --deadline …
+CLI: `orbit resident grant <task> --add … --add-workspace … --remove … --drop-workspace … --deadline …
 --quote …`.
 
 ## `orbit.resident.relay`

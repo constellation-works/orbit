@@ -82,8 +82,8 @@ const GRANT_PARAMS: &[ParamSpec] = &[
         "workspaces",
         ParamType::StringList,
         "Workspaces to add to the authority's scope; each must be one the mandate lists. Widening.",
-        CliArgKind::flag("workspace"),
-        "Workspace to add to the scope, repeatable",
+        CliArgKind::flag("add-workspace"),
+        "Workspace to add to the authority scope, repeatable",
     ),
     both(
         "remove",

@@ -113,7 +113,7 @@ them ([ORB-21244]); slice 1 records and reports the authority only.
 
 ## Widening
 
-`orbit.resident.grant` (CLI `orbit resident grant <task> --add <right>… --workspace <ws>… --quote
+`orbit.resident.grant` (CLI `orbit resident grant <task> --add <right>… --add-workspace <ws>… --quote
 <text>`):
 
 - **Operator caller.** Applies at once. Recorded with `by` = the human and `via: operator`.

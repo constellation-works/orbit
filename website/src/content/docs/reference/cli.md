@@ -201,7 +201,7 @@ keeps running leaves. `orbit run show` reports the claim stages.
 | `orbit lease listen` | Run the token-only network listener as the listener user. |
 | `orbit notice post` / `close` | Post a fleet notice (incident, maintenance or info), or update or corroborate the open one with the same subject; close one with a reason. Who you post as comes from your session. |
 | `orbit notice list` / `show` | List open fleet notices (or `--status closed`, `expired`, `all`), or show one with its history. |
-| `orbit resident grant <task>` | Widen (`--add`, `--workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
+| `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
 | `orbit resident show <task>` / `list` | Show a mandate, its effective authority, grant history and open grant requests, or list mandates (`--all` includes ended ones). |
 
 See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
