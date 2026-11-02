@@ -52,8 +52,10 @@ export function configureOperationsRoutines(callbacks) {
 
 let routineFailureRequest = 0;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
-// so a background refresh cannot revert it. Host-scoped, like the clock itself.
-let pendingCadenceSeconds = null;
+// so a background refresh cannot revert it. Keyed by host (machine_name), like
+// the clock itself: a draft made on one host never shows on another, while a
+// workspace switch on the same host keeps it.
+const pendingCadenceByHost = new Map();
 const TIMELINE_ROWS = 4;
 
 // ---------------------------------------------------------------------------
@@ -132,6 +134,38 @@ function cronFieldMatcher(field, min, max) {
   return (value) => accepted.has(value);
 }
 
+const cronZoneFormatters = new Map();
+const CRON_WEEKDAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+// Wall-clock fields of an instant in the host's IANA zone, or null when this
+// browser cannot resolve that zone. Seasonal offsets come from Intl, so a
+// window crossing a DST change is read in the offset in force at each minute,
+// not the host's current offset.
+function cronLocalParts(at, zoneName) {
+  if (!zoneName) return null;
+  try {
+    let formatter = cronZoneFormatters.get(zoneName);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: zoneName, hourCycle: "h23",
+        year: "numeric", month: "numeric", day: "numeric",
+        hour: "numeric", minute: "numeric", weekday: "short",
+      });
+      cronZoneFormatters.set(zoneName, formatter);
+    }
+    const parts = {};
+    for (const part of formatter.formatToParts(new Date(at))) parts[part.type] = part.value;
+    const weekday = CRON_WEEKDAYS[parts.weekday];
+    if (weekday === undefined) return null;
+    return {
+      minute: Number(parts.minute), hour: Number(parts.hour) % 24,
+      date: Number(parts.day), month: Number(parts.month), weekday,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Every fire of a cron routine from its next slot to the end of the window.
 // The server names only the next slot; the rest are the minutes after it that
 // the cron expression matches, read in the host's cron zone. A zone-sensitive
@@ -143,19 +177,29 @@ function routineFireTimes(routine, first, until) {
     cronFieldMatcher(fields[0], 0, 59), cronFieldMatcher(fields[1], 0, 23), cronFieldMatcher(fields[2], 1, 31),
     cronFieldMatcher(fields[3], 1, 12), cronFieldMatcher(fields[4], 0, 7),
   ];
+  const zoneName = operationsState.hostCronZone?.name || null;
+  const zoned = zoneName ? cronLocalParts(first, zoneName) : null;
   const offset = Number(operationsState.hostCronZone?.offset_seconds);
-  if (matchers.includes(null) || (!Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
+  if (matchers.includes(null) || (!zoned && !Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
   const [minute, hour, dom, month, dow] = matchers;
   const zoneOffset = Number.isFinite(offset) ? offset * 1000 : 0;
   const times = [first];
   for (let at = Math.floor(first / 60_000) * 60_000 + 60_000; at <= until; at += 60_000) {
-    const local = new Date(at + zoneOffset);
-    const weekday = local.getUTCDay();
+    const local = zoned ? cronLocalParts(at, zoneName) : null;
+    const fieldsAt = local || (() => {
+      const shifted = new Date(at + zoneOffset);
+      return {
+        minute: shifted.getUTCMinutes(), hour: shifted.getUTCHours(),
+        date: shifted.getUTCDate(), month: shifted.getUTCMonth() + 1, weekday: shifted.getUTCDay(),
+      };
+    })();
+    if (!fieldsAt) continue;
+    const weekday = fieldsAt.weekday;
     // Day-of-month and day-of-week combine with OR unless one is a wildcard.
     const days = fields[2] !== "*" && fields[4] !== "*"
-      ? dom(local.getUTCDate()) || dow(weekday) || (weekday === 0 && dow(7))
-      : dom(local.getUTCDate()) && (dow(weekday) || (weekday === 0 && dow(7)));
-    if (minute(local.getUTCMinutes()) && hour(local.getUTCHours()) && month(local.getUTCMonth() + 1) && days) times.push(at);
+      ? dom(fieldsAt.date) || dow(weekday) || (weekday === 0 && dow(7))
+      : dom(fieldsAt.date) && (dow(weekday) || (weekday === 0 && dow(7)));
+    if (minute(fieldsAt.minute) && hour(fieldsAt.hour) && month(fieldsAt.month) && days) times.push(at);
   }
   return times;
 }
@@ -500,8 +544,14 @@ export function renderClock(payload) {
     unavailable ? "Clock unavailable" : (active ? "Pause clock" : "Enable clock"),
   ));
   // A cadence the operator picked but has not applied yet outlives this render;
-  // it clears once the host reports that value as configured, whoever applied it.
-  if (pendingCadenceSeconds === clock.configured_cadence_seconds) pendingCadenceSeconds = null;
+  // it clears once its own host reports that value as configured, whoever
+  // applied it. Another host's draft is neither shown nor applied here.
+  const cadenceHost = payload.machine_name || "";
+  let pendingCadenceSeconds = pendingCadenceByHost.get(cadenceHost) ?? null;
+  if (pendingCadenceSeconds === clock.configured_cadence_seconds) {
+    pendingCadenceByHost.delete(cadenceHost);
+    pendingCadenceSeconds = null;
+  }
   const selectedCadence = pendingCadenceSeconds ?? clock.configured_cadence_seconds;
   const cadence = el("select", { class: "operation-cadence", title: "Clock cadence" });
   for (const seconds of [60, 300, 900, 1800, 3600]) {
@@ -519,6 +569,7 @@ export function renderClock(payload) {
   syncApplyState(selectedCadence);
   cadence.addEventListener("change", () => {
     pendingCadenceSeconds = Number(cadence.value);
+    pendingCadenceByHost.set(cadenceHost, pendingCadenceSeconds);
     syncApplyState(pendingCadenceSeconds);
   });
   apply.addEventListener("click", () => {

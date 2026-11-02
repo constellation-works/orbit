@@ -86,6 +86,18 @@ export function myWorkCrewNames() {
   return humans.map((crew) => crew.name);
 }
 
+// Whether a task is the viewer's own work, from the server-stamped
+// `human_crew` on the task itself. The aggregate view clears the workspace
+// registry, so a name-based check loses every task there; the per-task
+// stamp survives and keeps same-named human/agent crews apart. When the
+// viewer is known only that crew counts, otherwise every human crew does.
+export function isMyWorkTask(task) {
+  const human = humanCrewFor(task);
+  if (!human) return false;
+  const viewer = taskState.lastCrewPayload && taskState.lastCrewPayload.viewer_human_crew;
+  return viewer ? human.name === viewer : true;
+}
+
 export function cacheCrewPayload(payload) {
   taskState.lastCrewPayload = normalizeCrewPayload(payload);
   return taskState.lastCrewPayload;

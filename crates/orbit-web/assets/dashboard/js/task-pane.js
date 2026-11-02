@@ -25,6 +25,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     if (note) note.textContent = osReadoutNote(task);
   }
   refreshDraftCrewControl(wrap, task, context);
+  refreshDraftComplexityControl(wrap, readinessTask, context);
   refreshFixPrControls(wrap, task, context);
   taskFields.refreshFieldCells(wrap, readinessTask);
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
@@ -101,6 +102,25 @@ function refreshDraftCrewControl(wrap, task, context) {
   select.dataset.currentValue = refreshedSelect.dataset.currentValue;
   select.dataset.staleCurrentValue = refreshedSelect.dataset.staleCurrentValue;
 
+  const oldFeedback = control.querySelector(":scope > .mutation-feedback");
+  if (oldFeedback) oldFeedback.remove();
+  const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
+  if (newFeedback) control.appendChild(newFeedback);
+}
+function refreshDraftComplexityControl(wrap, task, context) {
+  // A summary record can omit complexity; only a full record may repaint it.
+  if (!task || task.complexity === undefined) return;
+  const control = wrap.querySelector(".complexity-cell");
+  const select = control && control.querySelector("select");
+  if (!select) return;
+  const refreshed = taskFields.buildComplexityUpdateControl(task, context);
+  const refreshedSelect = refreshed.querySelector("select");
+  if (!refreshedSelect) return;
+  const value = refreshedSelect.value;
+  select.replaceChildren(...refreshedSelect.children);
+  select.value = value;
+  select.disabled = refreshedSelect.disabled;
+  select.title = refreshedSelect.title;
   const oldFeedback = control.querySelector(":scope > .mutation-feedback");
   if (oldFeedback) oldFeedback.remove();
   const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");

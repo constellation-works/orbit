@@ -6,7 +6,7 @@ import { buildInlineFieldEditor } from './field-editor.js';
 import { onTaskRuntimeChange, taskContextContenders } from './task-runtime.js';
 import { taskState, rerender, canMutateTask, aggregateRefusalTitle, taskMutationPath, isOsTag, MUTATION_UNDO_WINDOW_MS } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback } from './task-crew.js';
-import { applyUpdatedTask } from './task-data.js';
+import { applyUpdatedTask, currentTaskRecord } from './task-data.js';
 
 // A saved text field has no undo (restoring prose would need a second write of
 // its own), so its note only has to stay long enough to be read.
@@ -456,17 +456,20 @@ function assessedComplexity(task) {
 }
 
 async function applyTaskComplexityChange(task, nextValue, context) {
+  const currentTask = currentTaskRecord(task, context) || task;
   const visit = captureWorkspaceVisit();
-  const mutationPath = visit.path(taskMutationPath(task));
-  const previousValue = assessedComplexity(task);
-  if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
-  taskState.complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  const mutationPath = visit.path(taskMutationPath(currentTask));
+  // A summary record can omit complexity entirely; then the build-time full
+  // record is the only one carrying it.
+  const previousValue = assessedComplexity(currentTask) || assessedComplexity(task);
+  if (!nextValue || nextValue === previousValue || !canMutateTask(currentTask)) return;
+  taskState.complexityFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
   rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { complexity: nextValue });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    taskState.complexityFeedback.set(task.id, {
+    taskState.complexityFeedback.set(currentTask.id, {
       kind: "success",
       text: "complexity saved",
       // Undo is offered only back to an assessed value; the endpoint refuses
@@ -477,12 +480,12 @@ async function applyTaskComplexityChange(task, nextValue, context) {
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.complexityFeedback.set(task.id, {
+    taskState.complexityFeedback.set(currentTask.id, {
       kind: "error",
       text: `complexity update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   rerender(context);
-  scheduleFeedbackExpiry(taskState.complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.complexityFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }

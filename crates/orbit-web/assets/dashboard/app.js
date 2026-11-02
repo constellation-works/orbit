@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
-import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -1348,6 +1348,9 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
         }
       : null;
     renderTaskList(tasks, taskContext());
+    if (taskState.pinnedExternalTask) {
+      void refreshPinnedTask(taskContext()).catch((error) => console.error("Failed to refresh pinned task", error));
+    }
     if (taskScrollResetPending) {
       const body = $("tasks-body");
       if (body) body.scrollTop = 0;
@@ -1815,7 +1818,9 @@ function wireChangeStream() {
   onChange(["task"], (notices) => {
     if (activeTab !== "tasks" || isAggregateView() || document.hidden) return;
     const shown = notices.some(({ id, status }) => !status || activeStatuses.has(status)
-      || id === taskState.selectedTaskId || lastTasks.some((task) => task.id === id));
+      || id === taskState.selectedTaskId || id === taskState.taskPageId
+      || (taskState.pinnedExternalTask && id === taskState.pinnedExternalTask.id)
+      || lastTasks.some((task) => task.id === id));
     if (shown) quietly("Tasks", () => fetchAndRenderTasks({ includeCrews: false }));
   });
   onChange(["locks"], () => {
