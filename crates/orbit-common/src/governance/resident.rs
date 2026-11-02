@@ -317,7 +317,7 @@ const RELAY: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Relay,
     cli_path: &["relay"],
     tool_name: "orbit.resident.relay",
-    tool_description: "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment on its assignment carrying `quote` verbatim with its `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or any other field is refused; widen through orbit.resident.grant. Refused for an empty or over-long quote (over 4000 characters) or an ended mandate. Output {task_id, comment_id}.",
+    tool_description: "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment carrying `quote` verbatim with `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or other fields is refused; widen through orbit.resident.grant. Refused for an empty or over-long quote (>4000 characters) or an ended mandate. Output {task_id, comment, answer}: comment is {index, at, by} (comments carry no ids) and answer is the record as written.",
     cli_about: "Relay a human's words to a resident, verbatim",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

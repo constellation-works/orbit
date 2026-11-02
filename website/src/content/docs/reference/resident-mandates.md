@@ -195,7 +195,7 @@ orbit resident relay <task id> --quote "Ship CSV first." \
   --source '{"human":"daniel","via":"chat","said_at":"2026-11-02T10:00:00Z"}'
 ```
 
-`relay` writes one `resident.answer` comment on the assignment. The quote is kept verbatim, up to 4000 characters, with its provenance: `human` (who said it), `via` (the channel), an optional `session` and `said_at`. Orbit records the relaying session as `relayed_by` from the caller, never from input. The comment wakes the resident on its next due check.
+`relay` writes one `resident.answer` comment on the assignment. The quote is kept verbatim, up to 4000 characters, with its provenance: `human` (who said it), `via` (the channel), an optional `session` and `said_at`. Orbit records the relaying session as `relayed_by` from the caller, never from input. The comment wakes the resident on its next due check. It returns `{task_id, comment, answer}`: `comment` names the written comment by its 1-based `index` with `at` and `by` (task comments carry no ids), and `answer` is the `resident.answer` record as written.
 
 - `--request-id` names the resident request or decision request the words answer. A relayed answer is a direction: the human still answers the decision request itself.
 - `--reverses` names a resident decision the direction undoes.
