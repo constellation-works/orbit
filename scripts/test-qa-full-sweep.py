@@ -16,6 +16,7 @@ import signal
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1256,6 +1257,23 @@ def cli_command_paths(orbit_bin, top_level, cwd, env):
     return sorted(paths)
 
 
+def untracked_entry_identity(entry: Path):
+    """Return `(git_mode, digest)` for one untracked entry, as Git would record it.
+
+    The entry is never followed: a symlink is its own deliverable whose
+    identity is the link text (dangling or not), a regular file is its bytes
+    plus Git's single executable bit, and any other kind (such as a nested
+    repository directory) is bound by kind so it cannot vanish from the ID.
+    """
+    status = os.lstat(entry)
+    if stat.S_ISLNK(status.st_mode):
+        return "120000", hashlib.sha256(os.readlink(os.fsencode(entry))).hexdigest()
+    if stat.S_ISREG(status.st_mode):
+        mode = "100755" if status.st_mode & stat.S_IXUSR else "100644"
+        return mode, hashlib.sha256(entry.read_bytes()).hexdigest()
+    return f"other-{stat.S_IFMT(status.st_mode):o}", ""
+
+
 def candidate_source(repo: Path, excluded_paths=()):
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     diff = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo)
@@ -1274,10 +1292,13 @@ def candidate_source(repo: Path, excluded_paths=()):
     for raw_path in untracked_output.split(b"\0"):
         if not raw_path:
             continue
-        path = raw_path.decode()
-        candidate = repo / path
-        if not is_excluded(path) and candidate.is_file():
-            untracked.append((path, hashlib.sha256(candidate.read_bytes()).hexdigest()))
+        path = os.fsdecode(raw_path)
+        if is_excluded(path):
+            continue
+        try:
+            untracked.append((path, *untracked_entry_identity(repo / path)))
+        except FileNotFoundError:
+            continue  # removed since listing: no longer part of the candidate
     material = json.dumps({"head": head, "diff": hashlib.sha256(diff).hexdigest(),
                            "untracked": untracked}, sort_keys=True).encode()
     return {"head": head, "diff_sha256": hashlib.sha256(diff).hexdigest(),
