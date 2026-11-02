@@ -336,7 +336,7 @@ long enough to reject replay; missing state is a diagnostic, not a fresh baselin
 Observe proposed/backlog tasks authorized for preparation. No-diff tasks retain
 the current exclusion unless an explicitly supported preparation contract needs
 them. Missing selectors are one reason for a first assessment; material edits after
-an assessment never request another automatic pilot. Tasks in progress, review, terminal, withdrawn, or human-blocked are
+an assessment never request another automatic pilot through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Tasks in progress, review, terminal, withdrawn, or human-blocked are
 not automatic pilot candidates. Preparing proposed work does not approve it.
 
 A material fingerprint (`material_v2`) covers the pilot contract version, the
@@ -397,16 +397,16 @@ receipt as evidence that the task has already been piloted, including an
 unready verdict and evidence from an explicit pilot. Routine windows report
 `fresh` or `fresh_unready` without another provider run or consumer-local
 receipt. This scheduling reuse is independent of dispatch freshness: edits
-never renew automatic pilot eligibility. Active pilots still withhold their
-tasks before reuse. Every later pilot needs an explicit operator request:
+never renew automatic routine pilot eligibility. An `--approve-proposed` drain (or scheduled discovery) still queues a fresh pilot automatically for a stale assessment whose certified description/criteria or other material drifted and no live execution claim holds it. Active pilots still withhold their
+tasks before reuse. Every later routine pilot needs an explicit operator request:
 `orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
 or a decision option action `re_pilot`. The explicit legacy command
 `orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
 holders and owner authority guard explicit submission.
 
 Description or acceptance-criteria edits invalidate the assessment for delivery.
-Shared admission fails closed (`pilot_assessment_stale`) and names both remedies:
-`orbit task repilot <id>`, or an operator's skip with the `no-pilot` tag. It
+Shared admission fails closed (`pilot_assessment_stale`) and names its remedies:
+a new assessment via `orbit task repilot <id>` (an `--approve-proposed` drain also repilots a stale assessment automatically when no live execution claim holds it), or an operator's skip with the `no-pilot` tag. It
 never silently dispatches using old requirements unless an operator explicitly
 skips with `no-pilot` [ORB-21238]. A task carrying the tag is not held by pilot
 assessment state at drain, `orbit run ship` or pull admission: no stale hold and
@@ -420,7 +420,7 @@ tag keeps its first-pilot meaning, and removing it restores the gate. The
 dashboard Readiness card offers this as "Skip pilot"
 ([decision](4_decisions.md#no-pilot-is-an-operator-skip-of-pilot-admission)).
 The atomic receipt seals those requirements independently of configurable
-scheduling fingerprints. A subsequent accepted explicit assessment clears the
+scheduling fingerprints. A subsequent accepted assessment (explicit, routine, or drain repilot) clears the
 stale hold. Administrative edits and promotion leave it current.
 Apply owns the prepared `context_files_before` snapshot and fills it
 into the persisted assessment; an agent need only return `context_files_after`.

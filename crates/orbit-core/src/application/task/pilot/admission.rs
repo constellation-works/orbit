@@ -586,7 +586,7 @@ impl OrbitRuntime {
                 history,
             )? {
                 return Ok(Some(PilotAdmissionHold::StaleAssessment(format!(
-                    "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new explicit assessment completes. {}",
+                    "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new assessment completes. {}",
                     super::skip::pilot_hold_remedies(task)
                 ))));
             }

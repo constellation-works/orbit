@@ -415,10 +415,10 @@ orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 
 The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
 when the footprint, complexity, testable criteria and deduplication are already
-settled; readiness still applies and an explicit pilot remains available. Every later assessment requires an explicit
+settled; readiness still applies and an explicit pilot remains available. The routine never queues a later pilot automatically, even after material edits: every later routine assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
-with `repilot: true`. These operator requests submit one pending pilot and
+with `repilot: true`. An `--approve-proposed` drain (and scheduled discovery) still queue a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
 refuse a second request while a pilot is pending or running, while delivery
 holds the task, or on a replica. A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite. Existing
@@ -465,7 +465,7 @@ mode, assessments, runs, median and total run seconds and tokens, plus
 re-checks later followed by a full pilot and the combined re-check-to-full
 rate.
 
-Description or acceptance-criteria edits make the assessment stale. The
+Certified description/criteria or other material drift makes the assessment stale. The
 drain and scheduled discovery queue a fresh pilot automatically when no live
 execution claim holds the task, and a failed repilot holds it until its
 meaning changes again or an operator acts. Dispatch fails closed as `pilot_assessment_stale` until
@@ -534,7 +534,7 @@ workspace routine is disabled by default and uses a `preparation_eligible`
 state trigger, not a periodic cron: each tick fingerprints eligible tasks and
 queues only tasks without an applied assessment after the 2-minute debounce or
 the 10-minute maximum wait. Once assessed, a task stays quiet across routine
-windows, including after material edits; request another pilot explicitly. Inspect the workspace's actual `task_pilot.yaml`
+windows, including after material edits; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 
@@ -763,9 +763,7 @@ configuration.
   proposed tasks, including ones filed mid-window. A task qualifies with the
   `no-diff-expected` tag, or with non-empty `context_files` and an assessed
   complexity. A fresh assessment from an explicit request or a routine pilot
-  is approved on that pass without another pilot. A stale description or
-  criteria edit, or a holding warning, keeps the task proposed and is not
-  selected again. A task another pilot is assessing is held as
+  is approved on that pass without another pilot. A stale assessment whose certified description/criteria or other material drifted is selected again for a fresh pilot like a new proposal when no live execution claim holds it; a holding warning keeps the task proposed and is not selected again. A task another pilot is assessing is held as
   `pilot_running` until it finishes. A new explicit request still starts one
   pilot; the drain's targeted task ids are not that request.
 - The drain pilots them through a detached `task_pilot_pipeline` run, and the
@@ -796,9 +794,9 @@ configuration.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
   report approved, closed and held counts with each hold reason, and
   `awaiting_reuse` lists fresh assessments a later pass approves. A task this
-  drain held is not piloted again until it changes. A fresh explicit or
-  routine assessment is approved without another pilot, and a stale one stays
-  proposed until a new explicit assessment.
+  drain held is not piloted again until it changes, except a stale assessment the drain repilots automatically as above. A fresh explicit or
+  routine assessment is approved without another pilot, and a stale one held for a live claim, a failed repilot, or a warning stays
+  proposed until the task changes or an operator acts.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
 
