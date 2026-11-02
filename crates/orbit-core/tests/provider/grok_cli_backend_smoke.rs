@@ -68,6 +68,7 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
         explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
+        notice_posting_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("grok-4.6".to_string()),

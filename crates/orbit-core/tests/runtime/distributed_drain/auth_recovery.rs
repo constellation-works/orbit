@@ -84,6 +84,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
+        notice_posting_instruction: None,
         tools: vec![],
         tool_disallow_list: None,
         on_denial: OnDenial::Terminate,

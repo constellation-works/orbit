@@ -56,6 +56,8 @@ mod explore;
 #[cfg(unix)]
 mod explore_brief;
 #[cfg(unix)]
+mod fleet_notices;
+#[cfg(unix)]
 mod no_diff;
 #[cfg(unix)]
 mod regression_risk;
@@ -1379,6 +1381,7 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
+        notice_posting_instruction: None,
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
         on_denial: OnDenial::Terminate,
         model: Some(orbit_common::model_defaults::CLAUDE_DEFAULT_STRONG.to_string()),
@@ -1496,6 +1499,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 explore_instruction: None,
                 explore_brief_instruction: None,
                 notice_instruction: None,
+                notice_posting_instruction: None,
                 tools: vec![],
                 on_denial: OnDenial::Terminate,
                 model: None,
