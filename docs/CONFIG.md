@@ -225,6 +225,29 @@ configuration surface does not activate either priority consumer. See the
 [service contract](design/decision-assistance/specs/service.md) for API usage,
 attempt accounting, freshness and the offline fixture command.
 
+### Precedent retrieval grants
+
+`assistance.precedent_providers` is an optional host-only array (default `[]`).
+Each entry grants an exact `workspace_id`, `built_in` (default `false`) and an
+ordered `plugin_tools` list (default `[]`). This retrieves decision evidence;
+it starts no model calls, notifications or automatic answers. For example,
+inside the host configuration:
+
+```toml
+[[assistance.precedent_providers]]
+workspace_id = "ws_example"
+built_in = true
+plugin_tools = ["history.retrieve"]
+```
+
+Only active, granted, read-only plugin tools are eligible. Each receives
+`orbit.precedent-provider/1` through ordinary audited plugin dispatch, with its
+existing callback session and sandbox. The built-in source runs first; plugin
+source order follows configuration. Removing the entry disables retrieval on
+the next call. There are at most 128 workspace entries and eight plugin tools
+per entry; duplicate workspaces or tool names are refused. See the
+[provider API and bounds](design/decision-assistance/specs/service.md#precedent-provider-application-boundary).
+
 ## `[machine]` — who this machine is
 
 Global-only. `orbit init` writes the identity keys once.

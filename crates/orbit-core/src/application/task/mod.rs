@@ -48,6 +48,7 @@ mod paths;
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
+pub mod precedent_provider;
 mod pull_request_links;
 mod query;
 mod record_json;

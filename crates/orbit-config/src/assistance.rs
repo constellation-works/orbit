@@ -15,6 +15,24 @@ pub struct AssistanceSettings {
     pub budget: AssistanceBudget,
     /// Workspace/use-case grants. No built-in consumers are activated.
     pub policies: Vec<AssistancePolicy>,
+    /// Explicit workspace grants for local and plugin precedent retrieval.
+    /// Empty by default; retrieval does not activate model inference.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub precedent_providers: Vec<PrecedentProviderPolicy>,
+}
+
+/// Host-only grant for a workspace's precedent sources, in merge order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrecedentProviderPolicy {
+    /// Exact registered workspace identity; no wildcard grants.
+    pub workspace_id: String,
+    /// Include the workspace's human decision history as the first source.
+    #[serde(default)]
+    pub built_in: bool,
+    /// Canonical installed read-only plugin tool names, in source order.
+    #[serde(default)]
+    pub plugin_tools: Vec<String>,
 }
 
 /// Operator grant for one consumer's immutable question/evidence contract.
@@ -54,6 +72,27 @@ impl AssistanceSettings {
             OrbitError::InvalidInput("invalid host assistance settings: contract_digest must be 'sha256:' followed by 64 lowercase hex digits".into())
         };
         self.limits.validate_limits().map_err(|_| invalid())?;
+        let mut workspaces = BTreeSet::new();
+        if self.precedent_providers.len() > 128 {
+            return Err(invalid());
+        }
+        for sources in &self.precedent_providers {
+            let mut tools = BTreeSet::new();
+            if !assistance::assistance_identifier(&sources.workspace_id)
+                || !workspaces.insert(&sources.workspace_id)
+                || sources.plugin_tools.len() > 8
+                || sources.plugin_tools.iter().any(|tool| {
+                    tool.is_empty()
+                        || tool.len() > 256
+                        || !tool
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                        || !tools.insert(tool)
+                })
+            {
+                return Err(invalid());
+            }
+        }
         if !assistance::assistance_identifier(&self.budget.epoch)
             || self.budget.token_ceiling > i64::MAX as u64
             || self.budget.spend_ceiling_microusd > i64::MAX as u64
