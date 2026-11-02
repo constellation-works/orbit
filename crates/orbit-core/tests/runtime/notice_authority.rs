@@ -1160,10 +1160,116 @@ fn linked_task_this_owner_does_not_hold_is_refused() {
 }
 
 fn runtime_at_roots(global: &Path, orbit: &Path) -> OrbitRuntime {
+    runtime_at_roots_config(global, orbit, CONFIG)
+}
+
+fn runtime_at_roots_config(global: &Path, orbit: &Path, config: &str) -> OrbitRuntime {
     std::fs::create_dir_all(global).unwrap();
     std::fs::create_dir_all(orbit).unwrap();
-    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    std::fs::write(orbit.join("config.toml"), config).unwrap();
     OrbitRuntime::from_roots(global, orbit).unwrap()
+}
+
+fn attention_notice_config(per_workspace_item_cap: u32) -> String {
+    format!(
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[attention]\nper_workspace_item_cap = {per_workspace_item_cap}\n\n[notice]\nmax_open_per_workspace = 60\nmax_open_global_per_owner = 60\n"
+    )
+}
+
+fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let home_root = root.path().join("home-ws/.orbit");
+    let other_root = root.path().join("other-ws/.orbit");
+    let config = attention_notice_config(200);
+    let home = runtime_at_roots_config(&global, &home_root, &config);
+    let other = runtime_at_roots_config(&global, &other_root, &config);
+    let operator = session(McpCapability::Operator);
+    let home_id = home.workspace_id().unwrap().to_string();
+    assert_ne!(home_id, other.workspace_id().unwrap().as_str());
+
+    let mut home_notice_ids = Vec::new();
+    for index in 0..51 {
+        let posted = call(
+            &home,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": format!("Home notice {index:02}")}),
+            &operator,
+        )
+        .unwrap();
+        home_notice_ids.push(posted["notice"]["id"].as_str().unwrap().to_string());
+    }
+    for index in 0..50 {
+        call(
+            &other,
+            "orbit.notice.post",
+            json!({"kind": "incident", "title": format!("Foreign notice {index:02}"),
+                "scope": "global"}),
+            &operator,
+        )
+        .unwrap();
+    }
+
+    let query = |runtime: &OrbitRuntime, input: Value| {
+        call(runtime, "orbit.attention", input, &operator).unwrap()
+    };
+    let first = query(&home, json!({"kind": "notice_open", "limit": 50}));
+    assert_eq!(first["counts"]["matching"], 51);
+    assert_eq!(first["counts"]["returned"], 50);
+    assert_eq!(first["counts"]["by_kind"]["notice_open"], 50);
+    assert_eq!(first["counts"]["truncated"], true);
+    assert_eq!(first["items"].as_array().map(Vec::len), Some(50));
+    assert!(first["degraded"].as_array().unwrap().is_empty());
+    for item in first["items"].as_array().unwrap() {
+        assert_eq!(item["workspace"]["id"], home_id);
+        assert!(
+            home_notice_ids
+                .iter()
+                .any(|id| item["refs"]["notice_id"].as_str() == Some(id.as_str()))
+        );
+    }
+
+    let first_cursor = first["cursor"]["next"].as_str().unwrap();
+    let second = query(
+        &home,
+        json!({"kind": "notice_open", "limit": 50, "since": first_cursor}),
+    );
+    assert_eq!(second["counts"]["matching"], 1);
+    assert_eq!(second["counts"]["returned"], 1);
+    assert_eq!(second["counts"]["unchanged"], 50);
+    assert_eq!(second["cursor"]["status"], "accepted");
+    assert!(second["degraded"].as_array().unwrap().is_empty());
+    let second_cursor = second["cursor"]["next"].as_str().unwrap();
+    let settled = query(
+        &home,
+        json!({"kind": "notice_open", "limit": 50, "since": second_cursor}),
+    );
+    assert_eq!(settled["counts"]["matching"], 0);
+    assert_eq!(settled["counts"]["returned"], 0);
+    assert_eq!(settled["counts"]["unchanged"], 51);
+    assert!(settled["degraded"].as_array().unwrap().is_empty());
+
+    let filtered = query(
+        &home,
+        json!({"kind": "notice_open", "severity": "medium", "limit": 100}),
+    );
+    assert_eq!(filtered["counts"]["matching"], 0);
+    assert!(filtered["items"].as_array().unwrap().is_empty());
+    assert!(filtered["degraded"].as_array().unwrap().is_empty());
+
+    drop(home);
+    drop(other);
+    let capped_home = runtime_at_roots_config(&global, &home_root, &attention_notice_config(40));
+    let capped = query(&capped_home, json!({"kind": "notice_open", "limit": 100}));
+    assert_eq!(capped["counts"]["returned"], 40);
+    assert_eq!(capped["items"].as_array().map(Vec::len), Some(40));
+    assert!(
+        capped["degraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| { entry["kind"] == "notice_open" && entry["code"] == "item_cap" })
+    );
 }
 
 /// A notice in one workspace may link a task in another workspace the
@@ -1273,4 +1379,5 @@ crate::scenario_table!(
     close_preserves_corroboration_committed_after_close_read,
     linked_task_this_owner_does_not_hold_is_refused,
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
+    attention_reads_all_home_notices_and_pages_them_without_foreign_globals,
 );

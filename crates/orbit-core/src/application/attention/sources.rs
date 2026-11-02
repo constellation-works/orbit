@@ -482,8 +482,14 @@ fn notice_attention_items(
     host: &AttentionHost,
     now: DateTime<Utc>,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
-    use crate::application::notice::NoticeListFilter;
-    let listing = runtime.list_notices(&NoticeListFilter::default())?;
+    use crate::application::notice::{NoticeListFilter, NoticeStatusFilter};
+    let listing = runtime.list_notices(&NoticeListFilter {
+        status: NoticeStatusFilter::Open,
+        include_global: false,
+        all_workspaces: false,
+        limit: None,
+        ..NoticeListFilter::default()
+    })?;
     let mut items = Vec::new();
     for notice in &listing.notices {
         if notice.status != EffectiveStatus::Open || notice.workspace.id != workspace.id {
