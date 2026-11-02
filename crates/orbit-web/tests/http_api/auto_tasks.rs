@@ -813,3 +813,134 @@ fn list_latency_4000_tasks() {
         }
     });
 }
+
+/// ORB-21174 preserves the HTTP row contract while moving its projection to Core.
+#[test]
+fn listing_profile_preserves_http_fields_and_condition_presence() {
+    isolated(
+        "auto_tasks::listing_profile_preserves_http_fields_and_condition_presence",
+        || {
+            let fixture = Fixture::new();
+            let secret = format!("ghp_{}", "a".repeat(36));
+            let raw = format!("  {secret} {}  ", "π".repeat(2200));
+            let mut definitions = Vec::new();
+            for (name, schedule, dedupe) in [
+                (
+                    "profile-interval",
+                    AutoTaskSchedule::every_minutes(60),
+                    DedupePolicy::Always,
+                ),
+                (
+                    "profile-condition",
+                    serde_json::from_value(json!({"condition":{"scope":"task","when":"'profile-fixture' in task.tags"}}))
+                        .unwrap(),
+                    DedupePolicy::SkipIfOpen,
+                ),
+            ] {
+                definitions.push(
+                    fixture
+                        .runtime
+                        .auto_task_add(AutoTaskAddParams {
+                            name: name.into(),
+                            description: raw.clone(),
+                            schedule,
+                            template: AutoTaskTemplate {
+                                title: raw.clone(),
+                                description: "Omitted HTTP body".into(),
+                                acceptance_criteria: vec!["Profile preserved".into()],
+                                task_type: TaskType::Chore,
+                                tags: vec!["profile".into()],
+                                required_tools: vec![],
+                                context_files: vec![],
+                                priority: TaskPriority::High,
+                                complexity: Some(orbit_types::task::TaskComplexity::Low),
+                                crew: None,
+                                status: TaskStatus::Proposed,
+                            },
+                            dedupe,
+                        })
+                        .unwrap(),
+                );
+            }
+            let server = fixture.server(true);
+            let page = json_ok(server.get(URL));
+            for definition in definitions {
+                let row = page["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == definition.name)
+                    .unwrap();
+                let mut keys = row
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                assert_eq!(
+                    keys,
+                    vec![
+                        "automation",
+                        "condition",
+                        "dedupe",
+                        "description",
+                        "effective_enabled",
+                        "enabled",
+                        "inactive_plugin",
+                        "last_evaluation",
+                        "last_minted_task_id",
+                        "last_minted_task_status",
+                        "may_create_open_duplicate",
+                        "name",
+                        "next_evaluation",
+                        "open_duplicate",
+                        "plugin_inactive",
+                        "schedule",
+                        "schedule_summary",
+                        "skipped_reason",
+                        "template",
+                        "template_summary"
+                    ]
+                );
+                assert_eq!(row["description"], raw);
+                assert_eq!(row["enabled"], definition.enabled);
+                assert_eq!(row["effective_enabled"], definition.enabled);
+                assert_eq!(row["schedule"], json!(definition.schedule));
+                assert_eq!(
+                    row["template"],
+                    json!({"title":raw,"crew":null,"status":"proposed","priority":"high","complexity":"low","required_tools":[]})
+                );
+                assert_eq!(
+                    row["template_summary"],
+                    format!("[auto-task] {raw} · status proposed · priority high · complexity low")
+                );
+                assert_eq!(row["plugin_inactive"], false);
+                assert_eq!(row["open_duplicate"], false);
+                assert_eq!(row["may_create_open_duplicate"], false);
+                for field in [
+                    "automation",
+                    "inactive_plugin",
+                    "skipped_reason",
+                    "last_evaluation",
+                    "last_minted_task_id",
+                    "last_minted_task_status",
+                ] {
+                    assert!(row[field].is_null(), "{row}");
+                }
+                if definition.name == "profile-condition" {
+                    assert!(row["condition"].is_object(), "{row}");
+                    assert_eq!(row["dedupe"], "skip_if_open");
+                    assert_eq!(
+                        row["schedule_summary"],
+                        "task condition: 'profile-fixture' in task.tags"
+                    );
+                } else {
+                    assert!(row["condition"].is_null(), "{row}");
+                    assert_eq!(row["dedupe"], "always");
+                    assert_eq!(row["schedule_summary"], "every 60 minutes");
+                }
+            }
+        },
+    );
+}

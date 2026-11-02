@@ -19,6 +19,7 @@ mod pilot_presence;
 mod pilot_reservation;
 mod pins;
 pub(crate) mod preparation;
+pub mod projection;
 mod provider;
 mod recovery;
 mod reset;

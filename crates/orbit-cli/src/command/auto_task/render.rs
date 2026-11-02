@@ -106,7 +106,6 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
             let enabled = row["effective_enabled"].as_bool() == Some(true);
             (!filter.enabled_only || enabled) && (!filter.disabled_only || !enabled)
         })
-        .map(with_listing_markers)
         .collect();
 
     let mut table = Table::new(vec![
@@ -193,18 +192,6 @@ fn condition_notice(name: &str, condition: &Value) -> String {
     line
 }
 
-/// The tool marks only an inactive or skipped definition; the CLI record
-/// always carries the markers.
-fn with_listing_markers(mut record: Value) -> Value {
-    if let Some(object) = record.as_object_mut() {
-        object
-            .entry("plugin_inactive")
-            .or_insert(Value::Bool(false));
-        object.entry("skipped_reason").or_insert(Value::Null);
-    }
-    record
-}
-
 fn state_label(record: &Value) -> &'static str {
     if is_plugin_inactive(record) {
         "inactive"
@@ -222,7 +209,8 @@ fn is_plugin_inactive(record: &Value) -> bool {
 }
 
 fn show(value: Value) -> CommandOut {
-    let mut doc = with_listing_markers(value);
+    let mut doc = orbit_core::application::auto_tasks::projection::AutoTaskListingProfile::Cli
+        .project_auto_task_tool_document(value);
     if let Some(object) = doc.as_object_mut() {
         object.entry("inactive_plugin").or_insert(Value::Null);
     }

@@ -18,16 +18,15 @@ use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::WaiveBatchRequest;
 use orbit_types::workflow::automation::recovery::{RecoveryRequest, ResetRequest};
-use orbit_types::workflow::{
-    AutoTaskCursor, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
-};
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::projection::{self, AutoTaskListingProfile};
 use crate::application::auto_tasks::{
     AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskTemplatePatch, AutoTaskUpdateParams,
-    ListedAutoTask, cursor_state_path, load_cursor_state,
+    cursor_state_path, load_cursor_state,
 };
 
 /// Run one auto-task verb.
@@ -89,229 +88,9 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         .auto_task_listing_state(include_inactive_plugins, chrono::Utc::now())?
         .rows
         .iter()
-        .map(|row| {
-            let mut listed = listed_json(
-                &row.listed,
-                row.effective_enabled,
-                row.skipped_reason.as_deref(),
-            )?;
-            listed["last_fire"] =
-                last_fire_json(runtime, &row.listed.definition, row.cursor.as_ref())?;
-            if let Some(condition) = condition_listing_json(runtime, &row.listed.definition) {
-                listed["condition"] = condition;
-            }
-            Ok(listed)
-        })
+        .map(|row| runtime.project_auto_task_listing_row(row, AutoTaskListingProfile::Tool))
         .collect::<Result<Vec<Value>, OrbitError>>()?;
     Ok(Value::Array(array))
-}
-
-/// A condition definition's listing: ownership, counts, any stall, and the
-/// last fire and skip. A host that cannot read it lists the reason instead.
-fn condition_listing_json(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-) -> Option<Value> {
-    match runtime.auto_task_condition_listing(definition) {
-        Ok(listing) => listing.map(|listing| serde_json::to_value(listing).unwrap_or(Value::Null)),
-        Err(error) => Some(json!({"unavailable": error.to_string()})),
-    }
-}
-
-/// Project only the latest scheduler fire or recorded precondition skip.
-fn last_fire_json(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-    cursor: Option<&AutoTaskCursor>,
-) -> Result<Value, OrbitError> {
-    // Delivery schedules never write the time cursor, so their latest fire
-    // lives in scheduler-owned automation state and receipts instead. A
-    // leftover cursor from an earlier time schedule must not shadow it.
-    if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
-        return delivery_last_fire_json(runtime, definition);
-    }
-    // A condition mints through its fire records, never the slot cursor.
-    if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
-        let listing = runtime
-            .auto_task_condition_listing(definition)
-            .ok()
-            .flatten();
-        let fire = listing
-            .as_ref()
-            .and_then(|listing| listing.last_fire.clone());
-        let skip = listing.and_then(|listing| listing.last_skip);
-        return Ok(match (fire, skip) {
-            (Some(fire), Some(skip)) if skip.at > fire.observed_at => json!({
-                "kind": "skipped",
-                "at": skip.at.to_rfc3339(),
-                "skip_reason": skip.reason,
-            }),
-            (Some(fire), _) => match fire.action_id {
-                Some(task) => fired_json(runtime, fire.observed_at.to_rfc3339(), Some(task))?,
-                None => json!({
-                    "kind": "fired",
-                    "at": fire.observed_at.to_rfc3339(),
-                    "fire_state": fire.state,
-                }),
-            },
-            (None, Some(skip)) => json!({
-                "kind": "skipped",
-                "at": skip.at.to_rfc3339(),
-                "skip_reason": skip.reason,
-            }),
-            (None, None) => Value::Null,
-        });
-    }
-    let Some(cursor) = cursor else {
-        return Ok(Value::Null);
-    };
-    if let Some(skip) = &cursor.last_skip {
-        return Ok(json!({
-            "kind": "skipped",
-            "at": skip.at,
-            "skip_reason": skip.reason,
-        }));
-    }
-    let Some(at) = &cursor.last_fired_at else {
-        return Ok(Value::Null);
-    };
-    fired_json(runtime, at.clone(), cursor.last_task_id.clone())
-}
-
-/// The latest delivery fire from scheduler-owned records: the active
-/// batch's latest minted task, including during retry backoff, or the
-/// newest accepted receipt's task. Only bounded time/task/status fields are projected;
-/// no run ids, logs or step output are read.
-fn delivery_last_fire_json(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-) -> Result<Value, OrbitError> {
-    // Without a registered machine identity this host owns no delivery
-    // consumer, so it cannot have a delivery fire to report.
-    let Ok(consumer) =
-        crate::application::automation::consumer_key(runtime, "auto-task", &definition.name)
-    else {
-        return Ok(Value::Null);
-    };
-    let store = runtime.automation_store()?;
-    let state = store.automation_state(&consumer)?;
-    let active = if let Some(attempt) = state.as_ref().and_then(|state| state.active.as_ref()) {
-        let tasks = runtime.stores().tasks();
-        let task_id = if let Some(id) = &attempt.action_id {
-            Some(id.clone())
-        } else if let Some(task) = tasks.automation_task_for_key(&attempt.action_key)? {
-            Some(task.id)
-        } else if attempt.attempt > 1
-            && (attempt.retry_after.is_some() || attempt.reissue.is_some())
-        {
-            let key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt - 1);
-            tasks
-                .automation_task_for_key(&key)?
-                .map(|task| task.id)
-                .or_else(|| {
-                    attempt
-                        .reissue
-                        .as_ref()
-                        .and_then(|reissue| reissue.from_action_id.clone())
-                })
-        } else {
-            None
-        };
-        task_id.map(|id| (attempt.batch.created_at, id))
-    } else {
-        None
-    };
-    // Receipts return newest first, so one row bounds the completed case.
-    let receipt = store
-        .automation_receipts(&consumer, 1)?
-        .into_iter()
-        .next()
-        .map(|receipt| (receipt.accepted_at, receipt.action_id));
-    // Compare the actual fire times when tasks still exist; a receipt may
-    // have been accepted after the newer batch was frozen.
-    let fire_time =
-        |record: &(chrono::DateTime<chrono::Utc>, String)| match runtime.get_task(&record.1) {
-            Ok(task) => Ok(task.created_at),
-            Err(OrbitError::NotFound { .. }) => Ok(record.0),
-            Err(error) => Err(error),
-        };
-    let latest = match (active, receipt) {
-        (Some(active), Some(receipt)) => {
-            if fire_time(&active)? >= fire_time(&receipt)? {
-                Some(active)
-            } else {
-                Some(receipt)
-            }
-        }
-        (Some(active), None) => Some(active),
-        (None, Some(receipt)) => Some(receipt),
-        (None, None) => None,
-    };
-    let Some((recorded_at, task_id)) = latest else {
-        return Ok(Value::Null);
-    };
-    // Prefer the minted task's own creation time (the actual fire time,
-    // including a reissued attempt over an older batch); the recorded
-    // batch/receipt time is the fallback when the task is gone.
-    match runtime.get_task(&task_id) {
-        Ok(task) => Ok(json!({
-            "kind": "fired",
-            "at": task.created_at,
-            "task_id": task_id,
-            "task_status": task.status,
-        })),
-        Err(OrbitError::NotFound { .. }) => Ok(json!({
-            "kind": "fired",
-            "at": recorded_at,
-            "task_id": task_id,
-            "task_status": Value::Null,
-        })),
-        Err(error) => Err(error),
-    }
-}
-
-fn fired_json(
-    runtime: &OrbitRuntime,
-    at: String,
-    task_id: Option<String>,
-) -> Result<Value, OrbitError> {
-    let task_status = match task_id.as_deref() {
-        Some(task_id) => match runtime.get_task(task_id) {
-            Ok(task) => Some(task.status),
-            Err(OrbitError::NotFound { .. }) => None,
-            Err(error) => return Err(error),
-        },
-        None => None,
-    };
-    Ok(json!({
-        "kind": "fired",
-        "at": at,
-        "task_id": task_id,
-        "task_status": task_status,
-    }))
-}
-
-/// The canonical definition record, plus the inactive-plugin marker when its
-/// seeding plugin is off here and the reason when it never fires here. A
-/// live definition is the bare record.
-fn listed_json(
-    listed: &ListedAutoTask,
-    effective_enabled: bool,
-    skipped_reason: Option<&str>,
-) -> Result<Value, OrbitError> {
-    let mut value = to_json(&listed.definition)?;
-    value["effective_enabled"] = json!(effective_enabled);
-    let Some(object) = value.as_object_mut() else {
-        return Ok(value);
-    };
-    if let Some(inactive) = &listed.inactive_plugin {
-        object.insert("plugin_inactive".to_string(), json!(true));
-        object.insert("inactive_plugin".to_string(), json!(inactive));
-    }
-    if let Some(reason) = skipped_reason {
-        object.insert("skipped_reason".to_string(), json!(reason));
-    }
-    Ok(value)
 }
 
 /// One definition with the diagnostics that explain why it did or did not
@@ -322,7 +101,7 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     let definition = existing_definition(runtime, &name)?;
     // A definition listings hide still resolves here, marked inactive.
     let listed = runtime.listed_auto_task(definition);
-    let mut value = listed_json(
+    let mut value = projection::auto_task_definition_document(
         &listed,
         runtime.auto_task_enabled(&listed.definition),
         listed.skipped_reason.as_deref(),
@@ -356,7 +135,7 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     {
         value["crew_overridden"] = json!(note);
     }
-    if let Some(condition) = condition_listing_json(runtime, &definition) {
+    if let Some(condition) = projection::auto_task_condition_document(runtime, &definition) {
         value["condition"] = condition;
     }
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
