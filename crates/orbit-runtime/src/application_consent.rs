@@ -211,9 +211,14 @@ pub(crate) fn validate_constrained_fields(
             ));
         }
     }
-    if builtin_fields.is_some() && !fields.contains_key("id") {
+    let identity = if matches!(tool, "orbit.auto_task.add" | "orbit.auto_task.update") {
+        "name"
+    } else {
+        "id"
+    };
+    if builtin_fields.is_some() && !fields.contains_key(identity) {
         return Err(OrbitError::InvalidInput(format!(
-            "application operation `{tool}` must constrain `id`"
+            "application operation `{tool}` must constrain `{identity}`"
         )));
     }
     validate_builtin_field_rules(tool, fields)
@@ -350,6 +355,54 @@ fn validate_builtin_field_rules(
         ))
     };
     match tool {
+        "orbit.auto_task.add" => {
+            for (field, constraint) in fields {
+                if field != "workspace"
+                    && !matches!(
+                        constraint.required_form(),
+                        ApplicationConstraint::ArtifactJson(_)
+                    )
+                {
+                    return Err(refuse(
+                        field,
+                        "must be bound through `artifact_json`".into(),
+                    ));
+                }
+            }
+            for field in ["name", "schedule", "template"] {
+                if !matches!(
+                    fields.get(field),
+                    Some(ApplicationConstraint::ArtifactJson(_))
+                ) {
+                    return Err(refuse(field, "requires `artifact_json`".into()));
+                }
+            }
+            Ok(())
+        }
+        "orbit.auto_task.update" => {
+            if !matches!(
+                fields.get("name"),
+                Some(ApplicationConstraint::ArtifactJson(_))
+            ) {
+                return Err(refuse("name", "requires `artifact_json`".into()));
+            }
+            match fields
+                .get("enabled")
+                .map(ApplicationConstraint::required_form)
+            {
+                None | Some(ApplicationConstraint::ArtifactJson(_)) => Ok(()),
+                Some(ApplicationConstraint::Const(Value::Bool(_))) => Ok(()),
+                Some(ApplicationConstraint::OneOf(values))
+                    if values.iter().all(Value::is_boolean) =>
+                {
+                    Ok(())
+                }
+                _ => Err(refuse(
+                    "enabled",
+                    "must constrain a boolean or bind through `artifact_json`".into(),
+                )),
+            }
+        }
         "orbit.task.update" => {
             let Some(status) = fields.get("status") else {
                 return Ok(());

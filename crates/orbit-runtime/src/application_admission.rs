@@ -40,6 +40,7 @@ pub(crate) struct ConstrainedAdmission {
 pub(crate) struct CallbackBindings<'a> {
     pub(crate) bindings: &'a BTreeMap<String, Value>,
     pub(crate) pinned_task: Option<&'a str>,
+    pub(crate) predicate: Option<&'a ApplicationPredicateEvidence>,
 }
 
 /// The first field of a constrained operation that failed, and why. The
@@ -190,9 +191,26 @@ impl FieldCheck<'_> {
                             .pinned_task
                             .is_none_or(|pinned| value.as_str() == Some(pinned)))
             }),
-            // Artifact pointers are admitted from slice 5; nested optionals
-            // are refused at consent.
-            ApplicationConstraint::ArtifactJson(_) | ApplicationConstraint::Optional(_) => false,
+            ApplicationConstraint::ArtifactJson(pointer) => {
+                match self.callback.and_then(|callback| callback.predicate) {
+                    Some(evidence) => match evidence.artifact.as_ref() {
+                        Some(artifact) if artifact.path == pointer.path => self
+                            .kernel
+                            .digest_bound_artifact_json(
+                                &evidence.task,
+                                &artifact.path,
+                                &artifact.sha256,
+                            )
+                            .ok()
+                            .flatten()
+                            .is_some_and(|json| json.pointer(&pointer.pointer) == Some(value)),
+                        _ => false,
+                    },
+                    None => false,
+                }
+            }
+            // Nested optionals are refused at consent.
+            ApplicationConstraint::Optional(_) => false,
         };
         if passed { Ok(Ok(())) } else { refuse() }
     }

@@ -217,7 +217,17 @@ impl OrbitRuntime {
     /// with the other definition writers. Settings failures publish no file.
     pub fn auto_task_add(
         &self,
+        params: AutoTaskAddParams,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        let actor = self.actor().resolve_write_label(None, None)?;
+        self.auto_task_add_with_actor(params, actor)
+    }
+
+    /// Ordinary creation with attribution supplied by a trusted dispatch.
+    pub(crate) fn auto_task_add_with_actor(
+        &self,
         mut params: AutoTaskAddParams,
+        actor: String,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
@@ -226,7 +236,6 @@ impl OrbitRuntime {
             params.template.required_tools =
                 normalize_required_tools(params.template.required_tools);
             let now = chrono::Utc::now().to_rfc3339();
-            let actor = self.actor().resolve_write_label(None, None)?;
             let definition = AutoTaskDefinition {
                 schema_version: AUTO_TASK_SCHEMA_VERSION,
                 name: params.name,
@@ -631,12 +640,36 @@ impl OrbitRuntime {
         name: &str,
         edit: impl FnOnce(&mut AutoTaskDefinition) -> Result<(), OrbitError>,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        let actor = self.actor().resolve_write_label(None, None)?;
+        self.edit_auto_task_with_actor(name, actor, edit)
+    }
+
+    /// Only an enabled-state edit is available to an admitted application.
+    pub(crate) fn auto_task_update_as_application(
+        &self,
+        name: &str,
+        enabled: bool,
+        actor: String,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.edit_auto_task_with_actor(name, actor, |definition| {
+            definition.enabled = enabled;
+            Ok(())
+        })
+    }
+
+    fn edit_auto_task_with_actor(
+        &self,
+        name: &str,
+        actor: String,
+        edit: impl FnOnce(&mut AutoTaskDefinition) -> Result<(), OrbitError>,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
             let mut definition = self.require_validated_auto_task(name)?;
             let before = definition.clone();
             edit(&mut definition)?;
-            definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
+            definition.updated_by = Some(actor);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
             self.refuse_condition_enable_storm(&before, &definition)?;

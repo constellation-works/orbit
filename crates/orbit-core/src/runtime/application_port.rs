@@ -28,15 +28,15 @@ impl ApplicationPort for CoreApplicationPort {
         OrbitRuntime::get_task(OrbitRuntime::from_kernel_ref(kernel), id)
     }
 
-    fn task_artifact_sha256(
+    fn task_artifact_content(
         &self,
         kernel: &RuntimeKernel,
         id: &str,
         path: &str,
-    ) -> Result<Option<String>, OrbitError> {
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
         Ok(
             OrbitRuntime::get_task_artifact(OrbitRuntime::from_kernel_ref(kernel), id, path)?
-                .map(|artifact| orbit_common::security::release::sha256_hex(&artifact.content)),
+                .map(|artifact| artifact.content),
         )
     }
 

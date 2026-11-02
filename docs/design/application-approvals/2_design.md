@@ -281,7 +281,8 @@ A closed table in `crates/orbit-common/src/governance/authorization/catalog.rs`
 may narrow a ceiling, never exceed it. Consent-time validation checks every scope
 against it, and admission checks again. Each row also keeps the v1 exact-form key list
 (`exact_fields`): `orbit.task.update` and `orbit.decision.answer` only, unchanged. The
-`orbit.auto_task.*` rows join the table in slice 5; until then they are refused.
+`orbit.auto_task.add` and `orbit.auto_task.update` are callback-only rows, implemented
+in slice 5. Neither operation admits the v1 exact form or an application entry.
 
 | Tool | Entry | Callback | Fields at most | Status targets at most |
 |---|---|---|---|---|
@@ -289,8 +290,8 @@ against it, and admission checks again. Each row also keeps the v1 exact-form ke
 | `orbit.decision.answer` | yes (exact only) | yes (exact only) | `id`, `answer`, `note`, `workspace` | — |
 | `orbit.task.show` | no | yes | `id`, `fields` (subset of `id`, `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at`, `execution_summary`), `workspace` | — |
 | `orbit.task.artifact.get` | no | yes | `id`, `path` (`const` only), `workspace` | — |
-| `orbit.auto_task.add` | no | yes, slice 5 | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
-| `orbit.auto_task.update` | no | yes, slice 5 | `name` (`artifact_json`), `enabled`, `workspace` | — |
+| `orbit.auto_task.add` | no | yes | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
+| `orbit.auto_task.update` | no | yes | `name` (`artifact_json`), `enabled` (a consented boolean or `artifact_json`), `workspace` | — |
 | plugin tool | yes | no (plugins cannot call plugins) | declared input schema | — |
 
 `orbit.task.update` targets `in-progress`, `review` and `backlog` only through a
@@ -435,6 +436,14 @@ Execution (**new**, `crates/orbit-core/src/application/application_authority.rs`
   closes the gap between step 6 and the read.
 - `orbit.auto_task.add` and `update` (slice 5) run the ordinary handlers as
   `application:<id>`. Their own catalogue rows and floors still apply.
+  Creation uses the same schedule, template, required-tool validation and cursor
+  lock as ordinary creation. Update uses the locked enabled-state edit and never
+  accepts `expected_enabled` or definition-body changes. Definition attribution
+  and the enclosing callback audit identify the application.
+  The `artifact_json` evaluator loads the entry-bound task's artifact, verifies
+  those same bytes against the entry digest before parsing JSON, then compares
+  the field value at its RFC 6901 pointer. Missing artifacts or pointers, invalid
+  JSON and changed digests refuse admission before mutation.
 
 Host route (**new**): an app-bound session sends every consented callback tool to the
 host, not only the two completion tools. The routed set is the ceiling table's callback

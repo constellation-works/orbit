@@ -84,8 +84,7 @@ pub struct ApplicationOperationCeiling {
 
 /// The closed built-in application-consent ceiling table, currently listing
 /// `orbit.task.update`, `orbit.decision.answer`, `orbit.task.show` and
-/// `orbit.task.artifact.get`. The `orbit.auto_task.add` and `update` rows are
-/// not present yet and remain refused until slice 5.
+/// `orbit.task.artifact.get` and the payload-bound auto-task callbacks.
 pub const APPLICATION_OPERATION_CEILINGS: &[ApplicationOperationCeiling] = &[
     ApplicationOperationCeiling {
         tool: "orbit.task.update",
@@ -122,6 +121,27 @@ pub const APPLICATION_OPERATION_CEILINGS: &[ApplicationOperationCeiling] = &[
         constrained_entry: false,
         constrained_callback: true,
         constrained_fields: &["id", "path", "workspace"],
+    },
+    ApplicationOperationCeiling {
+        tool: "orbit.auto_task.add",
+        exact_fields: &[],
+        constrained_entry: false,
+        constrained_callback: true,
+        constrained_fields: &[
+            "name",
+            "description",
+            "schedule",
+            "template",
+            "dedupe",
+            "workspace",
+        ],
+    },
+    ApplicationOperationCeiling {
+        tool: "orbit.auto_task.update",
+        exact_fields: &[],
+        constrained_entry: false,
+        constrained_callback: true,
+        constrained_fields: &["name", "enabled", "workspace"],
     },
 ];
 

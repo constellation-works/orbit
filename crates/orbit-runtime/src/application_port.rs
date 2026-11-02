@@ -30,15 +30,14 @@ use crate::RuntimeKernel;
 /// owns it. Implemented once, by `orbit-core`'s composition root.
 pub trait ApplicationPort: Send + Sync {
     fn get_task(&self, kernel: &RuntimeKernel, id: &str) -> Result<Task, OrbitError>;
-    /// Lowercase hex SHA-256 of a task artifact's stored bytes (the bytes
-    /// `orbit.task.artifact.get` returns); `None` when the task has no
-    /// artifact at `path`.
-    fn task_artifact_sha256(
+    /// A task artifact's stored bytes (the bytes `orbit.task.artifact.get`
+    /// returns); `None` when the task has no artifact at `path`.
+    fn task_artifact_content(
         &self,
         kernel: &RuntimeKernel,
         id: &str,
         path: &str,
-    ) -> Result<Option<String>, OrbitError>;
+    ) -> Result<Option<Vec<u8>>, OrbitError>;
     fn get_task_history(
         &self,
         kernel: &RuntimeKernel,
@@ -169,7 +168,32 @@ impl RuntimeKernel {
         id: &str,
         path: &str,
     ) -> Result<Option<String>, OrbitError> {
-        self.application.task_artifact_sha256(self, id, path)
+        Ok(self
+            .task_artifact_content(id, path)?
+            .map(|bytes| orbit_common::security::release::sha256_hex(&bytes)))
+    }
+
+    pub(crate) fn task_artifact_content(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        self.application.task_artifact_content(self, id, path)
+    }
+
+    pub(crate) fn digest_bound_artifact_json(
+        &self,
+        id: &str,
+        path: &str,
+        sha256: &str,
+    ) -> Result<Option<Value>, OrbitError> {
+        let Some(bytes) = self.task_artifact_content(id, path)? else {
+            return Ok(None);
+        };
+        if orbit_common::security::release::sha256_hex(&bytes) != sha256 {
+            return Ok(None);
+        }
+        Ok(serde_json::from_slice(&bytes).ok())
     }
 
     pub(crate) fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {

@@ -520,6 +520,7 @@ impl RuntimeKernel {
                         let bindings = CallbackBindings {
                             bindings: &invocation.bindings,
                             pinned_task: invocation.pinned_task.as_deref(),
+                            predicate: invocation.predicate.as_ref(),
                         };
                         match evaluate_constrained(
                             self,

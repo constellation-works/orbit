@@ -1,10 +1,28 @@
 //! Built-in operations reached only after application consent admitted the call.
 
+use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::{OrbitRuntime, application::task::TaskUpdateParams};
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use serde::Deserialize;
 use serde_json::Value;
+
+/// The callback's payload uses the ordinary auto-task creation types.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationAutoTaskAdd {
+    name: String,
+    #[serde(default)]
+    description: String,
+    schedule: AutoTaskSchedule,
+    template: AutoTaskTemplate,
+    #[serde(default)]
+    dedupe: DedupePolicy,
+    #[serde(rename = "workspace")]
+    _workspace: Option<String>,
+}
 
 impl OrbitRuntime {
     pub(crate) fn execute_application_builtin(
@@ -42,6 +60,42 @@ impl OrbitRuntime {
             invocation.consent.consent_provenance
         );
         match tool {
+            "orbit.auto_task.add" if invocation.callback => {
+                let payload: ApplicationAutoTaskAdd = serde_json::from_value(input.clone())
+                    .map_err(|_| {
+                        OrbitError::InvalidInput("invalid application auto-task payload".into())
+                    })?;
+                let definition = self.auto_task_add_with_actor(
+                    AutoTaskAddParams {
+                        name: payload.name,
+                        description: payload.description,
+                        schedule: payload.schedule,
+                        template: payload.template,
+                        dedupe: payload.dedupe,
+                    },
+                    actor,
+                )?;
+                Ok(Some(
+                    serde_json::to_value(definition)
+                        .map_err(|error| OrbitError::Io(error.to_string()))?,
+                ))
+            }
+            "orbit.auto_task.update" if invocation.callback => {
+                let enabled = input
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(
+                            "application auto-task update needs boolean `enabled`".into(),
+                        )
+                    })?;
+                let definition =
+                    self.auto_task_update_as_application(&required("name")?, enabled, actor)?;
+                Ok(Some(
+                    serde_json::to_value(definition)
+                        .map_err(|error| OrbitError::Io(error.to_string()))?,
+                ))
+            }
             "orbit.task.update" => {
                 let status = string("status")?
                     .map(|status| {
