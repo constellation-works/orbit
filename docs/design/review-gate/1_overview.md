@@ -2,7 +2,7 @@
 title: Review Gate — Overview
 owner: codex
 last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 status: Implemented
 stage: shipped
 next: "Operator chooses observe or enforce; symbol triggers stay deferred"

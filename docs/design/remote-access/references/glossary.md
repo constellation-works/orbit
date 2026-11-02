@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Remote Access"
-last_validated: 2026-10-30
+last_validated: 2026-11-02
 tags: [remote-access]
 ---
 
