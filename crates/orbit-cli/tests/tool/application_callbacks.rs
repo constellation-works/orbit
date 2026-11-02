@@ -519,3 +519,157 @@ fn application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_
     std::fs::write(next.path(), record.to_string()).unwrap();
     succeeds(&run(&next, "orbit.task.show", &show(&second)));
 }
+
+/// Persist one more callback row: a copy of `template` under `execution_id`,
+/// with its application object replaced by `application`.
+fn copy_callback_row(
+    conn: &rusqlite::Connection,
+    template: i64,
+    execution_id: &str,
+    application: &str,
+) -> i64 {
+    conn.execute(
+        "INSERT INTO audit_events (execution_id, timestamp, command, tool_name, role, \
+         status, exit_code, duration_ms, working_directory, pid, application_json) \
+         SELECT ?2, timestamp, command, tool_name, role, status, exit_code, \
+                duration_ms, working_directory, pid, ?3 \
+         FROM audit_events WHERE id = ?1",
+        rusqlite::params![template, execution_id, application],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// An entry with more callback rows than `audit show` displays says so and
+/// lists the newest 100. The refused callback is the oldest row, so it is the
+/// one left out, and a callback of another entry is never listed.
+#[test]
+fn audit_show_marks_callback_list_incomplete_past_display_limit() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "audit_show_marks_callback_list_incomplete_past_display_limit",
+    ) {
+        return;
+    }
+    // One more than the 100-row display limit.
+    const PERSISTED_CALLBACKS: usize = 101;
+
+    let fixture = Fixture::new();
+    let accepted = proposal_task(&fixture, "Overflow accept", PAYLOAD);
+    let other = proposal_task(&fixture, "Overflow other", PAYLOAD);
+    let show = json!({"id": accepted, "fields": ["id", "status", "tags"]});
+    let other_show = json!({"id": other, "fields": ["status"]});
+    // The first callback is refused: the entry binds `accepted`, not `other`.
+    let script = format!(
+        r#"#!/bin/sh
+cat >/dev/null
+run() {{ orbit tool run "$1" --input "$2" --format json; }}
+if run orbit.task.show '{other_show}' >/dev/null 2>&1; then exit 71; fi
+run orbit.task.show '{show}' >/dev/null || exit 72
+printf '{{"ok":true,"output":{{"accepted":"overflow-ok"}}}}\n'
+"#
+    );
+    let plugin = install_proposal_plugin(&fixture, &script);
+    let request = json!({
+        "application_id": "office-app",
+        "expires_at": expires_in(7),
+        "scopes": [accept_scope(&plugin)],
+    });
+    let (_, credential) = consent(&fixture, &request, "callback-overflow", None);
+    let entry = json!({"id": accepted, "sha256": sha256_hex(PAYLOAD.as_bytes())});
+    let output = app_command(&fixture, &credential, "proposal.accept", &entry)
+        .assert()
+        .get_output()
+        .clone();
+    assert!(
+        output.status.success(),
+        "accept failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let conn = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    let (entry_id, entry_execution_id): (i64, String) = conn
+        .query_row(
+            "SELECT id, execution_id FROM audit_events \
+             WHERE tool_name = 'proposal.accept' AND status = 'success' \
+               AND application_json IS NOT NULL \
+             ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let callbacks_of = |entry: &str| -> Vec<i64> {
+        conn.prepare(
+            "SELECT id FROM audit_events \
+             WHERE json_extract(application_json, '$.entry_execution_id') = ?1 \
+             ORDER BY id",
+        )
+        .unwrap()
+        .query_map([entry], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    };
+
+    // The run persists the refused `orbit.task.show` first, then the success.
+    // The refusal carries the entry's execution id, so it is listed under it.
+    let ids = callbacks_of(&entry_execution_id);
+    assert_eq!(ids.len(), 2, "callbacks persisted by the run: {ids:?}");
+    let early: (String, String) = conn
+        .query_row(
+            "SELECT status, tool_name FROM audit_events WHERE id = ?1",
+            [ids[0]],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(early, ("denied".to_string(), "orbit.task.show".to_string()));
+
+    // Persist the rest as copies of the successful callback, then a callback
+    // of another entry, which is the newest row of all.
+    let template = ids[1];
+    let template_application: String = conn
+        .query_row(
+            "SELECT application_json FROM audit_events WHERE id = ?1",
+            [template],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for n in ids.len()..PERSISTED_CALLBACKS {
+        copy_callback_row(
+            &conn,
+            template,
+            &format!("overflow-copy-{n}"),
+            &template_application,
+        );
+    }
+    let mut foreign: Value = serde_json::from_str(&template_application).unwrap();
+    foreign["entry_execution_id"] = json!("overflow-foreign-entry");
+    let foreign_id = copy_callback_row(&conn, template, "overflow-foreign", &foreign.to_string());
+
+    let entry_ids = callbacks_of(&entry_execution_id);
+    assert_eq!(entry_ids.len(), PERSISTED_CALLBACKS, "{entry_ids:?}");
+
+    let shown = String::from_utf8(
+        fixture
+            .command(["audit", "show", &entry_id.to_string()])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let heading = shown
+        .lines()
+        .find(|line| line.starts_with("Callbacks"))
+        .unwrap_or("");
+    assert!(heading.contains("incomplete"), "{shown}");
+    let listed: Vec<i64> = shown
+        .lines()
+        .filter(|line| line.starts_with("  "))
+        .map(|line| line.split_whitespace().next().unwrap().parse().unwrap())
+        .collect();
+    // The newest 100 of this entry's callbacks, oldest first. The refusal is
+    // the row left out, and the other entry's callback is not listed.
+    assert_eq!(listed, entry_ids[1..].to_vec(), "{shown}");
+    assert!(!listed.contains(&foreign_id), "{shown}");
+}

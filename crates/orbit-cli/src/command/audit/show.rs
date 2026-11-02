@@ -180,7 +180,13 @@ fn write_application_audit(out: &mut String, application: &ApplicationInvocation
     }
 }
 
-/// Callback rows of this entry, oldest first. An empty page is omitted.
+/// Most callback rows `audit show` lists for one entry.
+const CALLBACK_DISPLAY_LIMIT: usize = 100;
+
+/// Callback rows of this entry, oldest first. An empty page is omitted. The
+/// newest `CALLBACK_DISPLAY_LIMIT` rows are listed; when there are more, the
+/// heading says the list is incomplete. One row past the limit is fetched only
+/// to tell those two cases apart.
 fn write_application_callbacks(
     out: &mut String,
     runtime: &OrbitRuntime,
@@ -189,14 +195,24 @@ fn write_application_callbacks(
     use std::fmt::Write as _;
     let mut callbacks = runtime.list_audit_events_filtered(&AuditEventFilter {
         application_entry_execution_id: Some(event.execution_id.clone()),
-        limit: 100,
+        limit: CALLBACK_DISPLAY_LIMIT + 1,
         ..AuditEventFilter::default()
     })?;
     if callbacks.is_empty() {
         return Ok(());
     }
+    let incomplete = callbacks.len() > CALLBACK_DISPLAY_LIMIT;
+    // The store returns newest first, so truncation drops the oldest rows.
+    callbacks.truncate(CALLBACK_DISPLAY_LIMIT);
     callbacks.reverse();
-    let _ = writeln!(out, "Callbacks:");
+    if incomplete {
+        let _ = writeln!(
+            out,
+            "Callbacks (incomplete: showing the newest {CALLBACK_DISPLAY_LIMIT}; older callbacks are not listed):"
+        );
+    } else {
+        let _ = writeln!(out, "Callbacks:");
+    }
     for callback in callbacks {
         let tool = callback.tool_name.as_deref().unwrap_or("-");
         let _ = writeln!(out, "  {} {tool} {}", callback.id, callback.status);
