@@ -1430,6 +1430,103 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     );
 }
 
+/// A regular file as stdin cannot be polled, so the session takes the plain
+/// path. Its invalid line must still be answered with the id-less `-32600`
+/// before rmcp reads it, and the following request must not wait out the
+/// client response timeout. Broken JSON and a non-standard notification
+/// still get no answer and must not steal the next read.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_non_pollable_mcp_session_answers_invalid_requests_before_rmcp_reads_them() {
+    let workspace = McpWorkspace::init();
+    let (server_stderr, stderr) = ServerStderr::create(&workspace, "non-pollable-invalid");
+    let messages = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": McpClient::initialize_params("non-pollable", Some("ws_mcp-roundtrip")),
+        }),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": "x"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
+    ];
+    let mut input_lines: Vec<String> = messages
+        .iter()
+        .map(|message| serde_json::to_string(message).expect("serialize stdin line"))
+        .collect();
+    input_lines.push("{not json".to_string());
+    for message in [
+        json!({"jsonrpc": "2.0", "id": 1004, "method": "notifications/custom", "params": "x"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}),
+    ] {
+        input_lines.push(serde_json::to_string(&message).expect("serialize stdin line"));
+    }
+    let input_path = workspace.home.join("non-pollable-stdin.jsonl");
+    std::fs::write(&input_path, format!("{}\n", input_lines.join("\n"))).expect("stdin file");
+    let input = std::fs::File::open(&input_path).expect("open stdin file");
+
+    let mut command = McpWorkspace::orbit_command(&workspace.work, &workspace.home);
+    command
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::piped())
+        .stderr(stderr);
+    let mut child = spawn_copied_orbit(&mut command).expect("non-pollable server");
+    let stdout = child.stdout.take().expect("server stdout");
+    let mut client = McpClient::over_streams(child, Box::new(std::io::sink()), Box::new(stdout));
+    let next = |client: &mut McpClient, what: &str| -> Value {
+        let line = client
+            .lines
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap_or_else(|error| {
+                panic!("{what} within 15s ({error}); {}", server_stderr.tail())
+            });
+        serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("{what}: invalid JSON ({error}): {line}"))
+    };
+
+    // The whole input is already in the file, so the pump can answer the
+    // invalid line before the service answers `initialize`. Collect the
+    // four expected frames rather than assuming an order between them.
+    let mut received = Vec::new();
+    for _ in 0..4 {
+        received.push(next(
+            &mut client,
+            "initialize, rejection and ping responses",
+        ));
+    }
+    let initialized = received
+        .iter()
+        .find(|message| message["id"] == 1)
+        .unwrap_or_else(|| panic!("no initialize response in {received:?}"));
+    assert!(
+        initialized.get("error").is_none(),
+        "initialize refused: {initialized}; {}",
+        server_stderr.tail()
+    );
+    let rejection = received
+        .iter()
+        .find(|message| message.get("id").is_none())
+        .unwrap_or_else(|| panic!("no id-less rejection in {received:?}"));
+    assert_eq!(rejection["error"]["code"], -32600, "{rejection}");
+    // Both pings answer, so the broken and compatibility lines got no
+    // `-32600` of their own and did not steal the next read.
+    for id in [2, 3] {
+        let ping = received
+            .iter()
+            .find(|message| message["id"] == id)
+            .unwrap_or_else(|| panic!("no ping {id} response in {received:?}"));
+        assert_eq!(ping["result"], json!({}), "{ping}");
+    }
+}
+
 /// A permitted image read is larger than Tokio's 2 MiB stdout chunk because
 /// the base64 is sent twice. The invalid request is written only after that
 /// many bytes of the image frame have already arrived, while its newline is
