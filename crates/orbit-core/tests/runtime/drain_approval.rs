@@ -540,6 +540,18 @@ impl Workspace {
 
     /// Apply one assessment with no promotion authority, so the task stays proposed.
     fn apply_unpromoted(&self, run_id: &str, prepared: &Value, task: &Task) -> Value {
+        self.apply_unpromoted_assessment(run_id, prepared, assessment(task))
+    }
+
+    /// Apply one supplied assessment with no promotion authority, so the
+    /// task stays proposed.
+    fn apply_unpromoted_assessment(
+        &self,
+        run_id: &str,
+        prepared: &Value,
+        assessed: Value,
+    ) -> Value {
+        let task_id = assessed["task_id"].clone();
         self.action(
             "apply_task_pilot_results",
             json!({
@@ -548,8 +560,8 @@ impl Workspace {
                 "prepared": prepared,
                 "results": [{
                     "partition_index": 0,
-                    "task_ids": [task.id],
-                    "tasks": [assessment(task)],
+                    "task_ids": [task_id],
+                    "tasks": [assessed],
                 }],
                 "promotion_authorized": false,
             }),

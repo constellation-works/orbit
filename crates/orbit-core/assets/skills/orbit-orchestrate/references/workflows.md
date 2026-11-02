@@ -218,9 +218,10 @@ empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
 proposed without blocking other pilot children. A `blocked_by` finding, or a
 holding utility or surface finding, holds unless it names prerequisites and every
-one is already done in this workspace or is enforced by a stored dependency edge.
-Free text, missing tasks and
-other-workspace prerequisites still hold. Admission decides from the edges in the atomic pilot
+one is already done — in this workspace or in another registered workspace,
+resolved through its registered owner — or is enforced by a stored dependency edge.
+Free text, missing tasks and unfinished prerequisites still hold, wherever
+they are registered. Admission decides from the edges in the atomic pilot
 write and completion statuses read under the dependency locks; replay uses
 only already stored edges. A drain rechecks named prerequisites under their
 locks before approval. `adr_conflicts`, `contract_conflicts` and deterministic
