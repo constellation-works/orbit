@@ -49,11 +49,14 @@ already found to have no in-workspace targets while that assessment is fresh;
 name its ID to audit it again.
 
 The routine selects eligible never-assessed tasks for their first automatic
-pilot. Once an assessment has applied, editing requirements does not request
-another one through the routine. The drain and scheduled discovery do queue a
-fresh pilot automatically when the description or criteria changed after the
-applied assessment and no live execution claim holds the task; a failed
-repilot holds it until its meaning changes again or an operator acts.
+pilot. For a proposed or backlog task with an applied assessment, a
+description or acceptance-criteria edit can queue a fresh pilot after the
+debounce period. A live execution claim or unresolved failed-pilot hold keeps
+it from queueing. Other material or policy edits do not queue a pilot through
+the routine; request one explicitly. The drain and scheduled discovery also
+queue a fresh pilot when the description or criteria changed after the applied
+assessment and no live execution claim holds the task; a failed repilot holds
+it until its meaning changes again or an operator acts.
 Description or criteria edits can hold dispatch as
 `pilot_assessment_stale`. After a material edit, an operator on the owner can
 also request a fresh assessment for a proposed or backlog task:
