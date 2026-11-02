@@ -7,6 +7,7 @@ use std::path::Path;
 use orbit_types::workflow::automation::members::{MemberAttempt, MemberEvidence};
 use serde_json::{Value, json};
 
+use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
 use super::super::{EXPLORE_BRIEF_REQUESTED, EXPLORE_BRIEF_TASK_IDS, member_ready};
 use super::input::{PreparedEcho, PreparedTask, Record};
@@ -188,6 +189,16 @@ impl Report<'_> {
                 });
                 if brief_requested {
                     partition[EXPLORE_BRIEF_TASK_IDS] = json!([task_id]);
+                }
+                // A re-check is repaired as a re-check, against the same input.
+                if let Some(recheck) = self
+                    .tasks
+                    .iter()
+                    .find(|task| task.fields.task_id.get() == Some(task_id))
+                    .and_then(|task| task.raw.get(RECHECK))
+                    .filter(|recheck| recheck.is_object())
+                {
+                    partition[RECHECKS] = json!({ task_id.as_str(): recheck });
                 }
                 partition
             })

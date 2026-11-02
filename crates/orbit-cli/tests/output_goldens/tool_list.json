@@ -2974,7 +2974,7 @@
   },
   {
     "name": "orbit.task.repilot",
-    "description": "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    "description": "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2991,6 +2991,12 @@
         "description": "Task to assess again",
         "param_type": "string",
         "required": true
+      },
+      {
+        "name": "full",
+        "description": "Run a full assessment instead of re-checking a held one",
+        "param_type": "boolean",
+        "required": false
       }
     ],
     "mcp_toolset": "default"

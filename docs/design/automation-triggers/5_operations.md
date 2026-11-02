@@ -2,8 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -846,7 +846,7 @@ automatic pilot. Once a task has an applied assessment, no material or policy
 edit makes it automatically due again. Request another pilot with
 `orbit task repilot <id>`, `orbit.task.repilot`, task update `repilot: true`, or a
 decision option action `re_pilot`. Description/criteria edits hold dispatch as
-`pilot_assessment_stale` until the explicitly requested assessment completes. Each key resolves routine block, then `config.toml`
+`pilot_assessment_stale` until the explicitly requested assessment completes. When the latest assessment holds promotion, that request runs as a re-check [ORB-21124]: the pilot gets the prior assessment, its holding findings and a field-level task diff, returns `resolved`, `still_holds` or `changed` per holding finding, and apply keeps the untouched prior fields under the same revision proofs (`mode: recheck`, `prior_assessment_id`). It falls back to a full assessment, recording `mode_reason`, when selector-path objects changed since the prior source revision, the title or description changed beyond a 0.6 word-set similarity, the prior is older than the `task_pilot_pipeline` input `recheck_max_age_hours` (default 72, 0 disables), the prior was itself a re-check, or the operator asked for `--full` (`full_pilot: true`). Each key resolves routine block, then `config.toml`
 `[workflow.task_pilot_freshness]`, then the default: `material_fields`
 `[title, description, criteria, plan, selectors]` and `source_sensitivity:
 ignore`. The opt-in fields are `tags`, `crew` (with the resolved

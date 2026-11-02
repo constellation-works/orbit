@@ -71,6 +71,20 @@
 # drain is live, opted in, and dispatched this run before it approves any
 # qualifying, warning-free proposed task.
 #
+# Re-check mode [ORB-21124]
+# - An explicit selection whose task's latest assessment holds promotion is
+#   re-checked, not piloted in full: prepare records `pilot_mode: recheck` on
+#   the task and passes the prior assessment, its holding findings and a
+#   field-level task diff in the partition's `rechecks`. The pilot judges each
+#   holding finding and the fields the diff invalidates; apply keeps every
+#   other prior field and validates the result like a full assessment.
+# - Prepare pilots in full, recording `pilot_mode_reason`, when the run sets
+#   `full_pilot` (`orbit task repilot --full`), the prior assessment is not
+#   held, was itself a re-check, predates the recorded basis or is older than
+#   `recheck_max_age_hours` (0 disables re-checks), its footprint paths
+#   changed since its source revision, or the title or description was
+#   rewritten or new context_files were added.
+#
 # Crew resolution
 # - The pilot steps name `workflow.purpose_crews.task_pilot` as their
 #   `crew_config_key`. The run draws one crew from that pool on the first pilot
@@ -117,6 +131,8 @@ spec:
     drain_promotion: null
     state_automation: null
     source_revision: ""
+    full_pilot: false
+    recheck_max_age_hours: 72
 
   steps:
     - id: prepare
@@ -129,6 +145,8 @@ spec:
         base_branch: "{{ input.base_branch }}"
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
+        full_pilot: "{{ input.full_pilot }}"
+        recheck_max_age_hours: "{{ input.recheck_max_age_hours }}"
 
     - id: pilot_results
       when: "{{ steps.prepare.output.partition_count }} == 0"

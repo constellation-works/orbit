@@ -91,6 +91,11 @@ pub(in crate::application::agents) struct Assessment {
     pub(in crate::application::agents) settled: Option<(DateTime<Utc>, String)>,
     /// The pilot run the receipt is attributed to, set after the scan.
     pub(in crate::application::agents) run: Option<PilotRun>,
+    /// `full` or `recheck`; a receipt written before modes was a full pilot.
+    pub(in crate::application::agents) mode: String,
+    /// A full assessment the pilot returned for a task prepared for a
+    /// re-check: that re-check needed a full pilot.
+    pub(in crate::application::agents) escalated: bool,
 }
 
 impl Assessment {
@@ -160,6 +165,11 @@ pub(in crate::application::agents) fn settle(
                 outcome,
                 settled,
                 run: None,
+                mode: body["assessment"][PILOT_MODE_FIELD]
+                    .as_str()
+                    .unwrap_or(MODE_FULL)
+                    .to_string(),
+                escalated: body["assessment"]["mode_reason"] == RECHECK_ESCALATED,
             }
         })
         .collect();
@@ -171,6 +181,95 @@ pub(in crate::application::agents) fn settle(
             .map(|entry| entry.at)
             .collect(),
     }
+}
+
+/// The assessment field naming the mode a receipt was produced in.
+const PILOT_MODE_FIELD: &str = "mode";
+const MODE_FULL: &str = "full";
+const MODE_RECHECK: &str = "recheck";
+/// The mode reason of a full assessment a re-checked task escalated to.
+const RECHECK_ESCALATED: &str = "recheck_escalated";
+
+/// One mode's pilot runs in the window: assessments, distinct runs, and
+/// those runs' durations and tokens.
+#[derive(Default)]
+struct ModeTally {
+    assessments: usize,
+    runs: BTreeMap<String, (Option<f64>, Option<u64>)>,
+}
+
+impl ModeTally {
+    fn json(&self) -> Value {
+        let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
+        let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
+        let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
+        seconds.sort_by(f64::total_cmp);
+        let median_seconds = (!seconds.is_empty()).then(|| {
+            let mid = seconds.len() / 2;
+            if seconds.len().is_multiple_of(2) {
+                (seconds[mid - 1] + seconds[mid]) / 2.0
+            } else {
+                seconds[mid]
+            }
+        });
+        json!({
+            "assessments": self.assessments,
+            "runs": self.runs.len(),
+            "median_seconds": median_seconds.map(number),
+            "total_seconds": total_seconds.map(number),
+            "total_tokens": (!tokens.is_empty()).then(|| tokens.iter().sum::<u64>()),
+            "runs_with_tokens": tokens.len(),
+        })
+    }
+}
+
+/// Task-pilot runs split by mode over the assessments written since
+/// `since`: each mode's assessments, runs, run durations and tokens, and
+/// how many re-checks needed a full pilot: re-checks a later full
+/// assessment of the same task followed, and re-check attempts the pilot
+/// escalated to a full assessment. A run that assessed tasks in both modes
+/// counts under each.
+fn pilot_modes(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
+    let mut full = ModeTally::default();
+    let mut recheck = ModeTally::default();
+    let mut followed_by_full = 0;
+    let mut escalated = 0;
+    for task in &facts.tasks {
+        let assessments = &task.warnings.assessments;
+        for (index, assessment) in assessments.iter().enumerate() {
+            if assessment.at < since {
+                continue;
+            }
+            let is_recheck = assessment.mode == MODE_RECHECK;
+            if assessment.escalated {
+                escalated += 1;
+            }
+            let tally = if is_recheck { &mut recheck } else { &mut full };
+            tally.assessments += 1;
+            if let Some(run) = &assessment.run {
+                tally
+                    .runs
+                    .insert(run.run_id.clone(), (run.seconds, run.tokens));
+            }
+            if is_recheck
+                && assessments[index + 1..]
+                    .iter()
+                    .any(|later| later.mode != MODE_RECHECK)
+            {
+                followed_by_full += 1;
+            }
+        }
+    }
+    json!({
+        MODE_FULL: full.json(),
+        MODE_RECHECK: recheck.json(),
+        "rechecks_followed_by_full": followed_by_full,
+        "rechecks_escalated_to_full": escalated,
+        // Re-check attempts (completed or escalated) that needed a full pilot.
+        "recheck_full_rate": (recheck.assessments + escalated > 0).then(|| {
+            number((followed_by_full + escalated) as f64 / (recheck.assessments + escalated) as f64)
+        }),
+    })
 }
 
 /// A write by someone other than the pilot or Orbit itself.
@@ -459,6 +558,7 @@ pub(super) fn header(facts: &AgentFacts, since: DateTime<Utc>) -> Map<String, Va
     let available = records > 0;
     let mut header = Map::new();
     header.insert("warning_min_support".to_string(), json!(MIN_SETTLED));
+    header.insert("pilot_modes".to_string(), pilot_modes(facts, since));
     header.insert(
         "sources".to_string(),
         json!({

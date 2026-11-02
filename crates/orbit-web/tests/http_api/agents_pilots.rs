@@ -1393,3 +1393,137 @@ fn as_f64(value: &Value) -> f64 {
         .as_f64()
         .unwrap_or_else(|| panic!("a number: {value}"))
 }
+
+/// Re-check and full pilot runs are reported apart: each mode's assessments,
+/// runs, durations and tokens, and the re-checks that later needed a full
+/// pilot, whether a later full assessment followed or the pilot escalated
+/// the re-check itself [ORB-21124].
+#[test]
+fn pilots_report_recheck_and_full_runs_apart() {
+    isolated(
+        "agents_pilots::pilots_report_recheck_and_full_runs_apart",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let run = |run_id: &str, minutes: i64, input: u64, output: u64| {
+                let started = now - Duration::minutes(40);
+                pilot_run(
+                    &fixture,
+                    run_id,
+                    "warden",
+                    "warden-model",
+                    started,
+                    started + Duration::minutes(minutes),
+                );
+                fixture
+                    .runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: None,
+                        job_run_id: run_id.into(),
+                        account: None,
+                        activity_id: "pilot".into(),
+                        agent: "fixture".into(),
+                        provider: None,
+                        model: Some("warden-model".into()),
+                        task_ids: Vec::new(),
+                        trace: InvocationTrace {
+                            usage: orbit_types::telemetry::TokenUsage {
+                                input,
+                                output,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            };
+            run("jrun-pilot-full", 5, 9000, 1000);
+            run("jrun-pilot-recheck", 1, 900, 100);
+            run("jrun-pilot-full-again", 5, 9000, 1000);
+            let proposed =
+                |title: &str| add_with_status(&fixture, title, &[], vec![], TaskStatus::Proposed);
+            let held = json!({"utility_warnings": [{"text": "Hold.", "holds_promotion": true}]});
+            let with_mode = |mode: &str, extra: Value| {
+                let mut findings = held.clone();
+                findings["mode"] = json!(mode);
+                for (key, value) in extra.as_object().into_iter().flatten() {
+                    findings[key] = value.clone();
+                }
+                findings
+            };
+            let receipt = |task: &str, minutes: i64, run_id: &str, findings: Value| {
+                pilot_receipt_with(
+                    &fixture,
+                    task,
+                    now - Duration::minutes(minutes),
+                    Some(run_id),
+                    &[],
+                    &["file:README.md"],
+                    findings,
+                );
+            };
+            // Full, then a re-check, then a full pilot again.
+            let looped = proposed("looped");
+            receipt(&looped, 30, "jrun-pilot-full", with_mode("full", json!({})));
+            receipt(
+                &looped,
+                20,
+                "jrun-pilot-recheck",
+                with_mode("recheck", json!({})),
+            );
+            receipt(
+                &looped,
+                10,
+                "jrun-pilot-full-again",
+                with_mode("full", json!({})),
+            );
+            // A re-check that settled the hold, with no full pilot after it.
+            let settled = proposed("settled");
+            receipt(
+                &settled,
+                30,
+                "jrun-pilot-full",
+                with_mode("full", json!({})),
+            );
+            receipt(
+                &settled,
+                20,
+                "jrun-pilot-recheck",
+                with_mode("recheck", json!({})),
+            );
+            // A re-check the pilot escalated to a full assessment.
+            let escalated = proposed("escalated");
+            receipt(
+                &escalated,
+                10,
+                "jrun-pilot-full-again",
+                with_mode("full", json!({"mode_reason": "recheck_escalated"})),
+            );
+            // A receipt from before modes reads as a full pilot.
+            let legacy = proposed("legacy");
+            receipt(&legacy, 30, "jrun-pilot-full", held.clone());
+
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(card["status"], "ok", "{card}");
+            let modes = &card["pilot_modes"];
+            let full = &modes["full"];
+            let recheck = &modes["recheck"];
+            assert_eq!(full["assessments"], 5, "{modes}");
+            assert_eq!(recheck["assessments"], 2, "{modes}");
+            assert_eq!(full["runs"], 2, "{modes}");
+            assert_eq!(recheck["runs"], 1, "{modes}");
+            assert_eq!(as_f64(&full["median_seconds"]), 300.0, "{modes}");
+            assert_eq!(as_f64(&recheck["median_seconds"]), 60.0, "{modes}");
+            let tokens = |mode: &Value| mode["total_tokens"].as_u64().unwrap();
+            assert!(tokens(recheck) > 0, "{modes}");
+            assert_eq!(tokens(full), 20 * tokens(recheck), "{modes}");
+            assert_eq!(modes["rechecks_followed_by_full"], 1, "{modes}");
+            assert_eq!(modes["rechecks_escalated_to_full"], 1, "{modes}");
+            // Two of three re-check attempts needed a full pilot.
+            assert!(
+                (as_f64(&modes["recheck_full_rate"]) - 2.0 / 3.0).abs() < 0.01,
+                "{modes}"
+            );
+        },
+    );
+}

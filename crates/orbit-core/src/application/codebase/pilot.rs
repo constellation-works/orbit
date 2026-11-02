@@ -44,6 +44,9 @@ pub(in crate::application) struct PilotRun {
     pub(in crate::application) model: Option<String>,
     /// Start to finish; `None` while it runs or when either is unrecorded.
     pub(in crate::application) seconds: Option<f64>,
+    /// Total tokens the run's recorded invocations spent; `None` when it
+    /// recorded none or they could not be read in full.
+    pub(in crate::application) tokens: Option<u64>,
 }
 
 struct RunRecord {
@@ -55,6 +58,44 @@ struct RunRecord {
 }
 
 impl RunRecord {
+    /// The run's invocation records, read once.
+    fn invocations(&self, runtime: &OrbitRuntime) -> std::cell::RefMut<'_, Vec<InvocationRecord>> {
+        std::cell::RefMut::map(self.invocations.borrow_mut(), |invocations| {
+            invocations.get_or_insert_with(|| self.load_invocations(runtime))
+        })
+    }
+
+    /// Total tokens of the run's recorded invocations.
+    fn pilot_run_tokens(&self, runtime: &OrbitRuntime) -> Option<u64> {
+        let invocations = self.invocations(runtime);
+        (!invocations.is_empty()).then(|| {
+            invocations
+                .iter()
+                .map(|invocation| invocation.total_tokens)
+                .sum()
+        })
+    }
+
+    fn load_invocations(&self, runtime: &OrbitRuntime) -> Vec<InvocationRecord> {
+        // A truncated or failed read cannot establish an identity.
+        const LIMIT: usize = 1000;
+        match runtime.workspace_invocation_records(InvocationQuery {
+            job_run_id: Some(self.run.run_id.clone()),
+            limit: LIMIT,
+            ..Default::default()
+        }) {
+            Ok(records) if records.len() < LIMIT => records,
+            Ok(_) => {
+                tracing::warn!(run_id = %self.run.run_id, "pilot identity: invocation read truncated");
+                Vec::new()
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %self.run.run_id, %error, "pilot identity: invocations unreadable");
+                Vec::new()
+            }
+        }
+    }
+
     fn model_for_pilot_receipt(
         &self,
         runtime: &OrbitRuntime,
@@ -62,26 +103,7 @@ impl RunRecord {
         producing: &[usize],
         task_id: &str,
     ) -> Option<String> {
-        let mut invocations = self.invocations.borrow_mut();
-        let invocations = invocations.get_or_insert_with(|| {
-            // A truncated or failed read cannot establish an identity.
-            const LIMIT: usize = 1000;
-            match runtime.workspace_invocation_records(InvocationQuery {
-                job_run_id: Some(self.run.run_id.clone()),
-                limit: LIMIT,
-                ..Default::default()
-            }) {
-                Ok(records) if records.len() < LIMIT => records,
-                Ok(_) => {
-                    tracing::warn!(run_id = %self.run.run_id, "pilot identity: invocation read truncated");
-                    Vec::new()
-                }
-                Err(error) => {
-                    tracing::warn!(run_id = %self.run.run_id, %error, "pilot identity: invocations unreadable");
-                    Vec::new()
-                }
-            }
-        });
+        let invocations = self.invocations(runtime);
         let workers: Vec<_> = steps
             .iter()
             .enumerate()
@@ -189,6 +211,7 @@ impl PilotRuns {
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
                         (end - start).num_milliseconds().max(0) as f64 / 1000.0
                     }),
+                    tokens: None,
                 },
                 invocations: RefCell::new(None),
             })
@@ -238,6 +261,7 @@ impl PilotRuns {
             }
             let mut run = record.run.clone();
             run.model = record.model_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
+            run.tokens = record.pilot_run_tokens(runtime);
             Some(run)
         });
         let run = found.next()?;

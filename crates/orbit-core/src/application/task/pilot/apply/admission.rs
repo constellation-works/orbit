@@ -42,6 +42,20 @@ pub(in super::super) struct PreparedTaskSnapshot {
     pub(in super::super) context_creation_identity: Option<String>,
     /// Whether preparation requested an explore brief for the task.
     pub(in super::super) explore_brief_requested: bool,
+    /// The pilot mode preparation chose for the task.
+    pub(in super::super) pilot_mode: PilotModeSnapshot,
+}
+
+/// How preparation asked the pilot to assess a task. The default, also read
+/// from a payload prepared before modes, is a full pilot with no prior.
+#[derive(Debug, Clone, Default)]
+pub(in super::super) struct PilotModeSnapshot {
+    /// The re-check input; `Some` only when the task is re-checked.
+    pub(in super::super) recheck: Option<serde_json::Value>,
+    /// Why a full pilot ran although a prior assessment existed.
+    pub(in super::super) reason: Option<String>,
+    /// The latest assessment's receipt id at preparation.
+    pub(in super::super) prior_assessment_id: Option<String>,
 }
 
 pub(in super::super) struct ValidatedTask {

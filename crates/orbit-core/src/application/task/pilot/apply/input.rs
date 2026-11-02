@@ -16,6 +16,7 @@ use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use serde_json::{Map, Value};
 
 use super::super::source::SourceSnapshot;
+use super::admission::PilotModeSnapshot;
 use super::admission::PreparedTaskSnapshot;
 use crate::application::task::CiSweepFilingEvidence;
 
@@ -199,6 +200,10 @@ pub(super) struct PreparedTask {
     history_len: Field<Option<usize>>,
     context_creation_identity: Field<Option<String>>,
     explore_brief_requested: Field<Option<bool>>,
+    pilot_mode: Field<Option<String>>,
+    pilot_mode_reason: Field<Option<String>>,
+    prior_assessment_id: Field<Option<String>>,
+    recheck: Field<Option<Value>>,
 }
 
 /// Prepare's exclusions: echoed verbatim in the report, and read for the
@@ -502,8 +507,43 @@ impl PreparedTask {
                 self.explore_brief_requested,
                 Field::Present(Some(true))
             ),
+            pilot_mode: self.pilot_mode(action)?,
         };
         Ok((task_id.to_string(), snapshot))
+    }
+
+    /// The mode prepare chose. A payload prepared before modes reads as a
+    /// full pilot; a re-check without its input refuses the apply.
+    fn pilot_mode(&self, action: &str) -> Result<PilotModeSnapshot, DispatchError> {
+        let refuse = |message: &str| DispatchError::action_failed(action, message.to_string());
+        let text = |field: &Field<Option<String>>, name: &str| match field {
+            Field::Absent | Field::Present(None) => Ok(None),
+            Field::Present(Some(value)) => Ok(Some(value.clone())),
+            Field::Invalid(_) => Err(refuse(&format!(
+                "prepared task {name} must be a string or null"
+            ))),
+        };
+        let mode = text(&self.pilot_mode, super::super::recheck::PILOT_MODE)?;
+        let recheck = match &self.recheck {
+            Field::Absent | Field::Present(None) => None,
+            Field::Present(Some(value)) if value.is_object() => Some(value.clone()),
+            _ => return Err(refuse("prepared task recheck must be an object")),
+        };
+        if mode.as_deref() == Some(super::super::recheck::MODE_RECHECK) && recheck.is_none() {
+            return Err(refuse("prepared re-check task carries no recheck input"));
+        }
+        Ok(PilotModeSnapshot {
+            recheck: recheck
+                .filter(|_| mode.as_deref() == Some(super::super::recheck::MODE_RECHECK)),
+            reason: text(
+                &self.pilot_mode_reason,
+                super::super::recheck::PILOT_MODE_REASON,
+            )?,
+            prior_assessment_id: text(
+                &self.prior_assessment_id,
+                super::super::recheck::PRIOR_ASSESSMENT_ID,
+            )?,
+        })
     }
 
     /// Freshness-component digests captured with the fingerprint, absent on a

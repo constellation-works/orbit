@@ -62,6 +62,7 @@ mod persist;
 mod post_deploy;
 mod prepare;
 mod promotion;
+mod recheck;
 pub(crate) mod source;
 mod validation_tools;
 
