@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{McpWorkspace, tool_names};
+use super::{McpWorkspace, SpawnPiped, tool_names};
 
 /// The reader role's advertised surface: core discovery plus attention,
 /// task, run, codebase and search reads.
@@ -216,4 +216,62 @@ fn an_unknown_role_is_refused_before_serving() {
     assert!(!output.status.success(), "{output:?}");
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("unknown MCP role 'admin'"), "{error}");
+}
+
+#[test]
+fn unbound_attention_notice_actions_target_each_home_workspace() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::roles::unbound_attention_notice_actions_target_each_home_workspace",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let second = workspace.home.join("second-checkout");
+    super::init_checkout(&workspace.home, &second, "second-checkout");
+    let scratch = workspace.scratch("unbound-notice-session");
+    let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
+        .args(["mcp", "serve", "--operator", "--toolset", "notice"])
+        .spawn_piped();
+    let (mut client, _) = super::McpClient::initialized(
+        child,
+        super::McpClient::initialize_params("unbound-notices", None),
+    );
+    let listing = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let workspaces = listing["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 2, "{listing}");
+    let mut expected = std::collections::BTreeMap::new();
+    for workspace in workspaces {
+        let id = workspace["id"].as_str().unwrap();
+        let posted = client.call_tool_ok(
+            "orbit_notice_post",
+            json!({"workspace": id, "kind": "info", "title": format!("Notice for {id}")}),
+        );
+        expected.insert(id.to_string(), posted["notice"]["id"].clone());
+    }
+    let attention = client.call_tool_ok(
+        "orbit_attention",
+        json!({"all": true, "kind": "notice_open"}),
+    );
+    assert_eq!(attention["degraded"], json!([]), "{attention}");
+    let items = attention["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{attention}");
+    for item in items {
+        let home = item["workspace"]["id"].as_str().unwrap();
+        let id = &expected[home];
+        let show = &item["next"];
+        assert_eq!(show["tool"], "orbit.notice.show");
+        assert_eq!(show["input"], json!({"id": id, "workspace": home}));
+        let shown = client.call_tool_ok("orbit_notice_show", show["input"].clone());
+        assert_eq!(shown["notice"]["id"], *id);
+        assert_eq!(shown["notice"]["workspace"]["id"], home);
+        let close = &show["also"][0];
+        assert_eq!(close["tool"], "orbit.notice.close");
+        assert_eq!(close["input"], json!({"id": id, "workspace": home}));
+        let mut input = close["input"].clone();
+        input["reason"] = json!("Resolved in fixture");
+        let closed = client.call_tool_ok("orbit_notice_close", input);
+        assert_eq!(closed["notice"]["id"], *id);
+        assert_eq!(closed["notice"]["workspace"]["id"], home);
+        assert_eq!(closed["notice"]["status"], "closed");
+    }
 }

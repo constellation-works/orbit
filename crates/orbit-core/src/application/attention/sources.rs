@@ -515,13 +515,13 @@ fn notice_attention_items(
         let show = AttentionNext {
             summary: "Show the notice".into(),
             tool: Some("orbit.notice.show".into()),
-            input: Some(json!({"id": notice.id})),
+            input: Some(json!({"id": notice.id, "workspace": workspace.id})),
             command: format!("orbit --workspace '{ws}' notice show {}", notice.id),
             needs: Vec::new(),
             also: vec![AttentionNext {
                 summary: "Close the notice".into(),
                 tool: Some("orbit.notice.close".into()),
-                input: Some(json!({"id": notice.id})),
+                input: Some(json!({"id": notice.id, "workspace": workspace.id})),
                 command: format!(
                     "orbit --workspace '{ws}' notice close {} --reason '<reason>'",
                     notice.id
