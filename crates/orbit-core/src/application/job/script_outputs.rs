@@ -547,3 +547,53 @@ fn hash_stored_file(path: &Path) -> std::io::Result<(u64, String)> {
     }
     Ok((total, orbit_types::identity::lower_hex(hasher.finalize())))
 }
+
+/// The exact bytes of one file of a set [`verify_script_output_set`] has
+/// honoured, read from its store path (never the descriptor's claim alone)
+/// and checked against the recorded size and SHA-256. `Err` names the file
+/// when it is gone, over `max_bytes`, or no longer matches its digest.
+pub(crate) fn read_verified_script_output(
+    runtime: &OrbitRuntime,
+    set: &ScriptOutputSet,
+    file: &ScriptOutputFile,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    if !is_set_id(&set.set_id) || !is_valid_script_output_name(&file.name) {
+        return Err(format!("file `{}` is not in a valid set", file.name));
+    }
+    let expected = run_dir(runtime, &set.run_id)
+        .join(&set.set_id)
+        .join(FILES_DIR)
+        .join(&file.name);
+    if Path::new(&file.path) != expected {
+        return Err(format!("names file `{}` outside its set", file.name));
+    }
+    if file.bytes > max_bytes {
+        return Err(format!(
+            "file `{}` is {} bytes, over the {max_bytes} byte limit",
+            file.name, file.bytes
+        ));
+    }
+    let read = || -> std::io::Result<Vec<u8>> {
+        let file = open_no_follow(&expected)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other("not a regular file"));
+        }
+        let mut content = Vec::new();
+        file.take(max_bytes.saturating_add(1))
+            .read_to_end(&mut content)?;
+        Ok(content)
+    };
+    let content = read().map_err(|error| format!("lost file `{}`: {error}", file.name))?;
+    let sha256 = orbit_types::identity::lower_hex(Sha256::digest(&content));
+    if content.len() as u64 != file.bytes || sha256 != file.sha256 {
+        return Err(format!(
+            "file `{}` changed: recorded {} bytes sha256 {}, found {} bytes sha256 {sha256}",
+            file.name,
+            file.bytes,
+            file.sha256,
+            content.len()
+        ));
+    }
+    Ok(content)
+}

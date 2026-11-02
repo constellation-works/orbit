@@ -7,7 +7,9 @@
 //! the answer means for the step and writes the `script_execution` entry.
 //! A manifest that declares output files gets them kept as one run-owned
 //! set ([`super::script_outputs`]) after a successful attempt whose stdout
-//! the step accepts, before the scratch directory is removed.
+//! the step accepts, before the scratch directory is removed. Declared
+//! input files ([`super::script_inputs`]) are resolved and digested before
+//! spawn and bound read-only at `in/<as>`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,8 +20,8 @@ use orbit_engine::{
     ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,
 };
 use orbit_exec::{
-    SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxRequest,
-    ScriptSandboxSpec,
+    SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxInput,
+    ScriptSandboxRequest, ScriptSandboxSpec,
 };
 use orbit_types::workflow::activity_job::{
     ScriptExecutionRecord, ScriptGrant, ScriptHostRole, ScriptNetwork, script_refusal,
@@ -30,6 +32,7 @@ use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_scope_launcher,
 };
+use crate::application::job::script_inputs::{ScriptInputSources, admit_script_inputs};
 use crate::application::job::script_outputs::keep_declared_outputs;
 
 /// The timeout a step gets when neither the step nor the manifest sets one.
@@ -114,6 +117,25 @@ fn prepare_and_run(
 
     let input_text = admitted_input(&snapshot, &request.input)?;
 
+    // Declared inputs resolve after the grant checks, so a refusal records
+    // the grant, and before the profile probe and anything created or
+    // spawned, so the refusal names the input on any host.
+    let masked = script_masked_trees(runtime, &cwd);
+    let home = std::env::var_os("HOME");
+    let admitted = admit_script_inputs(
+        &asset.spec.files.inputs,
+        &request.input,
+        &ScriptInputSources {
+            cwd: &cwd,
+            read_roots: &grant.read_roots,
+            masked: &masked,
+            home: home.as_deref(),
+        },
+    )
+    .map_err(|message| refuse(script_refusal::FILE_INPUT_UNAVAILABLE, message))?;
+    let (inputs, input_files): (Vec<ScriptSandboxInput>, Vec<_>) = admitted.into_iter().unzip();
+    record.input_files = input_files;
+
     // After the grant checks, so a refusal on a host without the profile
     // still records which script and grant it refused.
     let profile = orbit_exec::probe_script_sandbox().map_err(|reason| {
@@ -189,7 +211,6 @@ fn prepare_and_run(
 
     let scratch = ScriptScratch::create(runtime, request)?;
     let mut result = run_in_scratch(RunPlan {
-        runtime,
         request,
         snapshot: &snapshot,
         grant: &grant,
@@ -198,6 +219,8 @@ fn prepare_and_run(
         cwd: &cwd,
         cwd_writable,
         scratch: &scratch.path,
+        masked: &masked,
+        inputs: &inputs,
         launcher: &launcher,
         launcher_env: &launcher_env,
         stdin: input_text.into_bytes(),
@@ -259,6 +282,16 @@ fn script_cwd(
         )));
     }
     Ok((worktree, true))
+}
+
+/// The trees a script must not see: the cwd's `.orbit/`, the global root
+/// and the workspace's own `.orbit/`.
+fn script_masked_trees(runtime: &OrbitRuntime, cwd: &Path) -> Vec<PathBuf> {
+    let mut masked = vec![cwd.join(".orbit"), runtime.global_root()];
+    if let Ok(orbit_dir) = runtime.paths().orbit_dir.canonicalize() {
+        masked.push(orbit_dir);
+    }
+    masked
 }
 
 /// The verified grant for `script`, admitted for this host's role.
@@ -449,9 +482,6 @@ fn check_requests_within_grant(
     if !requests.env_pass.is_empty() || !grant.env_pass.is_empty() {
         return Err(unsupported("`env_pass`"));
     }
-    if !asset.spec.files.inputs.is_empty() {
-        return Err(unsupported("`files.inputs`"));
-    }
     Ok(())
 }
 
@@ -539,7 +569,6 @@ pub(super) fn path_segment(value: &str) -> String {
 }
 
 struct RunPlan<'a> {
-    runtime: &'a OrbitRuntime,
     request: &'a ScriptStepRequest,
     snapshot: &'a ScriptSnapshot,
     grant: &'a ScriptGrant,
@@ -548,6 +577,8 @@ struct RunPlan<'a> {
     cwd: &'a Path,
     cwd_writable: bool,
     scratch: &'a Path,
+    masked: &'a [PathBuf],
+    inputs: &'a [ScriptSandboxInput],
     launcher: &'a [String],
     launcher_env: &'a [(String, String)],
     stdin: Vec<u8>,
@@ -556,7 +587,6 @@ struct RunPlan<'a> {
 
 fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
     let RunPlan {
-        runtime,
         request,
         snapshot,
         grant,
@@ -565,6 +595,8 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         cwd,
         cwd_writable,
         scratch,
+        masked,
+        inputs,
         launcher,
         launcher_env,
         stdin,
@@ -623,10 +655,6 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         .cloned()
         .collect();
     readable.extend(grant.read_roots.iter().cloned());
-    let mut masked = vec![cwd.join(".orbit"), runtime.global_root()];
-    if let Ok(orbit_dir) = runtime.paths().orbit_dir.canonicalize() {
-        masked.push(orbit_dir);
-    }
     let home = std::env::var_os("HOME");
     let timeout_seconds = request
         .timeout_seconds
@@ -642,8 +670,9 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
             scratch,
             readable: &readable,
             writable: &grant.write_roots,
-            masked: &masked,
+            masked,
             home: home.as_deref(),
+            inputs,
         },
         argv: &argv,
         env: &env,

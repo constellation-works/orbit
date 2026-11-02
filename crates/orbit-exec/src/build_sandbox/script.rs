@@ -66,6 +66,54 @@ pub struct ScriptSandboxSpec<'a> {
     pub masked: &'a [PathBuf],
     /// The operator's `HOME`, whose credential trees stay denied.
     pub home: Option<&'a OsStr>,
+    /// Declared file inputs, each bound read-only at `in/<name>`. The
+    /// caller resolves and admits them first ([`script_input_conflict`]);
+    /// the profile refuses one that still overlaps protected state.
+    pub inputs: &'a [ScriptSandboxInput],
+}
+
+/// One declared file input of a script run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptSandboxInput {
+    /// The physical source path, a regular file or a directory.
+    pub source: PathBuf,
+    /// A plain name: the input appears at `in/<name>`.
+    pub name: String,
+}
+
+/// The protected tree a script input source would expose, if any: a masked
+/// tree it is, contains or lies within (a mask enclosing the cwd counts only
+/// for a source outside the cwd, as it is not mounted at all), or a
+/// credential path it is, contains or lies within. `source` and `cwd` are
+/// physical paths. A bind at `in/<name>` is not covered by the masks and
+/// denies, which apply at host paths, so such a source is refused instead.
+pub fn script_input_conflict(
+    source: &Path,
+    cwd: &Path,
+    masked: &[PathBuf],
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let overlaps =
+        |protected: &Path| source.starts_with(protected) || protected.starts_with(source);
+    for mask in masked {
+        let Ok(mask) = mask.canonicalize() else {
+            continue;
+        };
+        if cwd.starts_with(&mask) && source.starts_with(cwd) {
+            continue;
+        }
+        if overlaps(&mask) {
+            return Some(mask);
+        }
+    }
+    super::credential_denies(home)
+        .into_iter()
+        .map(|(path, _)| path.canonicalize().unwrap_or(path))
+        .find(|path| overlaps(path))
+}
+
+fn valid_input_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
 /// One script to run under the profile.
@@ -159,6 +207,29 @@ pub fn compile_linux_script_argv(
         }
         writable.push(root);
     }
+    for input in spec.inputs {
+        if !valid_input_name(&input.name) || !input.source.is_absolute() {
+            return Err(OrbitError::InvalidInput(format!(
+                "script input `{}` needs a plain name and an absolute source",
+                input.name
+            )));
+        }
+        let source = input.source.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "cannot resolve script input `{}` at {}: {error}",
+                input.name,
+                input.source.display()
+            ))
+        })?;
+        let cwd = cwd_physical.as_deref().unwrap_or(spec.cwd);
+        if let Some(protected) = script_input_conflict(&source, cwd, spec.masked, spec.home) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script input `{}` overlaps protected state at {}",
+                input.name,
+                protected.display()
+            )));
+        }
+    }
     // `--unshare-all` includes the network namespace: with no
     // `--share-net`, the only interface is the namespace's own loopback.
     let mut args: Vec<String> = vec![
@@ -191,6 +262,18 @@ pub fn compile_linux_script_argv(
             "--ro-bind".into(),
             display(&spec.scratch.join(read_only)),
             display(&mount.join(read_only)),
+        ]);
+    }
+    // Each input over its placeholder in the read-only `in/`: Bubblewrap
+    // cannot create a mountpoint inside a read-only bind, so the caller's
+    // `in/` holds an empty file or directory of the same name
+    // ([`run_script_sandboxed`] creates it). `--ro-bind` makes the input
+    // read-only whatever its host mode.
+    for input in spec.inputs {
+        args.extend([
+            "--ro-bind".into(),
+            display(&input.source),
+            display(&mount.join("in").join(&input.name)),
         ]);
     }
     // Git metadata is readable so `git describe` and `git archive` work,
@@ -292,6 +375,45 @@ fn cwd_git_dirs(cwd: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// An empty file or directory at `in/<name>` for each input, matching its
+/// source, so Bubblewrap binds over an existing mountpoint.
+#[cfg(target_os = "linux")]
+fn create_input_mountpoints(spec: &ScriptSandboxSpec<'_>) -> Result<(), OrbitError> {
+    for input in spec.inputs {
+        if !valid_input_name(&input.name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script input name `{}` is not a plain name",
+                input.name
+            )));
+        }
+        let mountpoint = spec.scratch.join("in").join(&input.name);
+        let unavailable = |error: std::io::Error| {
+            OrbitError::InvalidInput(format!(
+                "cannot prepare script input `{}` at {}: {error}",
+                input.name,
+                mountpoint.display()
+            ))
+        };
+        if std::fs::symlink_metadata(&mountpoint).is_ok() {
+            return Err(OrbitError::InvalidInput(format!(
+                "script input `{}` already has an entry in {}",
+                input.name,
+                spec.scratch.join("in").display()
+            )));
+        }
+        if input.source.is_dir() {
+            orbit_common::fs::io::create_private_dir_all(&mountpoint).map_err(unavailable)?;
+        } else {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&mountpoint)
+                .map_err(unavailable)?;
+        }
+    }
+    Ok(())
+}
+
 /// Whether this host can apply the script profile now. The error is the
 /// `script_sandbox_unavailable` reason: a platform without the profile, a
 /// start nested inside another sandbox, or Bubblewrap without the
@@ -383,6 +505,7 @@ pub fn run_script_sandboxed(
                 crate::bwrap_program_for_audit()
             ))
         })?;
+        create_input_mountpoints(spec)?;
         let wrapper_args = compile_linux_script_argv(spec, request.env, request.argv)?;
         let mut command = match request.launcher.split_first() {
             Some((launcher, launcher_args)) => {

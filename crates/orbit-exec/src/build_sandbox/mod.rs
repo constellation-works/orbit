@@ -36,8 +36,9 @@ pub use linux::compile_linux_build_argv;
 pub use macos::compile_macos_build_profile;
 pub use script::{
     SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, SCRIPT_STDOUT_CAP_BYTES,
-    SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxRun,
-    ScriptSandboxSpec, compile_linux_script_argv, probe_script_sandbox, run_script_sandboxed,
+    SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxInput, ScriptSandboxRequest,
+    ScriptSandboxRun, ScriptSandboxSpec, compile_linux_script_argv, probe_script_sandbox,
+    run_script_sandboxed, script_input_conflict,
 };
 pub use supervise::{BuildLog, PLUGIN_BUILD_LOG_CAP_BYTES};
 

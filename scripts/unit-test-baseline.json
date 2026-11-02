@@ -259,6 +259,7 @@
         "application/job/tests/pipeline/admission.rs::failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic",
         "application/job/tests/pipeline/admission.rs::repeated_automation_admission_preserves_pending_running_and_terminal_state",
         "application/job/tests/pipeline/admission.rs::trigger_recording_preserves_a_competing_checkpoint_and_drain_controls",
+        "application/job/tests/script_step.rs::attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes",
         "application/job/tests/script_step.rs::script_launcher_env_carries_user_bus_locators_but_script_env_does_not",
         "application/job/tests/script_step.rs::ux_evidence_survives_script_job_filer_cleanup_and_checkpoint_reuse",
         "application/plugin/tests/lifecycle/remove.rs::a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it",
