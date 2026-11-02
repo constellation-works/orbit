@@ -22,6 +22,7 @@ mod git_repo;
 #[path = "../support/isolated_test.rs"]
 mod isolated_test;
 
+mod attention_replica;
 mod mcp_roundtrip;
 mod mcp_setup_preservation;
 mod mcp_setup_root;
