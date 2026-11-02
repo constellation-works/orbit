@@ -228,6 +228,56 @@ fn rejected_or_superseded_requests_change_nothing() {
     );
 }
 
+fn losing_the_resident_tag_clears_effective_authority_but_keeps_history() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, workspace) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    call(
+        &runtime,
+        "orbit.resident.grant",
+        json!({"task_id": id, "add": ["dispatch"], "workspaces": [workspace]}),
+        &operator(),
+    )
+    .unwrap();
+    let granted = show(&runtime, &id);
+    assert_eq!(granted["state"], "active");
+    assert_eq!(
+        granted["effective_authority"]["rights"],
+        json!(["dispatch"])
+    );
+    assert_eq!(
+        granted["effective_authority"]["workspaces"],
+        json!([workspace])
+    );
+
+    // Remove only the `resident` tag; mandate and authority records stay.
+    runtime
+        .update_task_as_human(
+            &id,
+            TaskUpdateParams {
+                tags: Some(vec![]),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+
+    let shown = show(&runtime, &id);
+    assert_eq!(shown["state"], "invalid");
+    assert!(
+        shown["state_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not tagged"),
+        "unexpected state_reason: {shown}"
+    );
+    assert_eq!(shown["effective_authority"]["rights"], json!([]));
+    assert_eq!(shown["effective_authority"]["workspaces"], json!([]));
+    assert_eq!(shown["authority"]["rights"], json!(["dispatch"]));
+    assert_eq!(shown["authority"]["revision"], 1);
+    assert_eq!(shown["authority"]["granted"].as_array().unwrap().len(), 1);
+}
+
 fn any_task_writer_narrows_and_is_recorded() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = runtime_at(root.path());
@@ -297,4 +347,5 @@ crate::scenario_table!(
     agent_widening_is_a_request_the_human_answers,
     rejected_or_superseded_requests_change_nothing,
     any_task_writer_narrows_and_is_recorded,
+    losing_the_resident_tag_clears_effective_authority_but_keeps_history,
 );

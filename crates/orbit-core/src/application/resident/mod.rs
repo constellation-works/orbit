@@ -94,7 +94,10 @@ impl ResidentView {
         let (Ok(mandate), Ok(authority)) = (&self.mandate, &self.authority) else {
             return ResidentEffectiveAuthority::default();
         };
-        if self.state().0 == ResidentMandateState::Ended {
+        if matches!(
+            self.state().0,
+            ResidentMandateState::Ended | ResidentMandateState::Invalid
+        ) {
             return ResidentEffectiveAuthority::default();
         }
         let workspaces: Vec<String> = authority
