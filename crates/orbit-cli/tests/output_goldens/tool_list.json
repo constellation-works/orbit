@@ -358,7 +358,7 @@
   },
   {
     "name": "orbit.attention",
-    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, notice_open and host_unhealthy. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. On the federated server a call without a host-qualified workspace reads every host; an unreadable host is a host_unhealthy item plus a degraded entry. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime kinds require Operator capability; other sessions receive degraded code capability for each unreadable kind. Recovery and cancellation in next are suggestions only. Provider kinds are not yet implemented.",
+    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, notice_open, resident_stalled (an active resident mandate with no checkpoint for twice its heartbeat, or three incomplete cycles in a row) and host_unhealthy. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. On the federated server a call without a host-qualified workspace reads every host; an unreadable host is a host_unhealthy item plus a degraded entry. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime kinds require Operator capability; other sessions receive degraded code capability for each unreadable kind. Recovery and cancellation in next are suggestions only. Provider kinds are not yet implemented.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2597,6 +2597,59 @@
     "mcp_toolset": "resident"
   },
   {
+    "name": "orbit.resident.control",
+    "description": "Control a resident mandate's firing: pause, resume, stop, wake (status_request makes the cycle checkpoint even when idle), takeover or release. Each action is a history entry with the caller and reason. Pause, stop and takeover start no new cycle; a live cycle keeps its frozen grant, checkpoints and exits at its boundary. Stop ends the mandate and moves the assignment to review once no cycle is live. Resume and release restore firing under the existing authority and never widen it. Any caller that can write the assignment may call it. Output {task_id, action, state, effective_at}.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "task_id",
+        "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "action",
+        "description": "pause (active to paused: no new cycle), resume (paused to active), stop (ends the mandate: no new cycle, then the assignment moves to review), wake (active: due on the next tick despite the heartbeat, never the cadence floor), takeover (active or paused to taken_over: no cycle fires) or release (taken_over to active).",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded in the assignment's history with the caller.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "status_request",
+        "description": "With wake: the cycle writes a checkpoint even when it has nothing else to do.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "by_session",
+        "description": "The session taking over or acting, recorded with the action.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "orchestrator",
+        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
     "name": "orbit.resident.digest",
     "description": "Read the manager digest in the bound workspace: resident state, latest outcome, open requests and stalled flag; open escalations oldest first; reversible decisions in the window still awaiting veto; top evolution pains by minutes plus slot minutes with occurrence, cycle and mandate counts; evolution proposals awaiting human approval; and resident metrics totals. Read-only. Defaults to 14d and the top 5 pains.",
     "enabled": true,
@@ -2748,6 +2801,59 @@
       {
         "name": "baseline",
         "description": "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "orchestrator",
+        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
+    "name": "orbit.resident.relay",
+    "description": "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment on its assignment carrying `quote` verbatim with its `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or any other field is refused; widen through orbit.resident.grant. Refused for an empty or over-long quote (over 4000 characters) or an ended mandate. Output {task_id, comment_id}.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "task_id",
+        "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "quote",
+        "description": "The human's words, verbatim (1-4000 characters). They reach the resident unchanged as a resident.answer comment; text that would need redaction (a secret or home path) is refused, never rewritten.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "source",
+        "description": "Where the words came from: {human, via, session?, said_at}. human names who said it, via the channel (chat, email, call), session the conversation it came from, said_at an RFC 3339 instant. No other fields.",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "name": "request_id",
+        "description": "The resident request or decision request this answers. A relayed answer is a direction: the human still answers the decision request itself.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reverses",
+        "description": "The resident decision id this direction reverses.",
         "param_type": "string",
         "required": false
       },

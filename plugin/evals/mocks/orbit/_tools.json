@@ -170,6 +170,238 @@
       }
     },
     {
+      "name": "orbit_attention",
+      "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, notice_open, resident_stalled (an active resident mandate with no checkpoint for twice its heartbeat, or three incomplete cycles in a row) and host_unhealthy. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. On the federated server a call without a host-qualified workspace reads every host; an unreadable host is a host_unhealthy item plus a degraded entry. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and provider kinds are not yet implemented.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Registered workspace names or ids; accepts one string or an array. Conflicts with all."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Read every active workspace on this host."
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Host name or machine id (repeatable)."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pilot_warning",
+                  "pilot_hold",
+                  "blocked",
+                  "decision_open",
+                  "review_waiting",
+                  "run_failed",
+                  "run_stuck",
+                  "claim_stale",
+                  "ci_red",
+                  "friction_untriaged",
+                  "host_unhealthy",
+                  "notice_open",
+                  "resident_stalled"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pilot_warning",
+                    "pilot_hold",
+                    "blocked",
+                    "decision_open",
+                    "review_waiting",
+                    "run_failed",
+                    "run_stuck",
+                    "claim_stale",
+                    "ci_red",
+                    "friction_untriaged",
+                    "host_unhealthy",
+                    "notice_open",
+                    "resident_stalled"
+                  ]
+                }
+              }
+            ],
+            "description": "Include kinds (repeatable)."
+          },
+          "exclude_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pilot_warning",
+                  "pilot_hold",
+                  "blocked",
+                  "decision_open",
+                  "review_waiting",
+                  "run_failed",
+                  "run_stuck",
+                  "claim_stale",
+                  "ci_red",
+                  "friction_untriaged",
+                  "host_unhealthy",
+                  "notice_open",
+                  "resident_stalled"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pilot_warning",
+                    "pilot_hold",
+                    "blocked",
+                    "decision_open",
+                    "review_waiting",
+                    "run_failed",
+                    "run_stuck",
+                    "claim_stale",
+                    "ci_red",
+                    "friction_untriaged",
+                    "host_unhealthy",
+                    "notice_open",
+                    "resident_stalled"
+                  ]
+                }
+              }
+            ],
+            "description": "Exclude kinds (repeatable)."
+          },
+          "severity": {
+            "type": "string",
+            "description": "Minimum severity: low, medium, high or critical.",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Task lifecycle states (repeatable)."
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Task tags (repeatable)."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Task ids (repeatable)."
+          },
+          "crew": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Assigned crews (repeatable)."
+          },
+          "orchestrator": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Attributed orchestrators (repeatable)."
+          },
+          "older_than": {
+            "type": "string",
+            "description": "Minimum age, such as 90m, 36h or 3d."
+          },
+          "since": {
+            "type": "string",
+            "description": "Opaque cursor from a prior response; unusable tokens restart the list."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Public response limit, 1\u2013500 (default 100).",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "candidate_read": {
+            "type": "boolean",
+            "description": "Reserved for Orbit's federated aggregator; never send it."
+          }
+        },
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "orbit_auto_task_add",
       "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
       "inputSchema": {
@@ -700,7 +932,7 @@
         "properties": {
           "gate": {
             "type": "string",
-            "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority or review_approval."
+            "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant."
           },
           "task_id": {
             "type": "string",
@@ -749,6 +981,9 @@
           },
           "options": {
             "type": "array",
+            "items": {
+              "type": "object"
+            },
             "description": "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first."
           },
           "topic": {
@@ -866,6 +1101,122 @@
       },
       "annotations": {
         "readOnlyHint": false
+      }
+    },
+    {
+      "name": "orbit_evolution_add",
+      "description": "Record an interactive cost event in the bound workspace. Signature events corroborate one non-terminal evolution record; unsigned costs are retained without creating a capability gap. Returns {event, record}. Does not create friction or propose work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "Cost event: kind (workaround, manual_step, retry, wait), what (one line), minutes, retries, slot_minutes (nonnegative integers), wished (required for workaround/manual_step), signature (optional kebab-case key, 3-64 characters)."
+          },
+          "mandate": {
+            "type": "string",
+            "description": "Optional assignment task for this occurrence."
+          },
+          "cycle": {
+            "type": "string",
+            "description": "Optional cycle identifier; requires mandate."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "event",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_evolution_list",
+      "description": "List evolution signatures in the bound workspace, sorted by summed minutes plus slot_minutes. Returns {count, records}; each includes occurrence_count, distinct_cycles, distinct_mandates, cycle_count, mandate_count, minutes, retries and slot_minutes derived over the requested window. Friction is excluded. Declined signatures become eligible when suppression expires or window cost doubles.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "Filter open, proposed, declined or resolved; omitted returns all states."
+          },
+          "since": {
+            "type": "string",
+            "description": "RFC 3339 lower bound for occurrence aggregates. Records without occurrences in the window are omitted."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_evolution_show",
+      "description": "Show one evolution record in the bound workspace, its occurrences, proposal state, suppression window and all-time aggregates. Friction identifiers are not accepted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Evolution record identifier."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "id",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1041,6 +1392,9 @@
           },
           "arms": {
             "type": "array",
+            "items": {
+              "type": "object"
+            },
             "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused."
           },
           "population": {
@@ -1390,6 +1744,9 @@
           },
           "arms": {
             "type": "array",
+            "items": {
+              "type": "object"
+            },
             "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused."
           },
           "population": {
@@ -2077,6 +2434,9 @@
           },
           "evidence": {
             "type": "array",
+            "items": {
+              "type": "object"
+            },
             "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced."
           },
           "hosts": {
@@ -2333,6 +2693,151 @@
       }
     },
     {
+      "name": "orbit_resident_checkpoint",
+      "description": "Append one validated resident.checkpoint v1 JSON comment to the mandate's assignment task. Requires the mandate's live, unexpired cycle and matching run_id. Malformed records, stale cycles and a second checkpoint for the same cycle are refused without writes. Returns {task_id, checkpoint}. Observed authority in the record grants no rights.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact."
+          },
+          "record": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 note characters. Action keys are resident:<mandate>:<cycle>:<positive integer>."
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "task_id",
+          "record",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_resident_control",
+      "description": "Control a resident mandate's firing: pause, resume, stop, wake (status_request makes the cycle checkpoint even when idle), takeover or release. Each action is a history entry with the caller and reason. Pause, stop and takeover start no new cycle; a live cycle keeps its frozen grant, checkpoints and exits at its boundary. Stop ends the mandate and moves the assignment to review once no cycle is live. Resume and release restore firing under the existing authority and never widen it. Any caller that can write the assignment may call it. Output {task_id, action, state, effective_at}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact."
+          },
+          "action": {
+            "type": "string",
+            "description": "pause (active to paused: no new cycle), resume (paused to active), stop (ends the mandate: no new cycle, then the assignment moves to review), wake (active: due on the next tick despite the heartbeat, never the cadence floor), takeover (active or paused to taken_over: no cycle fires) or release (taken_over to active)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why, recorded in the assignment's history with the caller."
+          },
+          "status_request": {
+            "type": "boolean",
+            "description": "With wake: the cycle writes a checkpoint even when it has nothing else to do."
+          },
+          "by_session": {
+            "type": "string",
+            "description": "The session taking over or acting, recorded with the action."
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "task_id",
+          "action",
+          "reason",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_resident_digest",
+      "description": "Read the manager digest in the bound workspace: resident state, latest outcome, open requests and stalled flag; open escalations oldest first; reversible decisions in the window still awaiting veto; top evolution pains by minutes plus slot minutes with occurrence, cycle and mandate counts; evolution proposals awaiting human approval; and resident metrics totals. Read-only. Defaults to 14d and the top 5 pains.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "description": "Window start as a span (7d, 24h, 2w) or RFC 3339 instant; defaults to the configured evolution window."
+          },
+          "top": {
+            "type": "integer",
+            "description": "Maximum pains to return, 1-100; default 5."
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "orbit_resident_grant",
       "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Widening (add, workspaces) is the human's: from an operator it applies at once; from any other caller it changes nothing and raises one resident_authority decision request that quotes `quote` verbatim and names your session, and the authority changes only if a human answers grant. An open request for the same addition is returned, not duplicated; any authority change supersedes it. Narrowing (remove, drop_workspaces, a shorter deadline) applies at once for any caller that can write the assignment and is recorded with that caller. A call may not widen and narrow at once. Output {outcome, authority, request?} with outcome granted, requested or narrowed.",
       "inputSchema": {
@@ -2468,8 +2973,114 @@
       }
     },
     {
+      "name": "orbit_resident_metrics",
+      "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: manual interventions (per mandate and per active mandate-day), escalation load (per mandate-day and per human-day, median answer latency, share answered with the recommended option, expired-unanswered), reversal rate (resident decisions and actions a human undid within 7 days, each counted once) and crashed-cycle recovery cost (cycles without a checkpoint, time to the next good checkpoint, recovery slot minutes, repeated actions, human interventions needed). With baseline, the same measures for an interactive assignment task; a measure that cannot be derived reports not_derivable, never zero. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mandate": {
+            "type": "string",
+            "description": "One mandate's assignment task. Without it, every resident mandate in the workspace is reported, with workspace totals."
+          },
+          "since": {
+            "type": "string",
+            "description": "Window start: a span such as 7d, 24h or 2w, or an RFC 3339 instant. Defaults to 30d."
+          },
+          "baseline": {
+            "type": "string",
+            "description": "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero."
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "orbit_resident_relay",
+      "description": "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment on its assignment carrying `quote` verbatim with its `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or any other field is refused; widen through orbit_resident_grant. Refused for an empty or over-long quote (over 4000 characters) or an ended mandate. Output {task_id, comment_id}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The mandate's assignment task: a task tagged `resident` carrying a resident/mandate.json artifact."
+          },
+          "quote": {
+            "type": "string",
+            "description": "The human's words, verbatim (1-4000 characters). They reach the resident unchanged as a resident.answer comment; text that would need redaction (a secret or home path) is refused, never rewritten."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "Where the words came from: {human, via, session?, said_at}. human names who said it, via the channel (chat, email, call), session the conversation it came from, said_at an RFC 3339 instant. No other fields."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The resident request or decision request this answers. A relayed answer is a direction: the human still answers the decision request itself."
+          },
+          "reverses": {
+            "type": "string",
+            "description": "The resident decision id this direction reverses."
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "task_id",
+          "quote",
+          "source",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "orbit_resident_show",
-      "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+      "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2840,7 +3451,6 @@
           },
           "relations": {
             "type": "array",
-            "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -2934,7 +3544,8 @@
                   }
                 }
               }
-            }
+            },
+            "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link."
           },
           "crew": {
             "type": [
@@ -3156,6 +3767,9 @@
           },
           "options": {
             "type": "array",
+            "items": {
+              "type": "object"
+            },
             "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both"
           },
           "recommended": {
@@ -3318,6 +3932,10 @@
           "runs_on": {
             "type": "string",
             "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not."
+          },
+          "pilot_warnings": {
+            "type": "boolean",
+            "description": "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings."
           },
           "ready": {
             "type": "boolean",
@@ -3836,7 +4454,6 @@
           },
           "relations": {
             "type": "array",
-            "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -3930,7 +4547,8 @@
                   }
                 }
               }
-            }
+            },
+            "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source."
           },
           "tags": {
             "anyOf": [

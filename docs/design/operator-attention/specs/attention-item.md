@@ -48,6 +48,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
+| `resident_stalled` | task | the resident mandate view and its checkpoint comments (`application/resident/due.rs`, `resident_stall`), derived only on the home owner | an `active` resident mandate (not paused, taken over, handed off or ended) wrote no checkpoint for twice its heartbeat, or its last three checkpoints are all `incomplete` ([manager-channel](../../resident-orchestrator/specs/manager-channel.md#what-residents-report-through)) | the last checkpoint (task creation when it never checkpointed), or the first of the three incomplete ones |
 
 Notes that bind implementations:
 
@@ -148,6 +149,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `friction_untriaged` | `orbit.friction.update` with `status: triaged` (the operator edits tags or body first when needed) |
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
+| `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`); `also`: `orbit.resident.show` |
 
 For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
 `detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
@@ -189,6 +191,7 @@ and are not waiting on a single task.
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
+| `resident_stalled` | medium | high | none; fingerprint state is the stall reason and `last_checkpoint_at` |
 | `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds and `run_window_hours`, `run_stuck_after_minutes`, `ci_cache_seconds`, `source_timeout_seconds`

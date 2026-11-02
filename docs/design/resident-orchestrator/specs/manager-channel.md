@@ -59,17 +59,36 @@ CLI: `orbit resident grant <task> --add … --add-workspace … --remove … --d
 
 ## `orbit.resident.relay`
 
-Input: `{task, quote: string, source: {human, via, session?, said_at}, request_id?: string, reverses?: string}`.
-Output: `{comment_id}`. Writes one `resident.answer` comment
-([checkpoint-contract](./checkpoint-contract.md#residentanswer-v1)) and records `relayed_by` from
-the caller. Refused: an empty or over-long quote (> 4,000 characters), input carrying rights,
-workspaces, status or any field other than those listed, or a mandate in `ended` state. A relay is
-a wake event.
+Input: `{task_id, quote: string, source: {human, via, session?, said_at}, request_id?: string, reverses?: string}`
+plus the attribution fields `orchestrator?` and `model?`.
+Output: `{task_id, comment: {index, at, by}, answer}`: task comments carry no ids, so the written
+comment is named by its 1-based position, and `answer` is the record as written. Writes one
+`resident.answer` comment ([checkpoint-contract](./checkpoint-contract.md#residentanswer-v1)) and
+records `relayed_by` from the caller (`crew` from the session's orchestrator or agent, `model`
+from its model). Refused: an empty or over-long quote (> 4,000 characters), input carrying rights,
+workspaces, status or any field other than those listed (the operation refuses unknown fields,
+and `source` refuses unknown keys), a quote that would need redaction (refused, never rewritten,
+so the words stay verbatim), or a mandate in `ended` state. A relay is a wake event: the answer
+comment is in the wake digest. CLI: `orbit resident relay <task> --quote … --source '<json>'
+[--request-id …] [--reverses …]`.
 
 ## `orbit.resident.control`
 
-Input: `{task, action: pause|resume|stop|wake|takeover|release, reason: string, status_request?: bool, by_session?: string}`.
-Output: `{state, effective_at}`.
+Input: `{task_id, action: pause|resume|stop|wake|takeover|release, reason: string, status_request?: bool, by_session?: string}`
+plus `orchestrator?` and `model?`.
+Output: `{task_id, action, state, effective_at, by}`, and for `stop` a `handoff` of `review`,
+`cycle_live` (finalize hands off), `already` or `refused: <why>` (the lifecycle refused the move,
+for example from `proposed`; the operator moves the assignment). `status_request` applies only to
+`wake`. CLI: `orbit resident control <task> <action> --reason … [--status-request] [--by-session …]`.
+
+Each action appends a `resident_control` history entry whose note is
+`{action, state, reason, by, status_request?, by_session?}`; the last entry's `state` is the
+control state. A mandate's reported state is `paused` or `taken_over` from it, and `ended` after
+`stop`. `resume`, `wake` and `release` written after the last cycle start add the wake reason
+`wake` (and `status_request`) to the due check, consumed by the next cycle; the cadence floor
+still applies. The brief carries `status_request: true` for such a cycle, and finalize
+synthesizes an `incomplete` checkpoint if the agent wrote none, so a status request always
+leaves a checkpoint. An unreadable control entry makes the mandate `invalid`, never active.
 
 Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant, completes,
 checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at the next
@@ -95,7 +114,8 @@ checkpoint parsed, open requests, next due estimate, and the last five outcomes.
 `list {workspace?, state?}` → one row per mandate: task, goal, state, last checkpoint time and
 outcome, open requests, stalled flag. Both are read-only and federated like other reads.
 
-Slice 1 ([ORB-21242]) ships the parts that exist yet: `show {task_id}` returns the task, `state`
+[ORB-21245] adds `control` (state and last action) and `stalled` with `stalled_reason` to `show`,
+and `stalled` to each `list` row. Slice 1 ([ORB-21242]) shipped: `show {task_id}` returns the task, `state`
 (`active`, `handed_off`, `ended`, `invalid` with `state_reason`), the parsed mandate (or
 `mandate_error`), the effective authority, the folded authority record with `granted[]` and
 `narrowed[]` (or `authority_error`), and open grant requests. `list {include_ended?}` returns
@@ -106,7 +126,9 @@ slices.
 ## The `resident` toolset
 
 `orbit mcp serve --toolset resident` advertises the tools above; [ORB-21242] introduced it with
-`grant`, `show` and `list`, and the `manager` and `resident` MCP roles include it. The default
+`grant`, `show` and `list`, [ORB-21245] added `relay` and `control`, and the `manager` and
+`resident` MCP roles include it. A resident cycle's guard refuses `grant`, `relay` and `control`:
+a cycle never speaks for the human or changes its own firing. The default
 toolset does not,
 because a leaf agent has no use for them. A resident cycle's own grant includes
 `orbit.resident.checkpoint` and `orbit.resident.show` for its own mandate regardless of toolset.
@@ -118,7 +140,7 @@ because a leaf agent has no use for them. A resident cycle's own grant includes
 | Progress, decisions, costs | `resident.checkpoint` on the assignment | — |
 | An escalation | decision request on a human-crew task, plus a `resident.request` index comment | `decision_open` |
 | Handoff | assignment in `review` with execution summary | `review_waiting` |
-| Stalled | no checkpoint for 2 × heartbeat, or three `incomplete` outcomes in a row | `resident_stalled` (new) |
+| Stalled | an `active` mandate with no checkpoint for 2 × heartbeat (since creation when it never checkpointed), or three `incomplete` outcomes in a row | `resident_stalled` |
 | Something broken | friction, or an `incident` notice (agent class) | `friction_untriaged` |
 
 ## Agent Signature

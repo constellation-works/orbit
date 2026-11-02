@@ -32,6 +32,11 @@ impl Execute for ResidentCommand {
                 text(&value["checkpoint"]["cycle"])
             ))],
             ResidentVerb::Grant => vec![Block::text(grant_text(&value))],
+            ResidentVerb::Relay => vec![Block::text(format!(
+                "Relayed to {}: a resident.answer comment wakes the resident.",
+                text(&value["task_id"])
+            ))],
+            ResidentVerb::Control => vec![Block::text(control_text(&value))],
             ResidentVerb::Digest => vec![Block::text(digest_text(&value))],
             ResidentVerb::Metrics => vec![Block::text(metrics_text(&value))],
             ResidentVerb::Show => vec![Block::text(show_text(&value))],
@@ -90,6 +95,29 @@ fn grant_text(value: &Value) -> String {
         }
     }
     let _ = write!(out, "Authority: {}", authority_line(&value["authority"]));
+    out
+}
+
+fn control_text(value: &Value) -> String {
+    let mut out = format!(
+        "Resident {} is {} after {} by {}.",
+        text(&value["task_id"]),
+        text(&value["state"]),
+        text(&value["action"]),
+        text(&value["by"]),
+    );
+    match value["handoff"].as_str() {
+        Some("review") => out.push_str(" The assignment moved to review."),
+        Some("cycle_live") => {
+            out.push_str(
+                " The live cycle finishes first; its finalize moves the assignment to review.",
+            );
+        }
+        Some(other) if other.starts_with("refused") => {
+            let _ = write!(out, " The assignment did not move to review ({other}).");
+        }
+        _ => {}
+    }
     out
 }
 
@@ -207,6 +235,9 @@ fn show_text(value: &Value) -> String {
     if let Some(reason) = value["state_reason"].as_str() {
         let _ = writeln!(out, "Not due: {reason}");
     }
+    if let Some(reason) = value["stalled_reason"].as_str() {
+        let _ = writeln!(out, "Stalled: {reason}");
+    }
     if !value["latest_checkpoint"].is_null() {
         let checkpoint = &value["latest_checkpoint"];
         let _ = writeln!(
@@ -278,7 +309,11 @@ fn list_table(value: &Value) -> Table {
     for row in value["mandates"].as_array().into_iter().flatten() {
         table.add_row(vec![
             text(&row["task_id"]),
-            text(&row["state"]),
+            if row["stalled"] == true {
+                format!("{} (stalled)", text(&row["state"]))
+            } else {
+                text(&row["state"])
+            },
             joined(&row["rights"]),
             joined(&row["workspaces"]),
             text(&row["open_requests"]),

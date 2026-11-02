@@ -1,11 +1,11 @@
 ---
 title: Resident mandates
-description: "Prepare a resident mandate, check its fields, inspect its effective authority, and widen or narrow that authority with the resident grant, show and list commands."
+description: "Prepare a resident mandate, check its fields, inspect its effective authority, widen or narrow that authority, relay a human's words to it, and pause, stop, wake or take over a resident."
 ---
 
 A resident mandate is an assignment task tagged `resident` that carries a `resident/mandate.json` artifact. The artifact says what the resident works toward and which workspaces it concerns. The mandate's authority, the rights and workspaces the resident may use, is a separate record. It starts with no rights. A human widens it. Anyone who can write the assignment task can narrow it.
 
-This page covers the mandate format and the authority commands in this release. It does not describe how a resident cycle is scheduled or started. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
+This page covers the mandate format, the authority commands and the manager's relay and control commands in this release. It does not describe how a resident cycle is scheduled or started. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
 
 ## Prepare the assignment
 
@@ -73,7 +73,7 @@ orbit resident list --all
 orbit resident show <task id>
 ```
 
-`list` prints one row per mandate with its task ID, state, effective rights, effective workspaces, number of open grant requests and goal. `--json` adds each mandate's deadline and authority revision. Ended mandates appear only with `--all`.
+`list` prints one row per mandate with its task ID, state (marked `(stalled)` when it is [stalled](#stalled-residents)), effective rights, effective workspaces, number of open grant requests and goal. `--json` adds each mandate's deadline, authority revision and `stalled` flag. Ended mandates appear only with `--all`.
 
 `show` reports one mandate in full. Its `state` is one of:
 
@@ -81,10 +81,12 @@ orbit resident show <task id>
 |---|---|
 | `active` | The task is tagged `resident`, the mandate is valid, and the assignment is open. |
 | `handed_off` | The assignment is in review. The resident has handed off. |
-| `ended` | The assignment is done, archived or rejected. The mandate takes no widening. |
+| `paused` | `orbit resident control … pause` stopped new cycles until `resume`. `state_reason` names who paused it and why. |
+| `taken_over` | A person took the mandate over with `takeover`. No cycle fires until `release`. |
+| `ended` | The assignment is done, archived or rejected, or the mandate was stopped with `stop`. The mandate takes no widening and no relay. |
 | `invalid` | The task is not tagged `resident`, or the mandate is missing or invalid. `state_reason` says which. |
 
-Add `--json` to get the full payload. Its keys are `state`, `state_reason`, `mandate`, `effective_authority`, `authority` (with its `granted` and `narrowed` history), `open_requests`, `latest_checkpoint` and `live_cycle`, which appears only while it is unexpired. `mandate_error` or `authority_error` appears when that record cannot be read.
+Add `--json` to get the full payload. Its keys are `state`, `state_reason`, `control` (the control state and its last action, caller and reason), `stalled` and `stalled_reason`, `mandate`, `effective_authority`, `authority` (with its `granted` and `narrowed` history), `open_requests`, `latest_checkpoint` and `live_cycle`, which appears only while it is unexpired. `mandate_error` or `authority_error` appears when that record cannot be read.
 
 ## Effective authority
 
@@ -164,7 +166,7 @@ Each applied change appends a `resident_authority_changed` event to the assignme
 
 ## MCP roles and authority
 
-The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
+The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
 
 A widening applies directly only when the caller is the operator, and the caller's role does not decide that. An MCP session is never the operator for this purpose, even one that holds operator capability, so its widening becomes a request. Its `orchestrator` and `model` arguments record attribution on that request and never grant anything.
 
@@ -173,7 +175,7 @@ A widening applies directly only when the caller is the operator, and the caller
 | Operator at a terminal on this host | Applies at once | Applies at once |
 | Any other caller, including an MCP session | Raises a request. The authority changes only when a human answers `grant`. | Applies at once |
 
-Over MCP the same operations take these argument names: `task_id`, `add`, `workspaces`, `remove`, `drop_workspaces`, `deadline` and `quote` for `orbit.resident.grant`, and `include_ended` for `orbit.resident.list`. `workspaces` and `drop_workspaces` are the CLI's `--add-workspace` and `--drop-workspace` flags.
+Over MCP the same operations take these argument names: `task_id`, `add`, `workspaces`, `remove`, `drop_workspaces`, `deadline` and `quote` for `orbit.resident.grant`, `task_id`, `quote`, `source`, `request_id` and `reverses` for `orbit.resident.relay`, `task_id`, `action`, `reason`, `status_request` and `by_session` for `orbit.resident.control`, and `include_ended` for `orbit.resident.list`. `workspaces` and `drop_workspaces` are the CLI's `--add-workspace` and `--drop-workspace` flags.
 
 ## Record a checkpoint
 
@@ -185,6 +187,50 @@ Over MCP the same operations take these argument names: `task_id`, `add`, `works
 - A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 characters of notes. Each action key has the form `resident:<mandate>:<cycle>:<n>`, where `<n>` is a positive integer.
 
 `show` reports the latest checkpoint.
+
+## Relay a human's words
+
+```bash
+orbit resident relay <task id> --quote "Ship CSV first." \
+  --source '{"human":"daniel","via":"chat","said_at":"2026-11-02T10:00:00Z"}'
+```
+
+`relay` writes one `resident.answer` comment on the assignment. The quote is kept verbatim, up to 4000 characters, with its provenance: `human` (who said it), `via` (the channel), an optional `session` and `said_at`. Orbit records the relaying session as `relayed_by` from the caller, never from input. The comment wakes the resident on its next due check.
+
+- `--request-id` names the resident request or decision request the words answer. A relayed answer is a direction: the human still answers the decision request itself.
+- `--reverses` names a resident decision the direction undoes.
+
+A relay never changes authority. Input that names rights, workspaces, a status or any field not listed above is refused, inside `source` too. Widen through [`orbit resident grant`](#widen-the-authority). A quote that would need redaction, such as a secret or a home directory path, is refused instead of rewritten. A relay to an ended mandate is refused.
+
+## Control a resident
+
+```bash
+orbit resident control <task id> pause --reason "Holding while the release is cut"
+orbit resident control <task id> resume --reason "Release is out"
+orbit resident control <task id> wake --status-request --reason "Where does slice 3 stand?"
+orbit resident control <task id> takeover --by-session <session> --reason "I'll drive this one"
+orbit resident control <task id> release --reason "Back to you"
+orbit resident control <task id> stop --reason "Goal dropped"
+```
+
+| Action | From | To | Effect |
+|---|---|---|---|
+| `pause` | `active` | `paused` | No new cycle starts. |
+| `resume` | `paused` | `active` | Due on the next tick. |
+| `stop` | anything but ended | `ended` | No new cycle starts. The assignment moves to review with a synthesized handoff summary once no cycle is live. |
+| `wake` | `active` | `active` | Due on the next tick despite the heartbeat, never before the cadence floor. `--status-request` makes the cycle report where the mandate stands even when it has nothing else to do. |
+| `takeover` | `active`, `paused` | `taken_over` | No cycle fires. Records who took over. |
+| `release` | `taken_over` | `active` | Due on the next tick. The cycle reads the comments written during the takeover as new. |
+
+An action that does not apply to the current state is refused and writes nothing. A live cycle is not interrupted: it keeps its grant, writes its checkpoint and ends at its boundary. When `stop` cannot move the assignment to review (a `proposed` assignment, say), the reply says why, and you move it by hand.
+
+Any caller that can write the assignment may call `control`, because every action narrows or restores firing under the existing authority. `resume` and `release` never widen it. Each action appends a `resident_control` event to the assignment's history with the action, the resulting state, the caller, the reason and any `--by-session`.
+
+## Stalled residents
+
+An `active` mandate is stalled when it has not written a checkpoint for twice its heartbeat (or, never having checkpointed, for twice its heartbeat since the task was created), or when its last three checkpoints are all `incomplete`. A paused, taken-over, handed-off or ended mandate is not stalled.
+
+`orbit attention` lists each stalled mandate as a `resident_stalled` item whose next step is `orbit resident control <task id> wake --status-request`. `orbit resident show` and `list` report the same flag.
 
 ## Evolution ledger
 

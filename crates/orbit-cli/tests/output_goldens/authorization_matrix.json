@@ -1742,6 +1742,21 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.resident.control",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.resident.digest",
     "required_any": [],
     "verdicts": {
@@ -1781,6 +1796,21 @@
     "surface": "tool",
     "operation": "orbit.resident.metrics",
     "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.resident.relay",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
     "verdicts": {
       "operator_terminal": "allow",
       "agent_session": "allow",

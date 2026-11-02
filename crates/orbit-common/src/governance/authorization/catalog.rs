@@ -791,6 +791,26 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "changing a resident's authority decides what it may do unattended, so the caller must be identified; only an operator's widening applies directly, anyone else's becomes a decision request for the human",
     },
     GovernedOperation {
+        id: "orbit.resident.relay",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "a relay puts a human's words in front of a resident, so the relaying session must be identified and recorded; core refuses any input that names authority",
+    },
+    GovernedOperation {
+        id: "orbit.resident.control",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "pausing, stopping or taking over a resident changes what runs unattended, so the caller must be identified and recorded; every action narrows or restores firing under the existing authority",
+    },
+    GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

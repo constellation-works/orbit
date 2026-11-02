@@ -6,8 +6,11 @@
 //! the mandate's workspaces or global scope, and the assignment's
 //! non-resident comments. A mandate is due when that digest differs from the
 //! last checkpoint's, its heartbeat elapsed, its deadline passed since the
-//! last cycle, it never cycled, or its last cycle died; and only once the
-//! cadence floor since the last cycle start allows it and no cycle is live.
+//! last cycle, it never cycled, its last cycle died, or a manager's `wake`,
+//! `resume` or `release` came after the last cycle started; and only once
+//! the cadence floor since the last cycle start allows it and no cycle is
+//! live. A mandate is stalled when it has not checkpointed for twice its
+//! heartbeat, or its last three checkpoints are all `incomplete`.
 
 use std::collections::BTreeSet;
 
@@ -28,6 +31,9 @@ use crate::application::notice::{NoticeListFilter, NoticeStatusFilter};
 
 /// Most watched tasks one digest reads.
 const MAX_WATCHED_TASKS: usize = 200;
+
+/// Consecutive `incomplete` checkpoints that make a mandate stalled.
+const STALLED_INCOMPLETE_RUN: usize = 3;
 
 /// One started cycle, as the assignment's history records it.
 #[derive(Debug, Clone)]
@@ -57,6 +63,9 @@ pub(crate) struct ResidentDue {
     pub(crate) maintenance: Vec<String>,
     /// The notices in scope, for the brief.
     pub(crate) notices: Vec<Notice>,
+    /// When the pending manager wake (`wake`, `resume`, `release`) was
+    /// written, if one is pending.
+    pub(crate) wake_at: Option<DateTime<Utc>>,
 }
 
 impl ResidentDue {
@@ -67,10 +76,12 @@ impl ResidentDue {
             .last_cycle
             .as_ref()
             .map_or("none", |cycle| cycle.live.cycle.as_str());
-        let why = if self.reasons.iter().any(|reason| reason == "heartbeat") {
-            "heartbeat"
+        let why = if let Some(at) = self.wake_at {
+            format!("wake:{}", at.to_rfc3339())
+        } else if self.reasons.iter().any(|reason| reason == "heartbeat") {
+            "heartbeat".to_string()
         } else {
-            self.digest.as_str()
+            self.digest.clone()
         };
         format!("after:{after}|{why}")
     }
@@ -120,6 +131,65 @@ pub(crate) fn checkpoints(task_id: &str, comments: &[TaskComment]) -> Vec<Reside
             },
         )
         .collect()
+}
+
+/// Why an active mandate is stalled, and since when.
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentStall {
+    pub(crate) reason: String,
+    pub(crate) since: DateTime<Utc>,
+    pub(crate) last_checkpoint_at: Option<DateTime<Utc>>,
+}
+
+/// Whether a mandate is stalled at `now`: no checkpoint (or, never having
+/// checkpointed, no first one since the task was created) for twice its
+/// heartbeat, or its last three checkpoints all `incomplete`. Callers ask
+/// only for an active mandate: a paused or taken-over one is meant to wait.
+pub(crate) fn resident_stall(
+    task: &Task,
+    mandate: &ResidentMandate,
+    comments: &[TaskComment],
+    now: DateTime<Utc>,
+) -> Option<ResidentStall> {
+    let written: Vec<(DateTime<Utc>, String)> = comments
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(record) if record.mandate == task.id.as_str() => {
+                    Some((comment.at, record.outcome))
+                }
+                _ => None,
+            },
+        )
+        .collect();
+    let last_checkpoint_at = written.last().map(|(at, _)| *at);
+    let tail: Vec<&(DateTime<Utc>, String)> =
+        written.iter().rev().take(STALLED_INCOMPLETE_RUN).collect();
+    if tail.len() == STALLED_INCOMPLETE_RUN
+        && tail.iter().all(|(_, outcome)| outcome == "incomplete")
+    {
+        return Some(ResidentStall {
+            reason: format!("its last {STALLED_INCOMPLETE_RUN} cycles were all incomplete"),
+            since: tail.last().map_or(now, |(at, _)| *at),
+            last_checkpoint_at,
+        });
+    }
+    let since = last_checkpoint_at.unwrap_or(task.created_at);
+    let limit = Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes));
+    (now - since >= limit).then(|| ResidentStall {
+        reason: match last_checkpoint_at {
+            Some(_) => format!(
+                "no checkpoint for over twice its {}-minute heartbeat",
+                mandate.cadence.heartbeat_minutes
+            ),
+            None => format!(
+                "no first checkpoint within twice its {}-minute heartbeat",
+                mandate.cadence.heartbeat_minutes
+            ),
+        },
+        since,
+        last_checkpoint_at,
+    })
 }
 
 fn digest_of(value: &serde_json::Value) -> String {
@@ -318,6 +388,17 @@ impl OrbitRuntime {
         if now - since >= Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)) {
             reasons.push("heartbeat".into());
         }
+        let control = super::control::resident_control_from_history(history)
+            .map_err(OrbitError::Execution)?;
+        let pending_wake = control
+            .pending_wake(last_cycle.as_ref().map(|cycle| cycle.at))
+            .cloned();
+        if let Some((entry, _)) = &pending_wake {
+            reasons.push("wake".into());
+            if entry.status_request {
+                reasons.push("status_request".into());
+            }
+        }
         if let Some(deadline) = mandate.deadline
             && deadline <= now
             && last_cycle.as_ref().is_none_or(|cycle| cycle.at < deadline)
@@ -341,6 +422,7 @@ impl OrbitRuntime {
             episode_start: since,
             maintenance,
             notices,
+            wake_at: pending_wake.map(|(_, at)| at),
         })
     }
 }

@@ -60,8 +60,8 @@ Roles are defined in one place, `McpRole::toolsets`:
 
 `agent` follows the managed activity baseline allowlist; activities keep
 their own allowlists, which still decide what a managed run may call. The
-`resident` toolset (`orbit.resident.grant`, `show` and `list`, [ORB-21242])
-is in `manager` and `resident`; relay and control join it in [ORB-21245].
+`resident` toolset (`orbit.resident.grant`, `show` and `list` from [ORB-21242];
+`relay` and `control` from [ORB-21245]) is in `manager` and `resident`.
 The roles, not another add-on toolset, are how those surfaces are served.
 
 ## Selection

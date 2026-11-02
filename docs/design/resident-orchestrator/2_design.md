@@ -301,8 +301,9 @@ A due mandate becomes a member whose fingerprint is `after:<last cycle>|<digest 
 its debounce clock at the last cycle start, so it is admitted on the first tick the floor allows.
 Admission re-evaluates with the observation's clock and retires a member whose reason changed. A
 cycle run settles its member once it stops: applied if it started its cycle, failed (and retried)
-otherwise. Control-action wakes (`wake`, `resume`, `release`) arrive with [ORB-21245]; until then a
-comment on the assignment wakes it.
+otherwise. A control-action wake (`wake`, `resume`, `release`, [ORB-21245]) written after the last
+cycle start makes the mandate due with reason `wake` (`status_request` too when asked), as does a
+comment on the assignment; `pause`, `takeover` and `stop` stop it firing.
 
 **Lease.** There is no separate fenced lease: the live-cycle record (`resident_cycle_changed`,
 compare-and-set) is the lease, with `expires_at` 40 minutes after observe (the agent step's 30 min
@@ -400,7 +401,7 @@ global `machine.mcp.role`) serves the role's toolsets; `--toolset` adds to it. A
 authority: `--operator` still decides operator capability. Today `--role manager` serves task and run
 reads, decisions, notices and search, and `--role resident` adds task writes and dispatch for the
 bounded cycle. Both also serve the `resident` toolset, which [ORB-21242] introduced with
-`orbit.resident.grant`, `show` and `list`; [ORB-21245] adds relay and control for the manager, and
+`orbit.resident.grant`, `show` and `list`; [ORB-21245] added relay and control for the manager, and
 later slices the resident's own checkpoints for the cycle. Without a role a server still
 serves the pre-role default surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
 

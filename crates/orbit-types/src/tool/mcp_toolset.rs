@@ -61,7 +61,8 @@ pub enum McpToolset {
     AgentInvoke,
     /// Fleet notices: post, close, list and show.
     Notice,
-    /// Resident mandates: the authority grant, show and list.
+    /// Resident mandates: the authority grant, relay and control, show,
+    /// list, checkpoint, metrics and digest, and the evolution ledger.
     Resident,
     /// Tools no MCP server advertises: `orbit tool run` and managed
     /// activities reach them. Naming it in a selection advertises nothing.
