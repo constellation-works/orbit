@@ -1,9 +1,12 @@
 //! `orbit host` — the remote Orbit hosts this machine reaches over SSH.
 //!
 //! Each command loads `~/.orbit/hosts.toml` through `orbit_cmd::hosts`, which
-//! the dashboard also calls, and opens no workspace runtime. Identity, version
-//! and protocol are read from each host live; only its name, SSH target,
-//! `machine_id` and task prefix are stored.
+//! the dashboard also calls, and opens no workspace runtime. Reachability,
+//! version, protocol and workspaces are read from each host live and never
+//! persisted; only its name, SSH target, `machine_id`, task prefix and the
+//! optional `host_os` snapshot are stored. The OS snapshot is read from the
+//! host when it is added or migrated, so entries registered before discovery
+//! reported an OS have none until they are removed and added again.
 
 use std::fmt::Write as _;
 use std::path::Path;
