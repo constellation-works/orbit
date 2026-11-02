@@ -17,7 +17,7 @@ related_artifacts: [ORB-21229, ORB-21263]
 # Resident Orchestrator — Design
 
 This document specifies how a resident orchestrator works and answers the nine design questions
-of [ORB-21229]. Nothing here is built. Exact record shapes and tool contracts are in the specs:
+of [ORB-21229]. Slice 1 ([ORB-21242]) is in review and not yet landed; slices 2–10 are approved (`backlog`), so nothing here is shipped. Exact record shapes and tool contracts are in the specs:
 [mandate-and-authority](./specs/mandate-and-authority.md),
 [checkpoint-contract](./specs/checkpoint-contract.md),
 [manager-channel](./specs/manager-channel.md) and
@@ -573,7 +573,7 @@ Proposals that the slices confirm:
 
 ## 13. Slices
 
-Every slice is a `proposed` task in ws_orbit tagged `resident-orchestrator`. Dependencies are
+Slice 1 is in `review` ([ORB-21242]); slices 2–10 are approved (`backlog`) tasks in ws_orbit tagged `resident-orchestrator`. Dependencies are
 `blocked_by` links inside ws_orbit; cross-workspace links (the [ORB-21178] baseline) are
 `related_to`.
 

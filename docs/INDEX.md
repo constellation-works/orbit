@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (11)
+### Building (12)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -124,12 +124,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
-| [Fleet Notices](./design/fleet-notices/1_overview.md) | Slice 3, ORB-21213: managed-agent posting | claude |
+| [Fleet Notices](./design/fleet-notices/1_overview.md) | Land slices 3-4 (ORB-21213, ORB-21214, in flight); then slice 5, ORB-21215 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]) and declared output files ([ORB-20866]); the rest of phase 3 (files.inputs, the attach action, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (9)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -138,7 +139,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Operator Attention](./design/operator-attention/1_overview.md) | Approve and build slice 1, ORB-21168 (tool, CLI, filters, cursor over task-level kinds) | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
-| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Approve and build slice 1, ORB-21242 (mandate record and operator-only authority grant) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
