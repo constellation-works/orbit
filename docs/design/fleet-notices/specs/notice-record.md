@@ -46,7 +46,7 @@ producing forty notices.
 | `hosts` | array | Up to 32 `machine_id`s a `maintenance` notice concerns. Display and filtering only in v1; reserved for the [dispatch-hold extension](../2_design.md#7-extension-point-maintenance-dispatch-hold). Refused on other kinds. |
 | `expires_at` | RFC 3339, required | Set at post from `expires_in_hours` or an explicit instant, bounded by [Expiry](#expiry). |
 | `opened_at` | RFC 3339, required | First post. |
-| `updated_at` | RFC 3339, required | Last post that changed content or expiry. |
+| `updated_at` | RFC 3339, required | Last post that changed content or expiry. A [repeat](#retries) changes neither, so it never moves `updated_at`. |
 | `revision` | integer, required | Starts at 1; each post that changes a content field (`title`, `body`, `kind`, `evidence`, `hosts`, `scope`) increments it. An expiry change alone does not. The brief records `id@revision` ([notice-delivery](./notice-delivery.md#delivery-record)). |
 | `reports` | object, required | `{count, last_at}`: matching posts on this open notice, including the first, except [repeats](#retries). Each bumping post increments `count` and sets `last_at`. A corroborating post bumps it without changing content. |
 | `closed` | object | Present once closed: `{at, by, cause}` plus `reason` for manual closes. `cause` is `manual` or `linked_task_done`. For `cause: manual`, `by` has the `author` shape and `reason` is required, 1–240 characters (supplied to `orbit.notice.close`). For `cause: linked_task_done`, `by` is exactly `{class: "system"}` — not an `author` value, carrying none of the author fields (`crew`, `model`, `task_id`, `run_id`, `machine_id`) and never valid as a poster class — and `reason` is absent; readers render `linked task done` from `cause`. |
@@ -101,8 +101,9 @@ the `[notice]` configuration ([2_design.md §6](../2_design.md#6-configuration))
 | Cap, `agent` (default = cap) | 24 h | — (refused) | 24 h |
 
 A requested expiry beyond the poster's cap is refused (`notice_expiry_exceeds_cap`), never
-clamped silently. An expiry in the past or less than 5 minutes ahead is refused. Re-posting an
-open notice may extend `expires_at`, measured from the re-post, within the re-poster's cap.
+clamped silently. An expiry in the past or less than 5 minutes ahead is refused. A non-repeat
+re-post of an open notice may extend `expires_at`, measured from the re-post, within the
+re-poster's cap; a [repeat](#retries) never does (see [Retries](#retries)).
 
 Expiry is visible: list and show return `expires_at` and `status`; an expired notice is listed
 with `--status expired` (and in `--status all`) for the retention window, and the dashboard shows
@@ -129,8 +130,8 @@ A post whose key matches an open notice is resolved by the [authority rules](./n
 | `updated` | the poster may edit the matched notice | title, body, kind, evidence, `hosts`, scope (subject to scope rules) and expiry replaced as given; `revision` +1 only if a content field changed; `reports` bumped |
 | `corroborated` | the poster may not edit it | content unchanged; `reports` bumped; the response returns the existing notice |
 
-A [repeat](#retries) returns `updated` or `corroborated` by the same rights, and moves nothing except,
-for an editor, the expiry.
+A [repeat](#retries) returns `updated` or `corroborated` by the same rights, and moves nothing —
+not content, `expires_at` or `updated_at`, for an editor or a corroborator alike.
 
 `corroborated` is how forty agents hitting one bug report it once: the first agent opens it, the
 rest bump `reports.count`, and every brief shows how many runs hit it. A corroboration, like any
@@ -141,19 +142,23 @@ other matching post that is not a repeat, counts against the poster's post rate
 
 A post is a **repeat** when its fingerprint equals the fingerprint of the notice's latest audited
 write: the most recent write of any poster on the open notice the post matches. A lost-reply retry
-is a repeat, and so is the same poster sending the same request again to keep an edited notice in
-force. The fingerprint is the resolved `author` object together with the request as given. Omitted
+is a repeat. The fingerprint is the resolved `author` object together with the request as given. Omitted
 optional fields and the defaults of `scope`, `dedupe_key` and `close_on_linked_done` are resolved
 first, and the expiry is compared as requested (`expires_in_hours` or `expires_at`), not as the
 instant it resolves to.
 
-A repeat changes no content field, bumps no `revision` and no `reports`, counts against no post rate
-and no open-count limit, and is never refused by a limit (the repeat check runs before them). An
-editor's repeat applies its expiry request as given, measured from the repeat: a retry seconds after
-the original moves `expires_at` by seconds, and a repeat after a while extends the notice within the
-[expiry](#expiry) rules. A repeat that moves no stored field writes nothing; any other repeat is
-audited like a write. A corroborator's repeat writes nothing at all, because its expiry request is
-not applied.
+A repeat changes no content field, no `expires_at` and no `updated_at`, bumps no `revision` and no
+`reports`, counts against no post rate and no open-count limit, and is never refused by a limit (the
+repeat check runs before them). This holds for an editor and a corroborator alike: neither repeat
+applies its expiry request, whether it was given as `expires_in_hours` or as an absolute
+`expires_at`, so a retry seconds or hours after the original leaves the stored `expires_at`
+unchanged. The repeat check also runs before [expiry](#expiry) validation, so a repeat is never
+refused with `notice_expiry_invalid` — including a lost-reply retry whose original absolute
+`expires_at` is now less than 5 minutes ahead (or would resolve differently as a relative request):
+it still returns `updated` or `corroborated` with the stored expiry untouched. A repeat writes
+nothing and no audit row. A poster who wants to extend a notice sends a post whose expiry request
+differs from the latest write; that is not a repeat, and it applies as a new post under the
+[expiry](#expiry) rules, measured from that post.
 
 Only the latest write is compared, so a post is never dropped because the notice changed after it.
 An identical request sent after another poster has written applies as a new post: an orchestrator

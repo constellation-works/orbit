@@ -78,7 +78,11 @@ A post whose dedupe key matches an open notice ([notice-record](./notice-record.
 - otherwise **corroborates**: the content is untouched and only `reports` changes.
 
 A [repeat](./notice-record.md#retries) of the notice's latest write is handled before these rules and
-changes nothing they would change.
+changes nothing they would change: for an editor and a corroborator alike it leaves content,
+`expires_at` and `updated_at` unchanged, applies no expiry request, and is checked before expiry
+validation, so it is never refused with `notice_expiry_invalid` — including a lost-reply retry
+whose absolute `expires_at` is now less than 5 minutes ahead; it still returns `updated` or
+`corroborated`.
 
 An update may widen `scope` from `workspace` to `global` only if the updater may post global; it
 may never narrow a `global` notice another class authored. An update may change `kind` only within

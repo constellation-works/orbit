@@ -48,7 +48,9 @@ because brief delivery and orchestrator posting have to work wherever the work r
 ## `orbit.notice.post`
 
 Effect: write. MCP scope: workspace required (the home workspace). Idempotent for a
-[repeat](./notice-record.md#retries) of the open notice's latest write, which covers a lost-reply retry.
+[repeat](./notice-record.md#retries) of the open notice's latest write, which covers a lost-reply retry:
+a repeat changes no stored field, including `expires_at` and `updated_at`, for an editor or a
+corroborator.
 
 | Input | Type | Notes |
 |---|---|---|
@@ -74,8 +76,11 @@ Output: `{notice, outcome}` with `outcome` one of `created`, `updated`, `corrobo
 ([notice-record](./notice-record.md#dedupe)). A lost reply may be retried with the same input. The
 retry matches the open key; when it is a [repeat](./notice-record.md#retries) (same poster, same
 request, and no later write by anyone else) it returns `updated` (the poster may edit the notice) or
-`corroborated` (it may not), changes no content, `revision` or `reports`, and is never refused by a
-limit. A post that changes no content field does not bump `revision`.
+`corroborated` (it may not), changes no content, `expires_at`, `updated_at`, `revision` or `reports`,
+and is never refused by a limit. Because the repeat check runs before expiry validation, a repeat
+is never refused with `notice_expiry_invalid`, even when the original absolute `expires_at` is now
+less than 5 minutes ahead: it still returns `updated` or `corroborated` with the stored expiry
+untouched. A post that changes no content field does not bump `revision`.
 
 ## `orbit.notice.close`
 
@@ -134,7 +139,7 @@ stands alone: no source paths and no internal task ids.
 Refusal codes are listed in [notice-authority](./notice-authority.md#refusals). Every write (and
 every refused write) is an audit row with target `notice` and the notice id, carrying the resolved
 poster class and the post's fingerprint, which the repeat check reads
-([notice-record](./notice-record.md#retries)). A repeat that moves no stored field writes no row.
+([notice-record](./notice-record.md#retries)). A repeat moves no stored field and writes no row.
 Reads write nothing.
 
 ## Agent Signature

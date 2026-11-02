@@ -69,7 +69,10 @@ which notices are open.
 ## 3. Surfaces
 
 - **Tools**: `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list`, `orbit.notice.show`
-  ([notice-tools](./specs/notice-tools.md)). `post` is idempotent for a repeat of its latest write
+  ([notice-tools](./specs/notice-tools.md)). `post` is idempotent for a repeat of its latest write —
+  a repeat changes no stored field, including `expires_at` and `updated_at`, for an editor or a
+  corroborator, and is never refused with `notice_expiry_invalid` when a retried absolute
+  `expires_at` is now less than 5 minutes ahead (it still returns `updated` or `corroborated`) —
   and `close` for a repeat close; `list` and `show` are read-only.
 - **MCP**: advertised only with the opt-in `notice` toolset (`orbit mcp serve --toolset notice`,
   or `machine.mcp.toolsets = ["notice"]`, or `all`), like `leases` and `experiments`. The default
