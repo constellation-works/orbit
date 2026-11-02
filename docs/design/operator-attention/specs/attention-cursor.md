@@ -1,7 +1,7 @@
 ---
 type: design
-summary: "Spec: attention fingerprints and the stateless --since cursor: format, delta semantics, validity, expiry and the consumer-hook protocol"
-last_validated: 2026-11-01
+summary: "Spec: attention fingerprints and the stateless --since cursor: format, delta semantics, validity, expiry and the caller polling protocol"
+last_validated: 2026-11-02
 title: Spec — Attention fingerprint and cursor
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention]
 related_artifacts: [ORB-21164, ORB-21165]
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 ---
 
 # Spec: Attention fingerprint and cursor
@@ -22,8 +22,7 @@ can mint or read one, and a cursor that cannot be used degrades to the full list
 
 ## Why This Exists
 
-A hook that re-injects the same eight items into every prompt makes the agent ignore all of
-them. The hook needs "what is new since I last told you", and the system must not grow an
+A caller making repeated explicit reads needs "what is new since the prior read". The system must not grow an
 inbox, acknowledgement table or per-session store to answer it
 ([4_decisions.md](../4_decisions.md#the-delta-cursor-is-stateless-and-carries-what-the-caller-has-seen)).
 
@@ -102,7 +101,7 @@ correct for a caller that has not been shown them.
 ## Validity and expiry
 
 - A cursor is valid for `attention.cursor_ttl_hours` (default 24) after `issued_at`. Every
-  response mints a fresh cursor with a fresh `issued_at`, so a hook that calls at least daily
+  response mints a fresh cursor with a fresh `issued_at`, so a caller that reads at least daily
   never expires; expiry measures the *gap* between calls.
 - Validity is judged by the process that serves the call, against its own clock. An
   `issued_at` more than 5 minutes in the future is `invalid`.
@@ -119,42 +118,38 @@ correct for a caller that has not been shown them.
 
   Falling back to the full list is the safe direction: a consumer may see an item twice but
   never misses one. A full-list response with a non-`none`, non-`accepted` status is what a
-  hook shows with a "list restarted" note.
+  caller shows with a "list restarted" note.
 
-## Consumer-hook protocol
+## Caller polling protocol
 
-Orbit ships the feed and cursor; the embedding project owns the hook. [ORB-21165] is
-constellation's session hook, filed in that repository. A hook uses the contract like this:
+Daniel dropped the session hook. [ORB-21165] is archived and is not a dependency or deliverable. A caller may explicitly poll:
 
-1. **Session start.** Run `orbit attention <scope + filters> --json` with an explicit scope
-   (for example `--all --severity medium`). Inject the `items` (their `reason` and
-   `next.command`) into the session context. Persist `cursor.next` for this session.
-2. **Later injections** (per prompt or every N minutes, rate-limited by the hook). Run the same
-   command with `--since <stored cursor>`. Inject only the returned items. Replace the stored
-   cursor with `cursor.next`. If `cursor.status` is `expired`, `invalid` or `unsupported`,
-   treat the response as a restarted full list and say so.
-3. **Failure.** If the command fails or times out, inject nothing and keep the old cursor. A
-   missed poll costs nothing: the next poll returns what accumulated.
-4. **Keep one cursor per session and per filter set.** Sessions sharing a cursor each get the
-   items once between them. The cursor is not a lock; two pollers using the same one may both
-   inject the same item, which is harmless.
-5. **`degraded` is part of the injection.** If sources were blind, the hook must say so; an
-   empty list with `degraded` entries is not an all-clear.
+1. Call `orbit attention <scope + filters> --json` and retain `cursor.next`.
+2. Pass that token as `--since` on a later explicit read. Replace it with the new `cursor.next`.
+3. On `expired`, `invalid` or `unsupported`, treat the response as a restarted full list.
+4. If the command fails, keep the old cursor. Always show `degraded`; empty with unread sources is not all-clear.
 
-The hook, its trigger names and its state file belong to the consumer. Core contains nothing
-constellation-specific and no hook ([4_decisions.md](../4_decisions.md#orbit-ships-the-feed-the-consumer-ships-the-hook)).
+No polling schedule, session hook, notification or live configuration change is installed by this contract.
 
 ## Cost
 
-A call recomputes every selected source. Task-level kinds are local reads of already-indexed
-task, decision and review records; runtime kinds add run, claim and host probes; `ci_red`
-adds a provider call cached for `attention.ci_cache_seconds` (default 60) per workspace. A
-hook polling faster than once a minute buys nothing for `ci_red` and little for the rest; the
-design assumes minutes. Per-source timing is a slice-1 measurement ([2_design.md §6](../2_design.md#6-slices)).
+A call recomputes selected task sources from one metadata index pass, hydrating only relevant nonterminal tasks. Kind selection skips unrelated source predicates. Source timings are logged at `orbit.attention=debug` in microseconds; they include a separate `task_index` bucket. Later runtime and provider slices consume the shared source deadline and cache fields.
+
+On 2026-11-02, one sequential observation of the real claimed Orbit workspace through the installed owner-facing CLI measured the following public read boundaries (wall clock, including process startup and routing). These are boundary costs, not candidate derivation benchmarks:
+
+| Read boundary | Seconds | Result |
+|---|---:|---|
+| Proposed/backlog task listing for pilot holds | 0.322 | passed |
+| Blocked task listing | 0.320 | passed |
+| Review task listing | 0.318 | passed |
+| Pilot-warning filtered listing | 0.280 | unavailable: the installed version lacks the filter; slice 1 restores the existing residual’s public wiring |
+| Effective open decisions | 0.080 | unavailable: `owner_route_unavailable` on this claimed worker’s nested owner route; the granted MCP call independently returned the same refusal in 0.040 seconds |
+
+Evidence is attached as `attention-source-costs.json` and the corresponding per-source records. Full per-source candidate timings on the live owner remain unmeasured: candidate binaries are permitted only in disposable homes, and this worker cannot reach the effective decision source. No substituted replica or synthetic load was used. The disposable-workspace boundary checks validate behavior without claiming live-owner latency.
 
 ## Task References
 
 - [ORB-21164] — specified the fingerprint and cursor
-- [ORB-21165] — consumer hook that follows the protocol above
+- [ORB-21165] — archived session-hook proposal
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

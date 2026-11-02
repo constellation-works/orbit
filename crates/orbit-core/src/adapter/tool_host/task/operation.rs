@@ -487,7 +487,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             has_external_ref_system,
             ..Default::default()
         },
-        pilot_warnings: false,
+        pilot_warnings: input.optional_bool("pilot_warnings")? == Some(true),
         ready: input.optional_bool("ready")? == Some(true),
         runs_on: input
             .optional_string("runs_on")?

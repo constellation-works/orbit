@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (12)
+### Building (13)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -126,18 +126,18 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | Slice 5, ORB-21215: dashboard banner and view, attention kind | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | Deliver runtime sources (slice 2), provider sources (slice 3), and cross-host federation (slice 4) | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (8)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Daniel reviews the design; then file the slices in 2_design.md §9 (none filed yet) | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | Approve and build slice 1, ORB-21168 (tool, CLI, filters, cursor over task-level kinds) | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
@@ -233,7 +233,7 @@ a conservative title/status fallback.
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for hooks | Draft | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Proposed | claude |

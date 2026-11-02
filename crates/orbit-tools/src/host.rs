@@ -1,5 +1,6 @@
 //! Orbit host surface a builtin tool calls instead of respawning the CLI.
 
+use orbit_common::governance::attention::AttentionVerb;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -116,6 +117,8 @@ pub enum OrbitBuiltinAction {
     Automation(AutomationVerb),
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
+    /// Read-only operator attention feed.
+    Attention(AttentionVerb),
     CommandExec,
     /// Read-only crew verbs: the crew ladder report.
     Crew(CrewVerb),
@@ -340,5 +343,11 @@ impl From<SearchVerb> for OrbitBuiltinAction {
 impl From<orbit_common::governance::evolution::EvolutionVerb> for OrbitBuiltinAction {
     fn from(verb: orbit_common::governance::evolution::EvolutionVerb) -> Self {
         Self::Evolution(verb)
+    }
+}
+
+impl From<AttentionVerb> for OrbitBuiltinAction {
+    fn from(verb: AttentionVerb) -> Self {
+        Self::Attention(verb)
     }
 }

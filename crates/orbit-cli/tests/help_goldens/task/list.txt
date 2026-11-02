@@ -91,6 +91,9 @@ Options:
       --full
           Show all table columns in text output
 
+      --pilot-warnings
+          Keep proposed tasks held by pilot warning findings
+
   -h, --help
           Print help (see a summary with '-h')
 

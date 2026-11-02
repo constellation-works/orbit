@@ -1,15 +1,15 @@
 ---
 title: Operator Attention — Overview
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
-stage: designing
-next: "Approve and build slice 1, ORB-21168 (tool, CLI, filters, cursor over task-level kinds)"
+stage: building
+next: "Deliver runtime sources (slice 2), provider sources (slice 3), and cross-host federation (slice 4)"
 feature: operator-attention
 doc_role: overview
 type: design
-summary: "orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for hooks"
+summary: "orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers"
 tags: [operator-attention, operator-ux, decision-channel, federated-mcp]
 paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [human-decision-channel, federated-mcp, host-registry, distributed-drain, mcp-session-context]
@@ -23,7 +23,7 @@ waiting on an operator: pilot warnings and holds, blocked tasks, open decisions,
 stuck runs, stale claims, reviews awaiting a verdict, a red base branch, untriaged friction
 and unhealthy hosts. It is derived from existing state on every call (no inbox, no new
 store), every item names the exact command that resolves it, and a stateless cursor lets a
-hook inject only what is new or changed. The CLI is `orbit attention`; the tool is
+caller request only what is new or changed. The CLI is `orbit attention`; the tool is
 `orbit.attention`.
 
 ## 1. Motivation
@@ -38,7 +38,7 @@ On 2026-11-01 four proposed tasks (ORB-21114, ORB-21118, ORB-21127, ORB-20363) c
 pilot warnings that hold promotion, and ORB-20363 also carried a contract-mismatch
 finding. None surfaced until Daniel saw them in the UI. [ORB-21164] records his ask: "a
 holistic summary of issues that requires operator attention", available to orchestrators,
-injected through a hook, and filterable (for example by workspace). He chose the name
+initially injected through a hook, and filterable (for example by workspace). Daniel subsequently dropped the session hook; its task is archived and it is no dependency or deliverable. He chose the name
 `attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_scope.md))
 solves the last mile for decisions it can email; this feature covers everything else and
 gives the orchestrator one place to look.
@@ -62,8 +62,7 @@ gives the orchestrator one place to look.
 - **Aggregator**: the layer that merges per-workspace results across workspaces and hosts,
   applies the cursor, and turns unreachable hosts into items. Contract:
   [attention-federation](./specs/attention-federation.md).
-- **Consumer hook**: a session hook owned by whoever embeds Orbit (constellation files its
-  own, [ORB-21165]). Orbit ships the feed and the cursor; it ships no hook.
+- **Explicit reads**: operators and agents call the feed and retain a cursor when useful. No session hook, automation, notification or live config change is part of this feature.
 
 ## 3. At a Glance
 
@@ -87,6 +86,6 @@ Implementation is cut into four slices ([ORB-21168], [ORB-21169], [ORB-21170], [
 - [ORB-21169] — slice 2: runtime kinds
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation and `host_unhealthy`
-- [ORB-21165] — constellation's orchestrator-session hook that consumes the delta feed (separate repository)
+- [ORB-21165] — archived session-hook proposal; not a dependency or deliverable
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

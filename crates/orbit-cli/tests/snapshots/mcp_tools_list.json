@@ -1,5 +1,225 @@
 [
   {
+    "name": "orbit_attention",
+    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open and review_waiting. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Registered workspace names or ids; accepts one string or an array. Conflicts with all."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Read every active workspace on this host."
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Host name or machine id (repeatable)."
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "pilot_warning",
+                "pilot_hold",
+                "blocked",
+                "decision_open",
+                "review_waiting",
+                "run_failed",
+                "run_stuck",
+                "claim_stale",
+                "ci_red",
+                "friction_untriaged",
+                "host_unhealthy"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pilot_warning",
+                  "pilot_hold",
+                  "blocked",
+                  "decision_open",
+                  "review_waiting",
+                  "run_failed",
+                  "run_stuck",
+                  "claim_stale",
+                  "ci_red",
+                  "friction_untriaged",
+                  "host_unhealthy"
+                ]
+              }
+            }
+          ],
+          "description": "Include kinds (repeatable)."
+        },
+        "exclude_kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "pilot_warning",
+                "pilot_hold",
+                "blocked",
+                "decision_open",
+                "review_waiting",
+                "run_failed",
+                "run_stuck",
+                "claim_stale",
+                "ci_red",
+                "friction_untriaged",
+                "host_unhealthy"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pilot_warning",
+                  "pilot_hold",
+                  "blocked",
+                  "decision_open",
+                  "review_waiting",
+                  "run_failed",
+                  "run_stuck",
+                  "claim_stale",
+                  "ci_red",
+                  "friction_untriaged",
+                  "host_unhealthy"
+                ]
+              }
+            }
+          ],
+          "description": "Exclude kinds (repeatable)."
+        },
+        "severity": {
+          "type": "string",
+          "description": "Minimum severity: low, medium, high or critical.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Task lifecycle states (repeatable)."
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Task tags (repeatable)."
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Task ids (repeatable)."
+        },
+        "crew": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Assigned crews (repeatable)."
+        },
+        "orchestrator": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Attributed orchestrators (repeatable)."
+        },
+        "older_than": {
+          "type": "string",
+          "description": "Minimum age, such as 90m, 36h or 3d."
+        },
+        "since": {
+          "type": "string",
+          "description": "Opaque cursor from a prior response; unusable tokens restart the list."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Public response limit, 1–500 (default 100).",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_auto_task_add",
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "inputSchema": {
@@ -1379,6 +1599,10 @@
         "runs_on": {
           "type": "string",
           "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not."
+        },
+        "pilot_warnings": {
+          "type": "boolean",
+          "description": "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings."
         },
         "ready": {
           "type": "boolean",

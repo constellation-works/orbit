@@ -170,7 +170,7 @@ impl Execute for ToolRunArgs {
             && runtime
                 .worker_invocation()
                 .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id);
-        let bound = if claimed_owner_call {
+        let bound = if claimed_owner_call || self.name == "orbit.attention" {
             None
         } else {
             RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input)?

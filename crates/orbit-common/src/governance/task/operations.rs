@@ -378,6 +378,13 @@ const LIST: TaskOperation = TaskOperation {
                 "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
             ),
             both(
+                "pilot_warnings",
+                ParamType::Switch,
+                "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings.",
+                CliArgKind::flag("pilot-warnings"),
+                "Keep proposed tasks held by pilot warning findings",
+            ),
+            both(
                 "ready",
                 ParamType::Switch,
                 "When true, keep only tasks whose dependencies are satisfied",

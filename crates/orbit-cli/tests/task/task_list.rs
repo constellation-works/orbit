@@ -708,3 +708,116 @@ fn unknown_task_status_refusal_names_every_valid_status() {
         }
     }
 }
+
+/// The attention delta contract must retain changed rows and suppress unchanged
+/// rows through the real CLI, including across a limited first page.
+#[test]
+fn attention_cursor_resurfaces_material_changes_at_cli_boundary() {
+    let workspace = workspace();
+    let [first, second] =
+        workspace.add_tasks(["First operator warning", "Second operator warning"]);
+    let receipt = |task: &str, operation: char, warning: &str| {
+        let message = format!(
+            "operation_id={}\n{}",
+            operation.to_string().repeat(64),
+            serde_json::json!({
+                "assessment": {"utility_warnings": [{"text": warning, "holds_promotion": true}]}
+            })
+        );
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&workspace.work)
+            .env("HOME", &workspace.home)
+            .env("USERPROFILE", &workspace.home)
+            .env("ORBIT_ACTOR", "task-pilot")
+            .args(["task", "update", task, "--comment", &message, "--json"])
+            .assert()
+            .success();
+    };
+    receipt(&first, 'a', "First prerequisite needs an operator");
+    receipt(&second, 'b', "Second prerequisite needs an operator");
+    let query = |extra: &[&str]| {
+        let mut args = vec!["attention", "--kind", "pilot_warning", "--json"];
+        args.extend_from_slice(extra);
+        serde_json::from_slice::<Value>(&workspace.run_as_operator(&args, "read attention").stdout)
+            .unwrap()
+    };
+    let full = query(&[]);
+    assert_eq!(full["counts"]["returned"], 2, "{full}");
+    let warnings: Value = serde_json::from_slice(
+        &workspace
+            .run(
+                &["task", "list", "--pilot-warnings", "--json"],
+                "read pilot warnings",
+            )
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        warnings.as_array().unwrap().len(),
+        full["items"].as_array().unwrap().len()
+    );
+    let cursor = full["cursor"]["next"].as_str().unwrap();
+    let quiet = query(&["--since", cursor]);
+    assert_eq!(quiet["cursor"]["status"], "accepted");
+    assert_eq!(quiet["counts"]["unchanged"], 2);
+    assert_eq!(quiet["counts"]["returned"], 0);
+    receipt(&first, 'c', "Changed prerequisite now needs credentials");
+    let changed = query(&["--since", cursor]);
+    assert_eq!(changed["counts"]["returned"], 1, "{changed}");
+    assert_eq!(changed["counts"]["unchanged"], 1);
+    assert_eq!(changed["items"][0]["refs"]["task_id"], first);
+    let before = full["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["refs"]["task_id"] == first)
+        .unwrap();
+    assert_eq!(changed["items"][0]["id"], before["id"]);
+    assert_ne!(changed["items"][0]["fingerprint"], before["fingerprint"]);
+    let page = query(&["--limit", "1"]);
+    assert_eq!(page["counts"]["matching"], 2);
+    let next_page = query(&[
+        "--limit",
+        "1",
+        "--since",
+        page["cursor"]["next"].as_str().unwrap(),
+    ]);
+    assert_eq!(next_page["counts"]["returned"], 1);
+    assert_ne!(page["items"][0]["id"], next_page["items"][0]["id"]);
+    for (token, status) in [("not-a-cursor", "invalid"), ("atc2.future", "unsupported")] {
+        let restarted = query(&["--since", token]);
+        assert_eq!(restarted["cursor"]["status"], status);
+        assert_eq!(restarted["counts"]["returned"], 2);
+    }
+    let empty = query(&["--task", "UNKNOWN-1"]);
+    assert_eq!(empty["counts"]["returned"], 0);
+    assert!(
+        empty["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Nothing needs attention")
+    );
+    assert_eq!(empty["filters"]["task"], serde_json::json!(["UNKNOWN-1"]));
+    // Reproduced on the first implementation: the unbound host runtime was
+    // incorrectly asked for a current workspace partition before resolving --all.
+    for extra in [vec![], vec!["--all"]] {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&workspace.home)
+            .env("HOME", &workspace.home)
+            .env("USERPROFILE", &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["attention", "--kind", "pilot_warning", "--json"])
+            .args(extra);
+        let output = command.assert().success().get_output().stdout.clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["counts"]["returned"], 2, "{result}");
+    }
+}

@@ -30,20 +30,33 @@ impl OrbitRuntime {
         let task = self.get_task(id)?;
         let history = self.get_task_history(id)?;
         let comments = self.get_task_comments(id)?;
+        self.task_decision_requests_in(&task, &history, &comments, chrono::Utc::now())
+    }
+
+    /// Effective decision requests over records a read-only aggregate already loaded.
+    /// `task` must include its requirements: revision-bound requests cannot be
+    /// checked against bodyless task-index metadata.
+    pub(crate) fn task_decision_requests_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<DecisionRequest>, OrbitError> {
         let pilot_operation = if task.status == TaskStatus::Backlog
             && self
-                .pilot_admission_hold_in(&task, &comments, &|| Ok(history.clone()))?
+                .pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))?
                 .is_some()
         {
-            super::pilot::latest_pilot_operation_id(&comments)
+            super::pilot::latest_pilot_operation_id(comments)
         } else {
             None
         };
         Ok(orbit_types::task::decision_requests_from_history(
-            &task,
-            &history,
+            task,
+            history,
             pilot_operation,
-            chrono::Utc::now(),
+            now,
         ))
     }
 

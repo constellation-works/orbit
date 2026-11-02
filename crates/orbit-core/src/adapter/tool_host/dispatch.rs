@@ -128,6 +128,9 @@ fn execute_admitted(
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Attention(_) => {
+            crate::application::attention::attention_query(runtime, input)
+        }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {
             super::automation_tools::dispatch(runtime, verb, input)

@@ -7,7 +7,7 @@ status: Draft
 feature: operator-attention
 doc_role: decisions
 type: design
-summary: "Decisions for orbit attention: derived view not inbox, stateless cursor, fingerprint scope, source-bound read rights, consumer-owned hook, fan-out exception, blindness reporting, folding"
+summary: "Decisions for orbit attention: derived view not inbox, stateless cursor, fingerprint scope, source-bound read rights, explicit caller polling, fan-out exception, blindness reporting, folding"
 tags: [operator-attention]
 paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, federated-mcp, human-decision-channel]
@@ -64,7 +64,7 @@ Rejected:
 
 ### Context
 
-A hook must inject only new or changed items, per session, without making the feed stateful.
+A caller needs only new or changed items on a later explicit read, without making the feed stateful.
 
 ### Decision
 
@@ -87,7 +87,7 @@ Rejected:
 
 - Cursors work across processes, restarts and hosts; sessions are independent by holding
   their own.
-- Failing toward the full list means a hook can repeat an item but cannot miss one.
+- Failing toward the full list means a caller can see an item twice but cannot miss one.
 - Cost: a cursor grows with the list (up to about 10 KB), it cannot report resolved items
   (hashes do not decode to ids), and a consumer that wants a resolved feed must diff two full
   lists itself.
@@ -152,21 +152,17 @@ Rejected:
 - Cost: results differ by session capability, so two readers' lists are not interchangeable,
   and a consumer must surface `degraded`.
 
-## Orbit ships the feed; the consumer ships the hook
+## Orbit ships the feed without a session hook
 
 **Recorded:** 2026-11 · [ORB-21164]
 
 ### Context
 
-Daniel wants the feed injected into orchestrator sessions. Orbit core is generic; the
-orchestrator session, its hook mechanism and its state live in the consuming repository.
+Daniel’s final direction is explicit reads with a delta cursor. The session hook was dropped and [ORB-21165] is archived.
 
 ### Decision
 
-Orbit provides the tool, the CLI, the filters and the cursor contract
-([attention-cursor](./specs/attention-cursor.md#consumer-hook-protocol)). It provides no hook,
-no install command and no constellation-specific kind, path or default. Each consumer files
-its own hook task; constellation's is [ORB-21165].
+Orbit provides the tool, CLI, filters and [cursor protocol](./specs/attention-cursor.md#caller-polling-protocol). No session hook, automation, notification, install command or live configuration change is authorized. The archived hook is neither a prerequisite nor a fifth slice.
 
 Rejected:
 
@@ -280,6 +276,6 @@ Rejected:
 ## Task References
 
 - [ORB-21164] — recorded the attention design decisions
-- [ORB-21165] — constellation hook that consumes the cursor protocol
+- [ORB-21165] — archived session-hook proposal
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

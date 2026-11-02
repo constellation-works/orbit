@@ -6,6 +6,54 @@ macro_rules! with_tail_keys {
     ($($head:tt)*) => {
         define_config_settings! {
             $($head)*
+    attention_cursor_ttl_hours: u32 => u32 {
+        key: "attention.cursor_ttl_hours", value_type: "integer",
+        description: "Cursor validity in hours. Default: 24.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 24, 1, 8760, "attention.cursor_ttl_hours"),
+    },
+    attention_run_window_hours: u32 => u32 {
+        key: "attention.run_window_hours", value_type: "integer",
+        description: "Failed-run lookback in hours. Default: 48.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 48, 1, 87600, "attention.run_window_hours"),
+    },
+    attention_run_stuck_after_minutes: u32 => u32 {
+        key: "attention.run_stuck_after_minutes", value_type: "integer",
+        description: "Running wall-clock bound in minutes. Default: 120.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 120, 1, 525600, "attention.run_stuck_after_minutes"),
+    },
+    attention_ci_cache_seconds: u32 => u32 {
+        key: "attention.ci_cache_seconds", value_type: "integer",
+        description: "Provider cache lifetime in seconds. Default: 60.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 60, 1, 86400, "attention.ci_cache_seconds"),
+    },
+    attention_source_timeout_seconds: u32 => u32 {
+        key: "attention.source_timeout_seconds", value_type: "integer",
+        description: "Per-source read deadline in seconds. Default: 10.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 10, 1, 3600, "attention.source_timeout_seconds"),
+    },
+    attention_fanout_budget_seconds: u32 => u32 {
+        key: "attention.fanout_budget_seconds", value_type: "integer",
+        description: "Cross-host call deadline in seconds. Default: 20.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 20, 1, 3600, "attention.fanout_budget_seconds"),
+    },
+    attention_per_workspace_item_cap: u32 => u32 {
+        key: "attention.per_workspace_item_cap", value_type: "integer",
+        description: "Maximum candidates per workspace. Default: 200.",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 200, 1, 10000, "attention.per_workspace_item_cap"),
+    },
+    attention_age_bump_hours: Vec<u32> => Vec<u32> {
+        key: "attention.age_bump_hours", value_type: "array<integer>",
+        description: "Strictly increasing positive severity age thresholds in hours. Default: [24, 72].",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: crate::attention::resolve_attention_age_bumps,
+    },
     resident_evolution_window_days: u32 => u32 {
         key: "resident.evolution.window_days", value_type: "integer",
         description: "Evolution pass window days (default 14).",

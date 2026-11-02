@@ -22,7 +22,7 @@ identically through any filter combination.
 ## Why This Exists
 
 The feed must serve three readers with different needs: an operator scanning everything, an
-orchestrator scoped to one workspace, and a hook that wants only high-severity news. Filters
+orchestrator scoped to one workspace, and a caller that wants only high-severity news. Filters
 that behave differently per surface, or silently match nothing on a typo, would make an empty
 result untrustworthy.
 
@@ -99,7 +99,7 @@ candidate set are specified in
 
 - **Workspace.** With no scope filter, a call bound to a workspace (a CLI run inside a
   workspace checkout, or an MCP session launched with `--workspace`) reads that workspace;
-  an unbound call reads `--all`. `--all` makes the broad reading explicit. A hook should
+  an unbound call reads `--all`. `--all` makes the broad reading explicit. A caller should
   always pass its scope explicitly so a changed working directory cannot change its feed.
 - **Severity, kinds, limit.** No minimum severity, every kind, public `--limit 100`.
   That default is the response page. It is not an aggregator candidate read.
@@ -118,7 +118,7 @@ orbit attention --kind pilot_warning --status proposed  # warnings on proposed t
 orbit attention --all --exclude-kind ci_red --exclude-kind friction_untriaged
 orbit attention --task ORB-21164                        # why is this task listed
 orbit attention --all --older-than 24h --tag operator-ux
-orbit attention --all --since atc1.… --json             # a hook's later injection
+orbit attention --all --since atc1.… --json             # a caller's later injection
 ```
 
 ## Task References

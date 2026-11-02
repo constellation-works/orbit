@@ -34,3 +34,5 @@ use self::dispatch::{
 };
 use self::identity::{identity_params, model_identity_params};
 use self::workspace::{apply_session_orchestrator_default, resolve_workspace_argument};
+
+mod attention;
