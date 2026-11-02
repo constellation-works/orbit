@@ -40,6 +40,22 @@ impl ApplicationPort for CoreApplicationPort {
         )
     }
 
+    fn task_artifact_bytes(
+        &self,
+        kernel: &RuntimeKernel,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        Ok(
+            OrbitRuntime::get_task_artifact_inline(
+                OrbitRuntime::from_kernel_ref(kernel),
+                id,
+                path,
+            )?
+            .map(|artifact| artifact.content),
+        )
+    }
+
     fn get_task_history(
         &self,
         kernel: &RuntimeKernel,

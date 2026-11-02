@@ -517,9 +517,13 @@ impl RuntimeKernel {
                         break;
                     }
                     (None, Some(fields)) => {
+                        let predicate = invocation.predicate.as_ref();
                         let bindings = CallbackBindings {
                             bindings: &invocation.bindings,
                             pinned_task: invocation.pinned_task.as_deref(),
+                            bound_task: predicate.map(|predicate| predicate.task.as_str()),
+                            bound_artifact: predicate
+                                .and_then(|predicate| predicate.artifact.as_ref()),
                         };
                         match evaluate_constrained(
                             self,

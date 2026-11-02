@@ -22,6 +22,7 @@
 //! a single in-scope name, a real `auto_tasks` directory, and a regular
 //! definition file, checked before any definition bytes are read.
 
+use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_automation::auto_tasks::settings::load_settings_table;
@@ -41,6 +42,40 @@ use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, defi
 use super::schedule::validate_schedule;
 use super::scheduler::mint_task;
 use super::state::cursor_state_path;
+
+thread_local! {
+    /// Write label an application executor records around one ordinary
+    /// auto-task create or edit. Absent, those writes keep the process actor.
+    static RECORDED_WRITE_ACTOR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Restores the previous recorded write actor when dropped.
+#[must_use]
+pub(crate) struct RecordedWriteActor {
+    previous: Option<String>,
+}
+
+impl Drop for RecordedWriteActor {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        RECORDED_WRITE_ACTOR.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+/// Record `actor` as the auto-task write label on this thread until the
+/// guard drops. Application consent runs the ordinary handlers, which
+/// otherwise stamp the process actor.
+pub(crate) fn record_write_actor(actor: String) -> RecordedWriteActor {
+    let previous = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow_mut().replace(actor));
+    RecordedWriteActor { previous }
+}
+
+fn write_actor(runtime: &OrbitRuntime) -> Result<String, OrbitError> {
+    if let Some(actor) = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow().clone()) {
+        return Ok(actor);
+    }
+    runtime.actor().resolve_write_label(None, None)
+}
 
 /// Parameters for creating a definition.
 #[derive(Debug, Clone)]
@@ -226,7 +261,7 @@ impl OrbitRuntime {
             params.template.required_tools =
                 normalize_required_tools(params.template.required_tools);
             let now = chrono::Utc::now().to_rfc3339();
-            let actor = self.actor().resolve_write_label(None, None)?;
+            let actor = write_actor(self)?;
             let definition = AutoTaskDefinition {
                 schema_version: AUTO_TASK_SCHEMA_VERSION,
                 name: params.name,
@@ -358,7 +393,7 @@ impl OrbitRuntime {
                 ));
             }
             let consumer = crate::application::automation::consumer_key(self, "auto-task", name)?;
-            let actor = self.actor().resolve_write_label(None, None)?;
+            let actor = write_actor(self)?;
             orbit_automation::delivery::waive(
                 self.automation_store()?.as_ref(),
                 &consumer,
@@ -636,7 +671,7 @@ impl OrbitRuntime {
             let mut definition = self.require_validated_auto_task(name)?;
             let before = definition.clone();
             edit(&mut definition)?;
-            definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
+            definition.updated_by = Some(write_actor(self)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
             self.refuse_condition_enable_storm(&before, &definition)?;

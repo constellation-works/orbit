@@ -12,9 +12,9 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::APPLICATION_BACKLOG_TRANSITION_SOURCES;
 use orbit_types::tool::{
-    ApplicationArtifactEvidence, ApplicationConsent, ApplicationConstraint,
-    ApplicationPredicateEvidence, ApplicationRateLimit, ApplicationTaskPredicate,
-    ApplicationTextDigest,
+    ApplicationArtifactEvidence, ApplicationArtifactJson, ApplicationConsent,
+    ApplicationConstraint, ApplicationPredicateEvidence, ApplicationRateLimit,
+    ApplicationTaskPredicate, ApplicationTextDigest,
 };
 use serde_json::Value;
 
@@ -34,12 +34,16 @@ pub(crate) struct ConstrainedAdmission {
     pub(crate) pin: Option<String>,
 }
 
-/// What a callback is evaluated against: the entry's admitted values and the
-/// task the invocation has pinned so far.
+/// What a callback is evaluated against: the entry's admitted values, the
+/// task the invocation has pinned so far, and the entry-bound task artifact.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallbackBindings<'a> {
     pub(crate) bindings: &'a BTreeMap<String, Value>,
     pub(crate) pinned_task: Option<&'a str>,
+    /// Task the entry's predicate bound, when it bound one.
+    pub(crate) bound_task: Option<&'a str>,
+    /// Digest the entry recorded for that task's artifact.
+    pub(crate) bound_artifact: Option<&'a ApplicationArtifactEvidence>,
 }
 
 /// The first field of a constrained operation that failed, and why. The
@@ -190,11 +194,44 @@ impl FieldCheck<'_> {
                             .pinned_task
                             .is_none_or(|pinned| value.as_str() == Some(pinned)))
             }),
-            // Artifact pointers are admitted from slice 5; nested optionals
-            // are refused at consent.
-            ApplicationConstraint::ArtifactJson(_) | ApplicationConstraint::Optional(_) => false,
+            ApplicationConstraint::ArtifactJson(artifact) => {
+                self.artifact_json_matches(artifact, value)?
+            }
+            // Nested optionals are refused at consent.
+            ApplicationConstraint::Optional(_) => false,
         };
         if passed { Ok(Ok(())) } else { refuse() }
+    }
+
+    /// `value` equals the JSON at `artifact.pointer` inside the entry-bound
+    /// task artifact, and that artifact's digest is still the one the entry
+    /// bound. A missing artifact, a non-JSON body or a missing pointer is a
+    /// refusal. The pointer is RFC 6901.
+    fn artifact_json_matches(
+        &self,
+        artifact: &ApplicationArtifactJson,
+        value: &Value,
+    ) -> Result<bool, OrbitError> {
+        let Some(callback) = self.callback else {
+            return Ok(false);
+        };
+        let (Some(task), Some(bound)) = (callback.bound_task, callback.bound_artifact) else {
+            return Ok(false);
+        };
+        if bound.path != artifact.path {
+            return Ok(false);
+        }
+        // A failed read would echo the task id, so it is a refusal.
+        let Ok(Some(bytes)) = self.kernel.task_artifact_bytes(task, &artifact.path) else {
+            return Ok(false);
+        };
+        if orbit_common::security::release::sha256_hex(&bytes) != bound.sha256 {
+            return Ok(false);
+        }
+        let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+            return Ok(false);
+        };
+        Ok(json_pointer(&document, &artifact.pointer) == Some(value))
     }
 
     fn selects_consent_workspace(&self, selector: &str) -> bool {
@@ -392,4 +429,55 @@ pub(crate) fn admit_within_rate_limit(
             Ok(true)
         },
     )
+}
+
+/// RFC 6901. The empty pointer is the whole document. `~1` is `/` and `~0`
+/// is `~`, decoded as the pointer is walked. An array token with a leading
+/// zero, or `-`, does not select an element.
+fn json_pointer<'a>(document: &'a Value, pointer: &str) -> Option<&'a Value> {
+    if pointer.is_empty() {
+        return Some(document);
+    }
+    let tokens = pointer.strip_prefix('/')?;
+    let mut current = document;
+    for token in tokens.split('/') {
+        let key = unescape_rfc6901_token(token);
+        current = match current {
+            Value::Object(map) => map.get(&key)?,
+            Value::Array(items) => items.get(rfc6901_array_index(&key)?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+fn unescape_rfc6901_token(token: &str) -> String {
+    let mut out = String::with_capacity(token.len());
+    let mut chars = token.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => out.push('~'),
+            Some('1') => out.push('/'),
+            Some(other) => {
+                out.push('~');
+                out.push(other);
+            }
+            None => out.push('~'),
+        }
+    }
+    out
+}
+
+fn rfc6901_array_index(token: &str) -> Option<usize> {
+    if token.is_empty() || token == "-" || (token.len() > 1 && token.starts_with('0')) {
+        return None;
+    }
+    if !token.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    token.parse().ok()
 }

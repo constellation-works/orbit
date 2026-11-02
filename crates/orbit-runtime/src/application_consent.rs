@@ -211,7 +211,7 @@ pub(crate) fn validate_constrained_fields(
             ));
         }
     }
-    if builtin_fields.is_some() && !fields.contains_key("id") {
+    if builtin_fields.is_some_and(|allowed| allowed.contains(&"id")) && !fields.contains_key("id") {
         return Err(OrbitError::InvalidInput(format!(
             "application operation `{tool}` must constrain `id`"
         )));
@@ -410,6 +410,61 @@ fn validate_builtin_field_rules(
             Some(ApplicationConstraint::Const(Value::String(path))) if !path.is_empty() => Ok(()),
             _ => Err(refuse("path", "must be a non-empty `const` string".into())),
         },
+        "orbit.auto_task.add" => {
+            for required in ["name", "schedule", "template"] {
+                if !matches!(
+                    fields.get(required),
+                    Some(ApplicationConstraint::ArtifactJson(_))
+                ) {
+                    return Err(refuse(
+                        required,
+                        "must be `artifact_json` bound to the approved artifact".into(),
+                    ));
+                }
+            }
+            for (field, constraint) in fields {
+                if field == "workspace" {
+                    continue;
+                }
+                if !matches!(constraint, ApplicationConstraint::ArtifactJson(_)) {
+                    return Err(refuse(
+                        field,
+                        "must be `artifact_json`; an add callback binds the artifact, not a caller value"
+                            .into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+        "orbit.auto_task.update" => {
+            if !matches!(
+                fields.get("name"),
+                Some(ApplicationConstraint::ArtifactJson(_))
+            ) {
+                return Err(refuse(
+                    "name",
+                    "must be `artifact_json` bound to the approved definition".into(),
+                ));
+            }
+            if let Some(enabled) = fields.get("enabled") {
+                let boolean = match enabled.required_form() {
+                    ApplicationConstraint::Const(Value::Bool(_)) => true,
+                    ApplicationConstraint::OneOf(values)
+                        if !values.is_empty() && values.iter().all(Value::is_boolean) =>
+                    {
+                        true
+                    }
+                    _ => false,
+                };
+                if !boolean {
+                    return Err(refuse(
+                        "enabled",
+                        "must be a boolean `const` or `one_of`".into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
