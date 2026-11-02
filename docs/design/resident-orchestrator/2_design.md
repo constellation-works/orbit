@@ -218,13 +218,34 @@ decision records and the audit log, never the previous agent's final message. Th
 response envelope ([4_decisions.md](./4_decisions.md#a-cycle-is-correct-from-orbit-state-alone)).
 
 **Idempotence.** Every mutating action in a cycle carries an action key
-`resident:<mandate>:<cycle>:<n>`, recorded in the checkpoint. Action-key idempotence is internal
-to automation admission today: run submission resolves an automation attempt's key to an existing
-run before submitting, and task creation reserves the attempt's key. No agent-callable tool accepts
-a caller-supplied key yet, so a recovery cycle retrying with the dead cycle's key gets no existing
-result today. Slice 3 ([ORB-21244]) exposes a caller-supplied key on the cycle's mutating tools
-(dispatch, requeue, promote, `orbit.task.add`) or specifies another dedupe mechanism; once it
-lands, a recovery cycle that retries an action with the dead cycle's key gets the existing result.
+`resident:<mandate>:<cycle>:<n>`, recorded in the checkpoint. Orbit already dedupes other keys, but
+none of them resolves a resident key from the cycle's mutating tools today:
+
+- **Action keys on admission.** Run submission resolves an automation attempt's key to an existing
+  run before submitting, and task creation reserves it. Landing attempts
+  (`landing:{handoff}:{attempt}`) use the same run-submission path, and visual follow-up tasks
+  (`visual-follow-up:…`) reserve their keys in task creation.
+- **Guarded `orbit.task.add` with `request_id`.** Creation reserves `desktop-create:{request_id}`,
+  and a repeat with the same payload returns the existing task. The guarded create takes no
+  relations or tags. The dashboard proposal path dedupes `dashboard-create:{request_id}` the same
+  way.
+- **Guarded `orbit.task.update` with `request_id`.** Edit, comment and review each dedupe on a
+  receipt in task history. A promote is a status edit, so its only caller-supplied key is this
+  `request_id`.
+- **`orbit.agent.invoke` `idempotency_key`.** A retry handle: a key used by a recent submission
+  resolves that run, matched over a bounded window of the job's recent runs, and an explorer dedupes
+  against its parent's prior explores. It accepts any non-empty string, so a resident-shaped key is
+  accepted there. The cycle's contract does not name this tool as keyed, so the design does not rely
+  on it.
+
+Both `request_id` forms accept only 1 to 128 ASCII letters, digits, `.`, `_` or `-`, so the `:` in a
+resident key is refused. Dispatch, requeue and promote do not accept a resident key on any
+agent-callable tool (`orbit.task.requeue` takes `id`, `reason` and `discard_candidate` only), and an
+ordinary `orbit.task.add` without `request_id` passes no action key. So a recovery cycle retrying
+with the dead cycle's `resident:` key gets no existing result today. Slice 3 ([ORB-21244]) exposes a
+caller-supplied key on the cycle's mutating tools (dispatch, requeue, promote, `orbit.task.add`) or
+specifies another dedupe mechanism; once it lands, a recovery cycle that retries an action with the
+dead cycle's key gets the existing result.
 
 **Crash recovery.** A killed cycle leaves a held lease that expires (lease TTL = agent budget + 5
 min, 35 min by default from lease acquisition) and no checkpoint. The next cycle cannot start
