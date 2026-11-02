@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 
 use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
-use super::super::{EXPLORE_BRIEF_REQUESTED, EXPLORE_BRIEF_TASK_IDS, member_ready};
+use super::super::{
+    EXPLORE_BRIEF_REQUESTED, EXPLORE_BRIEF_TASK_IDS, OPERATOR_TOOL_CANDIDATES, member_ready,
+};
 use super::input::{PreparedEcho, PreparedTask, Record};
 use super::{Applied, detail, settled};
 
@@ -199,6 +201,15 @@ impl Report<'_> {
                     .filter(|recheck| recheck.is_object())
                 {
                     partition[RECHECKS] = json!({ task_id.as_str(): recheck });
+                }
+                // The repair pilot classifies the same detected mentions.
+                if let Some(candidates) = self
+                    .tasks
+                    .iter()
+                    .find(|task| task.fields.task_id.get() == Some(task_id))
+                    .and_then(|task| task.raw.get(OPERATOR_TOOL_CANDIDATES))
+                {
+                    partition[OPERATOR_TOOL_CANDIDATES] = json!({ task_id.as_str(): candidates });
                 }
                 partition
             })

@@ -16,7 +16,8 @@ use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
     CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, EXPLORE_BRIEF_REQUESTED,
-    EXPLORE_BRIEF_TASK_IDS, VALIDATION_TOOL_WARNINGS, requested_base_branch,
+    EXPLORE_BRIEF_TASK_IDS, OPERATOR_TOOL_CANDIDATES, VALIDATION_TOOL_WARNINGS,
+    requested_base_branch,
 };
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -355,6 +356,10 @@ pub(crate) fn prepare(
         }
         snapshot["history_len"] = json!(history_len);
         snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
+        let operator_tools = lane.operator_requirements(&task);
+        if !operator_tools.is_empty() {
+            snapshot[OPERATOR_TOOL_CANDIDATES] = json!(operator_tools);
+        }
         let creation = runtime
             .context_creation_state(&task)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
@@ -490,6 +495,19 @@ pub(crate) fn prepare(
                 .collect::<Vec<_>>();
             if !requested.is_empty() {
                 partition[EXPLORE_BRIEF_TASK_IDS] = json!(requested);
+            }
+            let operator_tools = ids
+                .iter()
+                .filter_map(|id| {
+                    task_snapshots
+                        .iter()
+                        .find(|snapshot| snapshot["task_id"].as_str() == Some(id.as_str()))
+                        .and_then(|snapshot| snapshot.get(OPERATOR_TOOL_CANDIDATES))
+                        .map(|candidates| (id.clone(), candidates.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            if !operator_tools.is_empty() {
+                partition[OPERATOR_TOOL_CANDIDATES] = Value::Object(operator_tools);
             }
             if let Some(rechecks) = super::recheck::partition_rechecks(ids.iter(), &task_snapshots)
             {

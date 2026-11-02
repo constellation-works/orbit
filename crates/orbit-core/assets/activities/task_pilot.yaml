@@ -59,6 +59,21 @@ spec:
             type: array
             items:
               type: string
+          operator_tool_candidates:
+            description: >
+              Maps a task to the operator-only tools its acceptance criteria
+              name, one `{criterion, tool}` per detected mention. Absent when
+              no task in the partition has one.
+            type: object
+            additionalProperties:
+              type: array
+              items:
+                type: object
+                properties:
+                  criterion:
+                    type: integer
+                  tool:
+                    type: string
           rechecks:
             type: object
             additionalProperties:
@@ -296,6 +311,31 @@ spec:
                         minLength: 1
                       holds_promotion:
                         type: boolean
+            operator_tool_classifications:
+              description: >
+                One entry per `partition.operator_tool_candidates` mention of
+                this task. `invoke`: validating the criterion means running
+                the tool, so it is an operator handoff and holds admission.
+                `subject`: the criterion names the tool only as what the
+                change edits (its code, description, schema, docs or tests)
+                and does not hold. A mention with no entry, a malformed entry
+                or a `subject` without a reason holds.
+              type: array
+              items:
+                type: object
+                required: [criterion, tool, classification, reason]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  tool:
+                    type: string
+                  classification:
+                    type: string
+                    enum: [invoke, subject]
+                  reason:
+                    type: string
+                    minLength: 1
             required_os:
               type: array
               items:
@@ -659,6 +699,15 @@ spec:
       not report a criterion that expects a refusal, or a tool named inside a
       quoted example. When `implementation_lane` is null, do not invent a tool
       set.
+    - **Operator-only tool mentions.** For every `{criterion, tool}` that
+      `partition.operator_tool_candidates` lists for a task, return one
+      `operator_tool_classifications` entry with the same `criterion` and
+      `tool`, a `classification` and a one-line `reason`. Use `subject` when
+      the criterion names the tool only as what the change edits or tests (its
+      code, description, schema, docs or tests), so no one has to run it. Use
+      `invoke` when meeting the criterion means running the tool; that
+      becomes an operator validation handoff. When unsure, use `invoke`. A
+      mention you leave out holds the task as `invoke` does.
     - **Contract existence.** Inventory every concrete contract required by
       the description and criteria: tools, tool output fields, schema fields,
       port methods, config sections and authority requirements. Check the
@@ -972,6 +1021,7 @@ spec:
         "required_os":[],
         "required_machine":[],
         "post_deploy":[],
+        "operator_tool_classifications":[],
         "user_facing_ui":false,
         "explore_brief":null
       }],

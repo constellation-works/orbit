@@ -318,9 +318,13 @@ pub(in super::super) fn apply_task(
                     target_status.cli_name()
                 ));
             }
-            let mut requirements =
+            // Only mentions the pilot did not classify as the change's
+            // subject hold: a missing or malformed classification holds.
+            let mut requirements = super::super::admission::invoked_operator_requirements(
+                &task.assessment,
                 super::super::validation_tools::ImplementationLane::resolve(runtime)
-                    .operator_requirements(&current);
+                    .operator_requirements(&current),
+            );
             // A typed post-deploy measurement is the operator's work after
             // landing, not a tool requirement for candidate admission.
             requirements.retain(|requirement| {

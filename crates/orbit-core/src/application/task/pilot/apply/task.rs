@@ -488,11 +488,11 @@ fn assess_with(
     // The agent may still report screenshot attachment as infeasible. Drop
     // only that claim once the host knows the implement lane can attach;
     // promotion and the stored audit then agree.
-    validation_tools::drop_false_artifact_warnings(
-        &mut assessment,
-        &ImplementationLane::resolve(context.runtime),
-        &current.required_tools,
-    );
+    let lane = ImplementationLane::resolve(context.runtime);
+    validation_tools::drop_false_artifact_warnings(&mut assessment, &lane, &current.required_tools);
+    // An operator-only tool the pilot classified as the change's subject is
+    // no validation the lane must run, so its reserved-operation finding goes.
+    validation_tools::drop_subject_operator_warnings(&mut assessment, &lane, &current);
     warn_mocks_without_tag(context, &current, &mut assessment);
     Ok(Assessed {
         assessment,

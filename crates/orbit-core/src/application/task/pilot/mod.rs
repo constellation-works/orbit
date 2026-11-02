@@ -163,6 +163,12 @@ fn superseded_outcome(task_id: &str, reason: &str, status: TaskStatus, detail: &
 /// [ORB-11980].
 pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 
+/// Prepared-snapshot and partition field listing the `(criterion, tool)`
+/// operator-only tool mentions the deterministic detector found, which the
+/// pilot classifies in `operator_tool_classifications` [ORB-21291]. Written
+/// only when a task has one, so other tasks keep their prepared shape.
+pub(super) const OPERATOR_TOOL_CANDIDATES: &str = "operator_tool_candidates";
+
 /// Prepared-snapshot fields carrying the task's durable context creation
 /// grant: the exact selectors it authorizes and the identity of the record.
 pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
