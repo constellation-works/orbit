@@ -18,6 +18,7 @@ pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
     "orbit.task.review_reset",
     "orbit.task.reconcile_review",
     "orbit.task.requeue",
+    "orbit.task.repilot",
     "orbit.visual.capture",
     "orbit.visual.accept_dispute",
 ];
