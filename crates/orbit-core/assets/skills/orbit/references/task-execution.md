@@ -204,8 +204,10 @@ naming the gap and the configured `pr.missing_required_section` policy drafts
 the PR or refuses to open it. Verify the resulting PR body and, when required
 content is missing, the task history and delivery outcome. A reused draft is
 marked ready only when `pr.draft` is disabled, no required section is still
-missing, and either its live body has the section-gap note or a matching body
-refresh was reserved before an interrupted ready transition. Check its
+missing, and either its live body is exactly the body Orbit created it with
+for a recorded section gap (the typed `pr_section_gap` decision) or a matching
+body refresh was reserved before an interrupted ready transition. A human edit
+to that body removes the evidence. Check its
 `pr_draft_recovery` history record; do not assume a resumed delivery changed
 the draft state.
 

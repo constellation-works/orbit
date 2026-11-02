@@ -196,8 +196,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             // state without isDraft is an older answer without body evidence,
             // so refuse without an extra view.
             if !configured && status.is_draft {
-                let missing =
-                    draft_recovery::handed_off_section_gaps(host, &workspace, &pr_number)?;
+                let missing = draft_recovery::handed_off_section_gaps(
+                    host,
+                    &workspace,
+                    &context.task_id,
+                    &pr_number,
+                )?;
                 if !missing.is_empty() {
                     let action = if context.automatic_repair_spent {
                         "return the preserved candidate to the backlog for a repair round"

@@ -4,6 +4,7 @@
 //! from the task's evidence ref.
 
 use super::*;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     VISUAL_CAPTURE_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord,
     VisualCapturedMock, VisualNotEstablished, VisualReviewMode, VisualSettleOutcome,
@@ -79,6 +80,19 @@ fn pr_open_renders_the_base_template_and_drafts_an_unfilled_required_section() {
                 notes[0].contains("`Rollback`") && notes[0].contains("draft"),
                 "{notes:?}"
             );
+            // The note renders the typed decision, which binds the gap to the
+            // exact body the create published.
+            let [gap] = host.section_gap_decisions(TASK_ID).try_into().unwrap();
+            assert_eq!(gap.missing_sections, ["Rollback"]);
+            assert_eq!(gap.action, MissingSectionPolicy::Draft);
+            assert_eq!(gap.run_id, RUN_ID);
+            let published = fs::read_to_string(fx.forge.join("pr-body")).unwrap();
+            let publication = gap.publication.as_ref().unwrap();
+            assert_eq!(
+                Some(publication.head_branch.as_str()),
+                fx.forge_state("pr-head").as_deref()
+            );
+            assert_eq!(publication.body_sha256, sha256_hex(published.as_bytes()));
 
             // Without conventions the same candidate opens ready, unlabelled.
             let (fx, host) = fx_host(sandbox);
@@ -114,6 +128,11 @@ fn pr_open_refuses_an_unfilled_required_section_or_an_unknown_template_placehold
                 notes.iter().any(|note| note.contains("refuses")),
                 "{notes:?}"
             );
+            // A refusal publishes nothing, so it binds no publication.
+            let [gap] = host.section_gap_decisions(TASK_ID).try_into().unwrap();
+            assert_eq!(gap.action, MissingSectionPolicy::Refuse);
+            assert_eq!(gap.missing_sections, ["Rollback"]);
+            assert_eq!(gap.publication, None);
 
             let mut fx = Fixture::new(sandbox);
             fx.commit_on_base(TEMPLATE_PATH, "## Summary\n\n{{ticket}}\n");
@@ -191,6 +210,19 @@ fn pr_open_drafts_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence(
                 notes[0].contains("`Rollback`") && notes[0].contains("draft"),
                 "{notes:?}"
             );
+            // The note renders the typed decision, which binds the gap to the
+            // exact body the create published.
+            let [gap] = host.section_gap_decisions(TASK_ID).try_into().unwrap();
+            assert_eq!(gap.missing_sections, ["Rollback"]);
+            assert_eq!(gap.action, MissingSectionPolicy::Draft);
+            assert_eq!(gap.run_id, RUN_ID);
+            let published = fs::read_to_string(fx.forge.join("pr-body")).unwrap();
+            let publication = gap.publication.as_ref().unwrap();
+            assert_eq!(
+                Some(publication.head_branch.as_str()),
+                fx.forge_state("pr-head").as_deref()
+            );
+            assert_eq!(publication.body_sha256, sha256_hex(published.as_bytes()));
         },
     );
 }
@@ -222,6 +254,11 @@ fn pr_open_refuses_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence
                 notes.iter().any(|note| note.contains("refuses")),
                 "{notes:?}"
             );
+            // A refusal publishes nothing, so it binds no publication.
+            let [gap] = host.section_gap_decisions(TASK_ID).try_into().unwrap();
+            assert_eq!(gap.action, MissingSectionPolicy::Refuse);
+            assert_eq!(gap.missing_sections, ["Rollback"]);
+            assert_eq!(gap.publication, None);
         },
     );
 }
@@ -554,6 +591,9 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                 "ready_failure",
                 "human_after_failure",
                 "other_reason",
+                "legacy",
+                "legacy_quoted",
+                "edited",
             ] {
                 let (fx, host) = fx_host(sandbox);
                 host.set_conventions(DeliveryConventions {
@@ -581,8 +621,24 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                     fx.write_forge("pr-draft", "");
                 }
                 let original_body = fx.forge_state("pr-body").unwrap();
-                if case == "manual" {
-                    fx.write_forge("pr-body", "Human draft body");
+                if case.starts_with("legacy") {
+                    // History and body as a build before the typed decision
+                    // published them: only the body's note marks the gap.
+                    host.as_legacy_section_gap_history();
+                }
+                let edited_body = match case {
+                    "manual" => Some("Human draft body".to_string()),
+                    // A quoted sample of the note is not an unfilled section.
+                    "legacy_quoted" => Some(format!(
+                        "## Human notes\n\n```markdown\n{original_body}\n```"
+                    )),
+                    // A human edit that keeps the note no longer matches the
+                    // typed publication, and the prose cannot override it.
+                    "edited" => Some(format!("{original_body}\n\nReviewer note.")),
+                    _ => None,
+                };
+                if let Some(edited) = &edited_body {
+                    fx.write_forge("pr-body", edited);
                 }
                 if case != "missing" && case != "other_reason" {
                     host.put_artifact(
@@ -611,7 +667,10 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                 let ready = fx.forge_calls().iter().any(|call| call == "pr ready");
                 assert_eq!(
                     ready,
-                    matches!(case, "recovered" | "ready_failure" | "human_after_failure"),
+                    matches!(
+                        case,
+                        "recovered" | "ready_failure" | "human_after_failure" | "legacy"
+                    ),
                     "{case}: {:?}",
                     fx.forge_calls()
                 );
@@ -630,15 +689,18 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                     record.outcome,
                     match case {
                         "configured" => PrDraftRecoveryOutcome::ConfiguredDraft,
-                        "manual" | "other_reason" | "human_after_failure" =>
-                            PrDraftRecoveryOutcome::UnrelatedDraft,
+                        "manual"
+                        | "other_reason"
+                        | "human_after_failure"
+                        | "legacy_quoted"
+                        | "edited" => PrDraftRecoveryOutcome::UnrelatedDraft,
                         "missing" => PrDraftRecoveryOutcome::MissingSections,
                         _ => PrDraftRecoveryOutcome::Ready,
                     },
                     "{case}"
                 );
                 let body = fx.forge_state("pr-body").unwrap();
-                if matches!(case, "recovered" | "ready_failure") {
+                if matches!(case, "recovered" | "ready_failure" | "legacy") {
                     assert!(
                         body.contains("## Screenshots\n\n| | Before | After |"),
                         "{body}"
@@ -652,12 +714,10 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                     assert!(fx.forge_state("pr-draft").is_some(), "{case}");
                     assert_eq!(
                         body,
-                        if case == "manual" {
-                            "Human draft body"
-                        } else if case == "human_after_failure" {
+                        if case == "human_after_failure" {
                             "Human edit after failed ready"
                         } else {
-                            &original_body
+                            edited_body.as_deref().unwrap_or(&original_body)
                         }
                     );
                     assert_eq!(
