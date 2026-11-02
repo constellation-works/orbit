@@ -33,6 +33,15 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub problems: bool,
 
+    /// Print one check with its complete message and remediation (exact CHECK name)
+    #[arg(long, value_name = "NAME", conflicts_with_all = [
+        "problems", "fix_stale_locks", "fix_stale_task_locks",
+        "fix_state_directory_permissions", "remove_graph", "fix_stale_artifacts",
+        "fix_retired_activity_backends", "fix_orphan_task_stores",
+        "fix_automation_pins", "fix_retired_config_keys", "confirm"
+    ])]
+    pub check: Option<String>,
+
     /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
     pub fix_stale_locks: bool,
@@ -146,7 +155,11 @@ impl DoctorCommand {
                 "Fix the check above, then rerun `orbit doctor` for the full report.".to_string(),
             ),
         };
-        Some(report_output(vec![misplaced, runtime], self.problems))
+        Some(report_output(
+            vec![misplaced, runtime],
+            self.problems,
+            self.check.as_deref(),
+        ))
     }
 }
 
@@ -314,13 +327,41 @@ impl Execute for DoctorCommand {
             });
         }
         results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
-        report_output(results, self.problems)
+        report_output(results, self.problems, self.check.as_deref())
     }
 }
 
 /// Render the checks as `orbit doctor` reports them: a table sorted by
 /// severity, the JSON rows, and a nonzero exit when any check failed.
-fn report_output(mut results: Vec<WorkspaceDoctorResult>, problems: bool) -> CommandOut {
+fn report_output(
+    mut results: Vec<WorkspaceDoctorResult>,
+    problems: bool,
+    check: Option<&str>,
+) -> CommandOut {
+    if let Some(check) = check {
+        let row = results
+            .iter()
+            .find(|row| row.check_name == check)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("no workspace diagnostic named '{check}'"))
+            })?;
+        let failed = row.status == WorkspaceDoctorStatus::Error;
+        let mut payload = Payload::detail(
+            orbit_cmd::doctor_row_json(row),
+            format!(
+                "Check: {}\nStatus: {}\nDetails: {}",
+                row.check_name,
+                status_label(row.status),
+                human_detail(row)
+            ),
+        )
+        .with_exit_code(i32::from(failed));
+        if failed {
+            payload =
+                payload.with_audit_message(findings_audit_message(std::slice::from_ref(row), 0));
+        }
+        return Ok(payload.into());
+    }
     let failures = results
         .iter()
         .filter(|row| row.status == WorkspaceDoctorStatus::Error)

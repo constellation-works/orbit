@@ -10,6 +10,9 @@ use super::support::tool_status;
 pub struct ToolShowArgs {
     /// Tool name
     pub name: String,
+    /// Print one parameter with its complete description
+    #[arg(long, value_name = "NAME")]
+    pub parameter: Option<String>,
 }
 
 impl Execute for ToolShowArgs {
@@ -17,6 +20,37 @@ impl Execute for ToolShowArgs {
         let tool = runtime.show_tool(&self.name)?;
 
         use crate::output::color::{Domain, bold, text};
+        if let Some(name) = self.parameter {
+            let parameter = tool
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == name)
+                .ok_or_else(|| {
+                    orbit_core::OrbitError::InvalidInput(format!(
+                        "tool '{}' has no parameter '{name}'",
+                        tool.name
+                    ))
+                })?;
+            let doc = json!({
+                "tool_name": tool.name,
+                "name": parameter.name,
+                "param_type": parameter.param_type,
+                "required": parameter.required,
+                "description": parameter.description,
+            });
+            return Ok(Payload::detail(
+                doc,
+                format!(
+                    "Tool: {}\nParameter: {}\nType: {}\nRequired: {}\nDescription: {}",
+                    tool.name,
+                    parameter.name,
+                    parameter.param_type,
+                    parameter.required,
+                    parameter.description
+                ),
+            )
+            .into());
+        }
         let doc = json!({
             "name": tool.name,
             "description": tool.description,

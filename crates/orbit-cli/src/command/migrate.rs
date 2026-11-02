@@ -261,8 +261,13 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
 
     // A fixed-shape status readout, not a result set: every component is named
     // even when the two version columns happen to agree.
-    let mut table = crate::output::table::build_table(&["COMPONENT", "CURRENT", "SUPPORTED"])
-        .keep_all_columns();
+    use crate::output::table::{Column, Table};
+    let mut table = Table::new(vec![
+        Column::new("COMPONENT").fixed(),
+        Column::new("CURRENT").fixed(),
+        Column::new("SUPPORTED").fixed(),
+    ])
+    .keep_all_columns();
     table.add_row(vec![
         "workspace layout".to_string(),
         status.layout_version.to_string(),

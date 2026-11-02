@@ -19,6 +19,8 @@ mod task_workspace;
 mod output;
 
 mod browser_kit;
+#[cfg(unix)]
+mod detail_recovery;
 mod doctor;
 mod error_output;
 mod experiment_readout;

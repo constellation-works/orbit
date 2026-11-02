@@ -7,7 +7,7 @@ last_updated: 2026-11-02
 
 # Spec: Table Rendering
 
-In standard table-mode list output, the header is one line and each record is one line. Borders are not drawn, and cells are truncated rather than wrapped. A named detail command is available for many truncated values, but not all yet; current gaps are listed in [detail-commands.md](../references/detail-commands.md). Plain output uses escaped tab-separated fields, so `cut -f` yields whole field values.
+In standard table-mode list output, the header is one line and each record is one line. Borders are not drawn, and cells are truncated rather than wrapped. Named detail commands recover truncated values in full; the audited commands are listed in [detail-commands.md](../references/detail-commands.md). Plain output uses escaped tab-separated fields, so `cut -f` yields whole field values.
 
 ## Why This Exists
 
@@ -79,7 +79,7 @@ The piped form now follows §1: `auto` on a non-terminal sink selects plain outp
 
 No table-mode list snapshot existed to update: the checked-in output goldens capture piped forms, and no golden covers the terminal table form because it needs a terminal (see [../2_design.md §8](../2_design.md#8-test-coverage-of-output)). The migration therefore added fixtures instead: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
 
-Which truncatable column has a detail command, and which views still lack one ([ORB-21575]), is recorded in [../references/detail-commands.md](../references/detail-commands.md).
+The single-record commands for truncatable columns, including diagnostic and parameter detail recovery [ORB-21575], are recorded in [../references/detail-commands.md](../references/detail-commands.md).
 
 ## Task References
 

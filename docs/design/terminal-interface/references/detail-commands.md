@@ -9,7 +9,7 @@ last_validated: 2026-11-02
 
 [specs/table-rendering.md §4](../specs/table-rendering.md) makes truncation a promise: a list command that can cut column *C* must have a named command that prints *C* in full for one record. This table records, for every list view rendered through `crates/orbit-cli/src/output/table.rs`, which columns can be truncated and where the whole value lives (ORB-10567).
 
-Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` carries full values everywhere and is the fallback where no detail command exists.
+Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` and plain output carry full values everywhere; human detail selectors below recover one record without terminal-width truncation.
 
 `orbit tool show <name>` also prints persisted metadata for disabled external tools listed by `orbit tool list --all`. Inspection preserves their disabled state; `orbit tool run` remains refused until the tool is enabled.
 
@@ -31,19 +31,41 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
 | `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs and the regression cross-tabs |
 
-Workspace doctor now prints full non-ok findings and remediation below its terminal table [ORB-14829]; `orbit doctor --format plain` and `orbit doctor --json` retain complete messages. Non-ok findings therefore have full recovery; ok/info rows still have no per-check detail command. The remaining per-record recovery gaps below are tracked by [ORB-21575].
+## Diagnostic and nested detail recovery
+
+| List view | Truncatable columns | Full single-record command |
+|-----------|--------------------|----------------------------|
+| `orbit doctor` | `DETAILS` | `orbit doctor --check <check>` |
+| `orbit tool doctor` | `DETAILS` | `orbit tool doctor <name>` |
+| `orbit skill doctor` | `DETAILS` | `orbit skill doctor <id>` |
+| `orbit tool show <name>` (parameters) | `DESCRIPTION` | `orbit tool show <name> --parameter <parameter>` |
+
+Each selector uses the exact name printed in the list (CHECK, TOOL, SKILL or
+parameter NAME). It prints a labeled detail record with the full message or
+description, including embedded newlines; terminal width never cuts it. An
+unknown selector fails explicitly. JSON returns the selected record as an
+object (skill detail groups all diagnostics for that skill in `findings`);
+unselected lists retain their existing complete arrays and plain rows.
+Workspace doctor detail includes remediation and retains the selected check's
+failure exit status. `--check` cannot combine with `--problems` or repair flags.
+The selector chooses output after diagnostics run; it does not promise to run
+only that check or tool.
+
+Workspace doctor's full non-ok findings section already landed [ORB-14829].
+It remains available below the terminal table; `--check` also recovers ok/info
+rows that intentionally have no findings section. This closes the remaining
+per-record gaps [ORB-21575] without duplicating findings in list rows.
+
+`orbit migrate` is a fixed-shape status readout: COMPONENT, CURRENT and
+SUPPORTED are all fixed columns. Component labels (`workspace layout` and
+`store schema`) therefore stay whole, even on a narrow terminal; overflow is
+reported on stderr. No migration column is truncatable and no deeper command
+is required. Plain and JSON retain the full report.
 
 ## Gaps
 
-These views can truncate a column and have no detail command. Listed rather than invented — closing them is separate work, and `--json` is the interim answer.
-
-| List view | Truncatable columns | Note |
-|-----------|--------------------|------|
-| `orbit doctor` | `DETAILS` | Full non-ok findings print below the table; ok/info rows still lack a per-check detail command. |
-| `orbit tool doctor` | `DETAILS` | No per-tool diagnostic detail command; plain/JSON carries the full message. |
-| `orbit skill doctor` | `DETAILS` | No per-skill diagnostic detail command; plain/JSON carries the full message. |
-| `orbit tool show` (parameters) | `DESCRIPTION` | Already the detail view; the parameter description has no deeper surface than `--json`. |
-| `orbit migrate` (inspection readout) | `COMPONENT` | Lists every component, but the column is flexible, so a narrow sink can cut it. `--json` carries the full report. |
+None in the views audited above [ORB-21575]. Adding a flexible column still
+requires a documented single-record command under the accepted contract.
 
 ## Run history
 

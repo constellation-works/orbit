@@ -1,3 +1,23 @@
 [
-  {"argv": ["tool", "run"], "golden": "tool/run.txt"}
+  {
+    "argv": [
+      "tool",
+      "run"
+    ],
+    "golden": "tool/run.txt"
+  },
+  {
+    "argv": [
+      "tool",
+      "show"
+    ],
+    "golden": "tool/show.txt"
+  },
+  {
+    "argv": [
+      "tool",
+      "doctor"
+    ],
+    "golden": "tool/doctor.txt"
+  }
 ]

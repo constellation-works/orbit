@@ -5,7 +5,7 @@ use crate::command::{CommandOut, Execute};
 
 use super::add::ToolAddArgs;
 use super::disable::ToolDisableArgs;
-use super::doctor::execute_doctor;
+use super::doctor::{self, ToolDoctorArgs};
 use super::enable::ToolEnableArgs;
 use super::list::ToolListArgs;
 use super::remove::ToolRemoveArgs;
@@ -58,7 +58,7 @@ pub enum ToolSubcommand {
     /// Disable a tool
     Disable(ToolDisableArgs),
     /// Validate tool health
-    Doctor,
+    Doctor(ToolDoctorArgs),
 }
 
 impl Execute for ToolSubcommand {
@@ -72,7 +72,9 @@ impl Execute for ToolSubcommand {
             ToolSubcommand::Remove(args) => args.execute(runtime),
             ToolSubcommand::Enable(args) => args.execute(runtime),
             ToolSubcommand::Disable(args) => args.execute(runtime),
-            ToolSubcommand::Doctor => execute_doctor(runtime),
+            ToolSubcommand::Doctor(args) => {
+                doctor::execute_tool_doctor(runtime, args.name.as_deref())
+            }
         }
     }
 }

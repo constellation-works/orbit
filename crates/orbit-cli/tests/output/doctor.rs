@@ -399,6 +399,20 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     assert_eq!(code, Some(1), "deep failure exit: {deep:?}");
     let deep_rows = rows(&deep);
     expect_status(&deep_rows, "database", "error");
+    let selected = run(&f, &["doctor", "--deep", "--check", "database", "--json"]);
+    assert_eq!(
+        selected.status.code(),
+        Some(1),
+        "selected failure exit: {selected:?}"
+    );
+    let selected: Value = serde_json::from_slice(&selected.stdout).expect("single check JSON");
+    let failed = row(&deep_rows, "database");
+    assert_eq!(selected["message"], failed["message"]);
+    assert_eq!(selected["remediation"], failed["remediation"]);
+    let detail = run(&f, &["doctor", "--deep", "--check", "database"]);
+    assert_eq!(detail.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&detail.stdout).contains(failed["message"].as_str().unwrap()));
+
     for diagnostics in [&cheap, &deep_rows] {
         assert!(!diagnostics.is_empty());
         for d in diagnostics {
