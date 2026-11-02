@@ -84,7 +84,7 @@ export function renderNoticeBanner(payload) {
       noticeLink(notice),
     ]);
     row.dataset.key = `banner-${text(notice.id)}`;
-    row.dataset.hash = `${text(notice.revision)}:${expiryLabel(notice, now)}`;
+    row.dataset.hash = JSON.stringify([notice.revision, text(notice.kind), text(notice.title), text(notice.scope), ageLabel(notice, now), expiryLabel(notice, now)]);
     return row;
   });
   banner.hidden = false;
