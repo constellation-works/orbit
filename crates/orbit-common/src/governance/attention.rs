@@ -13,7 +13,7 @@ use crate::governance::operation::{
 /// The MCP client name the federated aggregator initializes its hops with.
 /// A destination honours `candidate_read` only from a session that names it.
 pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
     noun: ATTENTION;
     /// Attention operations.
@@ -174,6 +174,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Refuse widening a workspace-bound attention session with its wire code.

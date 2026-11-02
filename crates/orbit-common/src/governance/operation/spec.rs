@@ -1,4 +1,4 @@
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 use serde_json::{Map, Value};
 
 use crate::OrbitError;
@@ -57,6 +57,13 @@ pub struct OperationSpec<V: 'static> {
     /// [`crate::governance::authorization::GOVERNED_OPERATIONS`] alone — see that module's
     /// "Placement is not permission" section.
     pub mcp_scope: Option<McpToolScope>,
+    /// The id-routing classification this operation declares for itself:
+    /// task-id-routed, or workspace-local with the reason. The MCP adapter
+    /// and federation consume the declaration from the tool definition
+    /// built from this spec; a builtin that takes a required `id` with an
+    /// optional workspace and leaves this `Unspecified` fails closed when
+    /// its MCP definitions are built.
+    pub id_route: McpIdRouteDeclaration,
 }
 
 impl<V: 'static> OperationSpec<V> {

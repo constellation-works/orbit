@@ -10,7 +10,7 @@ use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: EXPERIMENT;
@@ -211,6 +211,7 @@ const CREATE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RENAME: &[ParamSpec] = &[both(
@@ -244,6 +245,9 @@ const UPDATE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const CLONE_NAME: &[ParamSpec] = &[required(both(
@@ -267,6 +271,9 @@ const CLONE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const START: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -282,6 +289,9 @@ const START: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const PAUSE: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -297,6 +307,9 @@ const PAUSE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const RESUME: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -312,6 +325,9 @@ const RESUME: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const REWEIGHT_PARAMS: &[ParamSpec] = &[
@@ -344,6 +360,9 @@ const REWEIGHT: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const CONCLUDE_ARM: &[ParamSpec] = &[both(
@@ -367,6 +386,9 @@ const CONCLUDE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const ABANDON: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -382,6 +404,9 @@ const ABANDON: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const DELETE: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -397,6 +422,9 @@ const DELETE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -412,6 +440,9 @@ const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const LIST_FILTER: &[ParamSpec] = &[both(
@@ -435,6 +466,7 @@ const LIST: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ASSIGN_PARAMS: &[ParamSpec] = &[
@@ -467,6 +499,9 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const READOUT_PARAMS: &[ParamSpec] = &[both(
@@ -490,4 +525,7 @@ const READOUT: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };

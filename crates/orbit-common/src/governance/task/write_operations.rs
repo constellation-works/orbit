@@ -16,7 +16,7 @@
 //!
 //! **Every string below is shipped contract.**
 
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::operations::{
     TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_ORIGIN_VALUES, TASK_PRIORITY_VALUES,
@@ -392,6 +392,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     retired_fields: ADD_RETIRED_FIELDS,
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const UPDATE_RETIRED_FIELDS: &[RetiredField] = &[
@@ -755,4 +756,5 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     retired_fields: UPDATE_RETIRED_FIELDS,
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };

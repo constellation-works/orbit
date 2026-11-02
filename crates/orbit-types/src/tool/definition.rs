@@ -374,6 +374,15 @@ pub enum McpToolDefinitionError {
     DuplicateAdvertisedName(String),
     #[error("MCP tool {0} belongs to no toolset; classify it in the builtin toolset table")]
     UnclassifiedToolset(String),
+    #[error(
+        "MCP tool {0} addresses one id with an optional workspace but declares no id route; \
+         declare its McpIdRoute at its definition site"
+    )]
+    UnclassifiedIdRoute(String),
+    #[error(
+        "MCP tool {0} declares an id route but does not address one id with an optional workspace"
+    )]
+    MisdeclaredIdRoute(String),
 }
 
 /// Convert a canonical Orbit tool name to its MCP-advertised form.

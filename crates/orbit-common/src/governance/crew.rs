@@ -4,7 +4,7 @@ use crate::governance::operation::{
     CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, ToolOnlyRegistration,
     UnknownFields, mcp_only, operation_registry,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: CREW;
@@ -56,4 +56,5 @@ const LADDER: OperationSpec<CrewVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

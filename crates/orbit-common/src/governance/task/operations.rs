@@ -16,7 +16,7 @@
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 
 use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::lifecycle_operations::{
     BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE, RETRY_HANDOFF,
@@ -466,6 +466,7 @@ const LIST: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ELIGIBLE: TaskOperation = TaskOperation {
@@ -532,6 +533,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: TaskOperation = TaskOperation {
@@ -626,6 +628,7 @@ const SHOW: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 const LINT: TaskOperation = TaskOperation {
@@ -682,6 +685,7 @@ const LINT: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// The globally unique task id `show` addresses.

@@ -1,8 +1,10 @@
-//! The id-routed task tool list stays in step with the canonical surface.
+//! The id route each builtin declares at its definition site stays in step
+//! with the canonical surface: a tool that addresses one id with an
+//! optional workspace must declare a route, and a declared route must
+//! match that parameter shape.
 
-use orbit_mcp::federated::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS};
-use orbit_tools::ToolRegistry;
-use orbit_types::tool::{McpToolScope, ToolSchema};
+use orbit_tools::{ToolRegistry, builtin_mcp_rules};
+use orbit_types::tool::{McpIdRoute, McpToolScope, ToolSchema};
 
 /// Every builtin, including the CLI-only tools `orbit tool run` reaches.
 fn builtins() -> (ToolRegistry, Vec<ToolSchema>) {
@@ -38,42 +40,36 @@ fn every_tool_addressing_one_id_is_routed_or_excluded_with_a_reason() {
         .iter()
         .filter(|schema| addresses_one_id_with_optional_workspace(&registry, schema))
         .map(|schema| schema.name.as_str())
-        .filter(|name| {
-            !ID_ROUTED_TASK_TOOLS.contains(name)
-                && !NOT_ID_ROUTED_TOOLS
-                    .iter()
-                    .any(|(excluded, _)| excluded == name)
-        })
+        .filter(|name| builtin_mcp_rules(name).id_route == McpIdRoute::Unspecified)
         .collect::<Vec<_>>();
     assert!(
         unclassified.is_empty(),
-        "tools with a required `id` and an optional workspace must be added to \
-         ID_ROUTED_TASK_TOOLS or excluded in NOT_ID_ROUTED_TOOLS with a reason, so a task id \
+        "tools with a required `id` and an optional workspace must declare a McpIdRoute at \
+         their definition site (task-id-routed, or workspace-local with a reason), so a task id \
          never silently stops routing to the host its prefix names: {unclassified:?}"
     );
 }
 
 #[test]
-fn every_listed_tool_exists_and_addresses_one_id_with_optional_workspace() {
+fn every_declared_route_matches_one_id_with_optional_workspace() {
     let (registry, schemas) = builtins();
-    let listed = ID_ROUTED_TASK_TOOLS
-        .iter()
-        .chain(NOT_ID_ROUTED_TOOLS.iter().map(|(name, _)| name));
-    for name in listed {
-        let schema = schemas
-            .iter()
-            .find(|schema| schema.name == *name)
-            .unwrap_or_else(|| panic!("{name} is classified but is not a builtin tool"));
+    for schema in &schemas {
+        let route = builtin_mcp_rules(&schema.name).id_route;
+        if route == McpIdRoute::Unspecified {
+            continue;
+        }
         assert!(
             addresses_one_id_with_optional_workspace(&registry, schema),
-            "{name} is classified for id routing but does not take a required `id` with an \
-             optional workspace; drop it from the list"
+            "{} is classified for id routing but does not take a required `id` with an \
+             optional workspace; drop the declared route from its definition",
+            schema.name
         );
-    }
-    for (name, reason) in NOT_ID_ROUTED_TOOLS {
-        assert!(
-            !reason.trim().is_empty(),
-            "{name} needs an exclusion reason"
-        );
+        if let McpIdRoute::WorkspaceLocal(reason) = &route {
+            assert!(
+                !reason.trim().is_empty(),
+                "{} needs a workspace-local reason",
+                schema.name
+            );
+        }
     }
 }

@@ -5,7 +5,7 @@ use crate::governance::operation::{
     CliArgKind, CliConstraint, CliHelp, Effect, ParamType, UnknownFields, aliased, both, cli_only,
     defaulted, mcp_only, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     verb: TaskVerb::ArtifactPut,
@@ -72,6 +72,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
@@ -138,6 +139,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const LOCKS_LIST: TaskOperation = TaskOperation {
@@ -159,6 +161,7 @@ pub(super) const LOCKS_LIST: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
@@ -258,6 +261,7 @@ pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 pub(super) const LOCKS_RELEASE: TaskOperation = TaskOperation {
@@ -298,4 +302,5 @@ pub(super) const LOCKS_RELEASE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

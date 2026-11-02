@@ -25,7 +25,7 @@ use crate::governance::operation::{
     ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
     required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: DECISION;
@@ -153,6 +153,7 @@ const LIST: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const REQUEST_ID: &[ParamSpec] = &[required(both(
@@ -176,6 +177,9 @@ const SHOW: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
 };
 
 const RAISE_PARAMS: &[ParamSpec] = &[
@@ -222,6 +226,7 @@ const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ANSWER_PARAMS: &[ParamSpec] = &[
@@ -254,6 +259,9 @@ const ANSWER: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
 };
 
 const REVERSE: OperationSpec<DecisionVerb> = OperationSpec {
@@ -269,6 +277,9 @@ const REVERSE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
 };
 
 const AUTO_SWITCH: &[EnumValue] = &[EnumValue::plain("on"), EnumValue::plain("off")];
@@ -302,6 +313,7 @@ const RULE_AUTO: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CONSOLIDATE_PARAMS: &[ParamSpec] = &[both(
@@ -325,6 +337,7 @@ const CONSOLIDATE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SUBMIT_PARAMS: &[ParamSpec] = &[
@@ -392,6 +405,9 @@ const SUBMIT: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
 };
 
 const DIGEST_PARAMS: &[ParamSpec] = &[required(both(
@@ -415,6 +431,7 @@ const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_NAME: &[ParamSpec] = &[required(both(
@@ -469,6 +486,7 @@ const CHANNEL_REGISTER: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_LIST: OperationSpec<DecisionVerb> = OperationSpec {
@@ -484,6 +502,7 @@ const CHANNEL_LIST: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_REVOKE: OperationSpec<DecisionVerb> = OperationSpec {
@@ -499,6 +518,7 @@ const CHANNEL_REVOKE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
@@ -514,6 +534,7 @@ const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ASSIST_CATEGORY: &[ParamSpec] = &[required(both(
@@ -545,6 +566,7 @@ const ASSIST_ENABLE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ASSIST_DISABLE: OperationSpec<DecisionVerb> = OperationSpec {
@@ -560,6 +582,7 @@ const ASSIST_DISABLE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ASSIST_STATUS: OperationSpec<DecisionVerb> = OperationSpec {
@@ -575,4 +598,5 @@ const ASSIST_STATUS: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

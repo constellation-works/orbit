@@ -3,6 +3,8 @@
 //! Names, descriptions, parameter order and registration retain the shipped
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
+use orbit_types::tool::McpIdRouteDeclaration;
+
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
     ToolOnlyRegistration, UnknownFields, operation_registry,
@@ -94,6 +96,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
@@ -128,6 +131,7 @@ const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const PULL: OperationSpec<DrainVerb> = OperationSpec {
@@ -216,6 +220,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
@@ -250,6 +255,7 @@ const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
@@ -313,6 +319,7 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
@@ -328,6 +335,7 @@ const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// A structural tool parameter, with no CLI binding or input rewriting.

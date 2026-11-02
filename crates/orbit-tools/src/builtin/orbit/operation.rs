@@ -21,7 +21,7 @@ use orbit_common::governance::operation::{
     Effect, NounSpec, OperationInput, OperationSpec, OperationVerb, ToolOnlyRegistration,
 };
 use orbit_common::protocol::tool_schema::tool_input_schema;
-use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::tool::{McpIdRouteDeclaration, ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
@@ -133,6 +133,10 @@ where
 {
     fn schema(&self) -> ToolSchema {
         operation_tool_schema(self.0)
+    }
+
+    fn declared_id_route(&self) -> McpIdRouteDeclaration {
+        self.0.id_route
     }
 
     fn input_schema(&self) -> Option<Value> {

@@ -9,7 +9,7 @@ use crate::governance::operation::{
     CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType, RetiredField,
     ToolOnlyRegistration, UnknownFields, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: WORKFLOW;
@@ -190,6 +190,7 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[RetiredField::verbatim("agent", "unknown field 'agent'")],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -230,6 +231,7 @@ const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -253,6 +255,9 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
 };
 
 const RUN_OBSERVE: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -268,6 +273,9 @@ const RUN_OBSERVE: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
 };
 
 const RUN_SHOW: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -292,6 +300,9 @@ const RUN_SHOW: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
 };
 
 const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -331,6 +342,7 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Refuse malformed or incompatible explicit modes before generic optional

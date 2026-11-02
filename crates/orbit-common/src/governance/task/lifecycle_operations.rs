@@ -10,7 +10,7 @@
 //!
 //! **Every string below is shipped contract.**
 
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::operations::{IDENTITY_PARAMS, TASK_HOST_HELP, TaskOperation, TaskVerb};
 use super::write_operations::WRITE_PROJECTION_PARAMS;
@@ -195,6 +195,7 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
@@ -241,6 +242,7 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 /// Requeue a blocked task onto the candidate its stopped run published, or
@@ -282,6 +284,7 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 /// Explicit operator request for one task-pilot assessment.
@@ -315,6 +318,7 @@ pub(super) const REPILOT: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] = &[EnumValue::plain("pilot_warning")];
@@ -397,6 +401,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// The task a lifecycle tool acts on.
@@ -432,6 +437,7 @@ pub(super) const REJECT: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const DELETE: TaskOperation = TaskOperation {
@@ -454,6 +460,7 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 const RECOVER_STATUS_VALUES: &[EnumValue] =
@@ -511,6 +518,7 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Revoke a handoff's completion authority.
@@ -565,6 +573,7 @@ pub(super) const REVOKE_HANDOFF: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Retry an existing authorized handoff, preserving its immutable foreign binding.
@@ -642,4 +651,5 @@ pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

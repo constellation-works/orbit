@@ -1,157 +1,63 @@
 //! Internal MCP rules declared alongside the owning builtin definitions.
 //! The adapter consumes these facts; it never infers behavior from tool names.
+//!
+//! A builtin's id-routing classification is declared at its definition
+//! site — the `id_route` field of its operation spec, or
+//! `Tool::declared_id_route` for a hand-written tool — and resolved into
+//! [`McpToolRules::id_route`] here.
+//! There is no name table: `builtin_mcp_rules` looks the name up in the
+//! routes the registered builtin definitions themselves declared.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use orbit_types::tool::{
-    McpIdRoute, McpInputCondition, McpInputDecoration, McpPresentationRead, McpToolRules,
-    McpWorkspaceEcho, ToolSchema,
+    McpIdRoute, McpIdRouteDeclaration, McpInputCondition, McpInputDecoration, McpPresentationRead,
+    McpToolRules, McpWorkspaceEcho, ToolSchema,
 };
 
-/// Tools whose target is exactly one task id and whose `workspace` is
-/// optional. Called without a selector, they route by the id's prefix.
-pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
-    "orbit.task.show",
-    "orbit.task.update",
-    "orbit.task.repilot",
-    "orbit.task.reject",
-    "orbit.task.delete",
-    "orbit.task.artifact.get",
-    "orbit.task.artifact.put",
-    "orbit.task.review_reset",
-    "orbit.task.reconcile_review",
-    "orbit.task.repilot",
-    "orbit.task.requeue",
-    "orbit.task.repilot",
-    "orbit.visual.capture",
-    "orbit.visual.accept_dispute",
-];
-
-/// Tools that take a required `id` and an optional workspace but are not
-/// id-routed, each with the reason.
-pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
-    (
-        "orbit.friction.show",
-        "a friction id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.friction.update",
-        "a friction id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.friction.resolve",
-        "a friction id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.friction.rehome",
-        "a friction id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.decision.show",
-        "a decision request id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.decision.answer",
-        "a decision request id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.decision.reverse",
-        "a decision request id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.decision.submit",
-        "a decision request id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.evolution.decline",
-        "an evolution record id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.evolution.show",
-        "an evolution record id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.update",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.clone",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.start",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.pause",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.resume",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.assign",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.reweight",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.conclude",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.abandon",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.delete",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.show",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.experiment.readout",
-        "an experiment id is workspace-local and carries no host prefix",
-    ),
-    (
-        "orbit.workflow.run.observe",
-        "a run id is host-local: a run executes where it was admitted",
-    ),
-    (
-        "orbit.workflow.run.show",
-        "a run id is host-local: a run executes where it was admitted",
-    ),
-    (
-        "orbit.workflow.run.resume",
-        "a run id is host-local: a run executes where it was admitted",
-    ),
-    (
-        "orbit.notice.show",
-        "a notice id is workspace-local and carries no host prefix",
-    ),
-];
+use crate::ToolRegistry;
 
 /// Rules for a registered tool. Plugins keep the default transport contract.
-pub(crate) fn mcp_rules(schema: &ToolSchema) -> McpToolRules {
+pub(crate) fn mcp_rules(
+    schema: &ToolSchema,
+    declared_id_route: McpIdRouteDeclaration,
+) -> McpToolRules {
     if !schema.builtin {
         return McpToolRules::default();
     }
-    builtin_mcp_rules(&schema.name)
+    builtin_mcp_rules_with_route(&schema.name, declared_id_route.resolve())
 }
 
 /// Builtin rules for name-based CLI routing, including CLI-only task operations.
 /// Registered plugins receive defaults through the registry instead.
+///
+/// The id route comes from the named builtin's own definition, never from
+/// a hand-kept name list.
 pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
-    let id_route = if ID_ROUTED_TASK_TOOLS.contains(&name) {
-        McpIdRoute::Task
-    } else if let Some((_, reason)) = NOT_ID_ROUTED_TOOLS.iter().find(|(tool, _)| *tool == name) {
-        McpIdRoute::WorkspaceLocal((*reason).into())
-    } else {
-        McpIdRoute::Unspecified
-    };
+    let id_route = declared_builtin_id_routes()
+        .get(name)
+        .cloned()
+        .unwrap_or(McpIdRoute::Unspecified);
+    builtin_mcp_rules_with_route(name, id_route)
+}
+
+/// Every registered builtin's declared id route, by tool name.
+///
+/// Built once from a registry of the builtins themselves, so a tool that
+/// declares its route at its definition site is picked up with no second
+/// place to update, and CLI-only operations (registered inactive or
+/// without an MCP scope) are included alongside MCP-advertised ones.
+fn declared_builtin_id_routes() -> &'static HashMap<String, McpIdRoute> {
+    static DECLARED: OnceLock<HashMap<String, McpIdRoute>> = OnceLock::new();
+    DECLARED.get_or_init(|| {
+        let mut registry = ToolRegistry::new();
+        registry.register_builtins();
+        registry.declared_id_routes()
+    })
+}
+
+fn builtin_mcp_rules_with_route(name: &str, id_route: McpIdRoute) -> McpToolRules {
     let present = |keys: &[&str]| {
         keys.iter()
             .map(|key| McpInputCondition::Present((*key).into()))

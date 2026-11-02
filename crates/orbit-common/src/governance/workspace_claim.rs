@@ -3,6 +3,8 @@
 //! Names, descriptions, parameter order and registration retain the shipped
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
+use orbit_types::tool::McpIdRouteDeclaration;
+
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
     ToolOnlyRegistration, UnknownFields, operation_registry,
@@ -87,6 +89,7 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
@@ -127,6 +130,7 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 // Preserve the old tool's conservative mutating execution kind for show.
@@ -143,6 +147,7 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// A structural tool parameter, with no CLI binding or input rewriting.
