@@ -424,6 +424,34 @@ PR** asks only for confirmation.
 Write the reason for the next reader of the task history, for example
 `flaky test fixed; rerun the candidate`.
 
+### Skip pilot in Readiness
+
+In **Tasks**, Readiness offers **Skip pilot** for a backlog task held by its
+pilot assessment, including a stale assessment or a pilot finding, when it
+does not already carry `no-pilot`. Confirm the action to add that tag and
+proceed without a new assessment. Adding it after a pilot receipt or while a
+pilot is pending requires an operator; filing a task with the tag is open to
+any caller. The skip records the operator and the requirements dispatched
+without assessment in task history. Remove `no-pilot` to restore the pilot
+gate.
+
+From the owner CLI, inspect the task's tags first, then include every tag you
+want to keep: `--tag` replaces the entire list. For example, if `docs` is the
+only existing tag:
+
+```bash
+orbit task show "$TASK_ID" --fields tags
+orbit task update "$TASK_ID" --tag docs,no-pilot
+# Restore the pilot gate, retaining the other tag:
+orbit task update "$TASK_ID" --tag docs
+```
+
+Skipping the pilot assessment does not clear other readiness or delivery
+holds, including dependencies, locks and unverified review findings. Native
+host requirements and review still need their own evidence. Readiness refreshes
+after the action to show any remaining hold. To refresh an assessment instead,
+see [Prepare proposed work](../continuous-delivery/#1-prepare-proposed-work).
+
 ### Clear a pilot admission hold
 
 A backlog task that a pilot assessment held from admission shows a **Pilot
