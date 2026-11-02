@@ -60,8 +60,9 @@ set, a covered requirement refuses the run before launch. `final_recovery`,
 `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
 `review_reconciliation_review`, `task_pilot` and `agent_invoke` drop that
 requirement from the requested list and record a note; it stays out of the
-callable set. The shipped `agent_explore` and `verify_finding` activities use
-the same non-implementer rule.
+callable set. The shipped `agent_explore`, `verify_finding`,
+`image_input_probe`, `resident_cycle`, `triage_escalation`, `visual_review` and
+`visual_verify` activities use the same non-implementer rule.
 
 An operator's task grant is a narrow exception for `agent_implement`: it can
 lift an exact deny entry for a read/repeat-safe tool, but a mutating grant
@@ -1003,8 +1004,10 @@ ended run, an expired step or a guard that no longer holds keeps it in the
 backlog.
 
 Opening a workspace with this release moves it to workspace layout
-version 7, which records parked runs and step bindings that an earlier
-release would drop. Earlier Orbit releases then refuse to open the workspace until
+version 8. Version 7 records parked runs and step bindings that an earlier
+release would drop; version 8 adds the kept script output files and parallel
+script-branch checkpoints (see [Output files](#output-files)). Earlier Orbit
+releases then refuse to open the workspace until
 they are upgraded, and while an earlier release still holds it, for example
 as a running MCP server, this release waits for that client to exit rather
 than proceeding alongside it.

@@ -9,7 +9,7 @@ sidebar:
 
 | Crate | Responsibility |
 |-------|----------------|
-| `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, and Web. |
+| `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, Web, and Auth. |
 | `orbit-cmd` | CLI-facing command layer split out of `orbit-core`: doctor, migrate, diagnostics, agent rules, host commands, MCP client config, browser kit, and update. Exposes `*Commands` extension traits over `OrbitRuntime`. |
 | `orbit-core` | Runtime composition, default asset seeding, application use cases, and adapters. Provides the `OrbitRuntime` wrapper to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
 | `orbit-runtime` | Runtime kernel: stores, engine handles, policy and tool execution, audit, workspace binding, and host probes. Core wraps its `RuntimeKernel`; kernel callbacks reach application use cases through `ApplicationPort`, with no dependency back on Core. |
@@ -22,10 +22,11 @@ sidebar:
 | `orbit-tools` | Generic tool registry, workspace-scoped builtins, filesystem tools, and policy-aware exec tools. |
 | `orbit-policy` | Filesystem-scoping policy engine: `FsProfile` resolution and `denyRead` / `denyModify` evaluation. |
 | `orbit-exec` | Process, sandbox, and supervision primitives for running shell commands under an `FsProfile`. |
+| `orbit-auth` | Credential code for the lease listener: bearer lease tokens (format, generation, hashing, constant-time verification), principals, scopes and the allow-or-deny decision, the listener user's token store, the client-address rule, and the failed-authentication limiter. No HTTP framework, runtime handle, or Orbit store; depends only on `orbit-common` and `orbit-types`. |
 | `orbit-store` | Generic YAML and SQLite stores, connection primitives, the namespaced feature-migration ledger, and immutable historical bootstrap migrations. Feature crates own their active schemas and queries. |
 | `orbit-mcp` | RMCP stdio and TCP transports, canonical discovery, server identity context, the direct SSH stdio proxy, and the federated mux. |
 | `orbit-search` | Workspace-local lexical task search: SQLite FTS5 chunks ranked by BM25, kept in sync as tasks change. |
-| `orbit-types` | Lowest contract layer: shared types grouped by domain (`identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`, `plugin`, `desktop`) and `OrbitId`. No I/O and no Orbit crate dependencies. |
+| `orbit-types` | Lowest contract layer: shared types grouped by domain (`assistance`, `identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`, `plugin`, `desktop`) and `OrbitId`. No I/O and no Orbit crate dependencies. |
 | `orbit-common` | Mechanism crate above `orbit-types`: `OrbitError` plus governance, filesystem, process, storage, protocol, observability, and security helpers. |
 
 ## Dependency direction
@@ -38,6 +39,7 @@ flowchart LR
   CLI --> Registry["orbit-registry"]
   CLI --> MCP["orbit-mcp"]
   CLI --> Web["orbit-web"]
+  CLI --> Auth["orbit-auth"]
   Cmd --> Core
   Cmd --> Config
   Cmd --> MCP
@@ -79,12 +81,15 @@ flowchart LR
   Web --> Core
   Web --> Cmd
   Web --> Registry
+  Web --> Auth
   Cmd --> Common
   Core --> Common
   Config --> Common
   Config --> Types
   Common --> Types
   Exec --> Types
+  Auth --> Common
+  Auth --> Types
   Policy --> Types
   Store --> Types
 ```
