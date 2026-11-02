@@ -61,6 +61,8 @@ pub enum McpToolset {
     AgentInvoke,
     /// Fleet notices: post, close, list and show.
     Notice,
+    /// Resident mandates: the authority grant, show and list.
+    Resident,
     /// Tools no MCP server advertises: `orbit tool run` and managed
     /// activities reach them. Naming it in a selection advertises nothing.
     Local,
@@ -68,7 +70,7 @@ pub enum McpToolset {
 
 impl McpToolset {
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Core,
         Self::TasksRead,
         Self::TasksWrite,
@@ -88,6 +90,7 @@ impl McpToolset {
         Self::DecisionChannel,
         Self::AgentInvoke,
         Self::Notice,
+        Self::Resident,
         Self::Local,
     ];
 
@@ -131,6 +134,7 @@ impl McpToolset {
             Self::DecisionChannel => "decision-channel",
             Self::AgentInvoke => "agent-invoke",
             Self::Notice => "notice",
+            Self::Resident => "resident",
             Self::Local => "local",
         }
     }
@@ -187,10 +191,10 @@ pub enum McpRole {
     /// Every toolset: the full surface.
     Operator,
     /// A supervising manager: read-only task and run views, decisions
-    /// (attention), notices and search.
+    /// (attention), notices, resident mandates and search.
     Manager,
     /// The resident orchestrator's bounded cycle: task reads and writes, run
-    /// reads, dispatch, decisions, notices and search.
+    /// reads, dispatch, decisions, notices, its mandate and search.
     Resident,
     /// A managed agent, aligned with the managed activity baseline allowlist.
     Agent,
@@ -225,7 +229,14 @@ impl McpRole {
         use McpToolset as T;
         match self {
             Self::Operator => &McpToolset::ALL,
-            Self::Manager => &[T::TasksRead, T::Runs, T::Decisions, T::Notice, T::Search],
+            Self::Manager => &[
+                T::TasksRead,
+                T::Runs,
+                T::Decisions,
+                T::Notice,
+                T::Resident,
+                T::Search,
+            ],
             Self::Resident => &[
                 T::TasksRead,
                 T::TasksWrite,
@@ -233,6 +244,7 @@ impl McpRole {
                 T::Dispatch,
                 T::Decisions,
                 T::Notice,
+                T::Resident,
                 T::Search,
             ],
             Self::Agent => &[

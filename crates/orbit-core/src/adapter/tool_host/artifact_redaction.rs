@@ -318,6 +318,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
         },
+        // A grant's quote is free text carried to the human verbatim; each
+        // parameter redacts per its declared class.
+        OrbitBuiltinAction::Resident(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            ..NO_REDACTION
+        },
         OrbitBuiltinAction::Task(verb) => match verb {
             // Artifact bytes are stored as given; the store screens their path.
             TaskVerb::ArtifactPut => NO_REDACTION,

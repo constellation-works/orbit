@@ -91,8 +91,9 @@ not the prompt.
   for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
   Core also refuses `resident.*` writes whose cycle id is not the mandate's live cycle.
-- **Who widens.** Only the human. A caller with operator authority writes a grant directly
-  (`orbit resident grant`). The manager, which is an agent session, submits the same input and gets a
+- **Who widens.** Only the human. The operator at a native terminal writes a grant directly
+  (`orbit resident grant`); any MCP session, even one served `--operator`, counts as a relay. The
+  manager, which is an agent session, submits the same input and gets a
   **grant request** instead: a decision request on a new `resident_authority` gate that quotes the
   human's words verbatim, names the relaying session and lists the exact rights added. The authority
   changes only when the human answers it through the decision channel (dashboard, CLI or a
@@ -114,9 +115,8 @@ not the prompt.
 2. The manager files or reuses the `[orchestration]` assignment in the owning workspace with the
    `resident` tag and writes `resident/mandate.json` (goal, exit criteria, deadline, covered
    workspaces, watched tasks, crew, cadence).
-3. The manager submits the authority grant with the human's words verbatim. Unless the session
-   itself holds operator authority, that raises a `resident_authority` decision request, and the
-   human answers it.
+3. The manager submits the authority grant with the human's words verbatim. From an MCP session
+   that always raises a `resident_authority` decision request, and the human answers it.
 4. The mandate becomes `active` when it has a mandate artifact and a non-empty granted authority. Its
    first fire follows on the next clock tick.
 
@@ -269,6 +269,9 @@ resumed conversation, is an adapter that adds context and never changes correctn
 **Where it runs.** On the owner host of the assignment's workspace, as owner-only automation, like
 every state routine. v1 requires every covered workspace to be owned by the same host; a covered
 workspace on another owner is refused at grant time ([3_vision.md](./3_vision.md#1-open-questions)).
+Slice 1 approximates that check: a granted workspace must be the assignment's own or registered in
+the granting host's workspace catalog
+([mandate-and-authority](./specs/mandate-and-authority.md#widening)).
 
 **Provider-neutral.** The cycle is an ordinary `agent_loop` with a crew from the mandate, so any
 registered crew can run a resident. Provider-specific continuity sits behind the adapter in
@@ -314,8 +317,9 @@ rather than one more add-on toolset ([federated-mcp specs/mcp-roles.md](../feder
 global `machine.mcp.role`) serves the role's toolsets; `--toolset` adds to it. A role grants no
 authority: `--operator` still decides operator capability. Today `--role manager` serves task and run
 reads, decisions, notices and search, and `--role resident` adds task writes and dispatch for the
-bounded cycle. When the `resident` toolset ([ORB-21245]) lands, it joins both roles: relay and control
-for the manager, the resident's own reads and checkpoints for the cycle. Without a role a server still
+bounded cycle. Both also serve the `resident` toolset, which [ORB-21242] introduced with
+`orbit.resident.grant`, `show` and `list`; [ORB-21245] adds relay and control for the manager, and
+later slices the resident's own checkpoints for the cycle. Without a role a server still
 serves the pre-role default surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
 
 ## 7. Notices
@@ -579,7 +583,7 @@ Slice 1 is in `review` ([ORB-21242]); slices 2–10 are approved (`backlog`) tas
 
 | # | Task | Delivers | Blocked by |
 |---|---|---|---|
-| 1 | [ORB-21242] | Mandate record, operator-only grant, grant requests, narrowing, `resident show/list` | — |
+| 1 | [ORB-21242] | Mandate record, operator-only grant, grant requests, narrowing, `resident show/list`, the `resident` toolset | — |
 | 2 | [ORB-21243] | `orbit.resident.checkpoint`, request/answer shapes, stale-cycle refusal | 1 |
 | 3 | [ORB-21244] | `resident_due`, cycle job, lease, action keys, authority-scoped tools, maintenance narrowing, mandate end | 1, 2 |
 | 4 | [ORB-21245] | `orbit.resident.control`, `orbit.resident.relay`, `resident` toolset, `resident_stalled` | 1, 2 |
@@ -595,10 +599,12 @@ Slice 1 is in `review` ([ORB-21242]); slices 2–10 are approved (`backlog`) tas
 - **The authority boundary is only as strong as the tool grant.** A resident with `dispatch` can still
   dispatch the wrong task. The grant bounds the kind of harm, not judgment; reversals measure
   judgment.
-- **Operator authority in a manager session.** A manager running in the operator's own terminal may
-  resolve as `operator` and grant directly. That is the existing caller model
-  ([notice-authority](../fleet-notices/specs/notice-authority.md) records the same limit), not a new
-  hole. A session that resolves as an agent or orchestrator always goes through a grant request.
+- **Operator authority in a manager session.** Slice 1 closes most of this: only a native CLI caller
+  with operator capability and no agent, model, orchestrator, MCP-session or managed-run context
+  grants directly, so a manager over MCP, even one served `--operator`, always goes through a grant
+  request. An agent that shells out to `orbit resident grant` in the operator's own terminal without
+  any agent context still resolves as the operator; that is the existing caller model
+  ([notice-authority](../fleet-notices/specs/notice-authority.md) records the same limit).
 - **The wake digest can miss a relevant change.** Anything outside the watched set (an unrelated task
   that starts touching the same files, say) shows up only at the heartbeat. A short heartbeat costs
   cycles; a long one costs latency. Workspaces can add condition-triggered wakes.

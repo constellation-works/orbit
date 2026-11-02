@@ -348,6 +348,10 @@ const ROOT_OPERATE: &[GroupedRow] = &[
         "Post, close and list fleet notices other agents and operators see",
     ),
     (
+        "resident",
+        "Grant, narrow and inspect resident orchestrator mandates",
+    ),
+    (
         "tool",
         "Manage and run Orbit tools, including external MCP plugins",
     ),

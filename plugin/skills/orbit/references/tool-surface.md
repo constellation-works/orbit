@@ -270,8 +270,10 @@ subprocess, and external authentication checks.
 the opt-in toolsets the host enables: `leases` (path leases), `experiments`
 (experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
 show, crew ladder), `decision-channel` (decision submit and digest; decision
-list and show stay default), `agent-invoke` (`orbit.agent.invoke`) and `notice`
-(`orbit.notice.*`, fleet notices). Enable them per server with
+list and show stay default), `agent-invoke` (`orbit.agent.invoke`), `notice`
+(`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
+mandates; widening their authority from an MCP session raises a decision
+request for the human). Enable them per server with
 `--toolset leases,analytics` (or `all`), or for the host with
 `orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
 replaces the config. A call to a tool outside the server's toolsets is refused

@@ -171,6 +171,14 @@ pub(super) fn execute(
             input,
             model.as_deref(),
         ),
+        OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
+            runtime,
+            session_context,
+            verb,
+            input,
+            agent.as_deref(),
+            model.as_deref(),
+        ),
         OrbitBuiltinAction::Lease(verb) => {
             super::lease_tools::dispatch(runtime, verb, input, agent, model)
         }

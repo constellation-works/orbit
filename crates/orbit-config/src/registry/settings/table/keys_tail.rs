@@ -27,7 +27,7 @@ macro_rules! with_tail_keys {
     },
     machine_mcp_toolsets: Vec<String> => Vec<String> {
         key: "machine.mcp.toolsets", value_type: "array<string>",
-        description: "MCP toolsets orbit mcp serve and listen advertise beside the role or the default surface, such as leases, experiments, analytics, decision-channel, agent-invoke, notice or all.",
+        description: "MCP toolsets orbit mcp serve and listen advertise beside the role or the default surface, such as leases, experiments, analytics, decision-channel, agent-invoke, notice, resident or all.",
         section: ConfigSection::Machine, order: 85,
         resolve: |raw: Option<Vec<String>>| resolve_mcp_toolsets(raw),
     },

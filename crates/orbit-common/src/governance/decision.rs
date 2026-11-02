@@ -82,6 +82,7 @@ const GATES: &[EnumValue] = &[
     EnumValue::plain("model_answer_review"),
     EnumValue::plain("pilot_admission"),
     EnumValue::plain("proposed_approval"),
+    EnumValue::plain("resident_authority"),
     EnumValue::plain("review_approval"),
 ];
 
@@ -95,7 +96,7 @@ const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
         ParamType::Enum(GATES),
-        "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval or review_approval.",
+        "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority or review_approval.",
         CliArgKind::flag("gate"),
         "Only requests waiting on this gate",
     ),

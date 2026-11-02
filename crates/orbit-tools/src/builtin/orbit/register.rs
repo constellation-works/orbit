@@ -10,6 +10,7 @@ use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::lease::LEASE;
 use orbit_common::governance::notice::NOTICE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
+use orbit_common::governance::resident::RESIDENT;
 use orbit_common::governance::task::TASK;
 use orbit_common::governance::visual::VISUAL;
 use orbit_common::governance::workflow::WORKFLOW;
@@ -45,6 +46,9 @@ pub fn register(registry: &mut ToolRegistry) {
     // reads are opt-in there, and `orbit tool run` reaches them regardless.
     operation::register_noun(registry, &LEASE);
     operation::register_noun(registry, &NOTICE);
+    // Resident mandates: the governed authority grant and the mandate reads,
+    // in the opt-in `resident` toolset the manager and resident roles serve.
+    operation::register_noun(registry, &RESIDENT);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives. Its
     // toolset is opt-in: a managed run offered explorer delegation enables

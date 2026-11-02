@@ -34,6 +34,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.tags"
         | "orbit.notice.list"
         | "orbit.notice.show"
+        | "orbit.resident.list"
+        | "orbit.resident.show"
         | "orbit.orchestrator.scorecard"
         | "orbit.orchestrator.show"
         | "orbit.search"
@@ -67,6 +69,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // A post whose key an open notice holds replaces that notice's
         // content; repeating it matches the same notice and changes nothing.
         "orbit.notice.post" => A::destructive(true),
+        // A narrowing removes authority; repeating a grant returns the open
+        // request or finds the rights already held.
+        "orbit.resident.grant" => A::destructive(true),
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also

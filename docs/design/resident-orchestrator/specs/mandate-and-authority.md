@@ -29,8 +29,9 @@ being able to delegate power.
 
 ## Mandate artifact
 
-`resident/mandate.json`, written with `orbit.task.artifact.put` or through `orbit resident grant`
-(which can write both). Schema version 1:
+`resident/mandate.json`, written with `orbit.task.artifact.put` (or `orbit task update
+--artifact`). `orbit resident grant` never writes it, except to shorten its `deadline` (see
+[Narrowing](#narrowing)). Schema version 1:
 
 ```json
 {
@@ -59,21 +60,33 @@ being able to delegate power.
 | `continuity` | `prefer` (resume a provider conversation when the adapter can) or `off` |
 | `probe` | `true` while the mandate is run interactively as a probe |
 
-Editing the mandate is an ordinary task write and is not gated. A mandate edit that would widen
-the authority's scope is refused: the scope lives in the authority record, and `workspaces` cannot
-drop below it.
+Editing the mandate is an ordinary task write and is not gated. The scope lives in the authority
+record, so a mandate edit cannot widen it. An edit that drops a workspace the authority still covers
+is not refused at the artifact write (slice 1): the **effective authority** is the authority's
+rights over the workspaces both records cover, so the dropped workspace leaves the effective scope
+at once, and `orbit resident show` reports both records beside the effective one.
+
+A mandate is not due (`orbit resident show` state `invalid`, with the reason) when the task is not
+tagged `resident`, the artifact is missing or fails validation, or its `crew` is not a configured
+crew. Its other states are `active`, `handed_off` (the assignment is in `review`) and `ended` (done,
+archived or rejected). An ended or invalid mandate's effective authority is empty.
 
 ## Authority record
 
-Stored as the task's `resident_authority` record (beside the task, versioned, with history):
+Stored in the assignment task's history: every change appends one `resident_authority_changed`
+entry whose note carries the change and the resulting `rights` and `workspaces`, and only core
+writes them, under the task write lock. The record is the fold of those entries; its `revision` is
+their count, which the grant request binds to. No separate store or schema migration is needed, and
+the history is already the task's append-only audit trail. Folded, it reads:
 
 ```json
 {
   "schema": "resident.authority/v1",
+  "revision": 1,
   "rights": ["dispatch", "promote"],
   "workspaces": ["orbit-office"],
   "granted": [
-    {"at": "2026-11-02T10:00:00Z", "by": "human:daniel", "via": "decision:DR-…", "added": ["dispatch", "promote"], "quote": "you may dispatch and promote in orbit-office, not merge"}
+    {"revision": 1, "at": "2026-11-02T10:00:00Z", "by": "human:daniel", "via": "decision:DR-…", "added": ["dispatch", "promote"], "workspaces_added": ["orbit-office"], "quote": "you may dispatch and promote in orbit-office, not merge", "relay": {"by": "claude", "crew": "opus", "model": "claude", "session_id": "…"}}
   ],
   "narrowed": []
 }
@@ -95,30 +108,42 @@ grantable to a resident in v1.
 
 The mapping lives in core beside the tool catalog. A tool not in the map for the effective rights is
 not granted to the cycle. A tool call whose workspace selector is outside `workspaces` is refused
-with `resident_scope_refused`.
+with `resident_scope_refused`. The mapping and that refusal arrive with the cycle that consumes
+them ([ORB-21244]); slice 1 records and reports the authority only.
 
 ## Widening
 
-`orbit.resident.grant` (CLI `orbit resident grant <task> --add <right>… --workspace <ws>… --quote
+`orbit.resident.grant` (CLI `orbit resident grant <task> --add <right>… --add-workspace <ws>… --quote
 <text>`):
 
 - **Operator caller.** Applies at once. Recorded with `by` = the human and `via: operator`.
+  Operator means the human at a terminal: a native CLI caller holding operator capability with no
+  agent, model or orchestrator attribution, no MCP session and no managed-run or agent context.
+  Any MCP session, even one served `--operator`, is a relay and takes the next path.
 - **Any other caller.** Writes nothing to the authority. It raises one decision request on the
   `resident_authority` gate, bound to the authority's current revision (the stale guard), with:
   - `question`: "Grant <rights> in <workspaces> to the resident for <task>?"
-  - the `quote`, verbatim, and the relaying session (crew, model, session id);
+  - the `quote`, verbatim (required, at most 2000 characters), and the relaying session (crew,
+    model, session id);
   - answers `grant` and `reject`.
 
   Answering `grant` as the human applies exactly the requested addition with `via: decision:<id>`.
   `reject`, expiry or an intervening authority change supersedes it, and nothing changes. An open
-  request for the same addition is reused, not duplicated.
-- Refused: a right outside the enum, a workspace not owned by the assignment's owner host, any
-  grant on a mandate in `ended` state.
+  request for the same addition is reused, not duplicated. The request rides beside other decision
+  requests on the task (neither supersedes the other), and precedent and the decision model never
+  answer it: both answers are authority-tier.
+- Refused: a right outside the enum, a workspace the mandate does not list, a workspace that is
+  neither the assignment's own nor registered in this host's workspace catalog (slice 1's stand-in
+  for "owned by the assignment's owner host"), a task not tagged `resident` or without a valid
+  mandate, any grant on a mandate in `ended` state, and one call that both widens and narrows.
 
 ## Narrowing
 
-`orbit.resident.grant --remove <right>… / --drop-workspace <ws>…`, `orbit.resident.control
-pause|stop`, and a deadline shortened in the mandate are narrowing. Any caller that can write the
+`orbit.resident.grant --remove <right>… / --drop-workspace <ws>… / --deadline <rfc3339>`,
+`orbit.resident.control pause|stop` ([ORB-21245]), and a deadline shortened in the mandate are
+narrowing. `--deadline` must be earlier than the current deadline (or set the first one); it
+rewrites the mandate's `deadline` in the same update and records the new deadline in `narrowed[]`.
+A later deadline is refused there; extend a deadline by editing the mandate. Any caller that can write the
 assignment may narrow, including the resident's own cycle. Narrowing takes effect for cycle
 execution at the next cycle boundary, and each narrowing is recorded in `narrowed[]` with its
 caller. Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant,
@@ -132,7 +157,7 @@ the next cycle boundary, within at most one agent budget. A stop then hands the 
 |---|---|
 | Authority record missing or unreadable | The cycle runs observe-only and the checkpoint reports `authority_unavailable` |
 | Mandate artifact missing or invalid | The mandate is not due; `orbit resident show` reports why |
-| Authority wider than the mandate's `workspaces` after an edit | The edit is refused |
+| Authority wider than the mandate's `workspaces` after an edit | The edit is accepted; the effective authority drops the uncovered workspaces |
 | Decision channel disabled | Grant requests are still raised and answerable from the dashboard and CLI |
 
 ## Agent Signature
@@ -143,5 +168,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242].
 
 - [ORB-21229] — designed the mandate and authority model
 - [ORB-21242] — implements the mandate record, grants, grant requests and narrowing
+- [ORB-21244] — the cycle that maps rights to tools
+- [ORB-21245] — `orbit.resident.control` and relay
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
