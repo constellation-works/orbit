@@ -150,6 +150,12 @@ impl OrbitRuntime {
         let poster = self.resolve_notice_poster(caller)?;
         audit.poster = Some(poster.class);
         let settings = *self.notice_settings();
+        if poster.class == AuthorClass::Agent && !settings.agent_posting {
+            return Err(refuse(
+                NoticeRefusalCode::AgentPostingDisabled,
+                "notice.agent_posting is false in this workspace, so a managed agent may not post notices",
+            ));
+        }
         #[cfg(feature = "test-support")]
         let now = super::test_support::notice_post_time();
         #[cfg(not(feature = "test-support"))]

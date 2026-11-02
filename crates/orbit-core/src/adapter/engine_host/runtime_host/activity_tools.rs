@@ -17,6 +17,46 @@ use crate::application::job::{drops_disallowed_requirements, granted_tool_refusa
 /// including reviewers, recovery and pilot, never reads a grant.
 const GRANT_LIFTING_ACTIVITY: &str = "agent_implement";
 
+/// Activities whose tool baseline carries the fleet-notice write tools, so
+/// a managed run can warn other agents about a problem outside its task
+/// (fleet notices slice 3). Nothing else is granted for notices: `list`
+/// stays a brief/read surface, not a baseline grant.
+pub(crate) const NOTICE_AGENT_ACTIVITIES: &[&str] =
+    &["agent_implement", "agent_review_repair", "final_recovery"];
+
+/// The notice tools a managed agent's baseline carries when
+/// `notice.agent_posting` is on.
+pub(crate) const NOTICE_AGENT_TOOLS: &[&str] = &[
+    "orbit.notice.post",
+    "orbit.notice.show",
+    "orbit.notice.close",
+];
+
+/// Apply the `notice.agent_posting` switch to a resolved baseline: when
+/// the switch is off the notice tools leave every baseline (the owner also
+/// refuses agent-class posts and closes); when it is on, the named
+/// activities gain the tools even if a future baseline change drops them.
+fn apply_notice_agent_posting_baseline(
+    runtime: &OrbitRuntime,
+    activity: Option<&str>,
+    disallow_list: Option<&[String]>,
+    effective_tools: &mut Vec<String>,
+) {
+    if !runtime.notice_settings().agent_posting {
+        effective_tools.retain(|tool| !NOTICE_AGENT_TOOLS.contains(&tool.as_str()));
+        return;
+    }
+    if !activity.is_some_and(|name| NOTICE_AGENT_ACTIVITIES.contains(&name)) {
+        return;
+    }
+    for tool in NOTICE_AGENT_TOOLS {
+        let denied = disallow_list.is_some_and(|list| tool_allowed(tool, list));
+        if !denied && !effective_tools.iter().any(|existing| existing == tool) {
+            effective_tools.push((*tool).to_string());
+        }
+    }
+}
+
 pub(super) fn resolve_activity_tools(
     runtime: &OrbitRuntime,
     task_ids: &[String],
@@ -25,9 +65,11 @@ pub(super) fn resolve_activity_tools(
     let tasks = load_tasks(runtime, task_ids)?;
     let (requested_tools, omitted_requirement_notes) = admit_required_tools(runtime, &tasks, None)?;
     if requested_tools.is_empty() {
+        let mut effective_tools = baseline_tools.to_vec();
+        apply_notice_agent_posting_baseline(runtime, None, None, &mut effective_tools);
         return Ok(ResolvedActivityTools {
             requested_tools,
-            effective_tools: baseline_tools.to_vec(),
+            effective_tools,
             omitted_requirement_notes,
             granted_tools: Vec::new(),
         });
@@ -40,6 +82,7 @@ pub(super) fn resolve_activity_tools(
             effective_tools.push(tool.clone());
         }
     }
+    apply_notice_agent_posting_baseline(runtime, None, None, &mut effective_tools);
     Ok(ResolvedActivityTools {
         requested_tools,
         effective_tools,
@@ -101,12 +144,19 @@ pub(super) fn resolve_activity_tool_denials(
             other => other,
         })?;
     let registered_tools = runtime.allowlist_known_tool_names();
+    let mut effective_tools = tools_allowed_by_disallow_list(
+        &deny_policy.disallow_list,
+        registered_tools.iter().map(String::as_str),
+    );
+    apply_notice_agent_posting_baseline(
+        runtime,
+        Some(activity),
+        Some(disallow_list),
+        &mut effective_tools,
+    );
     Ok(ResolvedActivityTools {
         requested_tools,
-        effective_tools: tools_allowed_by_disallow_list(
-            &deny_policy.disallow_list,
-            registered_tools.iter().map(String::as_str),
-        ),
+        effective_tools,
         omitted_requirement_notes,
         granted_tools: grants.lifted.into_iter().collect(),
     })
