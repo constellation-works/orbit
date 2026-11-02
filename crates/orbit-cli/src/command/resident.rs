@@ -32,6 +32,7 @@ impl Execute for ResidentCommand {
                 text(&value["checkpoint"]["cycle"])
             ))],
             ResidentVerb::Grant => vec![Block::text(grant_text(&value))],
+            ResidentVerb::Metrics => vec![Block::text(metrics_text(&value))],
             ResidentVerb::Show => vec![Block::text(show_text(&value))],
             ResidentVerb::List => vec![Block::table(list_table(&value))],
         };
@@ -89,6 +90,79 @@ fn grant_text(value: &Value) -> String {
     }
     let _ = write!(out, "Authority: {}", authority_line(&value["authority"]));
     out
+}
+
+fn measure_line(label: &str, measure: &Value) -> String {
+    if let Some(text_value) = measure.as_str() {
+        return format!("{label}: {text_value}");
+    }
+    format!(
+        "{label}: {} (per mandate-day {})",
+        text(&measure["count"]),
+        text(&measure["per_mandate_day"]),
+    )
+}
+
+fn metrics_text(value: &Value) -> String {
+    let mut out = String::new();
+    let window = &value["window"];
+    let _ = writeln!(
+        out,
+        "Resident metrics since {} ({} day(s))",
+        text(&window["start"]),
+        text(&window["days"]),
+    );
+    let mut sections: Vec<(&str, &Value)> = Vec::new();
+    for mandate in value["mandates"].as_array().into_iter().flatten() {
+        sections.push((mandate["task_id"].as_str().unwrap_or_default(), mandate));
+    }
+    if !value["totals"].is_null() && sections.len() != 1 {
+        sections.push(("totals", &value["totals"]));
+    }
+    if !value["baseline"].is_null() {
+        sections.push(("baseline", &value["baseline"]));
+    }
+    for (label, mandate) in sections {
+        let _ = writeln!(out, "{label}:");
+        let _ = writeln!(
+            out,
+            "  {}",
+            measure_line("interventions", &mandate["interventions"])
+        );
+        let escalations = &mandate["escalations"];
+        let _ = writeln!(
+            out,
+            "  escalation load: {} (per mandate-day {}, median answer latency {}s, recommended share {}, expired {})",
+            text(&escalations["count"]),
+            text(&escalations["per_mandate_day"]),
+            text(&escalations["median_answer_latency_seconds"]),
+            text(&escalations["recommended_share"]),
+            text(&escalations["expired_unanswered"]),
+        );
+        if let Some(marker) = mandate["reversals"].as_str() {
+            let _ = writeln!(out, "  reversals: {marker}");
+        } else {
+            let _ = writeln!(
+                out,
+                "  reversals: {}/{} (rate {})",
+                text(&mandate["reversals"]["reversed"]),
+                text(&mandate["reversals"]["total"]),
+                text(&mandate["reversals"]["rate"]),
+            );
+        }
+        if let Some(marker) = mandate["recovery"].as_str() {
+            let _ = writeln!(out, "  recovery: {marker}");
+        } else {
+            let _ = writeln!(
+                out,
+                "  recovery: {} crashed cycle(s), {} repeated action(s), {} slot minute(s)",
+                text(&mandate["recovery"]["crashed_cycles"]),
+                text(&mandate["recovery"]["repeated_actions"]),
+                text(&mandate["recovery"]["recovery_slot_minutes"]),
+            );
+        }
+    }
+    out.trim_end().to_string()
 }
 
 fn entry_line(entry: &Value) -> String {

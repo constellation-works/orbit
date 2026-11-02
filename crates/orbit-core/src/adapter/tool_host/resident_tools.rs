@@ -44,6 +44,11 @@ pub(super) fn dispatch(
                 .optional_string("model")?
                 .or_else(|| model.map(ToOwned::to_owned)),
         ),
+        ResidentVerb::Metrics => runtime.resident_metrics(
+            input.optional_string("mandate")?.as_deref(),
+            input.optional_string("since")?.as_deref(),
+            input.optional_string("baseline")?.as_deref(),
+        ),
         ResidentVerb::Show => runtime.show_resident_mandate(&input.required_string("task_id")?),
         ResidentVerb::List => {
             runtime.list_resident_mandates(input.optional_bool("include_ended")?.unwrap_or(false))
