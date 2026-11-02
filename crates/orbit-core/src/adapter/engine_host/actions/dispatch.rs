@@ -302,9 +302,6 @@ pub(crate) fn run_deterministic(
             input,
             finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
-        // Re-check one blocked task's episode and open a detached base
-        // checkout for final recovery, then apply its decision through the
-        // shared final-recovery applier and remove that checkout.
         // Take the resident cycle lease for this run's mandate (recovering a
         // dead predecessor) and build the brief; then close the cycle. The run
         // is the trusted reservation owner, never step input.
@@ -324,6 +321,9 @@ pub(crate) fn run_deterministic(
                 .finish_resident_cycle(run_id)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
+        // Re-check one blocked task's episode and open a detached base
+        // checkout for final recovery, then apply its decision through the
+        // shared final-recovery applier and remove that checkout.
         CoreDeterministicAction::PrepareBlockedTaskRecovery => {
             blocked_recovery::steps::prepare(runtime, action, input, recovery_run_id(&tool_context))
         }
