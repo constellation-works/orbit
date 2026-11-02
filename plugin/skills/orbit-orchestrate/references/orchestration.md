@@ -424,6 +424,34 @@ holds the task, or on a replica. A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite. Existing
 `orbit run task-pilot <id>` remains an explicit assessment command.
 
+**Re-check and full modes.** An explicit re-pilot of a task whose latest
+assessment holds promotion runs as a *re-check*. The pilot receives the prior
+assessment, its holding findings (each with an id such as `blocked_by[0]` or
+`duplicate_of`) and a field-level diff of the task since that assessment:
+title and description (with a word-overlap similarity), criteria, context
+files, tags, dependencies, relations and answered decisions. It returns a
+verdict per holding finding, `resolved`, `still_holds` or `changed` (with the
+replacement finding), plus only the fields the diff touched. Apply keeps every
+other prior field, drops resolved findings, records `mode: recheck` and
+`prior_assessment_id`, and validates it with the same source-revision proofs as
+a full assessment. A re-check missing a verdict for any holding finding goes to
+repair. A pilot that judges a re-check insufficient may return a complete
+assessment instead; it is recorded as full with `mode_reason:
+recheck_escalated`.
+
+The pilot runs a full assessment, recording why as `mode_reason`, when there
+is no held prior assessment, the operator passed `orbit task repilot <id>
+--full` (`full: true`; job input `full_pilot: true`), the prior assessment is
+older than the job input `recheck_max_age_hours` (default 72; 0 disables
+re-checks), the prior was itself a re-check, the prior receipt predates the
+recorded re-check basis, the objects at the task's selector paths changed
+between the prior and current source revisions, or the title or description
+was rewritten beyond the bounded edit threshold (word-set similarity below
+0.6) or first added. Analytics › Agents › Pilots reports `pilot_modes`: per
+mode, assessments, runs, median and total run seconds and tokens, plus
+re-checks later followed by a full pilot and the combined re-check-to-full
+rate.
+
 Description or acceptance-criteria edits make the assessment stale but never
 schedule another pilot. Dispatch fails closed as `pilot_assessment_stale` until
 `orbit task repilot <id>` completes against the edited requirements. A held

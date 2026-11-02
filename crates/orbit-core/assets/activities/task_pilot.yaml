@@ -51,12 +51,40 @@ spec:
         description: >
           The prepared partition. `explore_brief_task_ids` lists the tasks
           whose explore brief the workspace requests; absent means none.
+          `rechecks` maps each task to re-check, rather than pilot in full,
+          to its re-check input; absent means every task is piloted in full.
         type: object
         properties:
           explore_brief_task_ids:
             type: array
             items:
               type: string
+          rechecks:
+            type: object
+            additionalProperties:
+              type: object
+              properties:
+                prior_assessment_id:
+                  type: string
+                prior_assessed_at:
+                  type: string
+                prior_source_revision:
+                  type: string
+                holding_findings:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      category:
+                        type: string
+                      text:
+                        type: string
+                prior_assessment:
+                  type: object
+                task_diff:
+                  type: object
       crew:
         type: string
       crew_config_key:
@@ -121,6 +149,24 @@ spec:
               type: array
               items:
                 type: string
+            recheck_findings:
+              description: >
+                Re-check mode only: one verdict per prior holding finding.
+                `current` is the finding as it now stands, required when
+                `status` is `changed`.
+              type: array
+              items:
+                type: object
+                required: [id, status, evidence]
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [resolved, still_holds, changed]
+                  evidence:
+                    type: string
+                  current: {}
             context_evidence_dropped:
               type: array
               items:
@@ -443,7 +489,46 @@ spec:
     3. Then work through, in order: Selector rules, Dispositions (CI-failure
        sweeps for a `ci-failure-sweep` task), Acceptance-criteria checks,
        Assessment and Findings, then Explore brief for a task that requests
-       one.
+       one. A task listed in `partition.rechecks` follows Re-check mode
+       instead of this step.
+
+    ## Re-check mode
+
+    A task in `partition.rechecks` already has an assessment that holds
+    promotion, and the host has established that neither the repository at
+    its footprint paths nor the task's scope moved beyond a bounded edit since
+    then. Its input is host-produced and trusted: `prior_assessment` (every
+    prior field), `holding_findings` (each with `id`, `category`, `text`,
+    `evidence` and the original `finding`), `prior_source_revision`, and
+    `task_diff` (title and description similarity, criteria, context_files,
+    tags, dependencies, relations and answered decisions since then).
+
+    Steps 1 and 2 still apply, but read only what the re-check needs: the
+    current task, the code and records each holding finding cites, and the
+    material the diff touches. Do not repeat `orbit.search`, the duplicate
+    lead check or a selector sweep unless the diff makes them relevant. Then:
+
+    1. Return `recheck_findings` with exactly one entry per holding finding,
+       using its `id`: `resolved` (cite what resolved it), `still_holds`
+       (cite why it still holds) or `changed` (it still holds in another
+       form; put the new finding, in its category's shape, in `current`).
+    2. For each prior field the diff invalidates — footprint
+       (`context_files_after`), complexity, crew, `required_os`,
+       `duplicate_of` or `already_landed` — return the re-derived field.
+       Omit every field the diff leaves valid: apply keeps the prior value,
+       dropping `resolved` findings from kept finding fields and replacing
+       `changed` ones with `current`. A field you return replaces the prior
+       one entirely.
+    3. Return any new finding the diff introduces in its usual field.
+
+    When the evidence shows the re-check cannot be bounded (the prior
+    assessment no longer describes the task), pilot the task in full instead
+    and return a complete assessment without `recheck_findings`; apply
+    records it as a full assessment that a re-check escalated.
+
+    Report `observed_revision` and `observed_tree` as in step 2: apply holds
+    a re-check to the same revision proofs as a full assessment. Never write
+    `mode` or `prior_assessment_id`; the host records them.
 
     ## Selector rules
 
@@ -850,7 +935,8 @@ spec:
     Reassess only the supplied task IDs at the original `source_revision` and
     fix every message in `validation_errors`. Do not revisit successful siblings
     or resolve a new source revision. Return `explore_brief` again for a task
-    in `partition.explore_brief_task_ids`; apply validates it the same way.
+    in `partition.explore_brief_task_ids`; apply validates it the same way. A
+    task in `partition.rechecks` is repaired in Re-check mode.
 
     ## Return
 
@@ -896,6 +982,9 @@ spec:
     `already_landed` and `finding_invalid` are `{"evidence":"..."}`, and
     `release_action_required` is `{"action":"...","evidence":"..."}`. A requested `explore_brief` is
     `{"change":[{"target":"file:...","what":"..."}],"call_path":[],"pattern":[],"tests":[],"gotchas":[],"out_of_scope":[],"maps":[],"confidence":"high|medium|low"}`.
+    A re-checked task adds
+    `"recheck_findings":[{"id":"...","status":"resolved|still_holds|changed","evidence":"...","current":null}]`
+    and may omit any field its task diff leaves valid.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add

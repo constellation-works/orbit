@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -537,6 +537,8 @@ Why these weights: at 3 : 1 a crew's warnings are net positive above 25% precisi
 Missed scope blocks have one source: block-triage markers, which only the retired blocked-task triage wrote ([ORB-20629]), so they survive in old history alone. When no `blocked_task_triaged` marker of any disposition falls in the window, the term reads 0 and the scorecard's `sources.missed_scope_blocks` reports `available: false`, with the reason. The view shows that as a banner, so the zero is not read as no misses.
 
 Each assessment counts against the crew and model of the pilot run its receipt names, through the same attribution as graded tasks (above), never the task's own crew. A row can therefore have settled assessments but no graded done task (`units` 0).
+
+**Pilot modes** [ORB-21124]. The Pilots payload's `pilot_modes` separates full assessments from re-checks (an explicit re-pilot of a held assessment that re-judges only its holding findings). For each of `full` and `recheck` it reports the window's assessments, the distinct pilot runs behind them, their median and total wall seconds, and their total tokens with `runs_with_tokens` (summed from the run's recorded agent invocations). `rechecks_followed_by_full` counts re-checks a later full assessment of the same task replaced, `rechecks_escalated_to_full` counts re-check runs whose pilot returned a full assessment instead (`mode_reason: recheck_escalated`), and `recheck_full_rate` is their sum over all re-check attempts. These are shown, not scored.
 
 The pilot warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner. A confirmed qualifying hold can separately yield the orchestrator spec-defect charge in §5.1, deduplicated against its confirming event.
 

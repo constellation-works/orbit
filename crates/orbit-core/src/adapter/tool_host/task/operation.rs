@@ -96,8 +96,13 @@ pub(in crate::adapter::tool_host) fn dispatch(
             } else {
                 orbit_types::workflow::JobRunTrigger::cli()
             };
+            let full = input
+                .as_value()
+                .get("full")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let response = runtime
-                .submit_explicit_task_pilot(&id, caller.agent.as_deref(), trigger)
+                .submit_explicit_task_pilot_in_mode(&id, caller.agent.as_deref(), trigger, full)
                 .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
             Ok((
                 serde_json::to_value(response)

@@ -42,6 +42,7 @@ mod pilot_output;
 mod post_deploy;
 mod provider_hold;
 mod races;
+mod recheck;
 mod review_evidence;
 mod settlement;
 mod source_moves;

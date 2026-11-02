@@ -120,6 +120,18 @@ impl OrbitRuntime {
         actor: Option<&str>,
         trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, TaskPilotSubmitError> {
+        self.submit_explicit_task_pilot_in_mode(task_id, actor, trigger, false)
+    }
+
+    /// [`Self::submit_explicit_task_pilot`], where `full` forces a full
+    /// assessment even when the latest one could be re-checked.
+    pub fn submit_explicit_task_pilot_in_mode(
+        &self,
+        task_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+        full: bool,
+    ) -> Result<PipelineInvokeResult, TaskPilotSubmitError> {
         if let Some(owner) = self.replica_owner_machine() {
             return Err(TaskPilotSubmitError::Refused(
                 TaskPilotRefusal::ReplicaCheckout {
@@ -134,7 +146,11 @@ impl OrbitRuntime {
                 submitted = Some(self.check_explicit_task_pilot(task_id).and_then(|()| {
                     self.submit_catalog_job_run(
                         PILOT_JOB,
-                        json!({"task_ids": [task_id]}),
+                        if full {
+                            json!({"task_ids": [task_id], "full_pilot": true})
+                        } else {
+                            json!({"task_ids": [task_id]})
+                        },
                         actor,
                         trigger.clone(),
                     )

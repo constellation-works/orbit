@@ -34,6 +34,12 @@ spec:
     workspace, each requested task carries `explore_brief_requested: true`
     and its partition lists it in `explore_brief_task_ids`, so the pilot
     returns an explore brief for it; both are absent when none is requested.
+    An explicit selection records each task's `pilot_mode` (`full` or
+    `recheck`), the prior assessment's id and, for a full pilot after one,
+    `pilot_mode_reason`. A re-check task carries its `recheck` input (prior
+    assessment, holding findings, source revision and field-level task diff),
+    which its partition repeats under `rechecks`. `full_pilot` forces full
+    pilots; `recheck_max_age_hours` bounds a re-checked assessment's age.
   input_schema_json:
     type: object
     properties:
@@ -56,6 +62,12 @@ spec:
         type: number
         minimum: 1
         maximum: 5
+      full_pilot:
+        type: boolean
+      recheck_max_age_hours:
+        type: number
+        minimum: 0
+        maximum: 8760
   output_schema_json:
     type: object
     required:

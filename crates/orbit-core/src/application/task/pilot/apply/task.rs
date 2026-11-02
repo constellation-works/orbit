@@ -25,6 +25,7 @@ use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_with_current, task_operation_id, task_outcome,
 };
+use super::super::recheck::{complete_recheck, mark_full};
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
@@ -129,6 +130,18 @@ pub(super) fn settle_task(
     // the assessment is validated, fingerprinted or audited.
     let mut assessment = assessment.clone();
     let brief = take_explore_brief(&mut assessment);
+    // A re-check is completed from its prior assessment first, then
+    // validated, proven and written exactly as a full assessment is.
+    let mode = &snapshot.pilot_mode;
+    match &mode.recheck {
+        Some(recheck) => complete_recheck(&mut assessment, recheck)
+            .map_err(|error| task_outcome(task_id, "invalid", Some(error)))?,
+        None => mark_full(
+            &mut assessment,
+            mode.reason.as_deref(),
+            mode.prior_assessment_id.as_deref(),
+        ),
+    }
     let scope = scope_with(
         context,
         task_id,

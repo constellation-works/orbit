@@ -78,6 +78,7 @@ pub(crate) fn prepare(
         ));
     }
     let explicit_mode = !explicit_task_ids.is_empty();
+    let recheck_request = recheck_request(action, input)?;
     let run_id = pilot_run_id(input);
     let mut active_preparations = runtime
         .pilot_preparation_holders()
@@ -367,6 +368,21 @@ pub(crate) fn prepare(
         if source.is_some() && explore_brief.requested_for(&task.tags) {
             snapshot[EXPLORE_BRIEF_REQUESTED] = json!(true);
         }
+        // Only an explicit request re-pilots an assessed task, so only it
+        // may re-check a held assessment instead of piloting in full.
+        if explicit_mode {
+            super::recheck::plan(
+                runtime,
+                &workspace_root,
+                &task,
+                source
+                    .as_ref()
+                    .map(|source| source.source_revision.as_str()),
+                &recheck_request,
+            )
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
+            .record(&mut snapshot);
+        }
 
         if let Some(source) = &source {
             let fingerprints = runtime
@@ -475,6 +491,10 @@ pub(crate) fn prepare(
             if !requested.is_empty() {
                 partition[EXPLORE_BRIEF_TASK_IDS] = json!(requested);
             }
+            if let Some(rechecks) = super::recheck::partition_rechecks(ids.iter(), &task_snapshots)
+            {
+                partition[super::recheck::RECHECKS] = Value::Object(rechecks);
+            }
             partition
         })
         .collect::<Vec<_>>();
@@ -525,6 +545,47 @@ pub(crate) fn prepare(
             .then(|| forge.require(runtime).err().map(|error| error.to_string()))
             .flatten(),
     }))
+}
+
+/// Upper bound on `recheck_max_age_hours`: one year.
+const HARD_MAX_RECHECK_AGE_HOURS: u64 = 24 * 365;
+
+/// The run's re-check request: `full_pilot` forces a full assessment, and
+/// `recheck_max_age_hours` bounds a prior assessment's age (0 disables
+/// re-checks).
+fn recheck_request(
+    action: &str,
+    input: &Value,
+) -> Result<super::recheck::RecheckRequest, DispatchError> {
+    let full = match input.get("full_pilot") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(full)) => *full,
+        Some(_) => {
+            return Err(DispatchError::action_failed(
+                action,
+                "`full_pilot` must be a boolean",
+            ));
+        }
+    };
+    let hours = match input.get("recheck_max_age_hours") {
+        None | Some(Value::Null) => super::recheck::DEFAULT_RECHECK_MAX_AGE_HOURS,
+        Some(value) => value
+            .as_u64()
+            .filter(|hours| *hours <= HARD_MAX_RECHECK_AGE_HOURS)
+            .ok_or_else(|| {
+                DispatchError::action_failed(
+                    action,
+                    format!(
+                        "`recheck_max_age_hours` must be between 0 and {HARD_MAX_RECHECK_AGE_HOURS}"
+                    ),
+                )
+            })?,
+    };
+    Ok(super::recheck::RecheckRequest {
+        full,
+        max_age: chrono::Duration::hours(hours as i64),
+        now: chrono::Utc::now(),
+    })
 }
 
 /// The pilot run this preparation belongs to. The dispatcher names it

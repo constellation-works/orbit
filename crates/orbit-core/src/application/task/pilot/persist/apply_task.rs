@@ -468,6 +468,13 @@ pub(in super::super) fn apply_task(
                     "applied_material": written,
                     "pilot_run_id": task.pilot_run_id,
                     "explore_brief": explore_brief,
+                    // What a later re-check diffs the task against.
+                    super::super::recheck::RECHECK_BASIS: super::super::recheck::recheck_basis(
+                        &assessed,
+                        &assessed.context_files,
+                        &assessed.tags,
+                        prepared["source"]["source_revision"].as_str(),
+                    ),
                 }))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
