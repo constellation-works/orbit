@@ -11,6 +11,8 @@ pub(crate) struct NativePublicationProof {
     pub(crate) number: String,
     pub(crate) url: Option<String>,
     pub(super) adopted: Option<SourceRepairBinding>,
+    /// The unpublished tip the source's certified chases carried `head` to.
+    pub(super) certified_tip: Option<super::certified_rebase::CertifiedRebaseTip>,
 }
 
 impl OrbitRuntime {
@@ -272,6 +274,10 @@ impl OrbitRuntime {
                 "authenticated prepare/rebase commit chain is inconsistent",
             ));
         }
+        // The source's own certified base chases may have carried the retained
+        // branch past `head` without publishing it. Binding still checks the
+        // remote and the pull request against `head` exactly.
+        let certified_tip = self.certified_rebase_tip(source_id, state, head)?;
         Ok(NativePublicationProof {
             branch: branch.into(),
             head: head.into(),
@@ -282,6 +288,7 @@ impl OrbitRuntime {
                 .map(|pr| field(pr, "pr_url").map(String::from))
                 .transpose()?,
             adopted,
+            certified_tip,
         })
     }
 }

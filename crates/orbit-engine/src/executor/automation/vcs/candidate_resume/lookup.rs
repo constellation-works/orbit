@@ -207,7 +207,7 @@ fn claimed_resume(
             candidate.prior_pull_request_head(),
             candidate.branch
         )),
-        _ => adopt_published_branch(workspace_path, task_id, &candidate)?,
+        _ => adopt_published_branch(workspace_path, task_id, &candidate, &candidate.head_sha)?,
     };
     match adoption {
         Adoption::Adopted => {

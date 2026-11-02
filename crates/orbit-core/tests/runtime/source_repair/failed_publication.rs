@@ -1132,3 +1132,356 @@ crate::scenario_table!(
     reviewer_handoffs_refuse_unproven_transitions_without_writes,
     escalated_completion_receipt_requires_explicit_rework_authority
 );
+
+/// Commit a new base on `origin/main`, as concurrent landings do.
+fn advance_origin_main(f: &Fixture, name: &str) -> String {
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(f.repo.join(name), "advanced base\n").unwrap();
+    git(&f.repo, &["add", name]);
+    git(&f.repo, &["commit", "-qm", "advance the base"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    git(&f.repo, &["rev-parse", "HEAD"])
+}
+
+/// Rebase the retained branch in `checkout` onto the current `origin/main`
+/// and return its new tip, as a clean base chase does.
+fn chase_origin_main(checkout: &Path) -> String {
+    git(checkout, &["fetch", "-q", "origin", "main"]);
+    git(checkout, &["rebase", "-q", "origin/main"]);
+    git(checkout, &["rev-parse", "HEAD"])
+}
+
+/// Record a host-certified clean base chase exactly as `certify_chase`
+/// writes it: a host-reserved attempt in the recovery authority, its
+/// certificate, and the run-state copy for `step_id`.
+fn certify_chase(
+    f: &Fixture,
+    run_id: &str,
+    step_id: &str,
+    checkout: &Path,
+    before: &str,
+    head: &str,
+    base: &str,
+) -> Value {
+    use orbit_core::runtime::recovery_authority::RecoveryAuthority;
+    let workspace_path = checkout.to_string_lossy().into_owned();
+    let authority = RecoveryAuthority::open(&f.runtime.global_root()).unwrap();
+    let attempt = authority
+        .begin_attempt(
+            run_id,
+            step_id,
+            &orbit_engine::RebaseRecoveryAttemptScope {
+                workspace_path: workspace_path.clone(),
+                head_sha_before: before.into(),
+                target_base_sha: base.into(),
+            },
+        )
+        .unwrap();
+    let payload = json!({
+        "run_id": run_id,
+        "step_id": step_id,
+        "task_ids": [f.task],
+        "workspace_path": workspace_path,
+        "head": f.branch,
+        "head_sha_before": before,
+        "original_base_sha": f.base,
+        "base_ref": "origin/main",
+        "target_base_sha": base,
+        "base_sha": base,
+        "remote_sha_before": before,
+        "head_sha": head,
+        "chased_from": before,
+        "companion_paths": [],
+        "rewritten": true,
+        "recovery_attempt": attempt,
+    });
+    authority.issue(run_id, step_id, &payload).unwrap();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state
+        .rebase_recovery_checkpoints
+        .insert(step_id.into(), payload.clone());
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    payload
+}
+
+fn resume_input(run: &orbit_types::workflow::JobRun, setup: &Value, task: &str) -> Value {
+    json!({"job_run_id":run.run_id,"task_ids":[task],
+        "workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]})
+}
+
+/// [F2026-11-055] The source published P, then its own certified base chases
+/// carried the retained branch to an unpublished tip T before the base ran
+/// away (`base_chase_exhausted`). Resume binds P as the remote and PR
+/// identity, adopts T as the candidate, and the existing push step publishes
+/// it under a lease on P.
+fn certified_rebase_tip_is_adopted_and_pushed_under_a_lease_on_the_published_head() {
+    let mut f = Fixture::new();
+    let checkout = super::published_owner::publication(&mut f);
+    let published = f.head.clone();
+    let source = f.source.run_id.clone();
+    let first_base = advance_origin_main(&f, "first-base.txt");
+    let recovered = chase_origin_main(&checkout);
+    certify_chase(
+        &f,
+        &source,
+        "sync_base",
+        &checkout,
+        &published,
+        &recovered,
+        &first_base,
+    );
+    let second_base = advance_origin_main(&f, "second-base.txt");
+    let tip = chase_origin_main(&checkout);
+    certify_chase(
+        &f,
+        &source,
+        "complete_pr",
+        &checkout,
+        &recovered,
+        &tip,
+        &second_base,
+    );
+    assert_eq!(git(&f.repo, &["rev-parse", &f.branch]), tip);
+    super::published_owner::requeue(&mut f);
+
+    let (run, setup) = super::published_owner::next(&f);
+    let resumed = f.action("candidate_resume", resume_input(&run, &setup, &f.task));
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+    assert_eq!(
+        resumed["source_sha"], tip,
+        "the certified tip is the candidate"
+    );
+    assert_eq!(
+        resumed["reused_head_sha"], published,
+        "the lease stays on the published head"
+    );
+    assert_eq!(resumed["published_binding"]["head_sha"], published);
+    assert_eq!(resumed["published_binding"]["candidate_head_sha"], tip);
+    assert_eq!(
+        git(
+            &f.repo,
+            &["ls-remote", "origin", &format!("refs/heads/{}", f.branch)]
+        )
+        .split_whitespace()
+        .next(),
+        Some(published.as_str()),
+        "nothing is published before the push step"
+    );
+    let superseded = git(
+        &f.repo,
+        &["for-each-ref", "--format=%(objectname)", "refs/heads/"],
+    );
+    assert!(
+        superseded.lines().any(|sha| sha == tip),
+        "the unpublished tip stays reachable from a branch: {superseded}"
+    );
+    super::published_owner::checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+    let workspace = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("second-base.txt")).unwrap(),
+        "advanced base\n"
+    );
+    let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":workspace,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
+    assert_eq!(commit["committed"], true, "{commit}");
+    let pushed = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":workspace,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
+    assert_eq!(
+        (
+            &pushed["decision"],
+            &pushed["force_with_lease"],
+            &pushed["remote_sha_before"]
+        ),
+        (
+            &json!("performed_force_with_lease"),
+            &json!(true),
+            &json!(published)
+        ),
+        "the push step replaces exactly the published head: {pushed}"
+    );
+}
+
+/// Every local tip the source's certified chases do not carry P to is still
+/// `retained local branch moved`, and a remote or PR head other than P still
+/// refuses, all without publication writes.
+fn uncertified_rebase_tips_and_drifted_publications_still_refuse() {
+    let mut f = Fixture::new();
+    let checkout = super::published_owner::publication(&mut f);
+    let published = f.head.clone();
+    let source = f.source.run_id.clone();
+    let base = advance_origin_main(&f, "first-base.txt");
+    let tip = chase_origin_main(&checkout);
+    let certified = certify_chase(&f, &source, "sync_base", &checkout, &published, &tip, &base);
+    super::published_owner::requeue(&mut f);
+    let original = f.runtime.read_run_state(&source).unwrap().unwrap();
+    let (run, setup) = super::published_owner::next(&f);
+    let remote_head = || {
+        git(
+            &f.repo,
+            &["ls-remote", "origin", &format!("refs/heads/{}", f.branch)],
+        )
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+    };
+    let refuses = |case: &str, reason: &str| {
+        let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+        let state = serde_json::to_value(f.runtime.read_run_state(&source).unwrap()).unwrap();
+        let error = execute_deterministic_action(
+            &f.runtime,
+            "candidate_resume",
+            &json!({}),
+            &resume_input(&run, &setup, &f.task),
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{case}: unexpectedly adopted"));
+        assert!(error.to_string().contains(reason), "{case}: {error}");
+        assert_eq!(remote_head(), published, "{case}: published branch moved");
+        assert_eq!(
+            serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+            history,
+            "{case}: task history written"
+        );
+        assert_eq!(
+            serde_json::to_value(f.runtime.read_run_state(&source).unwrap()).unwrap(),
+            state,
+            "{case}: source receipts rewritten"
+        );
+    };
+    let with_checkpoints = |checkpoints: Vec<(&str, Value)>| {
+        let mut state = original.clone();
+        state.rebase_recovery_checkpoints = checkpoints
+            .into_iter()
+            .map(|(step, checkpoint)| (step.to_string(), checkpoint))
+            .collect();
+        f.runtime.write_run_state(&source, &state).unwrap();
+    };
+    let moved = "retained local branch moved";
+    let edited = |field: &str, value: Value| {
+        let mut checkpoint = certified.clone();
+        checkpoint[field] = value;
+        checkpoint
+    };
+
+    with_checkpoints(Vec::new());
+    refuses("no checkpoint", moved);
+    let elsewhere = certify_chase(&f, &source, "landing_rebase", &checkout, &base, &tip, &base);
+    with_checkpoints(vec![("landing_rebase", elsewhere)]);
+    refuses("chain starts at another SHA", moved);
+    with_checkpoints(vec![(
+        "sync_base",
+        edited("run_id", json!("jrun-elsewhere")),
+    )]);
+    refuses("checkpoint from another run", moved);
+    // Certified for another run in the authority, then copied here.
+    let foreign = certify_chase(
+        &f,
+        "jrun-elsewhere",
+        "sync_base",
+        &checkout,
+        &published,
+        &tip,
+        &base,
+    );
+    with_checkpoints(vec![("sync_base", foreign)]);
+    refuses("another run's certificate", moved);
+    with_checkpoints(vec![("sync_base", edited("chased_from", json!(null)))]);
+    refuses("not a certify_chase record", moved);
+
+    // A gap: P reaches X, but the next certified link starts elsewhere.
+    let gap_base = advance_origin_main(&f, "gap-base.txt");
+    let beyond = chase_origin_main(&checkout);
+    let gapped = certify_chase(
+        &f,
+        &source,
+        "complete_pr",
+        &checkout,
+        &base,
+        &beyond,
+        &gap_base,
+    );
+    with_checkpoints(vec![
+        ("sync_base", certified.clone()),
+        ("complete_pr", gapped),
+    ]);
+    refuses("gap between links", moved);
+
+    // The chain ends at T, but the local branch sits somewhere else.
+    with_checkpoints(vec![("sync_base", certified.clone())]);
+    refuses("last head_sha is not the local tip", moved);
+    git(
+        &f.repo,
+        &["update-ref", &format!("refs/heads/{}", f.branch), &tip],
+    );
+
+    // A certified tip that does not contain its target base.
+    let foreign_base = advance_origin_main(&f, "unrelated-base.txt");
+    let uncontained = certify_chase(
+        &f,
+        &source,
+        "sync_base",
+        &checkout,
+        &published,
+        &tip,
+        &foreign_base,
+    );
+    with_checkpoints(vec![("sync_base", uncontained)]);
+    refuses("tip does not contain the last target base", moved);
+
+    // Re-certify the genuine chain; P stays the remote and PR identity.
+    let genuine = certify_chase(&f, &source, "sync_base", &checkout, &published, &tip, &base);
+    with_checkpoints(vec![("sync_base", genuine)]);
+    git(
+        &f.repo,
+        &[
+            "push",
+            "-q",
+            "--force",
+            "origin",
+            &format!("{tip}:refs/heads/{}", f.branch),
+        ],
+    );
+    let refused = execute_deterministic_action(
+        &f.runtime,
+        "candidate_resume",
+        &json!({}),
+        &resume_input(&run, &setup, &f.task),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("published branch lease drifted or disappeared"),
+        "a remote at the certified tip is not P: {refused}"
+    );
+    git(
+        &f.repo,
+        &[
+            "push",
+            "-q",
+            "--force",
+            "origin",
+            &format!("{published}:refs/heads/{}", f.branch),
+        ],
+    );
+    let original_answer = std::fs::read_to_string(&f.answer).unwrap();
+    let mut answer: Value = serde_json::from_str(&original_answer).unwrap();
+    answer["headRefOid"] = json!(tip);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    refuses(
+        "PR head at the certified tip",
+        "provider PR identity changed",
+    );
+    std::fs::write(&f.answer, original_answer).unwrap();
+}
+
+crate::scenario_table!(
+    certified_rebase_scenarios,
+    certified_rebase_tip_is_adopted_and_pushed_under_a_lease_on_the_published_head,
+    uncertified_rebase_tips_and_drifted_publications_still_refuse
+);
