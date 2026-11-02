@@ -696,6 +696,225 @@ fn lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request() {
     }
 }
 
+fn assert_close_kept_corroboration(closed: &Value, corroborated: &Value, revision: &Value) {
+    assert_eq!(
+        corroborated["outcome"], "corroborated",
+        "the overlapping post must leave content and revision unchanged"
+    );
+    assert_eq!(corroborated["notice"]["revision"], *revision);
+    assert!(
+        corroborated["notice"]["reports"]["count"].as_u64().unwrap() > 1,
+        "the corroboration must commit a higher report count before close writes"
+    );
+    assert_eq!(
+        closed["notice"]["reports"]["count"],
+        corroborated["notice"]["reports"]["count"]
+    );
+    assert_eq!(
+        closed["notice"]["reports"]["last_at"],
+        corroborated["notice"]["reports"]["last_at"]
+    );
+    assert_eq!(closed["notice"]["revision"], *revision);
+}
+
+/// Commit one corroboration of the open notice `dedupe_key` at `at`.
+///
+/// This is the store write a poster's transaction makes after it has already
+/// decided the notice is open. A later tool post would not, once a linked
+/// task is done.
+fn commit_open_corroboration(
+    runtime: &OrbitRuntime,
+    dedupe_key: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    use orbit_store::contracts::{
+        NoticeEventRow, NoticePostPlan, NoticePostQuery, NoticeStoreBackend,
+    };
+
+    let store = runtime.sqlite_store().unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+    let written = store
+        .post_notice(
+            &NoticePostQuery {
+                workspace_id: &workspace_id,
+                poster_task_id: None,
+                poster_crew: None,
+                events_since: at,
+                purge_before: None,
+            },
+            &|snapshot| {
+                let matched = snapshot
+                    .unclosed
+                    .iter()
+                    .find(|row| row.dedupe_key == dedupe_key)
+                    .expect("the notice is still stored open");
+                let mut document: Value =
+                    serde_json::from_str(&matched.record_json).expect("notice document");
+                let count = document["reports"]["count"].as_u64().expect("report count") + 1;
+                document["reports"]["count"] = json!(count);
+                document["reports"]["last_at"] = json!(at);
+                let mut row = matched.clone();
+                row.record_json = serde_json::to_string(&document).expect("notice document");
+                let expected_revision = matched.revision;
+                let event = NoticeEventRow {
+                    workspace_id: row.workspace_id.clone(),
+                    notice_id: row.id.clone(),
+                    at,
+                    action: "corroborated".into(),
+                    poster_class: "orchestrator".into(),
+                    poster_crew: Some("sol".into()),
+                    poster_task_id: None,
+                    detail_json: json!({ "revision": expected_revision }).to_string(),
+                };
+                Ok(NoticePostPlan::Update {
+                    row,
+                    expected_revision,
+                    event,
+                })
+            },
+        )
+        .expect("corroboration commits");
+    let document: Value = serde_json::from_str(&written.record_json).expect("written notice");
+    json!({
+        "outcome": "corroborated",
+        "notice": {
+            "revision": written.revision,
+            "reports": document["reports"],
+        }
+    })
+}
+
+/// Close reads the notice, a corroboration commits at that same revision,
+/// then the close writes. The stored reports and the close result keep the
+/// corroboration. No timing or extra load: the hook runs in that window.
+fn close_preserves_corroboration_committed_after_close_read() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use chrono::{Duration, Utc};
+    use orbit_core::test_support;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    let later = Utc::now() + Duration::hours(5);
+
+    let posted = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Disk shelf", "dedupe_key": "incident:disk-shelf"}),
+        &operator,
+    )
+    .unwrap();
+    let id = posted["notice"]["id"].as_str().unwrap().to_string();
+    let revision = posted["notice"]["revision"].clone();
+    let seen = Rc::new(RefCell::new(None));
+    let seen_hook = Rc::clone(&seen);
+    let hooked = runtime.clone();
+    let manual_id = id.clone();
+    let closed = test_support::with_notice_close_snapshot_hook(
+        move || {
+            let corroborated = test_support::with_notice_post_time(later, || {
+                call(
+                    &hooked,
+                    "orbit.notice.post",
+                    json!({"kind": "incident", "title": "Disk shelf",
+                           "dedupe_key": "incident:disk-shelf", "body": "A second report",
+                           "orchestrator": "sol"}),
+                    &session(McpCapability::Agent),
+                )
+                .unwrap()
+            });
+            *seen_hook.borrow_mut() = Some(corroborated);
+        },
+        || {
+            call(
+                &runtime,
+                "orbit.notice.close",
+                json!({"id": manual_id, "reason": "shelf replaced"}),
+                &operator,
+            )
+            .unwrap()
+        },
+    );
+    let corroborated = seen.borrow().clone().unwrap();
+    assert_close_kept_corroboration(&closed, &corroborated, &revision);
+    assert_eq!(closed["notice"]["status"], "closed");
+    assert_eq!(closed["notice"]["closed"]["cause"], "manual");
+    let shown = call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+    assert_close_kept_corroboration(&shown, &corroborated, &revision);
+
+    let workspace = root.path().join("repo").to_string_lossy().into_owned();
+    let task = runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({"title": "Replace the shelf", "description": "Fixture fix.",
+                   "acceptance_criteria": ["Shelf replaced."], "complexity": "low",
+                   "workspace": workspace, "type": "bug", "model": "codex"}),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let linked = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "incident", "title": "Shelf still dead",
+               "dedupe_key": "incident:shelf-still-dead", "linked_task": task,
+               "close_on_linked_done": true}),
+        &operator,
+    )
+    .unwrap();
+    let linked_id = linked["notice"]["id"].as_str().unwrap().to_string();
+    let linked_revision = linked["notice"]["revision"].clone();
+    for input in [
+        json!({"id": task, "plan": "Replace it.", "model": "codex"}),
+        json!({"id": task, "status": "backlog", "model": "codex"}),
+        json!({"id": task, "status": "in_progress", "model": "codex"}),
+        json!({"id": task, "status": "review", "execution_summary": "Replaced.", "model": "codex"}),
+    ] {
+        runtime.run_tool("orbit.task.update", input).unwrap();
+    }
+    let seen = Rc::new(RefCell::new(None));
+    let seen_hook = Rc::clone(&seen);
+    let hooked = runtime.clone();
+    test_support::with_notice_close_snapshot_hook(
+        move || {
+            // The task is already done, so a tool post no longer matches this
+            // notice. Commit the corroboration through the store, which is the
+            // write that can still land in this window.
+            *seen_hook.borrow_mut() = Some(commit_open_corroboration(
+                &hooked,
+                "incident:shelf-still-dead",
+                later,
+            ));
+        },
+        || {
+            runtime
+                .apply_task_automation_update(
+                    &task,
+                    orbit_engine::TaskAutomationUpdate {
+                        status: Some(orbit_types::task::TaskStatus::Done),
+                        status_note: Some("completion authorized by run jrun-notice".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        },
+    );
+    let corroborated = seen.borrow().clone().unwrap();
+    let shown = call(
+        &runtime,
+        "orbit.notice.show",
+        json!({"id": linked_id}),
+        &operator,
+    )
+    .unwrap();
+    assert_close_kept_corroboration(&shown, &corroborated, &linked_revision);
+    assert_eq!(shown["notice"]["status"], "closed");
+    assert_eq!(shown["notice"]["closed"]["cause"], "linked_task_done");
+}
+
 crate::scenario_table!(
     notice_authority,
     operator_posts_updates_and_closes_any_notice,
@@ -705,4 +924,5 @@ crate::scenario_table!(
     updated_task_links_control_notice_closure,
     lost_reply_retries_preserve_editor_and_corroborator_state,
     lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request,
+    close_preserves_corroboration_committed_after_close_read,
 );

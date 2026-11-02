@@ -93,7 +93,8 @@ Effect: write. MCP scope: workspace required.
 | `reason` | string | Required, 1–240 characters. |
 | `workspace` | selector | Home workspace. |
 
-Output: the notice with `closed` set. Closing a closed or expired notice returns it unchanged with
+Output: the notice with `closed` set, including `reports` committed before the close write.
+Close does not bump `revision`. Closing a closed or expired notice returns it unchanged with
 `already_inactive: true`; it is not an error and writes no second close. Rights:
 [notice-authority](./notice-authority.md#rights).
 

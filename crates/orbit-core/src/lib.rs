@@ -99,6 +99,7 @@ pub mod test_support {
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    pub use crate::application::notice::test_support::with_notice_close_snapshot_hook;
     pub use crate::application::notice::test_support::with_notice_post_time;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
     pub use crate::application::task::{
