@@ -842,10 +842,20 @@ fn foreign_listener_scenario(preoccupied: bool) {
                     let reserved = forwarded_port(&call);
                     // Deterministic variant: an unrelated listener wins the
                     // race for the reserved port before the fixture binds it.
+                    // The application has already released this ephemeral
+                    // port, so an unrelated process may claim it before the
+                    // test can. That occupant still exercises the failed
+                    // forward path; it simply cannot be counted as a probe.
                     let preoccupying_probes = if preoccupied {
-                        let unrelated = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                            .expect("the pre-occupying listener binds the free reserved port");
-                        Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                        match TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)) {
+                            Ok(unrelated) => {
+                                Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => None,
+                            Err(error) => {
+                                panic!("preoccupying listener on reserved port {reserved}: {error}")
+                            }
+                        }
                     } else {
                         None
                     };
