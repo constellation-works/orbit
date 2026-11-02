@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Accepted
 stage: building
 next: "Restore ORB-15934 after 2026-11-12 to refuse unknown fields"
@@ -32,8 +32,10 @@ field names. This is bearing 1 of
 auto-task noun followed in [ORB-15935] (phase 1). Drain and workspace claim
 followed in [ORB-15936] (phase 2), migrating nine tool-only verbs. The task
 read verbs (`show`, `list`, `eligible`, `lint`) followed in [ORB-15937]
-(phase 3a), which also settled that ID routing stays keyed by tool name, and
-task `add` and `update` followed in [ORB-15938] (phase 3b), with the guarded
+(phase 3a). Builtin ID routes are declared by
+`OperationSpec::id_route` or `Tool::declared_id_route` and resolved from
+registered builtin definitions. Task `add` and `update` followed in [ORB-15938]
+(phase 3b), with the guarded
 creation schema as a surface table. Task artifacts and locks followed in
 [ORB-15939] (phase 3c), adding registry-derived nested CLI groups, and the
 review, reject and delete tools in [ORB-15940] (phase 3d), adding CLI action
@@ -138,7 +140,7 @@ and again in the tool handler.
 | Handler table, keyed on `WorkspaceClaimVerb` | [crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs) | [ORB-15937] |
 | Handler table, keyed on `WorkflowVerb` | [crates/orbit-core/src/adapter/tool_host/workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs) | [ORB-15941] |
-| ID routing, keyed by tool name (host prefix routing; owner-workspace binding is `ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server) | [crates/orbit-tools/src/mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) | [ORB-15937] |
+| Builtin ID routing, declared by `OperationSpec::id_route` or `Tool::declared_id_route` and resolved from registered definitions | [crates/orbit-tools/src/mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) | [ORB-15937] |
 | Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |
 | Claimed-worker routing, keyed on the migrated nouns' verb enums | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932], [ORB-15935] |
 | Shared tool-input parsing and unknown-field refusal | [crates/orbit-common/src/protocol/tool_input.rs](../../../crates/orbit-common/src/protocol/tool_input.rs) | — |
@@ -157,8 +159,7 @@ and again in the tool handler.
   object and CLI-only parameter kinds.
 - [ORB-15936] — phase 2: migrated the drain and workspace-claim tool-only nouns,
   preserving active/inactive registration, schemas and governance.
-- [ORB-15937] — phase 3a: migrated the task read verbs and kept ID routing keyed
-  by tool name.
+- [ORB-15937] — phase 3a: migrated the task read verbs.
 - [ORB-15938] — phase 3b: migrated task `add` and `update`, adding the array
   parameter kind, refuse-mode unknown fields and the schema extension table.
 - [ORB-15939] — phase 3c: migrated task artifacts and locks, adding
