@@ -28,9 +28,10 @@ The checkpoint is the resident's whole memory between cycles. If its shape were 
 cycle would re-interpret the last one, metrics could not count decisions or reversals, and a crash
 would leave no trace of what was half done. A validated record with action keys makes recovery
 mechanical and the evolution and metrics passes possible. The keys here are the cycle's
-caller-supplied keys, which slice 3 ([ORB-21244]) adds to the cycle's mutating tools: action-key
-idempotence is internal to automation admission until then, so no dedupe applies before that slice
-lands.
+`resident:<mandate>:<cycle>:<n>` keys. Slice 3 ([ORB-21244]) adds them as caller-supplied keys on
+the cycle's mutating tools. Until then, the dedupe Orbit already has (automation attempt, landing and
+visual follow-up keys, and guarded `request_id`s) does not take a resident key on those tools, so a
+retried cycle action gets no dedupe before that slice lands.
 
 ## `resident.checkpoint` v1
 
