@@ -1,9 +1,9 @@
 {
   "_comment": "Per-role MCP surface budgets over the canonical builtin and discovery definitions (ORB-21263). role_surface_budget fails when a role's tools or approximate tokens exceed its budget. Raising a budget is a reviewed decision: say in the PR why the role needs the extra surface. The resident role needs orbit.resident.metrics to inspect read-only mandate history, and orbit.evolution.add/list/show to record and read cost events; operator and manager include the resident toolset. `orbit tool list --role <role>` reports the current size.",
   "default": { "max_tools": 42, "max_approx_tokens": 23000 },
-  "operator": { "max_tools": 81, "max_approx_tokens": 40000 },
-  "manager": { "max_tools": 25, "max_approx_tokens": 12000 },
-  "resident": { "max_tools": 34, "max_approx_tokens": 21000 },
+  "operator": { "max_tools": 81, "max_approx_tokens": 41000 },
+  "manager": { "max_tools": 25, "max_approx_tokens": 13000 },
+  "resident": { "max_tools": 34, "max_approx_tokens": 22000 },
   "agent": { "max_tools": 33, "max_approx_tokens": 19000 },
   "reader": { "max_tools": 14, "max_approx_tokens": 7200 }
 }

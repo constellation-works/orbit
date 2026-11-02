@@ -9,6 +9,7 @@
 
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::evolution::EvolutionVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::operation::{Effect, OperationVerb};
@@ -39,6 +40,7 @@ pub(super) fn resident_guard_tool_name(action: OrbitBuiltinAction) -> &'static s
         OrbitBuiltinAction::Crew(verb) => verb.tool_name(),
         OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Evolution(verb) => verb.tool_name(),
         OrbitBuiltinAction::Experiment(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::Orchestrator(verb) => verb.tool_name(),
@@ -161,6 +163,12 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             }
             FrictionVerb::Add => Open,
             FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome => Refused,
+        },
+        OrbitBuiltinAction::Evolution(verb) => match verb {
+            EvolutionVerb::List | EvolutionVerb::Show => Read,
+            // A cost event is recorded like friction; declining is the operator's.
+            EvolutionVerb::Add => Open,
+            EvolutionVerb::Decline => Refused,
         },
         OrbitBuiltinAction::AutoTask(verb) => read_only(verb),
         OrbitBuiltinAction::Agents(verb) => read_only(verb),
