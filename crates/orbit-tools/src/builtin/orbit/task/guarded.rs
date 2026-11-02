@@ -84,9 +84,43 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
     super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)
 }
 
+/// The `relations` items shape shared by `orbit.task.add` and
+/// `orbit.task.update`: the `regression` classification vocabulary lives
+/// here as enums and per-property descriptions, so the top-level
+/// `relations` field description stays within its byte budget.
+///
+/// `severity_source` advertises only the filer inputs (`filer`,
+/// `operator`, `backfill`): `verified` is recorded only by finding
+/// verification and `default` only for a link stored without a severity,
+/// so neither is a value a filer should send.
+fn extend_relations_schema(value: &mut Value) {
+    let Some(relations) = value
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut("relations"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    relations.insert(
+        "items".into(),
+        json!({"type":"object","additionalProperties":false,"required":["type","target"],"properties":{
+            "type":{"type":"string","enum":["blocked_by","child_of","spawned_from","regression_from","supersedes","related_to","covered_by","produces","resolves"],"description":"Relation kind; only `regression_from` may carry a `regression` object"},
+            "target":{"type":"string","description":"Target task ID; `covered_by` also accepts a `github-pr:` reference and `produces`/`resolves` also accept a friction or ADR ID"},
+            "regression":{"type":"object","additionalProperties":false,"required":["nature","escape"],"description":"Classification of a `regression_from` link; accepted only on that relation type","properties":{
+                "nature":{"type":"string","enum":["broke_existing","defect_in_new","incomplete","merge_reintroduced","contract_drift","unclassified"],"description":"What kind of regression the link records"},
+                "escape":{"type":"string","enum":["no_test","test_not_selected","platform_only","review_missed","spec_ambiguous","nondeterministic","unclassified"],"description":"Why the delivery gates did not catch the defect"},
+                "severity":{"type":"string","enum":["critical","high","medium","low","nit"],"description":"How much the defect matters: critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic)"},
+                "severity_source":{"type":"string","enum":["filer","operator","backfill"],"description":"Who set the severity: filer (the default when a severity is given), operator or backfill. `verified` and `default` are recorded values that read back, not filer inputs"},
+                "sites":{"type":"array","items":{"type":"string"},"maxItems":8,"uniqueItems":true,"description":"Up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named"}
+            }}
+        }}),
+    );
+}
+
 /// `orbit.task.add`'s schema extension: guarded creation's conditionals,
 /// without weakening ordinary creation's requirements.
 pub(super) fn extend_create_schema(value: &mut Value) {
+    extend_relations_schema(value);
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
         "then":{"required":["workspace","description","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
@@ -100,6 +134,7 @@ pub(super) fn extend_create_schema(value: &mut Value) {
 /// `orbit.task.update`'s schema extension: the review verdict's shape and
 /// the guarded write's conditionals.
 pub(super) fn extend_update_schema(value: &mut Value) {
+    extend_relations_schema(value);
     let string = json!({"type":"string"});
     let strings = json!({"type":"array","items":{"type":"string"}});
     value["properties"]["verdict"] = json!({"type":"object","additionalProperties":false,"required":["decision","rationale","criteria","evidence"],"properties":{
