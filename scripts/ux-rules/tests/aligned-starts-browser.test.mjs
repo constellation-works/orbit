@@ -511,6 +511,43 @@ test("a displaced control start is still detected", { skip: !ENABLED }, async ()
   }
 });
 
+test("fully clipped text is not a column start and does not hide a displaced line", { skip: !ENABLED }, async () => {
+  const { page, result } = await measure(800, `
+    <style>
+      body { margin: 0; font: 16px/20px sans-serif; }
+      .row { display: flex; align-items: flex-start; gap: 12px; }
+      .clipped-column { position: relative; }
+      .clipped { position: absolute; top: 0; left: 0; clip-path: inset(100%); }
+      .flow { display: block; margin-top: 30px; }
+    </style>
+    <div class="row" id="clip-row">
+      <div id="left-col" class="clipped-column">
+        <span id="clipped" class="clipped">Invisible</span>
+        <span id="actual-left" class="flow">Same</span>
+      </div>
+      <div id="right-col"><span id="actual-right">Same</span></div>
+    </div>`);
+  try {
+    const clipped = await page.evaluate(() => {
+      const rect = document.querySelector("#clipped").getBoundingClientRect();
+      return { width: Math.round(rect.width), height: Math.round(rect.height) };
+    });
+    assert.ok(clipped.width > 1 && clipped.height > 1, JSON.stringify(clipped));
+    assert.equal(result.status, "fail", JSON.stringify(result.measurements));
+    const anchors = anchorsOf(result);
+    assert.equal(anchors.some((anchor) => anchor.selector === "#clipped"), false, JSON.stringify(anchors));
+    assert.equal(result.measurements.failures.some((item) => item.anchor_selector === "#clipped" || item.peer_selector === "#clipped"), false, JSON.stringify(result.measurements.failures));
+    const failure = result.measurements.failures.find((item) => item.anchor_selector === "#actual-left");
+    assert.ok(failure, JSON.stringify(result.measurements.failures));
+    assert.equal(failure.peer_selector, "#actual-right");
+    assert.equal(failure.text, "Same");
+    assert.equal(failure.peer_text, "Same");
+    assert.ok(Math.abs(failure.delta_px - 30) <= 1, JSON.stringify(failure));
+  } finally {
+    await page.close();
+  }
+});
+
 test("incomparable anchors are not a pass", { skip: !ENABLED }, async () => {
   const empty = await measure(800, `
     <style>
