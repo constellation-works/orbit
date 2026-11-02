@@ -418,7 +418,7 @@ when the footprint, complexity, testable criteria and deduplication are already
 settled; readiness still applies and an explicit pilot remains available. The routine never queues a later pilot automatically, even after material edits: every later routine assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
-with `repilot: true`. An `--approve-proposed` drain (and scheduled discovery) still queue a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
+with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
 refuse a second request while a pilot is pending or running, while delivery
 holds the task, or on a replica. A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite. Existing
@@ -465,10 +465,7 @@ mode, assessments, runs, median and total run seconds and tokens, plus
 re-checks later followed by a full pilot and the combined re-check-to-full
 rate.
 
-Certified description/criteria or other material drift makes the assessment stale. The
-drain and scheduled discovery queue a fresh pilot automatically when no live
-execution claim holds the task, and a failed repilot holds it until its
-meaning changes again or an operator acts. Dispatch fails closed as `pilot_assessment_stale` until
+Certified description/criteria or other material drift makes the assessment stale for an `--approve-proposed` drain, while only certified description/criteria drift makes it stale for scheduled discovery. The drain queues a fresh pilot automatically for either kind of drift, and scheduled discovery queues one automatically only for description/criteria drift, when no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. Dispatch fails closed as `pilot_assessment_stale` until
 a new assessment completes against the edited requirements, unless an
 operator skips the pilot with `no-pilot` as described above. A held
 warning keeps its one pending decision across routine windows; routine ticks

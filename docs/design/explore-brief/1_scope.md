@@ -30,8 +30,7 @@ out over partitions of one to five tasks, then validates the results in the dete
 `apply_task_pilot_results` step, with one repair pass for invalid assessments. The pilot is
 triggered by the `preparation_eligible` state trigger (`assets/routines/task_pilot.yaml`),
 with freshness governed by [`[workflow.task_pilot_freshness]`](../../CONFIG.md). An applied
-assessment is not automatically repeated after a material change; use `orbit task repilot` to
-request another pilot. It runs on the cheap
+assessment is not automatically repeated through the routine after a material change; an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted, and scheduled discovery does so only when its description/criteria drifted (each when no live execution claim holds the task); otherwise use `orbit task repilot` to request another pilot. It runs on the cheap
 `workflow.purpose_crews.task_pilot` pool, is a `require_response_envelope: true` activity,
 and already returns `context_files_after`, the task's lock footprint.
 [Task artifacts](../task-artifacts/2_design.md#5-artifact-manifest) store bounded files per
@@ -127,8 +126,8 @@ tag instruction has. That keeps it a map, not a transcript. Rules:
   admission. At admission it would add minutes to every run and spend exploration on runs
   that never start.
 - **Trigger and freshness.** The task-pilot checks material drift from preparation through
-  apply. Once applied, an assessment is not automatically repeated when task material or the
-  freshness policy changes; `orbit task repilot` explicitly requests another pilot. A brief
+  apply. Once applied, an assessment is not automatically repeated through the routine when task material or the
+  freshness policy changes; an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted, and scheduled discovery does so only when its description/criteria drifted (each when no live execution claim holds the task); `orbit task repilot` explicitly requests another pilot otherwise. A brief
   from the same pass inherits the prepare/apply check. A separate activity needs its own
   trigger, its own receipt and its own staleness rules, which duplicates machinery for the
   same question.
