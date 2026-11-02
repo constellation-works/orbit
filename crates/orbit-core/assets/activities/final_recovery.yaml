@@ -144,14 +144,38 @@ spec:
       # draws under.
       crew_config_key:
         const: workflow.final_recovery_crews
-  # Mirrors orbit_types::workflow::FinalRecoveryDecision. Orbit parses the
-  # result strictly against that type; anything else escalates.
+  # Mirrors orbit_types::workflow::FinalRecoveryDecision plus an optional
+  # repair_evidence handoff on resume. The host imports that field before
+  # Orbit strictly parses the remaining decision; anything else escalates.
   output_schema_json:
     type: object
     oneOf:
       - additionalProperties: false
         required: [decision, step_id, rationale]
         properties:
+          repair_evidence:
+            type: object
+            additionalProperties: false
+            required: [execution_summary]
+            properties:
+              execution_summary:
+                type: string
+                minLength: 1
+                maxLength: 65536
+              task_artifacts:
+                type: array
+                maxItems: 32
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [path, source_path]
+                  properties:
+                    path:
+                      type: string
+                      minLength: 1
+                    source_path:
+                      type: string
+                      minLength: 1
           decision:
             const: resume
           step_id:
@@ -332,7 +356,8 @@ spec:
     - Do not edit the task record (status, fields or comments), start or resume
       runs, or invoke agents or pipelines; the applier refuses a decision on a
       task that changed after the failure. Recording root causes with
-      `orbit.friction.add` and repairing files are fine.
+      `orbit.friction.add` and repairing files are fine. Return repair evidence
+      through the host handoff below, without calling task-write tools.
     - Inspect `retained_candidate` (the failed run's own worktree) read-only:
       never edit, copy from or run Git writes in it. Name it in an escalation
       when that work should continue.
@@ -437,6 +462,23 @@ spec:
        replace `task.final_validation_commands`, which comes only from the
        injected execution envelope, is absent when empty, and is not an
        `orbit.task.show` field.
+
+    Evidence handoff:
+    - When a repair produces evidence and will `resume`, add `repair_evidence` beside
+      the typed decision:
+      `{"execution_summary": "Outcome: success\nChanges: ...", "task_artifacts":
+      [{"path": "screenshots/view.png", "source_path": ".orbit/tmp/view.png"}]}`.
+      The host attaches it to this recovery's admitted task before resuming,
+      including on a claimed run; no operator attachment is needed. Only a
+      `resume` accepts this handoff; a backstop lane that excludes `resume`
+      returns its original decision without a `repair_evidence` field.
+    - Include validation commands and outcomes in `execution_summary` (at most
+      65536 characters). Return at most 32 artifacts, each at most 1 MiB. Every
+      source must be a regular file under this worktree's `.orbit/tmp/`.
+      Artifact names must be unique and may not use reserved namespaces,
+      including `review-`, `validation/` or `no-diff-handoff/`. The handoff
+      accepts no task ID, lifecycle change, scope edit or comment. An invalid
+      handoff refuses the decision before any evidence is written.
 
     Decisions:
     A `decide` becomes a card the operator answers with one click, so write it

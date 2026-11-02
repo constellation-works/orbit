@@ -810,6 +810,16 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         NullRuntimeHost::apply_final_recovery(self, run_id, application)
     }
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::persist_final_recovery_evidence(self, run_id, task_id, workspace, evidence)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,

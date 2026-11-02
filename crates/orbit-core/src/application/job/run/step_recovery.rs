@@ -134,7 +134,7 @@ impl crate::OrbitRuntime {
                 "step recovery '{step_id}' task owner does not match worktree owner '{checkpoint_owner}'"
             )));
         }
-        if !self.run_descends_from(run, checkpoint_owner)? {
+        if !self.recovery_run_descends_from(run, checkpoint_owner)? {
             return Err(OrbitError::Execution(format!(
                 "step recovery '{step_id}' worktree owner '{checkpoint_owner}' is outside run '{run_id}' retry lineage"
             )));
@@ -143,7 +143,7 @@ impl crate::OrbitRuntime {
     }
 
     /// Whether `run` is `expected_ancestor` or one of its retries.
-    fn run_descends_from(
+    pub(crate) fn recovery_run_descends_from(
         &self,
         mut run: JobRun,
         expected_ancestor: &str,

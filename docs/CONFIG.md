@@ -2015,6 +2015,18 @@ final_recovery = ["sol:100", "opus:20"]
 - **Explicit:** standard pool grammar (`crew[@effort]` or `crew[@effort]:weight`); every named crew must exist in `[crews.*]`.
 - **`[]`** disables final recovery.
 
+Final recovery keeps task-write tools closed. A repair that will `resume` can
+return an optional `repair_evidence` object beside its typed decision, containing `execution_summary`
+(up to 65536 characters) and `task_artifacts` (`[{path, source_path}]`, up to
+32 files, each at most 1 MiB). Sources must be regular files under the assigned
+worktree's `.orbit/tmp/`; names must be unique and cannot overwrite reserved
+artifacts, including `review-*`, `validation/` and `no-diff-handoff/`. The host
+validates the entire batch before writing its summary and artifacts to the
+admitted task. On a claimed run it sends the bytes through the authenticated
+owner route. The handoff accepts no task selector or lifecycle edits; invalid
+evidence refuses the decision and leaves the candidate for inspection. The
+blocked-task backstop excludes `resume` and does not accept this handoff.
+
 A final-recovery `resume` records its rationale and the failed step's refusal
 and output before discarding stale checkpoints. The refusal and output are
 bounded the way final recovery's own input is (64 KiB, keeping head and tail),

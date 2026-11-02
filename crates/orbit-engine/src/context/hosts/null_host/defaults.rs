@@ -983,6 +983,18 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("apply_final_recovery"))
     }
 
+    fn persist_final_recovery_evidence(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _workspace: &std::path::Path,
+        _evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "persist_final_recovery_evidence",
+        ))
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         _run_id: &str,
