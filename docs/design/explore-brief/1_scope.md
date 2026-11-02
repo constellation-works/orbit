@@ -28,9 +28,10 @@ Bearing: task-pilot already inspects every prepared task read-only at a pinned r
 before it runs. The `task_pilot_pipeline` job runs `prepare_task_pilot`, fans `task_pilot`
 out over partitions of one to five tasks, then validates the results in the deterministic
 `apply_task_pilot_results` step, with one repair pass for invalid assessments. The pilot is
-triggered by the `preparation_eligible` state trigger (`assets/routines/task_pilot.yaml`) and
-piloted again when the task's material fingerprint changes
-([`[workflow.task_pilot_freshness]`](../../CONFIG.md)). It runs on the cheap
+triggered by the `preparation_eligible` state trigger (`assets/routines/task_pilot.yaml`),
+with freshness governed by [`[workflow.task_pilot_freshness]`](../../CONFIG.md). An applied
+assessment is not automatically repeated after a material change; use `orbit task repilot` to
+request another pilot. It runs on the cheap
 `workflow.purpose_crews.task_pilot` pool, is a `require_response_envelope: true` activity,
 and already returns `context_files_after`, the task's lock footprint.
 [Task artifacts](../task-artifacts/2_design.md#5-artifact-manifest) store bounded files per
@@ -125,10 +126,12 @@ tag instruction has. That keeps it a map, not a transcript. Rules:
   is either also off the path, which means a second trigger after apply, or runs at
   admission. At admission it would add minutes to every run and spend exploration on runs
   that never start.
-- **Trigger and freshness.** Re-piloting on a material change already exists (fingerprint,
-  receipts, `pilot/freshness.rs`). A brief from the same pass inherits it. A separate activity
-  needs its own trigger, its own receipt and its own staleness rules, which duplicates
-  machinery for the same question.
+- **Trigger and freshness.** The task-pilot checks material drift from preparation through
+  apply. Once applied, an assessment is not automatically repeated when task material or the
+  freshness policy changes; `orbit task repilot` explicitly requests another pilot. A brief
+  from the same pass inherits the prepare/apply check. A separate activity needs its own
+  trigger, its own receipt and its own staleness rules, which duplicates machinery for the
+  same question.
 
 **Rejected alternative: a separate `explore_brief` activity**, either chained after pilot
 apply or run at admission. Its one advantage is isolation: a slow or failing brief cannot
