@@ -61,10 +61,7 @@ fn parse_window_start(
         return Ok(DateTime::from_naive_utc_and_offset(at, Utc));
     }
     let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
-    let compact = compact
-        .trim_end_matches("days")
-        .trim_end_matches("day")
-        .trim_end_matches('s');
+    let compact = compact.trim_end_matches('s');
     let split = compact
         .find(|c: char| c.is_ascii_alphabetic())
         .ok_or_else(|| OrbitError::InvalidInput(format!("unrecognised `--since` window: {raw}")))?;
@@ -72,18 +69,24 @@ fn parse_window_start(
     let amount: i64 = amount
         .parse()
         .map_err(|_| OrbitError::InvalidInput(format!("unrecognised `--since` window: {raw}")))?;
+    if amount < 0 {
+        return Err(OrbitError::InvalidInput(format!(
+            "unrecognised `--since` window: {raw}"
+        )));
+    }
     let span = match unit {
-        "m" | "min" | "minute" => Duration::minutes(amount),
-        "h" | "hour" => Duration::hours(amount),
-        "d" => Duration::days(amount),
-        "w" | "week" => Duration::weeks(amount),
+        "m" | "min" | "minute" => Duration::try_minutes(amount),
+        "h" | "hour" => Duration::try_hours(amount),
+        "d" | "day" => Duration::try_days(amount),
+        "w" | "week" => Duration::try_weeks(amount),
         _ => {
             return Err(OrbitError::InvalidInput(format!(
                 "unrecognised `--since` window: {raw} (use e.g. 7d, 24h, 2w or an RFC 3339 instant)"
             )));
         }
     };
-    Ok(now - span)
+    span.and_then(|span| now.checked_sub_signed(span))
+        .ok_or_else(|| OrbitError::InvalidInput(format!("out of range `--since` window: {raw}")))
 }
 
 fn median_seconds(values: &[f64]) -> Option<f64> {
