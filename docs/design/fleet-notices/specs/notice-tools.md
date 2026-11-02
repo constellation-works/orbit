@@ -137,8 +137,9 @@ stands alone: no source paths and no internal task ids.
 ## Errors and audit
 
 Refusal codes are listed in [notice-authority](./notice-authority.md#refusals). Every write (and
-every refused write) is an audit row with target `notice` and the notice id, carrying the resolved
-poster class and the post's fingerprint, which the repeat check reads
+every refused write) is an audit row with target `notice` and the notice id. A posted write's row
+also carries the resolved poster class and the request fingerprint, for inspection only: the repeat
+check reads the fingerprint from the notice's latest post event, not from the audit row
 ([notice-record](./notice-record.md#retries)). A repeat moves no stored field and writes no row.
 Reads write nothing.
 
