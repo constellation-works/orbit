@@ -38,6 +38,7 @@ const KINDS: &[EnumValue] = &[
     EnumValue::plain("ci_red"),
     EnumValue::plain("friction_untriaged"),
     EnumValue::plain("host_unhealthy"),
+    EnumValue::plain("notice_open"),
 ];
 const SEVERITIES: &[EnumValue] = &[
     EnumValue::plain("low"),
@@ -49,7 +50,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     verb: AttentionVerb::Query,
     cli_path: &["query"],
     tool_name: "orbit.attention",
-    tool_description: "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open and review_waiting. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
+    tool_description: "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting and notice_open. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
     cli_about: "List what waits on an operator",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

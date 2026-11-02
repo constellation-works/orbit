@@ -27,6 +27,7 @@ pub(crate) mod lease_notices;
 pub(crate) mod leases;
 mod log;
 mod metrics;
+mod notices;
 mod origin;
 mod pagination;
 mod plugins;

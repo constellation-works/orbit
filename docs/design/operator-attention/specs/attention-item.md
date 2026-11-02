@@ -47,6 +47,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's completion time |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
+| `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
 
 Notes that bind implementations:
 
@@ -92,7 +93,7 @@ description. `required` fields are always present; others are omitted, not `null
 | `severity` | enum, required | `critical`, `high`, `medium` or `low`; derivation below. |
 | `workspace` | object, required | `{id, name}`; `selector` is added in federated results. Items with no workspace (an unreachable host) use `null` for both and carry `host`. |
 | `host` | object, required | `{machine_id, name}` of the host whose state the item describes. |
-| `refs` | object | Subject ids that apply: `task_id`, `run_id`, `claim_id`, `decision_id`, `friction_id`, `pull_request`. |
+| `refs` | object | Subject ids that apply: `task_id`, `run_id`, `claim_id`, `decision_id`, `friction_id`, `pull_request`, `notice_id`. |
 | `task` | object | For items with a `task_id`: `{status, tags, crew, orchestrator, title}`. This is what the task filters match against. |
 | `since` | RFC 3339 string or `null`, required | When the condition began. `null` only for `host_unhealthy` checks whose source records no onset; such items skip the age rules and never match `--older-than`. |
 | `age_seconds` | integer | `generated_at - since`; omitted when `since` is `null`. Not part of the fingerprint. |
@@ -133,6 +134,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `ci_red` | the repair task's `orbit.task.show` when one exists, else `github.run.view` on the failing run |
 | `friction_untriaged` | `orbit.friction.update` with `status: triaged` (the operator edits tags or body first when needed) |
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
+| `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
 
 `next` is a suggestion with the right shape, never an action the tool takes. Choosing among
 `also` answers, supplying `needs`, and running the call are the operator's.
@@ -163,6 +165,7 @@ and are not waiting on a single task.
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
+| `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds and `run_window`, `run_stuck_after`, `ci_cache_seconds`, `source_timeout_seconds`
 and `per_workspace_item_cap` live in an `[attention]` config table with the defaults named

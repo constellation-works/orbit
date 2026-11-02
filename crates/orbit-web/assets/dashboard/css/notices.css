@@ -1,0 +1,62 @@
+/* Fleet notices: the banner over every view and the Notices view. */
+.notice-banner {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--state-pending) 12%, var(--bg));
+  padding: 6px 24px;
+}
+.notice-banner[hidden] { display: none; }
+.notice-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.notice-banner-title { font-weight: 600; overflow-wrap: anywhere; }
+.notice-banner-meta { color: var(--fg-mute); }
+.notice-banner-link { color: var(--accent); }
+.notice-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--fg-mute);
+  white-space: nowrap;
+}
+.notice-kind-incident { color: var(--state-pending); }
+.notice-kind-maintenance { color: var(--accent); }
+.notices-layout { grid-template-columns: minmax(0, 1fr); }
+.notice-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+}
+.notice-row-ended { opacity: 0.75; }
+.notice-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.notice-title { font-weight: 600; overflow-wrap: anywhere; }
+.notice-meta { color: var(--fg-mute); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.notice-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
+.notice-section-title, .notice-form-title { margin: 14px 0 8px; font-size: 13px; }
+.notice-post-form { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.notice-post-form input, .notice-post-form textarea, .notice-post-form select,
+.notice-close-reason {
+  background: var(--bg-control);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.notice-post-title, .notice-post-body { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+.notice-form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.notice-close-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.notice-close-reason { flex: 1 1 200px; }
+.notice-feedback { color: var(--fg-mute); font-size: 12px; }
+@media (max-width: 760px) {
+  .notice-banner { padding: 6px 12px; }
+  .notice-form-row > * { flex: 1 1 140px; }
+}
