@@ -109,6 +109,12 @@ FILE_READERS = (
     (Path("scripts/qa-full-sweep-inventory.json"), ()),
     # The guardrail runs the sweep itself. No Cargo test reads the script.
     (Path("scripts/test-qa-full-sweep.py"), ()),
+    # [ORB-21420] Read only by scripts/unit-test-inventory.py --check, a
+    # repository guard every CI guardrails run executes. No Cargo test reads it.
+    (Path("scripts/unit-test-baseline.json"), ()),
+    # The `claude plugin eval` suite runs outside CI. No Cargo test, guard
+    # or CI job reads its cases, graders or mocks.
+    (Path("plugin/evals"), ()),
     # orbit-core's visual-capture driver loads scripts/ux-rules/ui/*.mjs, and
     # every UI rule imports lib/ui-context.mjs. The rule-findings sweep reads
     # README.md and copies step.mjs. The CLI rules, cli-context.mjs,
