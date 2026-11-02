@@ -1936,6 +1936,25 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     assert_eq!(workspace.pilot_applications(&assessed), 1);
     workspace.finish(&child, JobRunState::Success);
 
+    // The drain records the child before its next selection. Standing down
+    // must not turn the explicit pilot's assessment into an unresolved child
+    // approval, either in the report or in durable task history.
+    let recorded = workspace.record(&drain);
+    assert_eq!(
+        recorded["awaiting_reuse"],
+        json!([assessed.id]),
+        "{recorded}"
+    );
+    assert!(
+        workspace
+            .runtime
+            .get_task_history(&assessed.id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "task_pilot_unresolved"),
+        "a child that stood down must not record the explicit assessment as unresolved"
+    );
+
     // An unrelated drain cannot acquire promotion authority from action
     // input. Its selection reaches the reusable assessment, and the write
     // boundary refuses it because the stored drain never asked to approve.

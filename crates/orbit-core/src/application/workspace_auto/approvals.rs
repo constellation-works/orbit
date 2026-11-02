@@ -10,8 +10,9 @@
 //!
 //! Selection decides who is worth a pilot. A proposed task whose latest
 //! certified assessment came from an explicit or routine pilot, and is still
-//! fresh, is approved here without another provider call. A stale one, or
-//! one with a holding warning, stays proposed and is not selected again.
+//! fresh, is approved here without another provider call. A drain child that
+//! stood down cannot claim that receipt as an unfinished approval. A stale
+//! one, or one with a holding warning, stays proposed and is not selected again.
 //! Every other approval happens in the task-pilot apply boundary under the
 //! drain's verified authority, so the qualification checked here is a cost
 //! filter, not the gate. Targeted task ids and promotion authority are not a
@@ -253,6 +254,57 @@ fn approval_snapshot(
             snapshot.held.push(held(classification, None, findings));
             continue;
         }
+        // A pilot still running would be duplicated by a second one.
+        if let Some(pilot) = pilots
+            .iter()
+            .find(|pilot| pilot.is_live() && pilot.task_ids.contains(&task.id))
+        {
+            snapshot.held.push(held(
+                "pilot_running",
+                Some(format!("task-pilot run {} is assessing it", pilot.run_id)),
+                Vec::new(),
+            ));
+            continue;
+        }
+        // Nor is one an explicit or routine pilot is running: the child this
+        // pass would dispatch could only stand down.
+        if let Some(run_id) = live_pilot_run(runtime, &holders, &task.id)? {
+            snapshot.held.push(held(
+                "pilot_running",
+                Some(format!("task-pilot run {run_id} is assessing it")),
+                Vec::new(),
+            ));
+            continue;
+        }
+        // A certified explicit receipt owns its assessment. A drain child
+        // may have stood down while that receipt was being applied, so its
+        // submission time alone cannot make the assessment unresolved.
+        match classify_explicit_assessment_reuse(runtime, &task)? {
+            ExplicitAssessmentReuse::Promote { .. } => {
+                snapshot.reusable.push(task.id);
+                continue;
+            }
+            ExplicitAssessmentReuse::Hold { reason, detail } => {
+                let findings = if reason == "warnings" {
+                    task_pilot_warnings(
+                        task.status,
+                        &runtime.get_task_comments(&task.id)?,
+                        &task.dependencies(),
+                        &|id: &str| {
+                            matches!(
+                                runtime.get_task(id),
+                                Ok(found) if found.status == TaskStatus::Done
+                            )
+                        },
+                    )
+                } else {
+                    Vec::new()
+                };
+                snapshot.held.push(held(reason, detail, findings));
+                continue;
+            }
+            ExplicitAssessmentReuse::NotReusable => {}
+        }
         // An applied assessment with no hold whose task is still proposed
         // was promoted on paper but its approval did not complete (for
         // example a deterministic apply failure after the pilot write).
@@ -272,28 +324,6 @@ fn approval_snapshot(
                      edit the task or approve it to retry",
                     pilot.run_id
                 )),
-                Vec::new(),
-            ));
-            continue;
-        }
-        // A pilot still running would be duplicated by a second one.
-        if let Some(pilot) = pilots
-            .iter()
-            .find(|pilot| pilot.is_live() && pilot.task_ids.contains(&task.id))
-        {
-            snapshot.held.push(held(
-                "pilot_running",
-                Some(format!("task-pilot run {} is assessing it", pilot.run_id)),
-                Vec::new(),
-            ));
-            continue;
-        }
-        // Nor is one an explicit or routine pilot is running: the child this
-        // pass would dispatch could only stand down.
-        if let Some(run_id) = live_pilot_run(runtime, &holders, &task.id)? {
-            snapshot.held.push(held(
-                "pilot_running",
-                Some(format!("task-pilot run {run_id} is assessing it")),
                 Vec::new(),
             ));
             continue;
@@ -333,31 +363,10 @@ fn approval_snapshot(
             ));
             continue;
         }
-        match classify_explicit_assessment_reuse(runtime, &task)? {
-            ExplicitAssessmentReuse::Promote { .. } => snapshot.reusable.push(task.id),
-            ExplicitAssessmentReuse::Hold { reason, detail } => {
-                let findings = if reason == "warnings" {
-                    task_pilot_warnings(
-                        task.status,
-                        &runtime.get_task_comments(&task.id)?,
-                        &task.dependencies(),
-                        &|id: &str| {
-                            matches!(
-                                runtime.get_task(id),
-                                Ok(found) if found.status == TaskStatus::Done
-                            )
-                        },
-                    )
-                } else {
-                    Vec::new()
-                };
-                snapshot.held.push(held(reason, detail, findings));
-            }
-            ExplicitAssessmentReuse::NotReusable => snapshot.candidates.push(ApprovalCandidate {
-                id: task.id,
-                crew: normalized_task_crew(task.crew.as_deref()),
-            }),
-        }
+        snapshot.candidates.push(ApprovalCandidate {
+            id: task.id,
+            crew: normalized_task_crew(task.crew.as_deref()),
+        });
     }
     Ok(snapshot)
 }
@@ -539,7 +548,17 @@ fn record_unresolved_pilot(
     task_id: &str,
     pilot: &PilotChild,
 ) -> Result<(), OrbitError> {
-    if runtime.get_task(task_id)?.status != TaskStatus::Proposed {
+    let task = runtime.get_task(task_id)?;
+    if task.status != TaskStatus::Proposed {
+        return Ok(());
+    }
+    // A child that stood down did not apply the explicit assessment. Keep
+    // its certified reuse or hold decision instead of recording an unrelated
+    // unresolved-child marker against it.
+    if !matches!(
+        classify_explicit_assessment_reuse(runtime, &task)?,
+        ExplicitAssessmentReuse::NotReusable
+    ) {
         return Ok(());
     }
     let history = runtime.get_task_history(task_id)?;
