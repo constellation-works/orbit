@@ -826,6 +826,55 @@
       "path": null,
       "shadowed_by": []
     },
+    "resident.evolution.decline_suppress_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.max_proposals": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.min_cost_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.min_distinct_cycles": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.min_distinct_mandates": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.min_occurrences": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "resident.evolution.window_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "retention.audit_days": {
       "scope": "built-in",
       "state": "default",

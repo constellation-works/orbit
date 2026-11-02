@@ -36,6 +36,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.notice.show"
         | "orbit.evolution.list"
         | "orbit.evolution.show"
+        | "orbit.resident.digest"
         | "orbit.resident.list"
         | "orbit.resident.show"
         | "orbit.orchestrator.scorecard"

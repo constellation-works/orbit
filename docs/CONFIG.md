@@ -8,6 +8,32 @@ last_validated: 2026-11-02
 
 Reference for Orbit's `config.toml`: every fixed key, its default and what it does. `orbit config keys` prints the same keys with descriptions. `orbit init` writes a minimal template, [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml), with the agent environment allowlist, the Codex sandbox mode, review-skip mappings for shipped auto-task provenance tags, and the `[workflow]` table its crew keys go into; this page is the reference. The website has a shorter overview under [Reference › Configuration](https://orbit-cli.com/reference/config/). To add an execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
 
+## Resident evolution pass
+
+The disabled `evolution-pass-<workspace>` routine runs Mondays at 05:17 host-local when enabled.
+It ranks measured capability gaps and drafts design tasks for human approval. Its agent has only
+read tools; a deterministic applier files `proposed` tasks with evidence. It never approves,
+promotes, dispatches or builds. `orbit resident digest --json` reports state, escalations,
+vetoable decisions, the top five pains, open proposals and metrics; `--top` changes the pain limit
+(1–100), and `--since` accepts a span or RFC 3339 window start.
+
+```toml
+[resident.evolution]
+window_days = 14
+min_occurrences = 3
+min_distinct_cycles = 3
+min_distinct_mandates = 1
+min_cost_minutes = 60
+max_proposals = 3
+decline_suppress_days = 30
+```
+
+Every threshold must be met. Cost includes minutes plus slot minutes within the window; distinct
+cycle and mandate counts exclude entries without those identifiers. All values
+are positive integers; day values are at most 3650, recurrence values at most 1,000,000, cost at most
+1,000,000,000 and proposals at most 100. Decline suppression still ends early only when window cost
+doubles. Workspace settings override the global layer.
+
 ## Where config lives
 
 | Path | Scope | Created by |

@@ -309,6 +309,18 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
     (
+        "evolution_rank",
+        include_str!("../../orbit-core/assets/activities/evolution_rank.yaml"),
+    ),
+    (
+        "evolution_draft",
+        include_str!("../../orbit-core/assets/activities/evolution_draft.yaml"),
+    ),
+    (
+        "evolution_apply",
+        include_str!("../../orbit-core/assets/activities/evolution_apply.yaml"),
+    ),
+    (
         "resident_observe",
         include_str!("../../orbit-core/assets/activities/resident_observe.yaml"),
     ),
@@ -442,6 +454,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "ux_rules_pipeline",
         include_str!("../../orbit-core/assets/jobs/ux_rules_pipeline.yaml"),
+    ),
+    (
+        "evolution_pass_pipeline",
+        include_str!("../../orbit-core/assets/jobs/evolution_pass_pipeline.yaml"),
     ),
     (
         "resident_cycle_pipeline",

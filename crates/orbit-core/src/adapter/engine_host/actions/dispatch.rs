@@ -302,6 +302,22 @@ pub(crate) fn run_deterministic(
             input,
             finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
+        // Freeze this pass's measured candidates, then apply advisory drafts
+        // as proposed tasks. The owning run, never input, binds the workspace.
+        CoreDeterministicAction::EvolutionRank | CoreDeterministicAction::EvolutionApply => {
+            let run_id = owner_run_id(&tool_context).ok_or_else(|| {
+                DispatchError::action_failed(action, "evolution step needs its owning run")
+            })?;
+            let result = if deterministic_action == CoreDeterministicAction::EvolutionRank {
+                runtime.rank_evolution_pass(run_id)
+            } else {
+                runtime.apply_evolution_pass(
+                    run_id,
+                    input.get("proposals").cloned().unwrap_or(Value::Null),
+                )
+            };
+            result.map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
         // Take the resident cycle lease for this run's mandate (recovering a
         // dead predecessor) and build the brief; then close the cycle. The run
         // is the trusted reservation owner, never step input.

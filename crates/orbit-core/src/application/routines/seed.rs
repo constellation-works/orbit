@@ -76,6 +76,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/resident_cycle.yaml"),
     ),
     (
+        "evolution_pass",
+        include_str!("../../../assets/routines/evolution_pass.yaml"),
+    ),
+    (
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),

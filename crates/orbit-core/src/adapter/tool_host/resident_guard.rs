@@ -156,7 +156,10 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             NoticeVerb::Close => Refused,
         },
         OrbitBuiltinAction::Resident(verb) => match verb {
-            ResidentVerb::Show | ResidentVerb::List | ResidentVerb::Metrics => Read,
+            ResidentVerb::Show
+            | ResidentVerb::List
+            | ResidentVerb::Metrics
+            | ResidentVerb::Digest => Read,
             ResidentVerb::Checkpoint => Open,
             ResidentVerb::Grant => Refused,
         },

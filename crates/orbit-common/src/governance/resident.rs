@@ -30,6 +30,8 @@ operation_registry! {
         List => LIST,
         /// The four widening measures, per mandate and across mandates.
         Metrics => METRICS,
+        /// The manager's resident state, escalations, vetoes and costly pains.
+        Digest => DIGEST,
     }
 }
 
@@ -234,5 +236,38 @@ const CHECKPOINT: OperationSpec<ResidentVerb> = OperationSpec {
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const DIGEST: OperationSpec<ResidentVerb> = OperationSpec {
+    verb: ResidentVerb::Digest,
+    cli_path: &["digest"],
+    tool_name: "orbit.resident.digest",
+    tool_description: "Read the manager digest in the bound workspace: resident state, latest outcome, open requests and stalled flag; open escalations oldest first; reversible decisions in the window still awaiting veto; top evolution pains by minutes plus slot minutes with occurrence, cycle and mandate counts; evolution proposals awaiting human approval; and resident metrics totals. Read-only. Defaults to 14d and the top 5 pains.",
+    cli_about: "Show resident state, escalations, vetoes, top pains and open proposals",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[
+        &[
+            both(
+                "since",
+                ParamType::String,
+                "Window start as a span (7d, 24h, 2w) or RFC 3339 instant; defaults to the configured evolution window.",
+                CliArgKind::flag("since"),
+                "Window start (default: configured evolution window)",
+            ),
+            both(
+                "top",
+                ParamType::Integer,
+                "Maximum pains to return, 1-100; default 5.",
+                CliArgKind::flag("top"),
+                "Maximum pains, 1-100 (default 5)",
+            ),
+        ],
+        ATTRIBUTION,
+    ],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
