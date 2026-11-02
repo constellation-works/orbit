@@ -20,6 +20,7 @@ pub(super) struct TestHost {
     registered_tools: Vec<String>,
     experiment_overlays: Vec<ExperimentActivityOverlay>,
     required_tools: Vec<String>,
+    suppressed_tools: Vec<String>,
 }
 
 impl TestHost {
@@ -34,7 +35,14 @@ impl TestHost {
                 .collect(),
             experiment_overlays: Vec::new(),
             required_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
         }
+    }
+
+    pub(super) fn with_suppressed_tools(mut self, tools: &[&str]) -> Self {
+        self.suppressed_tools
+            .extend(tools.iter().map(|tool| (*tool).to_string()));
+        self
     }
 
     pub(super) fn with_experiment_overlays(
@@ -82,14 +90,17 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         _activity: &str,
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
+        let mut effective_tools = orbit_types::workflow::tools_allowed_by_disallow_list(
+            disallow_list,
+            self.registered_tools.iter().map(String::as_str),
+        );
+        effective_tools.retain(|tool| !self.suppressed_tools.contains(tool));
         Ok(ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
-            effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
-                disallow_list,
-                self.registered_tools.iter().map(String::as_str),
-            ),
+            effective_tools,
             omitted_requirement_notes: Vec::new(),
             granted_tools: Vec::new(),
+            suppressed_tools: self.suppressed_tools.clone(),
         })
     }
 
@@ -103,6 +114,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
             effective_tools: baseline_tools.to_vec(),
             omitted_requirement_notes: Vec::new(),
             granted_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
         })
     }
 

@@ -58,4 +58,10 @@ pub struct ResolvedActivityTools {
     /// activity lifted for this run. Only `agent_implement` lifts any; the
     /// dispatcher removes them from the deny list the child enforces.
     pub granted_tools: Vec<String>,
+    /// Tools a host switch removed from `effective_tools` that a deny-mode
+    /// child must also deny. A deny-mode child ignores the legacy allowlist,
+    /// so removing a name from `effective_tools` alone does not suppress it:
+    /// the dispatcher adds these names to the deny list the child enforces,
+    /// after any granted lift, so a grant cannot re-open a suppressed name.
+    pub suppressed_tools: Vec<String>,
 }
