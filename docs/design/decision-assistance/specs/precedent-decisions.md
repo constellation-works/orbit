@@ -107,7 +107,16 @@ evidence, never instructions.
 - **Task context:** title, and the description and acceptance criteria truncated
   to fixed bounds, with truncation recorded.
 - **Precedents:** at most `k` (default 8) records from §Precedent provider,
-  ordered by the drift weighting in §Drift, each with its age in days.
+  ordered by the drift weighting in §Drift. Each row keeps its id, question,
+  options (id, label, and consequence), chosen option, context, reversed flag,
+  age in days, category, topic, `decided_at`, and citation (`source`, `ref`,
+  digest). Question, option text, and context are bounded; context uses the
+  fixed context budget, and a cut sets that field's truncation flag. The
+  serialized request stays within the host `max_request_bytes` limit: prose
+  bounds tighten first, then the lowest-ranked rows are dropped, and either
+  step records truncation. Citations are copied whole. Option ids belong to
+  the historical record, so two rows can share a chosen id and still carry
+  opposite labels and consequences.
 - **Provenance:** packet builder version, provider ids and contract versions, the
   provider omissions and truncation, and `as_of` (= `raised_at`).
 

@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::assistance::AssistanceAdmission;
 use orbit_types::assistance::{self, AssistanceEvidencePacket, AssistanceRequest};
 use orbit_types::task::{DecisionRequest, DecisionRequestState};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::contract::{
     BUILDER_VERSION, CONTEXT_BYTES, PRECEDENT_DECISION_USE_CASE, PRECEDENT_K, bound_text,
@@ -25,6 +25,8 @@ use crate::application::task::precedent_provider::{
 
 const RECONCILE_BOUND: usize = 32;
 const PROCESS_BOUND: usize = 32;
+/// Prose floor while shrinking a packet into the host request-byte budget.
+const PRECEDENT_TEXT_FLOOR: usize = 64;
 
 impl OrbitRuntime {
     /// Best-effort enqueue for a request this raise left open. A consumer
@@ -283,31 +285,10 @@ impl OrbitRuntime {
                 raised_at: request.raised_at,
             },
         })?;
-        let precedents: Vec<_> = retrieval
-            .precedents
-            .iter()
-            .take(PRECEDENT_K)
-            .map(|precedent| {
-                let age_days = (request.raised_at - precedent.decided_at).num_days().max(0);
-                json!({
-                    "id": precedent.id,
-                    "chosen_option": precedent.chosen_option,
-                    "reversed": precedent.reversed,
-                    "age_days": age_days,
-                    "category": precedent.scope.category,
-                    "topic": precedent.scope.topic,
-                    "decided_at": precedent.decided_at.to_rfc3339(),
-                })
-            })
-            .collect();
         let task = self.get_task(&request.task_id)?;
         let (description, description_truncated) = bound_text(&task.description, CONTEXT_BYTES);
         let (criteria_text, criteria_truncated) =
             bound_text(&task.acceptance_criteria.join("\n"), CONTEXT_BYTES);
-        let truncated = retrieval.truncated
-            || description_truncated
-            || criteria_truncated
-            || !retrieval.enabled;
         let mut omissions = retrieval.omissions.clone();
         if !retrieval.enabled {
             omissions.push("provider_disabled".into());
@@ -323,129 +304,252 @@ impl OrbitRuntime {
                 format!("{}:{reason}", gap.provider)
             })
             .collect();
-        let precedent_identity: Vec<_> = retrieval
-            .precedents
-            .iter()
-            .take(PRECEDENT_K)
-            .map(|precedent| {
-                (
-                    precedent.id.as_str(),
-                    precedent.chosen_option.as_str(),
-                    precedent.reversed,
-                    precedent.decided_at,
-                )
-            })
-            .collect();
-        let source_digest = assistance::assistance_digest(
-            &serde_json::to_vec(&(
-                "precedent-decision-source/1",
-                &request.id,
-                request.raised_at,
-                request.binding.key(),
-                &option_ids,
-                &question,
-                &precedent_identity,
-                &omissions,
-                &gaps,
-                truncated,
-            ))
-            .map_err(super::ledger::ledger_json_error)?,
-        );
-        let mut contract = precedent_decision_question_template();
-        let supports = contract
-            .questions
-            .get("precedent_supports")
-            .cloned()
-            .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
-        let choice = contract
-            .questions
-            .get("decision_choice")
-            .cloned()
-            .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
-        let conflict = contract
-            .questions
-            .get("precedents_conflict")
-            .cloned()
-            .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
-        contract.questions.clear();
-        contract.questions.insert("decision_choice".into(), choice);
-        for index in 1..=precedents.len() {
-            contract
-                .questions
-                .insert(format!("precedent_supports/{index}"), supports.clone());
+        let max_bytes = self.precedent_request_byte_budget()?;
+        let available = retrieval.precedents.len().min(PRECEDENT_K);
+        let mut keep = available;
+        let mut text_budget = CONTEXT_BYTES;
+        let task_title = task.title.clone();
+        loop {
+            let kept = &retrieval.precedents[..keep];
+            let (rows, prose_truncated) =
+                project_precedent_rows(kept, request.raised_at, text_budget);
+            let precedent_truncated = prose_truncated || keep < available;
+            let built = assemble_precedent_packet(&PrecedentPacketAssembly {
+                request,
+                workspace,
+                question: &question,
+                option_ids: &option_ids,
+                task_title: &task_title,
+                description: &description,
+                description_truncated,
+                criteria_text: &criteria_text,
+                criteria_truncated,
+                omissions: &omissions,
+                gaps: &gaps,
+                retrieval_truncated: retrieval.truncated,
+                provider_enabled: retrieval.enabled,
+                precedents: kept,
+                rows: &rows,
+                precedent_truncated,
+            })?;
+            let size = serde_json::to_vec(&built.request)
+                .map_err(super::ledger::ledger_json_error)?
+                .len();
+            if size <= max_bytes || keep == 0 {
+                return Ok(built);
+            }
+            if text_budget > PRECEDENT_TEXT_FLOOR {
+                text_budget /= 2;
+                continue;
+            }
+            keep -= 1;
+            text_budget = CONTEXT_BYTES;
         }
-        contract
-            .questions
-            .insert("precedents_conflict".into(), conflict);
-        let provenance = json!({
-            "builder": BUILDER_VERSION,
-            "provider_contract": PRECEDENT_PROVIDER_CONTRACT,
-            "provider_ids": retrieval.precedents.iter().take(PRECEDENT_K).map(|precedent| &precedent.citation.source).collect::<Vec<_>>(),
-            "omissions": omissions,
-            "gaps": gaps,
-            "truncated": truncated,
-            "as_of": request.raised_at.to_rfc3339(),
-        });
-        let packet = AssistanceRequest {
-            workspace_id: workspace.into(),
-            owner_id: workspace.into(),
-            use_case: PRECEDENT_DECISION_USE_CASE.into(),
-            source_digest: source_digest.clone(),
-            contract,
-            evidence_packet: AssistanceEvidencePacket {
-                packet_id: source_digest.clone(),
-                subject_id: request.id.clone(),
-                collected_at: Utc::now(),
-                evidence_refs: vec![
-                    format!("task:{}", request.task_id),
-                    format!("decision:{}", request.id),
-                ],
-                omissions: Vec::new(),
-                truncated: false,
-                fields: BTreeMap::from([
-                    ("option_ids".into(), json!(option_ids)),
-                    (
-                        "request".into(),
-                        json!({
-                            "id": request.id,
-                            "workspace": workspace,
-                            "gate": request.gate.as_str(),
-                            "category": request_category(request, workspace),
-                            "risk_tier": risk_tier_name(request.risk_tier),
-                            "question": question,
-                            "answers": request.answers.iter().map(|answer| json!({
-                                "id": answer.id,
-                                "label": answer.label,
-                                "consequence": answer.consequence,
-                            })).collect::<Vec<_>>(),
-                            "recommended": request.recommended,
-                            "topic": request.topic,
-                            "raised_at": request.raised_at.to_rfc3339(),
-                        }),
-                    ),
-                    (
-                        "task_context".into(),
-                        json!({
-                            "title": task.title,
-                            "description": description,
-                            "acceptance_criteria": criteria_text,
-                            "description_truncated": description_truncated,
-                            "criteria_truncated": criteria_truncated,
-                        }),
-                    ),
-                    ("precedents".into(), json!(precedents)),
-                    ("provenance".into(), provenance),
-                ]),
-            },
-        };
-        Ok(BuiltPacket {
-            request: packet,
-            source_digest,
-        })
+    }
+
+    fn precedent_request_byte_budget(&self) -> Result<usize, OrbitError> {
+        let settings = orbit_config::ConfigStore::open(
+            orbit_config::ConfigScope::Global,
+            self.global_root().join("config.toml"),
+        )?
+        .snapshot()?
+        .assistance_settings;
+        settings.validate_assistance_settings()?;
+        Ok(settings.limits.max_request_bytes as usize)
     }
 }
 
 struct BuiltPacket {
     request: AssistanceRequest,
     source_digest: String,
+}
+
+struct PrecedentPacketAssembly<'a> {
+    request: &'a DecisionRequest,
+    workspace: &'a str,
+    question: &'a str,
+    option_ids: &'a [&'a str],
+    task_title: &'a str,
+    description: &'a str,
+    description_truncated: bool,
+    criteria_text: &'a str,
+    criteria_truncated: bool,
+    omissions: &'a [String],
+    gaps: &'a [String],
+    retrieval_truncated: bool,
+    provider_enabled: bool,
+    precedents: &'a [precedent_provider::DecisionPrecedent],
+    rows: &'a [Value],
+    precedent_truncated: bool,
+}
+
+fn project_precedent_rows(
+    precedents: &[precedent_provider::DecisionPrecedent],
+    raised_at: chrono::DateTime<Utc>,
+    text_budget: usize,
+) -> (Vec<Value>, bool) {
+    let mut truncated = false;
+    let mut rows = Vec::with_capacity(precedents.len());
+    for precedent in precedents {
+        let (question, question_truncated) = bound_text(&precedent.question, text_budget);
+        let (context, context_truncated) = bound_text(&precedent.context, text_budget);
+        let mut options = Vec::with_capacity(precedent.options.len());
+        let mut options_truncated = false;
+        for option in &precedent.options {
+            let (label, label_truncated) = bound_text(&option.label, text_budget);
+            let (consequence, consequence_truncated) = match option.consequence.as_deref() {
+                Some(text) => {
+                    let (bounded, cut) = bound_text(text, text_budget);
+                    (Value::String(bounded), cut)
+                }
+                None => (Value::Null, false),
+            };
+            options_truncated |= label_truncated || consequence_truncated;
+            options.push(json!({
+                "id": option.id,
+                "label": label,
+                "consequence": consequence,
+                "label_truncated": label_truncated,
+                "consequence_truncated": consequence_truncated,
+            }));
+        }
+        truncated |= question_truncated || context_truncated || options_truncated;
+        let age_days = (raised_at - precedent.decided_at).num_days().max(0);
+        rows.push(json!({
+            "id": precedent.id,
+            "question": question,
+            "question_truncated": question_truncated,
+            "options": options,
+            "chosen_option": precedent.chosen_option,
+            "context": context,
+            "context_truncated": context_truncated,
+            "reversed": precedent.reversed,
+            "age_days": age_days,
+            "category": precedent.scope.category,
+            "topic": precedent.scope.topic,
+            "decided_at": precedent.decided_at.to_rfc3339(),
+            "citation": {
+                "source": precedent.citation.source,
+                "ref": precedent.citation.reference,
+                "digest": precedent.citation.digest,
+            },
+        }));
+    }
+    (rows, truncated)
+}
+
+fn assemble_precedent_packet(
+    input: &PrecedentPacketAssembly<'_>,
+) -> Result<BuiltPacket, OrbitError> {
+    let truncated = input.retrieval_truncated
+        || input.description_truncated
+        || input.criteria_truncated
+        || !input.provider_enabled
+        || input.precedent_truncated;
+    let source_digest = assistance::assistance_digest(
+        &serde_json::to_vec(&(
+            "precedent-decision-source/1",
+            &input.request.id,
+            input.request.raised_at,
+            input.request.binding.key(),
+            input.option_ids,
+            input.question,
+            input.rows,
+            input.omissions,
+            input.gaps,
+            truncated,
+        ))
+        .map_err(super::ledger::ledger_json_error)?,
+    );
+    let mut contract = precedent_decision_question_template();
+    let supports = contract
+        .questions
+        .get("precedent_supports")
+        .cloned()
+        .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
+    let choice = contract
+        .questions
+        .get("decision_choice")
+        .cloned()
+        .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
+    let conflict = contract
+        .questions
+        .get("precedents_conflict")
+        .cloned()
+        .ok_or_else(|| OrbitError::Store("precedent decision template is incomplete".into()))?;
+    contract.questions.clear();
+    contract.questions.insert("decision_choice".into(), choice);
+    for index in 1..=input.rows.len() {
+        contract
+            .questions
+            .insert(format!("precedent_supports/{index}"), supports.clone());
+    }
+    contract
+        .questions
+        .insert("precedents_conflict".into(), conflict);
+    let provenance = json!({
+        "builder": BUILDER_VERSION,
+        "provider_contract": PRECEDENT_PROVIDER_CONTRACT,
+        "provider_ids": input.precedents.iter().map(|precedent| &precedent.citation.source).collect::<Vec<_>>(),
+        "omissions": input.omissions,
+        "gaps": input.gaps,
+        "truncated": truncated,
+        "as_of": input.request.raised_at.to_rfc3339(),
+    });
+    let packet = AssistanceRequest {
+        workspace_id: input.workspace.into(),
+        owner_id: input.workspace.into(),
+        use_case: PRECEDENT_DECISION_USE_CASE.into(),
+        source_digest: source_digest.clone(),
+        contract,
+        evidence_packet: AssistanceEvidencePacket {
+            packet_id: source_digest.clone(),
+            subject_id: input.request.id.clone(),
+            collected_at: Utc::now(),
+            evidence_refs: vec![
+                format!("task:{}", input.request.task_id),
+                format!("decision:{}", input.request.id),
+            ],
+            omissions: Vec::new(),
+            truncated: input.retrieval_truncated || input.precedent_truncated,
+            fields: BTreeMap::from([
+                ("option_ids".into(), json!(input.option_ids)),
+                (
+                    "request".into(),
+                    json!({
+                        "id": input.request.id,
+                        "workspace": input.workspace,
+                        "gate": input.request.gate.as_str(),
+                        "category": request_category(input.request, input.workspace),
+                        "risk_tier": risk_tier_name(input.request.risk_tier),
+                        "question": input.question,
+                        "answers": input.request.answers.iter().map(|answer| json!({
+                            "id": answer.id,
+                            "label": answer.label,
+                            "consequence": answer.consequence,
+                        })).collect::<Vec<_>>(),
+                        "recommended": input.request.recommended,
+                        "topic": input.request.topic,
+                        "raised_at": input.request.raised_at.to_rfc3339(),
+                    }),
+                ),
+                (
+                    "task_context".into(),
+                    json!({
+                        "title": input.task_title,
+                        "description": input.description,
+                        "acceptance_criteria": input.criteria_text,
+                        "description_truncated": input.description_truncated,
+                        "criteria_truncated": input.criteria_truncated,
+                    }),
+                ),
+                ("precedents".into(), json!(input.rows)),
+                ("provenance".into(), provenance),
+            ]),
+        },
+    };
+    Ok(BuiltPacket {
+        request: packet,
+        source_digest,
+    })
 }
