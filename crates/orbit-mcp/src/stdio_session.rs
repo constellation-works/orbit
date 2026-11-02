@@ -13,7 +13,11 @@
 //! the lines it forwards and the responses the service flushes. The session
 //! is idle when every forwarded line has been consumed and every request the
 //! transport accepts has been answered. Rejected or dropped input never adds
-//! a pending request, since its error may not echo the original id.
+//! a pending request, since its error may not echo the original id. The pump
+//! writes that id-less invalid-request error itself, as one complete frame on
+//! the same stdout writer the service uses: rmcp sends it from inside
+//! `receive` after discarding the line, and the service loop drops that send
+//! when another branch is ready.
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
@@ -177,8 +181,10 @@ struct Tracker {
 impl Tracker {
     fn forwarded(&mut self, line: &[u8]) {
         // Match rmcp's incoming message type, including its BOM tolerance.
-        // A raw method/id pair is insufficient: decoding failures receive an
-        // id-less error or are dropped by the transport's compatibility path.
+        // A raw method/id pair is insufficient. Lines that do not decode are
+        // not pending: the pump answers an invalid request without forwarding
+        // it, and the transport drops broken JSON and compatibility-path
+        // notifications without a response.
         let line = line.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(line);
         let Ok(message) = serde_json::from_slice::<ClientJsonRpcMessage>(line) else {
             return;
@@ -269,7 +275,7 @@ async fn serve_plain(
         None => (Vec::new(), None),
     };
     let reader = std::io::Cursor::new(carryover).chain(tokio::io::stdin());
-    let transport = (reader, tokio::io::stdout());
+    let transport = (reader, CompleteFrameStdout::new());
     let running = match initialize {
         Some(request) => {
             let peer_info = server
@@ -326,7 +332,7 @@ async fn serve_handing_over(
         undelivered: Arc::clone(&undelivered),
     };
     let writer = TrackingWriter {
-        inner: tokio::io::stdout(),
+        inner: CompleteFrameStdout::new(),
         line: Vec::new(),
         answered: Vec::new(),
         tracker: Arc::clone(&tracker),
@@ -486,52 +492,195 @@ impl AsyncRead for LineReader {
     }
 }
 
-/// Passes the service's output through, retiring each answered request
-/// once its response has been flushed.
-struct TrackingWriter<W> {
-    inner: W,
-    line: Vec<u8>,
-    answered: Vec<Vec<u8>>,
-    tracker: Arc<Mutex<Tracker>>,
+/// Writes one complete stdout record while holding the process stdout lock.
+///
+/// Tokio's `Stdout::poll_write` copies at most 2 MiB and drops that lock
+/// between chunks. A permitted image read is larger than that once its
+/// base64 is carried as both an image block and `structuredContent`, so a
+/// second writer can insert bytes inside the record. One `write_all` keeps
+/// the lock until the record is finished.
+fn write_complete_stdout_frame(frame: &[u8]) -> std::io::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    std::io::Write::write_all(&mut stdout, frame)?;
+    std::io::Write::flush(&mut stdout)
 }
 
-impl<W: AsyncWrite + Unpin> AsyncWrite for TrackingWriter<W> {
+/// Stdout half that emits each encoded frame with [`write_complete_stdout_frame`].
+///
+/// `poll_write` only buffers. While a frame write is in flight it accepts
+/// nothing and returns [`Poll::Pending`], waking when that write finishes.
+/// `poll_flush` returns ready only after every byte already accepted has
+/// been emitted, including bytes buffered before a cancelled flush was
+/// polled again. A successful flush therefore cannot retire a response
+/// whose bytes are still sitting in `staged`.
+struct CompleteFrameStdout {
+    staged: Vec<u8>,
+    flush: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+}
+
+impl CompleteFrameStdout {
+    fn new() -> Self {
+        Self {
+            staged: Vec::new(),
+            flush: None,
+        }
+    }
+
+    /// `true` when this poll finished writing every accepted byte. An idle
+    /// flush is `Ok(false)` so a caller does not treat an earlier failure
+    /// as answered.
+    fn poll_flush_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<bool>> {
+        let this = self.get_mut();
+        poll_frame_flush(&mut this.staged, &mut this.flush, cx)
+    }
+}
+
+/// Drives the in-flight frame write. `Ok(false)` means nothing was in flight.
+fn poll_in_flight_frame(
+    flush: &mut Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    cx: &mut Context<'_>,
+) -> Poll<std::io::Result<bool>> {
+    let polled = {
+        let Some(handle) = flush.as_mut() else {
+            return Poll::Ready(Ok(false));
+        };
+        std::future::Future::poll(std::pin::Pin::new(handle), cx)
+    };
+    match polled {
+        Poll::Pending => Poll::Pending,
+        Poll::Ready(result) => {
+            *flush = None;
+            match result {
+                Ok(Ok(())) => Poll::Ready(Ok(true)),
+                Ok(Err(error)) => Poll::Ready(Err(error)),
+                Err(error) => Poll::Ready(Err(std::io::Error::other(error))),
+            }
+        }
+    }
+}
+
+fn poll_frame_flush(
+    staged: &mut Vec<u8>,
+    flush: &mut Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    cx: &mut Context<'_>,
+) -> Poll<std::io::Result<bool>> {
+    let mut wrote = false;
+    loop {
+        match poll_in_flight_frame(flush, cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            Poll::Ready(Ok(finished)) => wrote |= finished,
+        }
+        // Ready clears the handle. A flush still in flight made no progress.
+        if flush.is_some() {
+            return Poll::Ready(Err(std::io::Error::other(
+                "stdio frame flush lost its in-flight write",
+            )));
+        }
+        if staged.is_empty() {
+            return Poll::Ready(Ok(wrote));
+        }
+        // Bytes accepted while the previous frame was in flight. Emit them
+        // before reporting success, or a cancelled flush would retire a
+        // response that has not been written.
+        let frame = std::mem::take(staged);
+        *flush = Some(tokio::task::spawn_blocking(move || {
+            write_complete_stdout_frame(&frame)
+        }));
+    }
+}
+
+impl AsyncWrite for CompleteFrameStdout {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        let this = &mut *self;
-        let written = match Pin::new(&mut this.inner).poll_write(cx, buf) {
-            Poll::Ready(Ok(written)) => written,
-            other => return other,
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        // Do not accept bytes into `staged` while a frame is in flight.
+        // Completing that write and then reporting flush success would
+        // leave the new bytes unemitted. Drive the in-flight write so
+        // this waker runs when it finishes; accept the buffer only after
+        // that write has released the frame.
+        if self.flush.is_some() {
+            match poll_in_flight_frame(&mut self.flush, cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Ready(Ok(_)) => {}
+            }
+        }
+        self.staged.extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.poll_flush_frame(cx) {
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.poll_flush(cx)
+    }
+}
+
+/// Passes the service's output through, retiring each answered request
+/// once its response frame has been written.
+///
+/// A line is recorded only for the prefix [`CompleteFrameStdout`] actually
+/// accepts. A `Pending` write accepts nothing, so the retry is the first
+/// time those bytes are tracked.
+struct TrackingWriter {
+    inner: CompleteFrameStdout,
+    line: Vec<u8>,
+    answered: Vec<Vec<u8>>,
+    tracker: Arc<Mutex<Tracker>>,
+}
+
+impl AsyncWrite for TrackingWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let accepted = match Pin::new(&mut self.inner).poll_write(cx, buf) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            Poll::Ready(Ok(accepted)) => accepted,
         };
-        for byte in &buf[..written] {
+        let this = &mut *self;
+        for byte in buf.iter().take(accepted) {
             if *byte == b'\n' {
                 this.answered.push(std::mem::take(&mut this.line));
             } else {
                 this.line.push(*byte);
             }
         }
-        Poll::Ready(Ok(written))
+        Poll::Ready(Ok(accepted))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let this = &mut *self;
-        match Pin::new(&mut this.inner).poll_flush(cx) {
-            Poll::Ready(Ok(())) => {
+        match Pin::new(&mut this.inner).poll_flush_frame(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Ready(Ok(false)) => Poll::Ready(Ok(())),
+            Poll::Ready(Ok(true)) => {
                 let mut tracker = lock(&this.tracker);
                 for line in this.answered.drain(..) {
                     tracker.answered(&line);
                 }
                 Poll::Ready(Ok(()))
             }
-            other => other,
         }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
@@ -545,8 +694,15 @@ mod unix {
 
     use tokio::io::unix::AsyncFd;
     use tokio::sync::{mpsc, oneshot};
+    use tokio_util::codec::Decoder;
 
-    use super::{MAX_CARRYOVER, MAX_STDIO_LINE, READ_CHUNK, Tracker, lock};
+    use bytes::BytesMut;
+    use rmcp::model::{ClientJsonRpcMessage, ErrorData, ServerJsonRpcMessage};
+    use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
+
+    use super::{
+        MAX_CARRYOVER, MAX_STDIO_LINE, READ_CHUNK, Tracker, lock, write_complete_stdout_frame,
+    };
 
     pub(super) struct StdinFd(OwnedFd);
 
@@ -739,6 +895,18 @@ mod unix {
     ) -> bool {
         while let Some(end) = buffer.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = buffer.drain(..=end).collect();
+            // Answer here, before rmcp reads the line. `receive` clears the
+            // line and then sends this error from a `select!` branch that a
+            // ready response task cancels. The frame uses the service's stdout
+            // writer, so it stays a whole record beside a large response. Do
+            // not count the line: the service never reads it, and a pending
+            // count would stall handover.
+            if rmcp_receive_would_reject(&line) {
+                if !write_stdio_invalid_request().await {
+                    return false;
+                }
+                continue;
+            }
             // Record the request before the service can answer it.
             lock(tracker).forwarded(&line);
             undelivered.fetch_add(1, Ordering::SeqCst);
@@ -747,5 +915,44 @@ mod unix {
             }
         }
         true
+    }
+
+    /// A line rmcp's `AsyncRwTransport::receive` would answer with an id-less
+    /// `-32600` after consuming it. Broken JSON and the non-standard
+    /// notification compatibility path are excluded: rmcp writes nothing for
+    /// those, and answering them would steal the next read.
+    ///
+    /// Classification goes through rmcp's public line codec, which already
+    /// decides the compatibility path. A copied method list would drift.
+    fn rmcp_receive_would_reject(line: &[u8]) -> bool {
+        let mut codec = JsonRpcMessageCodec::<ClientJsonRpcMessage>::new();
+        let mut buffer = BytesMut::from(line);
+        match codec.decode(&mut buffer) {
+            Err(JsonRpcMessageCodecError::Serde(error)) => matches!(
+                error.classify(),
+                serde_json::error::Category::Data | serde_json::error::Category::Io
+            ),
+            _ => false,
+        }
+    }
+
+    /// Same bytes `ErrorData::invalid_request("Invalid request", None)`
+    /// serializes to. The write shares [`write_complete_stdout_frame`] with
+    /// service responses and runs to completion on this task, outside the
+    /// service `select!` that cancels `receive`.
+    async fn write_stdio_invalid_request() -> bool {
+        let message =
+            ServerJsonRpcMessage::error(ErrorData::invalid_request("Invalid request", None), None);
+        let Ok(mut line) = serde_json::to_vec(&message) else {
+            return false;
+        };
+        line.push(b'\n');
+        tracing::debug!(
+            target: "orbit.mcp",
+            "answering an undecodable stdio line before the transport reads it"
+        );
+        tokio::task::spawn_blocking(move || write_complete_stdout_frame(&line).is_ok())
+            .await
+            .unwrap_or(false)
     }
 }

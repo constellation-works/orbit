@@ -24,6 +24,10 @@ orbit-types = { path = "../orbit-types" }
 orbit-registry = { path = "../orbit-registry" }
 orbit-tools = { path = "../orbit-tools" }
 rmcp = { version = "3.8", default-features = false, features = ["client", "server", "transport-io"] }
+# Public JSON-RPC line codec. The stdio pump uses it to classify records rmcp
+# would reject, instead of copying rmcp's method list.
+bytes = "1"
+tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
