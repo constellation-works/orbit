@@ -160,6 +160,7 @@ fn script_grant_request_scenarios() {
     a_stale_grant_raises_a_request_with_both_digests_and_the_diff();
     an_answer_after_the_script_changed_is_refused_and_grants_nothing();
     an_insufficient_grant_raises_a_request_naming_requested_and_granted();
+    a_requested_timeout_above_the_default_ceiling_is_granted_by_answer_and_dashboard();
     a_registered_channel_answer_writes_the_grant_with_channel_provenance();
     agents_and_plugin_callbacks_cannot_answer_or_grant();
 }
@@ -352,6 +353,59 @@ fn an_insufficient_grant_raises_a_request_naming_requested_and_granted() {
         grant.network,
         ScriptNetwork::Https,
         "the answer grants the requested set"
+    );
+}
+
+fn a_requested_timeout_above_the_default_ceiling_is_granted_by_answer_and_dashboard() {
+    // Answer path: a default grant (3600s ceiling) refuses a 7200s request
+    // as insufficient; the human answer must grant exactly that timeout.
+    let fx = fixture();
+    fx.write_manifest("  requests:\n    timeout_seconds: 7200\n");
+    fx.runtime
+        .grant_script(SCRIPT, &ScriptGrantOptions::default())
+        .unwrap();
+    let refused = fx.run();
+    assert!(refused.contains("grant_insufficient"), "{refused}");
+    let (request, payload) = fx.only_open();
+    assert_eq!(payload.requested.timeout_seconds, Some(7200));
+    assert_eq!(
+        payload
+            .granted
+            .as_ref()
+            .and_then(|granted| granted.timeout_seconds),
+        Some(3600)
+    );
+    fx.answer(&request, "grant")
+        .expect("the human grants the timeout");
+    let grant = fx.runtime.verified_script_grant(SCRIPT).unwrap().unwrap();
+    assert_eq!(grant.limits.timeout_max_seconds, 7200);
+    let rerun = fx.run();
+    assert!(
+        !rerun.contains("grant_missing")
+            && !rerun.contains("grant_stale")
+            && !rerun.contains("grant_insufficient"),
+        "the granted timeout passes the grant gate: {rerun}"
+    );
+    assert!(
+        fx.open().is_empty(),
+        "a granted run raises nothing: {rerun}"
+    );
+
+    // Dashboard direct grant (no open request) grants the same timeout.
+    let fx = fixture();
+    fx.write_manifest("  requests:\n    timeout_seconds: 7200\n");
+    let digest = fx.current_digest();
+    let grant = fx
+        .runtime
+        .grant_script_from_dashboard(SCRIPT, &digest, HUMAN.to_string())
+        .unwrap();
+    assert_eq!(grant.limits.timeout_max_seconds, 7200);
+    let rerun = fx.run();
+    assert!(
+        !rerun.contains("grant_missing")
+            && !rerun.contains("grant_stale")
+            && !rerun.contains("grant_insufficient"),
+        "the dashboard-granted timeout passes the grant gate: {rerun}"
     );
 }
 
