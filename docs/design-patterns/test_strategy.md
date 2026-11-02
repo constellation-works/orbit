@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 ---
 # Boundary-First Testing
 
@@ -414,6 +414,8 @@ Admitted unit tests:
 - `crates/orbit-core/src/application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit` (criterion 3, fail-closed replay identity). A real Git divergence is replayed through the source adapter, using a provider lookup that panics. The test proves that a retained certificate exclusion is restated from its own record, so no fresh provider proof is needed. The store then accepts it onto its canonical commit with the certificate intact. The public `auto-task recover --replay-history` path cannot swap in that lookup without a live GitHub provider. The evaluator and store outcomes are covered at the public boundary in `crates/orbit-automation/tests/scheduling/delivery_recovery.rs`.
 
 - `crates/orbit-core/src/application/job/tests/pipeline/admission.rs::a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew` (criterion 3, fail-closed task write). A keyed automation resubmission of a delivery is refused as a changed key, because admission stamps fresh timestamps into the stored input. The test proves the refused draw writes nothing to its task. A redrawn keyed submission has no public boundary: `submit_automation_pipeline_run` is reached only from automation claims, whose setup dwarfs the invariant. It fails on the base, where the crew write-back landed before the refusal (ORB-19485).
+
+- `crates/orbit-core/src/application/tests/vision_probe.rs::successful_run_without_the_code_is_image_not_seen_and_a_returned_code_is_seen` (criterion 1, probe-report mapping). A finished image-input probe whose canary check did not see the code is reported `image_not_seen` for that crew, and a returned code is reported seen, including when the probe run itself succeeded. The same table keeps a failed delivery that still carries the marker as `image_not_seen`, and a failure after a seen check as a failure. `classify` is `pub(super)`, so the engine dispatch test cannot call it. That dispatch test proves the probe step stays successful and a delivery step still fails; it cannot assemble a successful pipeline wait beside a chosen check. The old mapping treated every successful run as seen and ignored the check (ORB-21365).
 
 - `crates/orbit-core/src/application/pull_drain/tests/drain.rs::claimed_leaf_settlement_carries_its_review_ledger` and `claimed_review_import_keeps_an_operator_decision` (criterion 3, durable review-state safety). The first exercises the production settlement path and proves an exhausted follower ledger reaches the owner under the claim lineage; the public escalation-and-requeue scenario starts from a prepared settlement and cannot prove that producer path. The second replays exhausted claim evidence after an operator reset and proves it cannot erase the reset decision; the public command scenario covers the escalation's requeue, not a later stale receipt.
 

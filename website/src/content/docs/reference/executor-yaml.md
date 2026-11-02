@@ -354,9 +354,10 @@ a text-only model on a lane that passes for other models. See
 
 Every image-input invocation is first given a canary: a generated PNG of a
 random six-character code, created per invocation in scratch and never written
-to a task. The agent must return the code as `result.canary`. A result
-without it, or with another code, is refused as `[image_not_seen]`, a
-retryable step failure. Each check emits an `activity.image_canary_checked`
+to a task. The agent must return the code as `result.canary`. A delivery
+result without it, or with another code, is refused as `[image_not_seen]`, a
+retryable step failure. The image-input probe records the same miss for that
+crew and the probe run still completes. Each check emits an `activity.image_canary_checked`
 audit event with the crew, mode and whether it was seen. The canary proves
 delivery, not judgement.
 

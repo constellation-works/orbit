@@ -7,9 +7,12 @@
 //! At launch a fresh canary is rendered and staged first, beside copies of
 //! the requested images, in a private directory under the run's scratch
 //! directory; only those scratch paths reach the prompt or argv. After the
-//! provider finishes, a result that does not return the canary code fails as
-//! `image_not_seen`, a retryable failure, and the check is audited so two
-//! misses in a row hold the crew for visual purposes.
+//! provider finishes, a result that does not return the canary code is
+//! `image_not_seen`. A delivery fails the step, so work is not treated as
+//! having seen its images. The image-input probe records the same check and
+//! leaves the run successful, so one crew's miss does not fail the probe
+//! batch. The check is audited either way, and two misses in a row hold the
+//! crew for visual purposes.
 
 mod canary;
 
@@ -25,6 +28,9 @@ use serde_json::Value;
 
 use super::super::audit_writer::V2AuditWriter;
 use super::super::dispatcher::{DispatchError, DispatchOutcome};
+
+/// The canary probe activity. A miss here is that crew's probe result.
+const PROBE_ACTIVITY: &str = "image_input_probe";
 
 /// An admitted image-input request: the lane's declaration and the images
 /// to stage after the canary.
@@ -250,9 +256,10 @@ fn instruction(mode: ImageInputMode, paths: &[String]) -> String {
 }
 
 impl StagedImages {
-    /// Refuse a finished turn whose result does not return the canary code,
-    /// and audit the check. A run that already failed is left as it is: its
-    /// failure is not a canary miss.
+    /// Audit whether the finished turn returned the canary code. A delivery
+    /// that missed fails the step. The image-input probe records the miss and
+    /// stays successful, so one crew does not fail the probe batch. A run
+    /// that already failed is left as it is: its failure is not a canary miss.
     pub(super) fn verify(
         &self,
         outcome: &mut DispatchOutcome,
@@ -291,7 +298,7 @@ impl StagedImages {
                 }),
             );
         }
-        if !seen {
+        if !seen && activity_name != PROBE_ACTIVITY {
             outcome.success = false;
             outcome.message = Some(format!(
                 "{IMAGE_NOT_SEEN_MARKER} provider `{provider}` finished without returning the \

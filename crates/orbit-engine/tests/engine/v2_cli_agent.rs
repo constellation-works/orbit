@@ -1053,6 +1053,232 @@ fn image_input_regular_and_canary_only_stage_and_reach_provider()
     Ok(())
 }
 
+/// A probe run that returns the staged code is seen, a probe run that returns
+/// a different code is not seen and still succeeds, and a delivery that
+/// returns a different code fails. One crew's miss does not fail the probe.
+#[cfg(unix)]
+#[test]
+fn probe_records_a_returned_canary_and_a_miss_without_failing_the_probe()
+-> Result<(), Box<dyn std::error::Error>> {
+    let seen = dispatch_canary(
+        "image_input_probe",
+        "probe-seen",
+        "reader",
+        CANARY_READER_SCRIPT,
+    )?;
+    assert!(
+        seen.success,
+        "a probe that returns the staged code succeeds: {:?}",
+        seen.message
+    );
+    assert_eq!(seen.canary_seen, Some(true), "returned code is seen");
+    let code = seen.returned.unwrap_or_default();
+    assert!(
+        code.len() == 6
+            && code
+                .bytes()
+                .all(|byte| b"ACEFHJKMNPQRTUVWXY3479".contains(&byte)),
+        "the returned code should be the staged canary, got {code:?}"
+    );
+    assert_eq!(seen.audit_seen, Some(true));
+
+    let miss = dispatch_canary(
+        "image_input_probe",
+        "probe-miss",
+        "misser",
+        CANARY_MISS_SCRIPT,
+    )?;
+    assert!(
+        miss.success,
+        "a probe miss is reported for that crew and does not fail the probe run: {:?}",
+        miss.message
+    );
+    assert_eq!(miss.canary_seen, Some(false));
+    assert_eq!(miss.returned.as_deref(), Some("KT2NJ4"));
+    assert!(
+        miss.message.is_none(),
+        "a probe miss must not record a step failure: {:?}",
+        miss.message
+    );
+    assert_eq!(miss.audit_seen, Some(false));
+
+    let delivery = dispatch_canary(
+        "visual_review",
+        "delivery-miss",
+        "misser",
+        CANARY_MISS_SCRIPT,
+    )?;
+    assert!(
+        !delivery.success,
+        "a delivery that does not return the code still fails closed"
+    );
+    let message = delivery.message.unwrap_or_default();
+    assert!(
+        message.contains("[image_not_seen]"),
+        "delivery miss stays [image_not_seen], got: {message}"
+    );
+    assert_eq!(delivery.canary_seen, Some(false));
+    assert_eq!(delivery.audit_seen, Some(false));
+    Ok(())
+}
+
+#[cfg(unix)]
+struct CanaryDispatch {
+    success: bool,
+    message: Option<String>,
+    returned: Option<String>,
+    canary_seen: Option<bool>,
+    audit_seen: Option<bool>,
+}
+
+#[cfg(unix)]
+fn dispatch_canary(
+    activity_name: &str,
+    run_id: &str,
+    crew: &str,
+    script: &str,
+) -> Result<CanaryDispatch, Box<dyn std::error::Error>> {
+    let tmp_audit = tempfile::tempdir()?;
+    let (writer, store) = build_writer(tmp_audit.path(), run_id)?;
+    let fake = fake_cli("claude", script)?;
+    let spec = cli_agent_loop_spec(None);
+    let host = ScriptHost::new(fake.cli_path()).with_image_input(attach_image_declaration());
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name,
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: serde_json::json!({
+            "prompt": "read the canary",
+            "crew": crew,
+            "image_input": { "images": [] },
+        }),
+        audit: writer,
+        run_id,
+        host: Some(&host),
+    })?;
+    let events = events_snapshot(&store, run_id)?;
+    let audit_seen = events.iter().find_map(|event| match &event.kind {
+        orbit_types::workflow::activity_job::V2AuditEventKind::ImageCanaryChecked {
+            seen,
+            activity_name: audited,
+            ..
+        } => {
+            assert_eq!(audited, activity_name);
+            Some(*seen)
+        }
+        _ => None,
+    });
+    Ok(CanaryDispatch {
+        success: outcome.success,
+        message: outcome.message,
+        returned: outcome
+            .output
+            .get("canary")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        canary_seen: outcome
+            .output
+            .get("image_canary")
+            .and_then(|canary| canary.get("seen"))
+            .and_then(Value::as_bool),
+        audit_seen,
+    })
+}
+
+/// `attach_args` lane, the route codex and muse use for the canary.
+#[cfg(unix)]
+fn attach_image_declaration() -> orbit_types::workflow::ExecutorImageInput {
+    orbit_types::workflow::ExecutorImageInput {
+        mode: orbit_types::workflow::ImageInputMode::AttachArgs,
+        formats: vec![orbit_types::workflow::ImageFormat::Png],
+        max_images: 5,
+        attach_args: Some(vec!["--image".to_string(), "{path}".to_string()]),
+    }
+}
+
+#[cfg(unix)]
+const CANARY_MISS_SCRIPT: &str = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \
+ '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"canary\":\"KT2NJ4\"},\"error\":null}'\n";
+
+/// Read the staged PNG the way the provider receives it (`--image`) and return
+/// the code it draws. The script fails closed if it cannot read the file.
+#[cfg(unix)]
+const CANARY_READER_SCRIPT: &str = r#"#!/bin/sh
+cat >/dev/null
+exec /usr/bin/python3 - "$@" <<'PY'
+import struct, sys, zlib
+path = None
+args = sys.argv[1:]
+for index, arg in enumerate(args):
+    if arg == "--image" and index + 1 < len(args):
+        path = args[index + 1]
+if not path:
+    sys.stderr.write("canary reader: no --image argument\n")
+    sys.exit(2)
+data = open(path, "rb").read()
+if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+    sys.stderr.write("canary reader: not a png\n")
+    sys.exit(2)
+pos, width, height, idat = 8, None, None, b""
+while pos + 8 <= len(data):
+    length = struct.unpack(">I", data[pos:pos + 4])[0]
+    kind = data[pos + 4:pos + 8]
+    chunk = data[pos + 8:pos + 8 + length]
+    if kind == b"IHDR":
+        width, height = struct.unpack(">II", chunk[:8])
+    elif kind == b"IDAT":
+        idat += chunk
+    elif kind == b"IEND":
+        break
+    pos += 12 + length
+raw = zlib.decompress(idat)
+scale, margin, glyph_width, glyph_height = 12, 3, 5, 7
+glyphs = {
+    "A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "C": [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+    "E": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+    "F": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+    "H": [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "J": [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+    "K": [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+    "M": [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+    "N": [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+    "P": [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+    "Q": [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+    "R": [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+    "T": [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+    "U": [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+    "V": [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+    "W": [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+    "X": [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+    "Y": [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+    "3": [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+    "4": [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+    "7": [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+    "9": [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+}
+def ink(column, row):
+    x = column * scale + scale // 2
+    y = row * scale + scale // 2
+    return raw[y * (width + 1) + 1 + x] == 0
+code = []
+for index in range(6):
+    bits = []
+    for row in range(glyph_height):
+        byte = 0
+        for offset in range(glyph_width):
+            if ink(margin + index * (glyph_width + 1) + offset, margin + row):
+                byte |= 0x10 >> offset
+        bits.append(byte)
+    match = [char for char, glyph in glyphs.items() if glyph == bits]
+    if len(match) != 1:
+        sys.stderr.write("canary reader: unreadable glyph %s\n" % bits)
+        sys.exit(2)
+    code.append(match[0])
+sys.stdout.write('{"schemaVersion":1,"status":"success","result":{"canary":"%s"},"error":null}\n' % "".join(code))
+PY
+"#;
+
 /// Image-input declaration shared by the staging regression tests: canary
 /// plus one image on a `native_read` lane.
 #[cfg(unix)]

@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 ---
 
 # Orbit Configuration
@@ -2522,11 +2522,11 @@ spec:
 - Shipped declarations: **claude** `native_read` (PNG, JPEG, WebP, GIF), **codex** `attach_args` with `--image {path}` (PNG, JPEG, WebP) and **muse** `attach_args` with `--image {path}` (PNG). Each is declared only because its lane passed the canary probe below. The gemini, antigravity, grok and copilot executors declare none.
 - Only regular files are staged. A requested image that is a FIFO, socket, directory, device or another non-regular file — including a symlink that resolves to one — is refused before launch with a `stage image …` error that names the path. When the source opens, the refusal reports `not a regular file (found <kind>)`; when opening the source itself fails — as it does for a Unix-domain socket on Linux, refused with its OS error such as `No such device or address (os error 6)` — the staging error retains that open error instead. The source is opened without blocking, so a named pipe with no writer cannot stall preparation before provider supervision starts.
 
-**The canary.** Every image-input invocation is first given a canary: a generated PNG of a random six-character code, created per invocation in scratch and never written to a task. The agent must return the code as `result.canary`. A result without it, or with another code, is refused as `[image_not_seen]`, a retryable step failure, and each check emits an `activity.image_canary_checked` audit event with the crew, mode and `seen`. The canary proves delivery, not judgement.
+**The canary.** Every image-input invocation is first given a canary: a generated PNG of a random six-character code, created per invocation in scratch and never written to a task. The agent must return the code as `result.canary`. A delivery result without it, or with another code, is refused as `[image_not_seen]`, a retryable step failure. The image-input probe records the same miss for that crew and the probe run still completes, so one crew does not fail the probe batch. Each check emits an `activity.image_canary_checked` audit event with the crew, mode and `seen`. The canary proves delivery, not judgement.
 
 **Visual hold.** A crew whose newest two or more canary checks all missed is held for visual purposes until 30 minutes after its last miss, doubling with each further consecutive miss up to 24 hours, like a [provider failure hold](#provider-failure-holds). Its next passing check clears it. The hold is read from the audit events, so it covers probes and deliveries alike.
 
-**Probing.** `orbit agents vision-probe` runs the canary for every enabled crew outside any delivery (one `image_input_probe_pipeline` run each) and prints one row per crew: executor, model, mode, result and any visual hold. Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. `--crew <name>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images. `--timeout-seconds` bounds the wait (default 900). Declare `image_input` on an executor only after its probe passes, and set `vision = false` on a crew whose model keeps returning `image_not_seen` on a lane that passes for others.
+**Probing.** `orbit agents vision-probe` runs the canary for every enabled crew outside any delivery (one `image_input_probe_pipeline` run each) and prints one row per crew: executor, model, mode, result and any visual hold. Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. A crew that finishes without the code is `image_not_seen` on its own row, and that probe run still completes. `--crew <name>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images. `--timeout-seconds` bounds the wait (default 900). Declare `image_input` on an executor only after its probe passes, and set `vision = false` on a crew whose model keeps returning `image_not_seen` on a lane that passes for others.
 
 ## `[execution.env]` — the agent subprocess environment
 
