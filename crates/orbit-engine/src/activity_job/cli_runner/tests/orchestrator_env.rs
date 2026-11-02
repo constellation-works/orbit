@@ -391,7 +391,18 @@ fn read_only_dispatch_injects_no_cargo_deny_db_path() {
 
 #[cfg(target_os = "linux")]
 fn read_only_cargo_deny_exercise() {
-    let temp = tempdir().expect("tempdir");
+    // Bubblewrap mounts a private tmpfs over /tmp, and this reviewer profile
+    // binds nothing writable, so a fixture under /tmp is hidden from the
+    // probe and the child never runs. Root the fixture on disk outside /tmp,
+    // as the sandbox tests do.
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    )
+    .expect("scratch dir");
+    let temp = tempfile::Builder::new()
+        .prefix("read-only-cargo-deny-")
+        .tempdir_in(scratch)
+        .expect("tempdir");
     let workspace = temp.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let workspace = workspace.canonicalize().expect("canonical workspace");
