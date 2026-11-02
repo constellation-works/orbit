@@ -381,8 +381,9 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   fences stale work when the claim settles (`stale_claim`). A read through `orbit.task.show` is
   scoped by the run broker to the claimed task's workspace ([ORB-19270]).
 - The closed claimed-owner bridge carries `orbit.task.show`, `orbit.search`,
-  `orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
-  `orbit.task.artifact.get` / `orbit.task.artifact.put` through the run coordinator.
+  `orbit.task.list`, `orbit.task.add`, `orbit.friction.add`,
+  `orbit.task.artifact.get` / `orbit.task.artifact.put`, and
+  `orbit.notice.post` / `orbit.notice.show` / `orbit.notice.close` through the run coordinator.
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
   (including their aliases). Task show and artifact get read any task in that

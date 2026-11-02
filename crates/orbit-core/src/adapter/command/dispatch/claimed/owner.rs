@@ -26,6 +26,9 @@
 //!   relation only as `regression_from`: the owner, which holds the claimed
 //!   task's tags, allows that only for a review task's findings;
 //! - `orbit.friction.add` is recorded during the claimed task.
+//! - `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` are
+//!   stored only on the owner; the binding supplies the poster's task and
+//!   run, so a request's `orchestrator` attribution never reaches the owner.
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
 //! ([`super::review`]), except the named ones a claimed leaf's final
@@ -72,6 +75,9 @@ pub(super) const PUT: &str = "orbit.task.artifact.put";
 pub(super) const TASK_SHOW: &str = "orbit.task.show";
 const TASK_ADD: &str = "orbit.task.add";
 const FRICTION_ADD: &str = "orbit.friction.add";
+const NOTICE_POST: &str = "orbit.notice.post";
+const NOTICE_SHOW: &str = "orbit.notice.show";
+const NOTICE_CLOSE: &str = "orbit.notice.close";
 
 /// Whether this process is a claimed worker whose owner is another machine:
 /// the only caller whose coordination calls need the bridge. A worker on its
@@ -276,6 +282,12 @@ fn local_owner_scope(
     cwd: &Path,
     workspace_root: &Path,
 ) -> Result<bool, OrbitError> {
+    if matches!(name, NOTICE_POST | NOTICE_SHOW | NOTICE_CLOSE) {
+        // Notices keep the in-process owner route on the owner's machine;
+        // only the workspace the binding confirms may be named.
+        without_confirmed_workspace(binding, input, cwd, workspace_root)?;
+        return Ok(false);
+    }
     if !matches!(name, TASK_SHOW | GET | PUT) {
         return Ok(false);
     }
@@ -457,6 +469,29 @@ const TASK_SHOW_PAGE_FIELDS: [&str; 4] = [
 
 /// The fields a claimed worker's `orbit.task.artifact.get` may carry.
 const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
+
+/// The fields a claimed worker's `orbit.notice.post` may carry.
+const NOTICE_POST_FIELDS: [&str; 13] = [
+    "kind",
+    "title",
+    "body",
+    "scope",
+    "dedupe_key",
+    "linked_task",
+    "close_on_linked_done",
+    "evidence",
+    "hosts",
+    "expires_in_hours",
+    "expires_at",
+    "model",
+    "orchestrator",
+];
+
+/// The fields a claimed worker's `orbit.notice.show` may carry.
+const NOTICE_SHOW_FIELDS: [&str; 3] = ["id", "model", "orchestrator"];
+
+/// The fields a claimed worker's `orbit.notice.close` may carry.
+const NOTICE_CLOSE_FIELDS: [&str; 5] = ["id", "dedupe_key", "reason", "model", "orchestrator"];
 
 /// Check a claimed worker's `orbit.task.show` request, of any task in the
 /// claimed workspace, and say whether it asks for a bounded page.
@@ -663,6 +698,21 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
                 }
             }
             input.clone()
+        }
+        NOTICE_POST | NOTICE_SHOW | NOTICE_CLOSE => {
+            let allowed: &[&str] = match tool {
+                NOTICE_POST => &NOTICE_POST_FIELDS,
+                NOTICE_SHOW => &NOTICE_SHOW_FIELDS,
+                _ => &NOTICE_CLOSE_FIELDS,
+            };
+            accept_fields(object, allowed)?;
+            let mut input = input.clone();
+            if let Some(object) = input.as_object_mut() {
+                // Poster attribution comes from the claim binding the owner
+                // route supplies, never from a caller-named orchestrator.
+                object.remove("orchestrator");
+            }
+            input
         }
         other => {
             return Err(denied(&format!(

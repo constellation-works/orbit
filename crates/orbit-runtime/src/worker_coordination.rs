@@ -449,7 +449,12 @@ pub fn is_coordination_tool(name: &str) -> bool {
         || name.starts_with("orbit.friction.")
         || matches!(
             name,
-            "orbit.search" | "orbit.auto_task.add" | "orbit.auto_task.update"
+            "orbit.search"
+                | "orbit.auto_task.add"
+                | "orbit.auto_task.update"
+                | "orbit.notice.post"
+                | "orbit.notice.show"
+                | "orbit.notice.close"
         )
 }
 
