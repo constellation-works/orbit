@@ -646,14 +646,32 @@ its interpreter, the snapshot, its cwd (a run worktree read-write, the
 workspace root read-only), the cwd's Git metadata read-only, its
 granted roots and a scratch directory at `/orbit-script` (`HOME`,
 `TMPDIR`, `in/`, `out/`). `.orbit/`, the global Orbit root and the
-credential paths under `HOME` are never visible. It has its own network
-namespace with only its own loopback, so neither the network nor
-services listening on the host's `127.0.0.1` are reachable. This build does
-not run `network` other than `none`, or `env_pass`, yet. After the grant
-checks, a step whose manifest requests either, or whose grant allows network
-access or passes a variable, is refused before spawn with
-`script_sandbox_unavailable`. Script steps run only on Linux in this build:
-on macOS a granted step is refused with the same code, after the grant checks.
+credential paths under `HOME` are never visible.
+
+The grant's `network` decides what the script can reach. Under `none`
+(the default) it has its own network namespace with only its own
+loopback, so neither the network nor services listening on the host's
+`127.0.0.1` are reachable. Under `https` it shares the host network, and
+a Landlock ruleset admits outbound TCP to port 443 only (no other TCP
+port and no listening socket); it needs Landlock ABI 4, and an older
+kernel refuses the step with `script_sandbox_unavailable`. Under `any`
+it shares the host network with no rule. A manifest whose `requests`
+ask for more network, or for an `env_pass` name, than the grant allows
+refuses before spawn with `grant_insufficient`.
+
+The script's environment is cleared and set to fixed values (`PATH`,
+`HOME`, `TMPDIR`, `LANG`, `TZ`), the `ORBIT_SCRIPT_*` step context, and
+each variable the grant's `env_pass` names, copied from the environment
+of the process running the job. No other host variable reaches it. A
+granted name that process does not hold stays unset and is recorded as
+`env_pass_unset`; an `ORBIT_*` name or one of the fixed names is never
+passed. Each passed value is redacted (`[REDACTED]`) from the captured
+log, the stdout that becomes the step output, the recorded argv, and so
+from the `script_execution` entry, `orbit run show` and `orbit script
+history`. Declared output files are kept byte for byte and are not
+redacted. Script steps run only on Linux in this build: on macOS a
+granted step, networked or not, is refused with
+`script_sandbox_unavailable`, after the grant checks.
 
 **Input files (Linux).** A manifest declares its read-only inputs under
 `spec.files.inputs`, a list of `{from, as}` entries:

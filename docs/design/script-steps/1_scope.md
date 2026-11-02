@@ -2,10 +2,10 @@
 title: "Scope: Script steps"
 owner: claude
 last_updated: 2026-11-02
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Phases 1, 2 and 4 landed ([ORB-19983], [ORB-19985], [ORB-21299]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task; an explicit raise surface for script_grant requests and phase 5 (network) are not yet filed"
+next: "Phases 1, 2, 4 and 5 landed ([ORB-19983], [ORB-19985], [ORB-21299], [ORB-21301]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task; an explicit raise surface for script_grant requests is not yet filed"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1, 2 and 4 (Phasing) have landed, and phase 3 has landed on Linux. Phase 1 ([ORB-19983]) added the `Script`
+Status: proposed; phases 1, 2, 4 and 5 (Phasing) have landed, and phase 3 has landed on Linux. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
@@ -28,7 +28,9 @@ phase 3 on Linux: declared input files (`files.inputs`, §4 Files in) and the
 ([ORB-21299]) raises a `script_grant` decision request when a step is refused for a
 missing, stale or insufficient grant, applies a human or registered-channel answer as a
 digest-bound grant, and adds the dashboard Scripts view with its operator-only grant
-action. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+action. Phase 5 ([ORB-21301]) honours `network: https` and `network: any` grants and
+`env_pass` on Linux, and redacts each passed value from everything the run keeps.
+This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
@@ -467,7 +469,9 @@ the profile uses `(deny network*)`.
 
 - **`https`** (Linux only). The host network is shared under a Landlock ruleset that
   allows outbound TCP to port 443 only. It is the build profile's fetch mode, and
-  needs Landlock ABI 4; an older kernel refuses.
+  needs Landlock ABI 4; an older kernel refuses with `script_sandbox_unavailable`.
+  The boundary is the TCP port, not the protocol: TLS isn't inspected, and UDP (DNS)
+  is not restricted.
 - **`any`** (Linux only). The network is shared with no rule. The grant command warns.
 - **macOS refuses both in v1.** A descendant that calls `setsid` escapes the
   process-group kill and would keep its network after the step ends. That is the same
@@ -480,16 +484,21 @@ the profile uses `(deny network*)`.
 - **Step context:** `ORBIT_SCRIPT_NAME`, `ORBIT_SCRIPT_DIGEST`, `ORBIT_SCRIPT_RUN_ID`,
   `ORBIT_SCRIPT_STEP_ID`, `ORBIT_SCRIPT_IN` and `ORBIT_SCRIPT_OUT`.
 - **Granted names:** each `env_pass` name, copied when the job's process has it. A
-  missing one is unset, never an empty string, and is recorded.
+  missing one is unset, never an empty string, and is recorded (`env_pass_unset` on the
+  `script_execution` entry, beside the passed names in `env_pass`). An `ORBIT_*` name
+  or a fixed name above is never copied, so a grant can't override the profile's values.
 
 No Orbit credential, claim token or provider key is passed. The script can't call
 `orbit` tools, because no `orbit_tools` inventory is mounted. Writes back to Orbit
 happen in a later deterministic step that reads the script's output.
 
 **Secrets.** They reach a script only through the grant's `env_pass` list, read from
-the environment of the process that runs the job. The captured log and any recorded
-argv go through the shared redaction, with each passed value registered as a literal
-to redact. A secret file, such as a backup tool's credentials, is reachable only when
+the environment of the process that runs the job. The captured log, the stdout that
+becomes `steps.<id>.output` and the recorded argv go through the shared redaction
+(`redact_secret_values_text`), with each passed value, and its JSON and Debug
+encodings, registered as a literal to redact, before they leave the host boundary. So
+the audit entry, `orbit run show` and `orbit script history` never hold a passed value.
+Declared output files are kept byte for byte and are not redacted (§4). A secret file, such as a backup tool's credentials, is reachable only when
 it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
 `secret_files` grant is an open question.
 
@@ -1122,8 +1131,12 @@ A script that rewrites itself during a run changes nothing for that run (§2,
    (orbit-office item 1); and the dashboard Scripts view with its grant action (§2).
    An explicit raise surface for orbit-office proposals is not yet filed;
    `office.script-run` becomes a thin wrapper once it lands.
-5. **Network.** Not yet filed. `https` and `any` on Linux, with `env_pass` and the redaction of passed
-   values. It covers the off-site part of use case A.
+5. **Network.** Landed in [ORB-21301]. `https` (TCP port 443 under Landlock) and `any`
+   grants on Linux, with `env_pass` and the redaction of passed values from the log, the
+   step output and the recorded argv. A manifest asking for more network or `env_pass`
+   than its grant refuses with `grant_insufficient`; macOS still refuses network
+   (phase 6), and network grant expiry (open question 7) stays open. It covers the
+   off-site part of use case A.
 6. **Later.** Each of these is filed only when needed: a grant-time `prepare` (fetch)
    phase, plugin-store roots, routine `script:` sugar, and macOS network once
    [ORB-19251] contains descendants.
@@ -1198,6 +1211,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-21299] — phase 4: `script_grant` decision requests raised by refused steps, human and channel answers that write digest-bound grants, and the dashboard Scripts view.
 - [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
+- [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
 - [ORB-21178] — filed the remaining phases of this doc.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.

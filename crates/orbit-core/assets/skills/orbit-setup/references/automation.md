@@ -511,13 +511,18 @@ input's name, source path and SHA-256 (for a directory, a digest over its whole
 tree) as `input_files` in the `--json` output of `orbit run show` and
 `orbit script history`.
 
-A granted script step runs only on Linux, under a sandbox with no network.
-Other hosts refuse the step. This build's script profile does not run network
-access or environment passthrough yet: a step is refused at run time when its
-manifest requests either, or when its grant allows network (`--network` other
-than `none`) or passes an environment variable (`--env-pass`). The grant still
-records them, and `orbit script history` shows each refusal. If the sandbox
-itself fails, see [Linux sandbox](linux-sandbox.md).
+A granted script step runs only on Linux; other hosts refuse the step. It has
+no network unless its grant allows one: `--network https` shares the host
+network but admits outbound TCP to port 443 only (it needs Landlock ABI 4, so an
+older kernel refuses the step), and `--network any` shares it with no rule.
+Only the variables named with `--env-pass` (or in the manifest's
+`requests.env_pass`) reach the script, copied from the environment of the
+process that runs the job; `ORBIT_*` names and the profile's own `PATH`,
+`HOME`, `TMPDIR`, `LANG` and `TZ` are never passed. A passed value is redacted
+from the step's log, its output and `orbit run show` / `orbit script history`.
+A manifest asking for more network or another variable than its grant refuses
+with `grant_insufficient`. If the sandbox itself fails, see
+[Linux sandbox](linux-sandbox.md).
 
 ### Grant states
 
@@ -584,7 +589,7 @@ orbit script history <name>        # recent attempts, newest first, refusals inc
 3. After a run, `orbit script history <name>` lists each attempt, including the
    refused ones.
 
-For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths in its `interpreter`/`args` and `read_roots` (no `env_pass`: the script profile refuses it). Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
+For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths in its `interpreter`/`args` and `read_roots` (no `env_pass`: it needs none). Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
 
 ## Tuning which tasks task-pilot prepares
 
