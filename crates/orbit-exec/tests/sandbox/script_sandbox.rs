@@ -316,6 +316,83 @@ mod macos {
         }
     }
 
+    /// Input preparation is bounded before a script can start, including
+    /// bytes already used by the snapshot and the aggregate of small inputs.
+    /// These refusals need no working Seatbelt profile: no child is spawned.
+    #[test]
+    fn oversized_inputs_and_expired_preparation_run_no_script() {
+        for (sizes, existing, cap, timeout, reason) in [
+            (vec![2048], 0, 1024, Duration::from_secs(30), "scratch cap"),
+            (
+                vec![384, 384],
+                384,
+                1024,
+                Duration::from_secs(30),
+                "scratch cap",
+            ),
+            (vec![1], 0, 1024, Duration::ZERO, "preparation timed out"),
+        ] {
+            let dir = tempfile::tempdir().expect("fixture");
+            let root = dir.path().canonicalize().expect("physical fixture");
+            let cwd = root.join("work");
+            std::fs::create_dir(&cwd).expect("cwd");
+            let scratch = scratch_in(&root);
+            std::fs::write(scratch.join("snapshot/entry"), vec![0; existing])
+                .expect("existing scratch bytes");
+            let inputs: Vec<_> = sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| {
+                    let source = root.join(format!("input-{index}"));
+                    if index == 0 {
+                        std::fs::write(&source, vec![0; *size]).expect("file input");
+                    } else {
+                        std::fs::create_dir_all(source.join("nested")).expect("directory input");
+                        std::fs::write(source.join("nested/data"), vec![0; *size])
+                            .expect("nested input bytes");
+                    }
+                    ScriptSandboxInput {
+                        source,
+                        name: format!("input-{index}"),
+                    }
+                })
+                .collect();
+            let marker = cwd.join("ran");
+            let argv = vec!["/usr/bin/touch".to_string(), marker.display().to_string()];
+            let mut request = request(
+                spec(
+                    &cwd,
+                    &scratch,
+                    &[],
+                    &[],
+                    &root,
+                    &inputs,
+                    ScriptSandboxNetwork::None,
+                ),
+                &argv,
+                &[],
+            );
+            request.scratch_cap_bytes = cap;
+            request.timeout = timeout;
+            let error = run_script_sandboxed(request).expect_err("preparation must refuse");
+            assert!(
+                matches!(&error, OrbitError::InvalidInput(message) if message.contains(reason)),
+                "{error:?}"
+            );
+            assert!(
+                !marker.exists(),
+                "a refused preparation must never spawn the script"
+            );
+            assert_eq!(
+                std::fs::read_dir(scratch.join("in"))
+                    .expect("inputs")
+                    .count(),
+                0,
+                "known oversized input sets and expired preparation must be refused before copying"
+            );
+        }
+    }
+
     /// A granted script writes its cwd worktree, its scratch `out/` and its
     /// granted write root, reads back and enumerates that write root without
     /// a read-root grant, reads its copied inputs, and nothing else: no

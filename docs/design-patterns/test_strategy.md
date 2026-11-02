@@ -381,6 +381,14 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-exec`'s `build_sandbox/tests/script_macos_inputs.rs::an_input_growing_during_preparation_cannot_escape_the_scratch_cap`
+  is a criterion 2 regression for ORB-21492. It calls the public
+  `run_script_sandboxed` boundary while a private, test-only hook appends bytes
+  to the open source after the first copied chunk. It proves that growth
+  after metadata admission cannot overrun the scratch cap or start a script,
+  without timing races, disk pressure or a shipped test-hook API. The separate
+  integration regression covers known oversized sets and expired preparation.
+
 - `orbit-cli`'s `tests/plugin_callback_surface.rs::recover_claim_commands_parse_with_each_phase_used_by_settlement_refusals`
   verifies the required recover-claim options parse with each phase used by
   settlement refusal guidance. The runtime producer coverage lives in
