@@ -88,7 +88,7 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 
 ## 9. Concerns & Honest Limitations
 
-**The specs and implementation share the main rendering path, with committed gaps.** [ORB-21575] tracks missing full detail paths; [ORB-21576] tracks health/status prose still returned as stdout text blocks by doctor, tool/skill doctor, and migration inspection. Those are incomplete contract work, separate from the explicit `Silent` compatibility cases and differing basic-palette shades. The shared fitter now warns on all-fixed overflow without cutting identifiers [ORB-20485].
+**The specs and implementation share the main rendering path.** Full detail recovery for the audited truncated views is complete [ORB-21575]. Doctor, tool/skill doctor, and migration inspection send non-record health/status trailers to stderr in every mode [ORB-21576]. The explicit `Silent` compatibility cases and differing basic-palette shades remain as described above. The shared fitter warns on all-fixed overflow without cutting identifiers [ORB-20485].
 
 **The payload refactor was broad.** `Execute::execute` now returns `CommandOut` (`Result<CommandOutput, OrbitError>`), and `entry/finish.rs` hands the result to `output::render`. `CommandOutput::Silent` remains for no-record operations such as MCP and web servers, host-prerequisites-only init, and pipeline-worker execution; the renderer emits nothing for that variant. Task update and workspace init return `Payload::detail`, so their human confirmation text and JSON document are projections of the same payload rather than a separate printing path.
 
@@ -120,8 +120,8 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 - [ORB-20485] — Warn when fixed table columns exceed terminal width without cutting identifiers.
 - [ORB-20753] — Wrap CLI help to the detected terminal width with hanging indents.
 - [ORB-21574] — Make filtered table cells neutral while keeping their columns visible.
-- [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
-- [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
+- [ORB-21575] — Add full detail recovery for audited truncated views.
+- [ORB-21576] — Move non-record health/status trailers to stderr in every mode.
 - [T20260427-43] — Extend the earlier duplicated color vocabulary for friction status.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
