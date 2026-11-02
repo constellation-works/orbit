@@ -72,6 +72,7 @@ impl Workspace {
             "select_proposed_approvals",
             "record_proposed_approvals",
             "classify_workspace_auto_tasks",
+            "pipeline_success_guard",
         ] {
             let file = format!("{name}.yaml");
             std::fs::copy(
@@ -234,6 +235,33 @@ impl Workspace {
             )
             .unwrap()
             .task
+    }
+
+    /// A task owned by another workspace registered under the same global
+    /// root, as a cross-workspace dependency target is.
+    fn foreign_task(&self, title: &str, status: TaskStatus) -> Task {
+        let root = self.repo.parent().unwrap().join("foreign");
+        std::fs::create_dir_all(root.join(".orbit")).unwrap();
+        std::fs::copy(
+            self.repo.join(".orbit/config.toml"),
+            root.join(".orbit/config.toml"),
+        )
+        .unwrap();
+        let runtime = OrbitRuntime::from_roots(&self.runtime.global_root(), &root.join(".orbit"))
+            .unwrap()
+            .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
+            .with_automation_machine_identity(Some("fixture-machine".into()));
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Ship {title}."),
+                acceptance_criteria: vec!["The change is in place.".into()],
+                plan: "Edit README.md.".into(),
+                status: Some(status),
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
     }
 
     fn edit(&self, task: &Task, params: TaskUpdateParams) {

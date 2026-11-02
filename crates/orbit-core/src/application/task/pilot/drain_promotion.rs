@@ -20,7 +20,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
@@ -316,6 +316,22 @@ pub(super) enum Approval {
     },
 }
 
+/// Whether a dependency read through its registered owner counts as done,
+/// including the shared archived-after-done rule.
+fn dependency_is_done(runtime: &OrbitRuntime, target: &Task) -> bool {
+    if target.status == TaskStatus::Done {
+        return true;
+    }
+    target.status == TaskStatus::Archived
+        && runtime
+            .get_dependency_history(&target.id)
+            .ok()
+            .flatten()
+            .is_some_and(|history| {
+                orbit_types::task::archived_task_completed_before_archive(&history)
+            })
+}
+
 /// Approve a promoted task through the ordinary approve transition. The
 /// decision is made under the task and dependency locks the pilot write took,
 /// and the transition runs inside them, so a concurrent edit either lands
@@ -335,13 +351,33 @@ pub(super) fn approve(
     let task_id = validated.task_id.as_str();
     for attempt in 0..4 {
         let mut lock_ids = vec![task_id.to_string()];
-        lock_ids.extend(runtime.get_task(task_id)?.dependencies());
+        // A dependency owned by another registered workspace is external:
+        // it takes no lock in this store, and its status comes from the
+        // registered-owner lookup `resolved_dependencies` uses. A
+        // dependency no registered workspace holds is the only `task not
+        // found` [ORB-21172].
+        let mut external_done = BTreeSet::new();
+        for id in runtime.get_task(task_id)?.dependencies() {
+            if runtime.stores().tasks().get_task(&id)?.is_some() {
+                lock_ids.push(id);
+            } else if let Some(target) = runtime.get_dependency_task(&id)? {
+                if dependency_is_done(runtime, &target) {
+                    external_done.insert(id);
+                }
+            } else {
+                return Err(OrbitError::not_found(NotFoundKind::Task, id));
+            }
+        }
         let named = promotion_task_ids(&validated.assessment);
         // A prerequisite that was done at the pilot write has no stored edge.
         // Lock those named local tasks too before checking completion again.
         for id in &named {
             if runtime.stores().tasks().get_task(id)?.is_some() {
                 lock_ids.push(id.clone());
+            } else if let Ok(Some(target)) = runtime.get_dependency_task(id)
+                && dependency_is_done(runtime, &target)
+            {
+                external_done.insert(id.clone());
             }
         }
         lock_ids.sort();
@@ -353,7 +389,7 @@ pub(super) fn approve(
         let result = with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
             entered = true;
             let task = runtime.get_task(task_id)?;
-            let mut done = BTreeSet::new();
+            let mut done = external_done.clone();
             for id in &named {
                 // A task absent during discovery is held conservatively without
                 // reading a newly appeared task outside the sorted lock set.

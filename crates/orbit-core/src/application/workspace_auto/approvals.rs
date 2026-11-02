@@ -15,7 +15,9 @@
 //! records the hold stays the newest in its history. A pilot that finished
 //! without deciding about a task (a failed or stale pilot) is recorded on that
 //! task when the drain that ran it records its approvals, so no later drain
-//! pilots the task again until it changes either. A pilot that failed on a
+//! pilots the task again until it changes either. The same recording covers
+//! an applied assessment whose approval did not complete: it stays
+//! `pilot_unresolved` until the task changes or an operator approves it. A pilot that failed on a
 //! provider outage or missing inspection-capable crew is not recorded, so the
 //! next drain retries it. Creation-grant rows are not changes here: every write
 //! to a task holding a grant appends one after its own entry to re-seal it.
@@ -237,6 +239,29 @@ fn approval_snapshot(
             snapshot.held.push(held(classification, None, findings));
             continue;
         }
+        // An applied assessment with no hold whose task is still proposed
+        // was promoted on paper but its approval did not complete (for
+        // example a deterministic apply failure after the pilot write).
+        // Hold it for the operator instead of piloting it again on every
+        // drain pass [ORB-21172].
+        if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
+            && let Some(pilot) = pilots.iter().find(|pilot| {
+                !pilot.is_live()
+                    && pilot.task_ids.contains(&task.id)
+                    && entry.at >= pilot.submitted_at
+            })
+        {
+            snapshot.held.push(held(
+                "pilot_unresolved",
+                Some(format!(
+                    "task-pilot run {} applied its assessment but approval did not complete; \
+                     edit the task or approve it to retry",
+                    pilot.run_id
+                )),
+                Vec::new(),
+            ));
+            continue;
+        }
         // A pilot still running would be duplicated by a second one.
         if let Some(pilot) = pilots
             .iter()
@@ -446,7 +471,17 @@ fn record_unresolved_pilot(
         .rev()
         .find(|entry| !is_decision_neutral(entry));
     if latest.is_some_and(|entry| entry.at >= pilot.submitted_at) {
-        return Ok(());
+        // An assessment history entry newer than submission normally means
+        // the pilot decided. The exception is an applied assessment with
+        // no hold on a task still proposed: its approval did not complete,
+        // so recording it unresolved is what stops the next pass piloting
+        // it again [ORB-21172].
+        let unapproved_apply = latest.is_some_and(|entry| {
+            entry.event == "task_pilot_applied" && held_classification(runtime, entry).is_none()
+        });
+        if !unapproved_apply {
+            return Ok(());
+        }
     }
     let now = Utc::now();
     runtime.stores().task_records().update(
