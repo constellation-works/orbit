@@ -33,6 +33,7 @@ use super::git_ops::{
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use super::published_replay::final_recovery_published_candidate;
 use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
+use super::regression::resolve_regression_landed_commits;
 use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
@@ -116,6 +117,8 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
+    let pr_config = host.pr_config();
+    let landed = resolve_regression_landed_commits(host, &workspace_path, &tasks, &pr_config);
 
     for task in tasks {
         let changed_files = assigned
@@ -129,7 +132,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         }
 
         stage_paths(&workspace_path, &changed_files)?;
-        let message = task_commit_message(&task, &host.pr_config());
+        let message = task_commit_message(&task, &pr_config, &landed);
         git_commit_paths_with_identity(
             &workspace_path,
             &message,
@@ -191,7 +194,10 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&workspace_path, &files_to_commit)?;
-    let mut message = finalize_commit_message(&affected_tasks, &host.pr_config());
+    let pr_config = host.pr_config();
+    let landed =
+        resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
+    let mut message = finalize_commit_message(&affected_tasks, &pr_config, &landed);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
     append_co_author_trailers(&mut message, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
@@ -485,7 +491,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         true,
     );
-    let message = batch_commit_message(&task, &host.pr_config());
+    let pr_config = host.pr_config();
+    let landed = resolve_regression_landed_commits(
+        host,
+        &workspace_path,
+        std::slice::from_ref(&task),
+        &pr_config,
+    );
+    let message = batch_commit_message(&task, &pr_config, &landed);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
@@ -534,7 +547,14 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             true,
         );
-        let message = batch_commit_message(task, &host.pr_config());
+        let pr_config = host.pr_config();
+        let landed = resolve_regression_landed_commits(
+            host,
+            workspace_path,
+            std::slice::from_ref(task),
+            &pr_config,
+        );
+        let message = batch_commit_message(task, &pr_config, &landed);
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
     }

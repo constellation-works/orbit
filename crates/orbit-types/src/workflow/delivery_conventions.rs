@@ -645,6 +645,8 @@ pub struct DeliveryConventions {
     pub implemented_by_trailer: bool,
     /// `commit.orchestrated_by_trailer`.
     pub orchestrated_by_trailer: bool,
+    /// `commit.regression_trailers`.
+    pub regression_trailers: bool,
     /// `branch.name_template`, else [`DEFAULT_BRANCH_TEMPLATE`].
     pub branch_name: ConventionTemplate,
 }
@@ -671,6 +673,7 @@ impl Default for DeliveryConventions {
             planned_by_trailer: true,
             implemented_by_trailer: true,
             orchestrated_by_trailer: true,
+            regression_trailers: true,
             branch_name: default_branch_template(),
         }
     }
