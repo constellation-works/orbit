@@ -100,16 +100,26 @@ grantable to a resident in v1.
 
 | Right | Tools the cycle may call (in covered workspaces) |
 |---|---|
-| none | read tools, `orbit.task.add` (filed `proposed`), comments, `orbit.friction.add`, `orbit.decision.raise`, `orbit.notice.post` (agent class), `orbit.resident.checkpoint`, `orbit.evolution.add` |
-| `dispatch` | run/ship/auto dispatch, requeue, cancel of runs the resident started |
-| `promote` | `proposed → backlog` status writes |
-| `merge` | PR merge and landing tools, except merges the workspace reserves for the human |
-| `plugin_upgrade` | plugin install and upgrade |
+| none | read tools; `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact.put`; `orbit.friction.add`; `orbit.decision.raise`; `orbit.notice.post`; `orbit.resident.checkpoint`; and `orbit.task.update` to `review` on the assignment itself (the handoff) |
+| `dispatch` | `orbit.agent.invoke`, `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
+| `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
+| `merge` | `orbit.task.update` to `done`, `orbit.task.retry_handoff`, `orbit.task.reconcile_review` |
+| `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
 
-The mapping lives in core beside the tool catalog. A tool not in the map for the effective rights is
-not granted to the cycle. A tool call whose workspace selector is outside `workspaces` is refused
-with `resident_scope_refused`. The mapping and that refusal arrive with the cycle that consumes
-them ([ORB-21244]); slice 1 records and reports the authority only.
+The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
+guard applies it to every builtin tool call a `resident_cycle_pipeline` run makes; the run is
+identified from the trusted managed-run binding, never from input. Reads always pass. A write
+without this run's live cycle is refused as `resident_cycle_stale`; a right-gated write without the
+right as `resident_right_refused` (naming the observe-only cause when a maintenance notice or a
+passed deadline emptied the rights); a `workspace` or `workspaces` input that resolves outside the
+granted workspaces and the assignment's own as `resident_scope_refused`; and any other write as
+`resident_tool_refused`. That includes `orbit.task.update` with `approve` or `force`, other status
+targets, `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
+`orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
+operator-only: their capability check runs before the guard. A write from a resident cycle run that
+this workspace does not hold (one started in another catalog workspace) is refused as
+`resident_scope_refused`; slice 3 does not support cross-workspace writes. `orbit.evolution.add`
+arrives with [ORB-21248].
 
 ## Widening
 

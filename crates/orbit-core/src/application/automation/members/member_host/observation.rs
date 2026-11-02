@@ -33,6 +33,9 @@ impl Host<'_> {
         after: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<MemberPage, AutomationError> {
+        if self.trigger.kind == StateTriggerKind::ResidentDue {
+            return self.observe_resident_page(now);
+        }
         let scan_before = after
             .map(serde_json::from_str)
             .transpose()
@@ -142,9 +145,9 @@ impl Host<'_> {
                     _ => preparation::active_escalation_triages(self.runtime)?,
                 }
             }
-            StateTriggerKind::ExecutionFailed | StateTriggerKind::DecisionRequested => {
-                BTreeMap::new()
-            }
+            StateTriggerKind::ExecutionFailed
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => BTreeMap::new(),
         };
         // One scan for the page. Admission of a member retained from an
         // earlier page reads this cache instead of scanning again.
@@ -255,6 +258,8 @@ impl Host<'_> {
                 }
                 // Retired trigger: observes nothing.
                 StateTriggerKind::BlockEscalated => continue,
+                // Observed by `observe_resident_page`, never per task here.
+                StateTriggerKind::ResidentDue => continue,
                 StateTriggerKind::DecisionRequested => {
                     // One member per open request, keyed by the task and
                     // fingerprinted by the request id: the id is raised

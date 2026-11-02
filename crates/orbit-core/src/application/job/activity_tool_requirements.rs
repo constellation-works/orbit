@@ -23,6 +23,7 @@ const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
     "final_recovery",
     "image_input_probe",
     "pr_conflict_recovery",
+    "resident_cycle",
     "review_reconciliation_review",
     "step_failure_recovery",
     "task_pilot",

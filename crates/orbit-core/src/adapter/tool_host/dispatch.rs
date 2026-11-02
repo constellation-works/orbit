@@ -5,6 +5,7 @@ use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::resident::ResidentCallAdmission;
 use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Everything the dispatch table knows about *who* is making this call.
@@ -39,14 +40,48 @@ pub(super) fn execute(
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<Value, OrbitError> {
+    let (input, mut redaction_report) =
+        super::artifact_redaction::sanitize_tool_input(action, input)?;
+    // A resident cycle's agent reaches tools only within its cycle's grant;
+    // the trusted run binding, never input, says whether this is one.
+    let ticket = match runtime.admit_resident_cycle_call(
+        task_scope.run_id.as_deref(),
+        super::resident_guard::resident_guard_tool_name(action),
+        super::resident_guard::resident_guard_class(action, &input),
+        &input,
+    )? {
+        ResidentCallAdmission::Proceed => None,
+        ResidentCallAdmission::Ledgered(ticket) => Some(ticket),
+        ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
+    };
+    let mut result = execute_admitted(
+        runtime,
+        task_scope,
+        caller,
+        action,
+        input,
+        &mut redaction_report,
+    );
+    if let Some(ticket) = ticket {
+        runtime.close_resident_action(ticket, &mut result)?;
+    }
+    result
+}
+
+fn execute_admitted(
+    runtime: &OrbitRuntime,
+    task_scope: &OrbitTaskScope,
+    caller: ToolCaller<'_>,
+    action: OrbitBuiltinAction,
+    input: Value,
+    redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
+) -> Result<Value, OrbitError> {
     let ToolCaller {
         session_context,
         agent,
         model,
         reservation_owner,
     } = caller;
-    let (input, mut redaction_report) =
-        super::artifact_redaction::sanitize_tool_input(action, input)?;
     if let Some(mut result) =
         super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
     {
@@ -54,7 +89,7 @@ pub(super) fn execute(
             runtime,
             action,
             &mut result,
-            &mut redaction_report,
+            redaction_report,
             session_context
                 .worker_invocation
                 .as_ref()
@@ -190,7 +225,7 @@ pub(super) fn execute(
         runtime,
         action,
         &mut response,
-        &mut redaction_report,
+        redaction_report,
         persisted_task_id.as_deref(),
         agent_for_audit.as_deref(),
         model_for_audit.as_deref(),

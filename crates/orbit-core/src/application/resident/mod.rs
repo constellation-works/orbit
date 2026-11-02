@@ -9,11 +9,16 @@
 //! turns anyone else's into a `resident_authority` decision request, and
 //! applies any task writer's narrowing; the decision answer path applies a
 //! human's `grant` through `OrbitRuntime::apply_resident_grant_answer`.
-//! Cycle firing and tool scoping come in later slices.
+//! A cycle fires through the `resident_due` state trigger (`due`), runs
+//! as `resident_cycle_pipeline` (`steps`) and reaches tools only through
+//! the cycle guard (`guard`).
 
 mod comments;
 mod cycle;
+mod due;
 mod grant;
+mod guard;
+mod steps;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -30,7 +35,10 @@ use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
 
 pub(crate) use comments::ensure_resident_comment_redaction_safe;
+pub(crate) use due::ResidentDue;
 pub use grant::{ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams};
+pub(crate) use guard::{ResidentCallAdmission, ResidentCallClass};
+pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 
 /// Where a mandate stands, as `orbit resident show` reports it.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

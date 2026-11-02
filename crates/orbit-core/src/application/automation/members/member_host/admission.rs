@@ -116,6 +116,10 @@ impl Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
+        if self.trigger.kind == StateTriggerKind::ResidentDue {
+            return self.resident_admission(member);
+        }
+
         if self.trigger.kind == StateTriggerKind::DecisionRequested {
             use orbit_types::task::DecisionRequestState;
             if !self.runtime.decision_channel_enabled() {

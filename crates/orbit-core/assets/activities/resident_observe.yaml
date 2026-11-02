@@ -1,0 +1,40 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: resident_observe
+spec:
+  type: deterministic
+  description: >
+    Start the owning run's resident cycle for the mandate its run input names.
+    A mandate that is not active or no longer due starts nothing and reports
+    `cycle_count: 0` with the reason. Otherwise a live cycle whose run stopped
+    or whose lease expired first gets a synthesized `incomplete` checkpoint
+    rebuilt from its action rows, and this cycle recovers it. The run then
+    publishes its live cycle under the assignment lock, records the cycle's
+    grant (the effective authority, observe-only while a maintenance notice
+    is open in the mandate's scope or its deadline has passed) and returns
+    the brief: mandate, grant, recent checkpoints, open requests, comments
+    since the last cycle, wake reasons, notices and the recovered actions.
+  input_schema_json:
+    type: object
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+  output_schema_json:
+    type: object
+    required: [task_id, cycle_count]
+    properties:
+      task_id:
+        type: string
+      cycle_count:
+        type: number
+      skip_reason:
+        type: string
+      cycle:
+        type: string
+      crew:
+        type: string
+  action: resident_observe
+  config: {}

@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-11-02
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -258,6 +258,8 @@ require `overlap: forbid` and the job fixed by their kind:
 [finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
 `pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
 [pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+`resident_due` targets `job:resident_cycle_pipeline`, takes `batch_size: 1` only and uses the
+[resident cycle rule](../resident-orchestrator/2_design.md#51-slice-3-as-implemented).
 `block_escalated` is retired: [ORB-17744] moved blocked-task triage from an
 auto-task to a state routine, and [ORB-20629] retired that routine because final
 recovery now decides blocked tasks. The loader skips a routine on that trigger
@@ -348,7 +350,7 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
 `task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
-`worktree_gc.yaml`, `store_gc.yaml`
+`resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
 and `task_publication.yaml` with workspace-unique names and `enabled: false`.
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
 enabled: hourly at :23 it skips scanning and writes no snapshot while
