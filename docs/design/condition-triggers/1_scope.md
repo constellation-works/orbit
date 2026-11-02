@@ -1346,6 +1346,12 @@ target: job:media_ingest_pipeline    # workspace-defined
 4. **Federated reads.** Could a condition read another owner's workspace through
    federated MCP, with that owner's revisions in the fire identity? Leaning: no,
    until a use case needs it.
+5. **Waking resident orchestrators.** The
+   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design wakes a resident
+   through a typed `resident_due` kind, because it needs "anything in this set changed since my last
+   checkpoint", not a per-subject edge. A condition-triggered routine can still call
+   `orbit resident control wake` for situations the wake digest misses. Open: whether such wakes
+   should become a first-class `wake_resident` condition action.
 
 ### Resolved 2026-10-29
 

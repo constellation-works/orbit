@@ -42,6 +42,12 @@ Forward-looking directions for [fleet notices](./1_overview.md). Nothing here is
 7. **Kinds.** Are three kinds enough? A `resolved` announcement ("fixed, rebase your branches") is
    today an `info` notice linked to the fix with `close_on_linked_done: false`; watch whether that
    is awkward in use.
+8. **Resident orchestrators.** Every resident cycle's brief carries notices, and the
+   [resident-orchestrator](../resident-orchestrator/2_design.md#7-notices) design adds one reader-side
+   rule: while a `maintenance` notice is open in scope, a resident narrows its own cycle to
+   observe-only. The notice still holds no leaf dispatch. The manager posts as `orchestrator` and
+   residents post as `agent`, under the existing poster classes. Watch whether that is enough, or
+   whether the dispatch hold in question 1 should also read residents.
 
 ## 2. Prior Work
 
