@@ -125,7 +125,7 @@ pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
 /// broker's own records to the claimed task or its workspace for search/list.
 /// The list is closed; any other coordination tool from such a worker's sandbox
 /// is refused.
-pub const CLAIMED_OWNER_TOOLS: [&str; 7] = [
+pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
     "orbit.task.show",
     "orbit.search",
     "orbit.task.list",
@@ -133,6 +133,9 @@ pub const CLAIMED_OWNER_TOOLS: [&str; 7] = [
     "orbit.friction.add",
     "orbit.task.artifact.get",
     "orbit.task.artifact.put",
+    "orbit.notice.post",
+    "orbit.notice.show",
+    "orbit.notice.close",
 ];
 
 /// Whether `tool` is one of the [`CLAIMED_OWNER_TOOLS`].

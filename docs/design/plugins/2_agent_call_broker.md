@@ -169,7 +169,8 @@ by reading the run record, so a long wait holds no broker connection.
 
 **Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
-`orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
+`orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,
+`orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks
 `~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
@@ -185,7 +186,9 @@ artifact get naming a task the owner does not hold there is refused as `claimed_
 after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
 claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
 task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
-friction may name only the claimed task as the one it was found during. Internal
+friction may name only the claimed task as the one it was found during. A notice is
+stored only on the owner and attributed to the claim's task and run; its request's
+`orchestrator` attribution never crosses the broker. Internal
 (`_`-prefixed) fields are refused; task show and artifact calls also use closed field
 allowlists. The activity's own tool policy still applies.
 For `orbit.task.show`, supplying `limit`, `comments_offset`, `history_offset` or
