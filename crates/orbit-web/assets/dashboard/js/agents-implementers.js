@@ -24,6 +24,7 @@ let complexity = "";
 let picked = null;
 let curves = null;
 let curvesScope = null;
+let curvesRequest = 0;
 // The latest render's redraw, so crossing the phone breakpoint redraws the
 // chart on its canvas.
 let redraw = null;
@@ -42,8 +43,9 @@ function curvesPath(selectedWindow, execution) {
 
 /// Read the curves for `selectedWindow` and `execution` under the current
 /// filter. A response for a window, filter or workspace no longer shown is
-/// dropped.
+/// dropped, as is a superseded read of the same scope.
 function loadCurves(selectedWindow, execution) {
+  const request = ++curvesRequest;
   const path = curvesPath(selectedWindow, execution);
   const scope = `${getWorkspaceRevision()}\0${path}`;
   if (curvesScope !== scope) {
@@ -51,10 +53,10 @@ function loadCurves(selectedWindow, execution) {
     curves = null;
   }
   return fetchJson(path).then((payload) => {
-    if (curvesScope !== scope) return;
+    if (request !== curvesRequest || curvesScope !== scope) return;
     curves = payload && payload.requested_window === selectedWindow && Array.isArray(payload.series) ? payload : null;
   }, () => {
-    if (curvesScope === scope) curves = { failed: true };
+    if (request === curvesRequest && curvesScope === scope) curves = { failed: true };
   });
 }
 
