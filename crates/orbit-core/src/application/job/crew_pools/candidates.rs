@@ -10,16 +10,16 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, InspectionPool, PURPOSE_SOURCE_PREFIX,
-    TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source, parse_type_crew_source,
-    type_crew_source,
+    CreationCrewAssignment, CrewCandidate, INSPECTION_CREW_UNAVAILABLE, InspectionPool,
+    PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source,
+    parse_type_crew_source, type_crew_source,
 };
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{
-    INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, permitted_candidates, pools_from_input,
-    random_crew_ticket, seeded_crew_ticket, sole_candidate, weighted_candidates, weighted_draw,
+    complexity_crews_key, permitted_candidates, pools_from_input, random_crew_ticket,
+    seeded_crew_ticket, sole_candidate, weighted_candidates, weighted_draw,
 };
 use super::purpose::task_crew_purpose;
 use super::types::{COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, POOLS_KEY};

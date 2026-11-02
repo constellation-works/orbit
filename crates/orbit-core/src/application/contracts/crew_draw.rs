@@ -6,6 +6,10 @@ use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 
+/// The reason an inspection-requiring activity names when no crew it may
+/// draw can inspect [ORB-15792].
+pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailable";
+
 /// Prefix of the provenance a task records when its crew was drawn from its
 /// purpose's pool, as `purpose:<purpose>`.
 pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";

@@ -91,10 +91,6 @@ impl crate::OrbitRuntime {
     }
 }
 
-/// The reason an inspection-requiring activity names when no crew it may
-/// draw can inspect [ORB-15792].
-pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailable";
-
 impl crate::OrbitRuntime {
     /// Whether `crew` can run a pinned-source inspection activity: its
     /// provider has a CLI runtime and its executor declares

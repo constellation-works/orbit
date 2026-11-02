@@ -426,7 +426,10 @@ the drain holds the task as `pilot_unresolved` for the operator instead of
 piloting it again on every pass; edit the task or approve it to retry. In
 a multi-task apply, one task's failure does not fail the other tasks'
 applied results: the pipeline guard passes a partially applied apply as
-held, and only the failed task is held.
+held, and only the failed task is held. Standalone scheduled discovery also
+holds failed stale repilots for proposed and backlog tasks. A later description
+or acceptance-criteria edit, or an explicit repilot request, can retry; provider
+outages and missing inspection crews do not create this task-dependent hold.
 
 ### Pilot-warning triage
 

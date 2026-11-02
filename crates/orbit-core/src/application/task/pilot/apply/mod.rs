@@ -11,6 +11,7 @@ mod input;
 mod partition;
 mod report;
 mod task;
+mod unresolved;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -168,6 +169,12 @@ pub(crate) fn apply(
             )
         })
         .collect::<Vec<_>>();
+    unresolved::record_failed_repilots(
+        &context,
+        &prepared_before,
+        &partition_decisions,
+        &envelope.results,
+    )?;
     for position in partitions.len()..envelope.results.len() {
         partition_decisions.push(json!({
             "partition_index": Value::Null,
