@@ -45,6 +45,7 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) task_ctx: Option<Value>,
     pub(super) regression_risk_instruction: Option<&'a str>,
     pub(super) explore_brief_instruction: Option<&'a str>,
+    pub(super) notice_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
     pub(super) declared_worktree_pair: Option<DeclaredWorktreePair>,
     pub(super) source_checkout: SourceCheckout,
@@ -114,6 +115,45 @@ fn attach_explore_brief<'a>(
         brief: record,
     });
     delivered.then_some(instruction)
+}
+
+/// Ask the host for the workspace's open fleet notices when `spec` declares
+/// a `notice_instruction`, put the brief into the task context and record
+/// what was delivered. Notices are workspace-scoped, so a prompt with no
+/// task snapshot (a multi-task pilot) gains a task object holding only the
+/// block. Returns the instruction only when the prompt carries the block.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "notice delivery needs the step identity, the mutable task context and the audit writer together"
+)]
+fn attach_fleet_notices<'a>(
+    host: &dyn RuntimeHost,
+    spec: &'a AgentLoopSpec,
+    run_id: &str,
+    step_id: &str,
+    activity_name: &str,
+    input: &Value,
+    task_ctx: &mut Option<Value>,
+    audit: &V2AuditWriter,
+) -> Option<&'a str> {
+    let instruction = spec
+        .notice_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())?;
+    let brief = host.notices_for_agent_input(run_id, activity_name, input)?;
+    if task_ctx.is_none() {
+        *task_ctx = Some(Value::Object(serde_json::Map::new()));
+    }
+    let context = task_ctx.as_mut()?.as_object_mut()?;
+    context.insert("fleet_notices".to_string(), brief.block);
+    audit.emit_lossy(V2AuditEventKind::NoticesDelivered {
+        step_id: step_id.to_string(),
+        activity_name: activity_name.to_string(),
+        task_id: task_id_from_input(input).unwrap_or_default().to_string(),
+        notices: brief.notices,
+        omitted: brief.omitted,
+    });
+    Some(instruction)
 }
 
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
@@ -207,6 +247,16 @@ pub(crate) fn run_cli_backend_for_step(
         task_ctx.as_mut(),
         &audit,
     );
+    let notice_instruction = attach_fleet_notices(
+        host,
+        spec,
+        run_id,
+        step_id,
+        activity_name,
+        input,
+        &mut task_ctx,
+        &audit,
+    );
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
@@ -251,6 +301,7 @@ pub(crate) fn run_cli_backend_for_step(
             task_ctx,
             regression_risk_instruction,
             explore_brief_instruction,
+            notice_instruction,
             tool_ctx,
             declared_worktree_pair,
             source_checkout,

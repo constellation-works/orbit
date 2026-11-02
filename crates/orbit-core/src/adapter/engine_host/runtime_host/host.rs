@@ -745,6 +745,15 @@ impl RuntimeHost for OrbitRuntime {
         task_context::explore_brief_for_agent_input(self, run_id, input)
     }
 
+    fn notices_for_agent_input(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<orbit_types::workflow::FleetNoticeBrief> {
+        task_context::notices_for_agent_input(self, run_id, activity_name, input)
+    }
+
     fn experiment_overlays_for_activity(
         &self,
         run_id: &str,

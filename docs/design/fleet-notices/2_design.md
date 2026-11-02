@@ -16,8 +16,8 @@ related_artifacts: [ORB-21207]
 
 # Fleet Notices — Design
 
-This document describes how fleet notices fit into Orbit and where they land in the code. Slice 1
-([ORB-21211]) is built; module names for later slices are placement proposals they confirm. The prescriptive contracts
+This document describes how fleet notices fit into Orbit and where they land in the code. Slices 1–2
+([ORB-21211], [ORB-21212]) are built; module names for later slices are placement proposals they confirm. The prescriptive contracts
 are the specs: [notice-record](./specs/notice-record.md) (fields, effective state, expiry, dedupe),
 [notice-tools](./specs/notice-tools.md) (tools, CLI, toolset),
 [notice-authority](./specs/notice-authority.md) (poster classes, rights, limits),
@@ -56,7 +56,7 @@ needed: every crate below already depends on the ones it would call.
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
 | Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed. The scheduler sweep pass is not built yet |
-| Brief block | a new required `RuntimeHost` method (`notices_for_agent_input`) implemented by Core beside `regression_risk_for_agent_input`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs` like `attach_explore_brief` |
+| Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs` beside `regression_risk_for_agent_input`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs` like `attach_explore_brief`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
 | `[notice]` configuration | `crates/orbit-config` registry settings |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |
 | Dashboard banner and view | `crates/orbit-web` |

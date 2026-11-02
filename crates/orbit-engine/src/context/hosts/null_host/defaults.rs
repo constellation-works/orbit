@@ -808,6 +808,15 @@ pub trait NullRuntimeHost: Send + Sync {
         None
     }
 
+    fn notices_for_agent_input(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _input: &Value,
+    ) -> Option<orbit_types::workflow::FleetNoticeBrief> {
+        None
+    }
+
     fn experiment_overlays_for_activity(
         &self,
         _run_id: &str,
