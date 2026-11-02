@@ -356,10 +356,7 @@ fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
             &pair.follower_repo,
             &["reset", "-q", "--hard", "FETCH_HEAD"],
         );
-        let drain = pair.run_drain();
         if changed_material {
-            // An edited description or criteria holds admission until an
-            // explicit re-assessment (ORB-21073): no claim, no dispatch.
             owner
                 .update_task_as_human(
                     task,
@@ -370,6 +367,9 @@ fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
                     "operator".into(),
                 )
                 .unwrap();
+        }
+        let drain = pair.run_drain();
+        if changed_material {
             let held = pair.pass(&drain);
             assert_eq!(
                 held["admitted"], 0,
@@ -400,9 +400,9 @@ fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
             );
             // Explicitly certify the changed description before admission.
             super::super::explore_brief::pilot_brief(owner, repo, task);
-            // Plan is brief material but not part of the description/criteria
-            // seal, so this edit does not hold admission. The claimed leaf
-            // must still recheck it and drop the brief.
+            // Plan is configured brief material, but does not stale the
+            // mandatory description/criteria seal. Keep the independent
+            // claimed-brief material recheck and all original assertions.
             owner
                 .update_task_as_human(
                     task,

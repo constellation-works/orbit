@@ -351,6 +351,44 @@ mod task_route {
     }
 
     #[test]
+    fn an_id_only_repilot_routes_to_the_owner_and_refuses_unknown_prefixes() {
+        use orbit_types::tool::McpCapability;
+        let (host, log) = routed(None);
+        let mut operator = ToolSessionContext::default();
+        operator
+            .effective_capabilities
+            .insert(McpCapability::Operator);
+        let response = host
+            .call_tool(
+                "orbit.task.repilot",
+                json!({"id": "OWN-7"}),
+                operator.clone(),
+            )
+            .expect("repilot must reach the owner without a workspace selector");
+        assert_eq!(response["id"], "OWN-7");
+        assert_eq!(
+            log.calls(),
+            vec![(
+                OWNER_MACHINE.to_string(),
+                "orbit.task.repilot".to_string(),
+                json!({"id": "OWN-7"})
+            )]
+        );
+        let error = host
+            .call_tool("orbit.task.repilot", json!({"id": "ZZZ-1"}), operator)
+            .expect_err("an unknown prefix must not search or fall back to another host");
+        assert_eq!(
+            error.host_registry_code(),
+            Some(HostRegistryCode::UnknownTaskPrefix)
+        );
+        assert_eq!(
+            log.calls().len(),
+            1,
+            "refusal reaches no additional destination"
+        );
+    }
+
+    #[test]
     fn an_id_only_call_goes_to_the_host_its_prefix_names_without_a_selector() {
         let (host, log) = routed(None);
 
