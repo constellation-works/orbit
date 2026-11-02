@@ -1002,8 +1002,134 @@ fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
     assert_next_run_resumes_the_published_candidate(&f);
 }
 
+/// Production never records a step as `failed`: the executor checkpoints
+/// completed steps only, so the step that failed has no `step_states` entry.
+/// The fixture records one by hand; this returns the run to the shape a real
+/// validate failure leaves, and names the failed step.
+fn forget_the_failed_step_state(f: &Fixture) -> String {
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let failed = state
+        .failure_activity_checkpoint
+        .as_ref()
+        .unwrap()
+        .failed_step_id
+        .clone();
+    assert_eq!(failed, "validate", "the fixture fails at validation");
+    assert!(
+        state
+            .step_states
+            .remove(&step_index(f, &failed))
+            .is_some_and(|s| s == JobRunState::Failed),
+        "the fixture recorded the failed step by hand"
+    );
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    failed
+}
+
+/// Rewrite one field of the failure-handoff receipt a run persisted.
+fn tamper_receipt(f: &Fixture, key: &str, value: Value) {
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint.as_mut().unwrap().output[key] = value;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+}
+
+/// The incident (ORB-21216): a run failed at `validate`, its failure handoff
+/// published a PR, and the task spec never changed, yet requeue refused the
+/// handoff because the failed step had no `failed` entry in `step_states`.
+fn requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_state() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog");
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    assert_eq!(answer["resumes"]["head_sha"], f.head);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// The final-recovery decision's own `requeue` answer takes the same route.
+fn the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    let request = f
+        .runtime
+        .list_decision_requests(None, Some(&f.task), false)
+        .unwrap()
+        .pop()
+        .expect("the escalation opened a requeue decision");
+    f.runtime
+        .answer_decision_request_as_human(
+            &request.id,
+            "done",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    assert_eq!(status(&f), TaskStatus::Backlog);
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// Each condition of the handoff check refuses under its own name, with
+/// nothing written.
+fn a_refused_handoff_names_the_condition_that_disagreed() {
+    let case = |name: &str, tamper: &dyn Fn(&Fixture), named: &str| {
+        let (f, _) = escalated_handoff_fixture(None, None);
+        forget_the_failed_step_state(&f);
+        tamper(&f);
+        let error = refused(&f, false, name);
+        assert!(error.contains(named), "{name}: {error}");
+        for other in [
+            "ownership disagrees",
+            "failed step disagrees",
+            "base disagrees",
+            "specification digest disagrees",
+        ] {
+            assert!(
+                other == named || !error.contains(other),
+                "{name} also names {other}: {error}"
+            );
+        }
+    };
+    case(
+        "ownership",
+        &|f| tamper_receipt(f, "checkpoint_owner", json!("jrun-another-owner")),
+        "ownership disagrees",
+    );
+    case(
+        "failed step",
+        &|f| {
+            let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+            state
+                .step_states
+                .insert(step_index(f, "validate"), JobRunState::Success);
+            f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        },
+        "failed step disagrees",
+    );
+    case(
+        "base",
+        &|f| tamper_receipt(f, "original_base_sha", json!("0".repeat(40))),
+        "base disagrees",
+    );
+    // Requeue's own spec check answers a stale digest first, so the handoff
+    // check's digest refusal is read through explicit source-repair inspection.
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    tamper_receipt(&f, "task_spec_digest", json!("0".repeat(64)));
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("specification digest disagrees"), "{error}");
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
+    requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_state,
+    the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff,
+    a_refused_handoff_names_the_condition_that_disagreed,
     plain_status_update_resumes_the_failure_handoff_candidate,
     plain_status_update_refuses_changed_publication_and_discard_closes_it,
     plain_status_update_refuses_an_unbound_pull_request,
