@@ -196,21 +196,29 @@ pub(super) async fn list_notices(
     };
     match blocking("list notices", move || {
         let mut by_id: BTreeMap<String, Notice> = BTreeMap::new();
+        let mut degraded: Vec<String> = Vec::new();
         for runtime in &runtimes {
+            // Read the full effective state before choosing what to show:
+            // the core listing sorts by kind and truncates at `limit`, so a
+            // bounded `All` read lets retained closed/expired rows consume
+            // the cap and silently hide an open notice of a later kind.
+            // `limit: None` returns every retained match; the open/recent
+            // selection below is the only bounding this endpoint applies.
             let listing = runtime.list_notices(&NoticeListFilter {
                 status: NoticeStatusFilter::All,
-                limit: Some(200),
+                limit: None,
                 ..Default::default()
             })?;
+            degraded.extend(listing.degraded);
             for notice in listing.notices {
                 by_id.entry(notice.id.clone()).or_insert(notice);
             }
         }
-        Ok::<_, orbit_core::OrbitError>(by_id.into_values().collect::<Vec<_>>())
+        Ok::<_, orbit_core::OrbitError>((by_id.into_values().collect::<Vec<_>>(), degraded))
     })
     .await
     {
-        Ok(notices) => {
+        Ok((notices, degraded)) => {
             let now = Utc::now();
             let cutoff = now - Duration::hours(24);
             let mut open: Vec<&Notice> = notices
@@ -243,7 +251,7 @@ pub(super) async fn list_notices(
                 "recent": recent.iter().map(|notice| notice_json(notice)).collect::<Vec<_>>(),
                 "banner": banner,
                 "can_write": can_write,
-                "degraded": [],
+                "degraded": degraded,
             }))
             .into_response()
         }
