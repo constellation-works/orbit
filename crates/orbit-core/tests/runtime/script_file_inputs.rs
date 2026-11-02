@@ -51,7 +51,8 @@ fn fixture(inputs_yaml: &str) -> Fixture {
         repo.join("check.sh"),
         format!(
             r#"#!/bin/sh
-: > '{marker}' 2>/dev/null
+# `:` is a special builtin: a failed redirect exits the shell, so probes use `true`.
+true > '{marker}' 2>/dev/null
 in="$ORBIT_SCRIPT_IN"
 brief=$(cat "$in/brief.txt")
 page=$(cat "$in/dist/index.html")
@@ -60,7 +61,7 @@ ref=$(cat "$in/ref.md")
 if echo x > "$in/brief.txt" 2>/dev/null; then file_write=ok; else file_write=refused; fi
 if echo x > "$in/dist/new.txt" 2>/dev/null; then dir_write=ok; else dir_write=refused; fi
 if rm -f "$in/dist/index.html" 2>/dev/null && [ ! -e "$in/dist/index.html" ]; then remove=ok; else remove=refused; fi
-if : > "$in/extra" 2>/dev/null; then in_write=ok; else in_write=refused; fi
+if true > "$in/extra" 2>/dev/null; then in_write=ok; else in_write=refused; fi
 printf '{{"brief":"%s","page":"%s","nested":"%s","ref":"%s","file_write":"%s","dir_write":"%s","remove":"%s","in_write":"%s"}}' \
   "$brief" "$page" "$nested" "$ref" "$file_write" "$dir_write" "$remove" "$in_write"
 "#,
@@ -84,6 +85,10 @@ printf '{{"brief":"%s","page":"%s","nested":"%s","ref":"%s","file_write":"%s","d
             "check",
             &orbit_core::runtime::scripts::ScriptGrantOptions {
                 read_roots: vec![library.clone()],
+                // The marker dir lies under the bulk temp dir, which the
+                // sandbox's private `/dev` hides, so it is bound writable
+                // explicitly; the entry's marker write needs it.
+                write_roots: vec![marker_dir.clone()],
                 ..Default::default()
             },
         )
