@@ -215,7 +215,8 @@ pub enum ScriptGrantState {
     Ungranted,
     /// A grant whose manifest no longer exists.
     Orphaned,
-    /// A grant row whose witness is missing or does not match.
+    /// A stored grant whose witness is untrusted or whose timeout ceiling is
+    /// outside the supported range.
     WitnessRefused,
 }
 
@@ -289,6 +290,14 @@ pub struct ScriptGrantOptions {
 /// years, sits far inside that range on Linux, where the overflow was
 /// reproduced, so no realistic request is refused.
 const SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS: u64 = u32::MAX as u64;
+
+fn script_grant_timeout_refusal(name: &str, grant_id: &str, seconds: u64) -> String {
+    format!(
+        "script `{name}` grant {grant_id} is refused: timeout ceiling {seconds} is outside \
+         1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
+         with `orbit script grant {name}`"
+    )
+}
 
 /// The limits one grant records: the defaults, with each acknowledged
 /// override checked against the hard ceilings.
@@ -367,6 +376,19 @@ impl RuntimeKernel {
                 ),
                 Some(grant) => match verify_script_grant_witness(&global_root, grant) {
                     Err(reason) => (ScriptGrantState::WitnessRefused, reason),
+                    Ok(())
+                        if !(1..=SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS)
+                            .contains(&grant.limits.timeout_max_seconds) =>
+                    {
+                        (
+                            ScriptGrantState::WitnessRefused,
+                            script_grant_timeout_refusal(
+                                &asset.name,
+                                &grant.grant_id,
+                                grant.limits.timeout_max_seconds,
+                            ),
+                        )
+                    }
                     Ok(()) if grant.digest == asset.digest => (
                         ScriptGrantState::Granted,
                         format!(
@@ -447,11 +469,10 @@ impl RuntimeKernel {
         verify_script_grant_witness(&self.global_root(), &grant).map_err(OrbitError::Execution)?;
         let seconds = grant.limits.timeout_max_seconds;
         if !(1..=SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS).contains(&seconds) {
-            return Err(OrbitError::Execution(format!(
-                "script `{name}` grant {} is refused: timeout ceiling {seconds} is outside \
-                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
-                 with `orbit script grant {name}`",
-                grant.grant_id
+            return Err(OrbitError::Execution(script_grant_timeout_refusal(
+                name,
+                &grant.grant_id,
+                seconds,
             )));
         }
         Ok(Some(grant))

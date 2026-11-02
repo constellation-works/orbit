@@ -534,7 +534,7 @@ with `grant_insufficient`. If the sandbox itself fails, see
 | `stale` | A verified grant whose digests no longer match: one of the files changed after granting. |
 | `ungranted` | A manifest with no grant. |
 | `orphaned` | A grant whose manifest no longer exists. |
-| `witness_refused` | The stored grant does not match the integrity record the grant command wrote, so it is not trusted. |
+| `witness_refused` | The stored grant is not trusted because its witness is missing or invalid, its row does not match the witness, or its timeout ceiling is outside `1..=4294967295` seconds. Review it and run `orbit script grant <name>` to re-authorize it. |
 
 ### Grant requests
 

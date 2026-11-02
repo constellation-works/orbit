@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{DecisionSubmitCaller, DecisionSubmitParams};
-use orbit_core::runtime::scripts::{self, ScriptGrantOptions};
+use orbit_core::runtime::scripts::{self, ScriptGrantOptions, ScriptGrantState};
 use orbit_engine::{RuntimeHost, ScriptStepRequest, ScriptStepRun};
 use orbit_types::task::{DecisionGate, DecisionRequest};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -197,6 +197,37 @@ fn stored_script_grant_timeout_checks() {
         )
         .unwrap();
         scripts::verify_script_grant_witness(&fx.runtime.global_root(), &grant).unwrap();
+
+        let status = fx.runtime.script_status(SCRIPT).unwrap().unwrap();
+        if seconds == bound {
+            assert_eq!(status.state, ScriptGrantState::Granted, "{}", status.detail);
+        } else {
+            assert_eq!(
+                status.state,
+                ScriptGrantState::WitnessRefused,
+                "{}",
+                status.detail
+            );
+            assert!(
+                status
+                    .detail
+                    .contains(&format!("timeout ceiling {seconds}")),
+                "{}",
+                status.detail
+            );
+            assert!(
+                status.detail.contains(&format!("1..={bound}")),
+                "{}",
+                status.detail
+            );
+            assert!(
+                status
+                    .detail
+                    .contains(&format!("orbit script grant {SCRIPT}")),
+                "{}",
+                status.detail
+            );
+        }
 
         let expected_code = if seconds == bound {
             assert_eq!(
