@@ -73,7 +73,8 @@ impl NoticeStoreBackend for Store {
                     let changed = conn
                         .execute(
                             "UPDATE notices SET scope = ?3, kind = ?4, expires_at = ?5, \
-                             updated_at = ?6, revision = ?7, record_json = ?8 \
+                             updated_at = ?6, revision = ?7, record_json = ?8, \
+                             linked_task_id = ?9, close_on_linked_done = ?10 \
                              WHERE id = ?1 AND revision = ?2 AND closed_at IS NULL",
                             params![
                                 row.id,
@@ -84,6 +85,8 @@ impl NoticeStoreBackend for Store {
                                 stamp(row.updated_at),
                                 row.revision,
                                 row.record_json,
+                                row.linked_task_id,
+                                row.close_on_linked_done,
                             ],
                         )
                         .map_err(sqlite_store_error)?;
