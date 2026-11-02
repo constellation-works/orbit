@@ -891,4 +891,30 @@ class EvalTests(unittest.TestCase):
             with self.subTest(case=label):
                 self._assert_structured_refusal(self._run("check-targets", "--targets", str(path)))
 
+    def test_precedent_recorded_model_label_is_refused_only_inside_the_window(self):
+        v4 = ("--format-version", "decision-assistance-eval/4")
+        ds = json.loads(self._run("seed", *v4).stdout)
+        ans = self._dump("p-ans.json", json.loads(self._run("seed", *v4, "--answers").stdout))
+        tgt = self._dump("p-tgt.json", json.loads(self._run("seed", *v4, "--targets").stdout))
+        def recorded(case_id, answered_by):
+            case = next(c for c in ds["cases"] if c["case_id"] == case_id)
+            case["label"].update(provenance="recorded_human_decision", answered_by=answered_by)
+        def score():
+            return self._run("score", "--dataset", str(self._dump("p-ds.json", ds)),
+                             "--answers", str(ans), "--targets", str(tgt))
+        recorded("ar-dev-model", "model")  # raised 2026-03-15, before the 2026-04-01 window
+        result = score()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["categories"]["ws_orbit:agent_request"]["excluded"]["outside_window"], 1, report)
+        validated = self._run("validate", "--dataset", str(self._dump("p-ds.json", ds)),
+                              "--answers", str(ans), "--targets", str(tgt))
+        self.assertEqual(validated.returncode, 0, validated.stdout)
+        recorded("ar-correct-a", "model")  # an in-window case stays refused
+        refused = score()
+        self.assertEqual(refused.returncode, 2, refused.stdout)
+        errors = json.loads(refused.stdout)["errors"]
+        self.assertTrue(any("ar-correct-a" in e and "model actor" in e for e in errors), errors)
+        self.assertFalse(any("ar-dev-model" in e for e in errors), errors)
+
 if __name__ == "__main__": unittest.main()
