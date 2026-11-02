@@ -96,6 +96,6 @@ never reads task records; title lookup is reserved for detail views.
 
 - [ORB-10567] — Replace bordered wrapping tables with borderless one-line rows and column metadata.
 - [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
-- [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
+- [ORB-21575] — Add full detail recovery for audited truncated views.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
