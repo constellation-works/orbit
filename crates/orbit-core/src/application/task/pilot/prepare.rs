@@ -179,10 +179,20 @@ pub(crate) fn prepare(
                 ),
             ));
         }
+        // A drain child is named like an explicit request, but its host
+        // trigger and the parent dispatch record say otherwise. An assessment
+        // an explicit or routine pilot already certified is reused, not
+        // assessed again. Operator explicit runs are not drain children.
+        let drain_child = super::drain_promotion::drain_dispatched_pilot(runtime, run_id)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        let mut certification_error = None;
         let selected = selected
             .into_iter()
             .filter(|task| !superseded.contains_key(&task.id))
             .filter(|task| {
+                if certification_error.is_some() {
+                    return false;
+                }
                 if runtime.is_human_crew(task.crew.as_deref()) {
                     // Operator work: no pilot assessment, warning or hold.
                     excluded.record(&task.id, HUMAN_CREW_EXCLUSION, &active_preparations);
@@ -190,6 +200,30 @@ pub(crate) fn prepare(
                 } else if active_preparations.contains_key(&task.id) {
                     excluded.record(&task.id, "already_preparing", &active_preparations);
                     false
+                } else if drain_child {
+                    match super::drain_promotion::certified_explicit_assessment(runtime, task) {
+                        Ok(true) => {
+                            excluded.record(
+                                &task.id,
+                                "assessment_already_applied",
+                                &active_preparations,
+                            );
+                            false
+                        }
+                        Ok(false) if forge_refused(&task.tags) => {
+                            excluded.record(
+                                &task.id,
+                                PR_FORGE_REMOTE_MISSING,
+                                &active_preparations,
+                            );
+                            false
+                        }
+                        Ok(false) => true,
+                        Err(error) => {
+                            certification_error = Some(error);
+                            false
+                        }
+                    }
                 } else if forge_refused(&task.tags) {
                     excluded.record(&task.id, PR_FORGE_REMOTE_MISSING, &active_preparations);
                     false
@@ -198,6 +232,9 @@ pub(crate) fn prepare(
                 }
             })
             .collect::<Vec<_>>();
+        if let Some(error) = certification_error {
+            return Err(DispatchError::action_failed(action, error.to_string()));
+        }
         let task_ids = selected
             .iter()
             .map(|task| task.id.clone())

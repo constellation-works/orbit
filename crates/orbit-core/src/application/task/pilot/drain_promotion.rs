@@ -22,22 +22,24 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
     TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use orbit_types::workflow::{JobRunState, JobRunTriggerKind};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
 use crate::application::task::{
-    AdmissionClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision, UNVERIFIED_REVIEW_FINDING,
-    VerifiedNoDiff,
+    AdmissionClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision, TaskAutomationPort, TaskJobPort,
+    UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff,
 };
 
-use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
+use super::apply::admission::{AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{
     PromotionFindings, auto_approval_hold_classification, auto_approval_opted_out,
@@ -419,6 +421,385 @@ pub(super) fn approve(
     Err(OrbitError::Execution(
         "drain approval lock discovery did not settle".to_string(),
     ))
+}
+
+/// What a drain pass should do with an explicit or routine pilot receipt.
+///
+/// `NotReusable` leaves the ordinary candidate path alone: a drain child's
+/// own assessment, a run with no recorded trigger, and a history note with
+/// no receipt are not this identity.
+pub(crate) enum ExplicitAssessmentReuse {
+    /// Fresh certified assessment. Approve it without another provider call.
+    Promote { operation_id: String },
+    /// Certified assessment that must stay proposed. Do not pilot it again.
+    Hold {
+        reason: &'static str,
+        detail: Option<String>,
+    },
+    /// No host-owned explicit or routine assessment to consume.
+    NotReusable,
+}
+
+/// Whether `pilot_run_id` is a child an approve-proposed drain dispatched.
+///
+/// The trigger and the parent dispatch record are host writes. `task_ids`
+/// and `promotion_authorized` on the run input are not authority.
+pub(crate) fn drain_dispatched_pilot(
+    runtime: &OrbitRuntime,
+    pilot_run_id: Option<&str>,
+) -> Result<bool, OrbitError> {
+    let Some(pilot_run_id) = pilot_run_id
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(state) = runtime.stored_run_state(pilot_run_id)? else {
+        return Ok(false);
+    };
+    if state.trigger.as_ref().map(|trigger| trigger.kind) != Some(JobRunTriggerKind::Child) {
+        return Ok(false);
+    }
+    // Stored rows only. The reconciling job list can finalize another run,
+    // and this check must not.
+    let drains = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(DRAIN_JOB.to_string()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(100),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+    for drain in drains {
+        if drain.state.is_terminal() {
+            continue;
+        }
+        let approve_proposed = drain
+            .input
+            .as_ref()
+            .and_then(|input| input.get("approve_proposed"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if !approve_proposed {
+            continue;
+        }
+        let Some(parent) = runtime.stored_run_state(&drain.run_id)? else {
+            continue;
+        };
+        if parent
+            .child_dispatches
+            .iter()
+            .any(|child| child.child_run_id == pilot_run_id && child.job_name == PILOT_JOB)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a drain child must not call the provider for `task`.
+///
+/// True when an explicit or routine pilot already certified an assessment.
+/// A drain-owned receipt stays on the ordinary prepare path, so a material
+/// change found at that child's own approval can still be piloted again.
+pub(crate) fn certified_explicit_assessment(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<bool, OrbitError> {
+    Ok(matches!(
+        classify_explicit_assessment_reuse(runtime, task)?,
+        ExplicitAssessmentReuse::Promote { .. } | ExplicitAssessmentReuse::Hold { .. }
+    ))
+}
+
+/// Approve one fresh explicit or routine assessment under the task lock.
+///
+/// Returns whether this call moved the task to `backlog`. A concurrent
+/// edit that makes the receipt stale, or a pilot that started since the
+/// snapshot, leaves the task proposed.
+pub(crate) fn promote_reusable_assessment(
+    runtime: &OrbitRuntime,
+    drain_run_id: &str,
+    task_id: &str,
+) -> Result<bool, OrbitError> {
+    let mut promoted = false;
+    with_task_locks(runtime, task_id, &[task_id.to_string()], 0, &mut || {
+        // The selection input is not promotion authority. Verify the live
+        // host-owned drain record again at the write boundary.
+        let Some(drain) = runtime.stores().jobs().get_job_run(drain_run_id)? else {
+            return Ok(());
+        };
+        if drain.job_id != DRAIN_JOB
+            || drain.state.is_terminal()
+            || drain
+                .input
+                .as_ref()
+                .and_then(|input| input.get("approve_proposed"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            return Ok(());
+        }
+        let task = runtime.get_task(task_id)?;
+        if task.status != TaskStatus::Proposed {
+            return Ok(());
+        }
+        let ExplicitAssessmentReuse::Promote { operation_id } =
+            classify_explicit_assessment_reuse(runtime, &task)?
+        else {
+            return Ok(());
+        };
+        let note = format!("{} (operation {operation_id})", approval_note(drain_run_id));
+        runtime.approve_task(task_id, Some(note), None)?;
+        promoted = true;
+        Ok(())
+    })?;
+    Ok(promoted)
+}
+
+/// Classify the latest task-pilot receipt for drain reuse.
+///
+/// The receipt's `pilot_run_id` is the host-owned identity. Only a run
+/// whose admission trigger is `cli`, `mcp`, `dashboard`, or `routine` can
+/// be consumed. A `child` trigger, or a run with no trigger, is not an
+/// operator or routine request.
+pub(crate) fn classify_explicit_assessment_reuse(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<ExplicitAssessmentReuse, OrbitError> {
+    let comments = runtime.get_task_comments(&task.id)?;
+    let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    if !super::is_operation_id(receipt.operation_id) {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    }
+    let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    let Some(assessment) = audit.get("assessment").filter(|value| value.is_object()) else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    let Some(pilot_run_id) = audit
+        .get("pilot_run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    let trigger = runtime
+        .stored_run_state(pilot_run_id)?
+        .and_then(|state| state.trigger);
+    if !trigger
+        .as_ref()
+        .is_some_and(|recorded| reusable_pilot_trigger(recorded.kind))
+    {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    }
+    if let Some(run_id) = runtime.live_task_pilot_run(&task.id)? {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_running",
+            detail: Some(format!("task-pilot run {run_id} is assessing it")),
+        });
+    }
+    // Selection lists envelopes. Those omit description, acceptance criteria
+    // and plan, so a freshness or fingerprint check against the envelope is a
+    // false edit. The receipt seals the stored body.
+    let task = runtime.get_task(&task.id)?;
+    let task = &task;
+    let operation_id = receipt.operation_id;
+    let history = || runtime.get_task_history(&task.id);
+    if super::freshness::pilot_requirements_stale(task, &audit, operation_id, &history)? {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "changed_since_pilot",
+            detail: Some("description or acceptance criteria changed after the assessment".into()),
+        });
+    }
+    let Some(written) = audit
+        .get("applied_material")
+        .and_then(|value| serde_json::from_value::<AppliedTaskMaterial>(value.clone()).ok())
+    else {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_output_malformed",
+            detail: Some("the pilot audit does not certify its written material".into()),
+        });
+    };
+    let Some(complexity) = audit
+        .get("complexity_after")
+        .and_then(|value| serde_json::from_value::<TaskComplexity>(value.clone()).ok())
+    else {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_output_malformed",
+            detail: Some("the pilot audit does not certify its complexity".into()),
+        });
+    };
+    let policy = runtime.claim_preparation_policy(None)?;
+    let validated = certified_validated_task(
+        task,
+        assessment.clone(),
+        written,
+        complexity,
+        operation_id.to_string(),
+        pilot_run_id.to_string(),
+    );
+    let snapshot = certified_snapshot(task);
+    if let Some((reason, detail)) =
+        assessed_material_drift(runtime, task, &snapshot, &validated, &policy)
+    {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "changed_since_pilot",
+            detail: Some(format!("{reason}: {detail}")),
+        });
+    }
+    promotable_reuse(runtime, task, assessment, operation_id)
+}
+
+fn reusable_pilot_trigger(kind: JobRunTriggerKind) -> bool {
+    matches!(
+        kind,
+        JobRunTriggerKind::Cli
+            | JobRunTriggerKind::Mcp
+            | JobRunTriggerKind::Dashboard
+            | JobRunTriggerKind::Routine
+    )
+}
+
+fn certified_snapshot(task: &Task) -> PreparedTaskSnapshot {
+    PreparedTaskSnapshot {
+        context_files: task.context_files.clone(),
+        status: TaskStatus::Proposed,
+        complexity: task.complexity,
+        title: task.title.clone(),
+        tags: task.tags.clone(),
+        material: None,
+        status_neutral_fingerprint: None,
+        material_components: None,
+        history_len: None,
+        validation_tool_warnings: Vec::new(),
+        context_creation_identity: None,
+        explore_brief_requested: false,
+    }
+}
+
+fn certified_validated_task(
+    task: &Task,
+    assessment: Value,
+    written: AppliedTaskMaterial,
+    complexity: TaskComplexity,
+    operation_id: String,
+    pilot_run_id: String,
+) -> ValidatedTask {
+    // Selector authority is the sealed fingerprint inside `written`. Using
+    // the task's current selectors here keeps apply's retained grants from
+    // looking like drift; a later selector edit still fails the fingerprint.
+    ValidatedTask {
+        task_id: task.id.clone(),
+        after: task.context_files.clone(),
+        assessment,
+        admission: None,
+        promote: false,
+        history_decision: None,
+        complexity,
+        operation_id,
+        required_os: Vec::new(),
+        required_machine: None,
+        post_deploy: Vec::new(),
+        user_facing_ui: false,
+        applied_material: Some(written),
+        pilot_run_id: Some(pilot_run_id),
+        pilot_crew: None,
+        explore_brief: None,
+    }
+}
+
+fn promotable_reuse(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    assessment: &Value,
+    operation_id: &str,
+) -> Result<ExplicitAssessmentReuse, OrbitError> {
+    let malformed = |detail: &str| ExplicitAssessmentReuse::Hold {
+        reason: "pilot_output_malformed",
+        detail: Some(detail.to_string()),
+    };
+    let dependencies = task.dependencies();
+    let findings = match promotion_findings(
+        "select_proposed_approvals",
+        &task.id,
+        assessment,
+        &dependencies,
+        &|id| {
+            runtime
+                .get_task(id)
+                .is_ok_and(|found| found.status == TaskStatus::Done)
+        },
+    ) {
+        Ok(findings) => findings,
+        Err(error) => return Ok(malformed(&error.to_string())),
+    };
+    let disposition = assessment
+        .get("disposition")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    let hold = |reason: &'static str| ExplicitAssessmentReuse::Hold {
+        reason,
+        detail: None,
+    };
+    if task.status != TaskStatus::Proposed {
+        return Ok(hold("not_proposed"));
+    }
+    if assessment
+        .get(super::FINDING_INVALID)
+        .is_some_and(|finding| !finding.is_null())
+    {
+        return Ok(hold(super::FINDING_INVALID));
+    }
+    if auto_approval_opted_out(&task.tags) {
+        return Ok(hold(auto_approval_hold_classification(&task.tags)));
+    }
+    if VerifiedNoDiff::from_assessment(assessment).is_some() && !no_diff {
+        return Ok(hold(PILOT_VERIFIED_NO_DIFF));
+    }
+    if let Some(reason) =
+        approval_disqualification(&task.tags, &task.context_files, task.complexity)
+    {
+        return Ok(hold(reason));
+    }
+    if !findings.already_landed.is_null() {
+        return Ok(hold("already_landed"));
+    }
+    if !findings.duplicate_of.is_null() {
+        return Ok(hold("duplicate"));
+    }
+    if assessment
+        .get("release_action_required")
+        .is_some_and(|finding| !finding.is_null())
+    {
+        return Ok(hold("release_action_required"));
+    }
+    if !findings.warnings.is_empty() {
+        return Ok(hold("warnings"));
+    }
+    if !no_diff && (disposition != "selectors" || task.context_files.is_empty()) {
+        return Ok(hold("no_actionable_selectors"));
+    }
+    if !no_diff && !task.complexity.is_some_and(TaskComplexity::is_assessed) {
+        return Ok(hold("unassessed_complexity"));
+    }
+    if runtime.unverified_finding_hold(task)?.is_some() {
+        return Ok(hold(UNVERIFIED_REVIEW_FINDING));
+    }
+    Ok(ExplicitAssessmentReuse::Promote {
+        operation_id: operation_id.to_string(),
+    })
 }
 
 /// A test seam just before the drain's approval takes its locks, standing in

@@ -36,6 +36,12 @@
 #   it approved and admits those tasks in the same pass. Only one pilot runs
 #   at a time, and a task it carries is held as `pilot_running`, so nothing is
 #   piloted twice.
+# - A fresh assessment from an explicit or routine pilot is approved on the
+#   selecting pass without another provider call. A stale one, or one with a
+#   holding warning, stays proposed and is not selected again. The drain's own
+#   child still pilots a task again when that child's assessment found the
+#   task had changed. Targeted task ids and promotion authority are not a new
+#   pilot request.
 # - An idle iteration does not sleep while the pilot is live: it waits on the
 #   pilot itself, bounded by the poll interval, so a finished pilot's
 #   approvals are admitted at once and freed slots are still refilled. Nor
@@ -47,8 +53,11 @@
 # - Approval is the task-pilot apply boundary's decision, not this file's:
 #   it verifies the authority record against this run, refuses any
 #   duplicate, already-landed, conflict or warning finding, and approves
-#   through the ordinary approve transition. Held tasks stay proposed and are
-#   not piloted again until they change. `allowed_crews` and the complexity
+#   through the ordinary approve transition. Held tasks stay proposed. A hold
+#   this drain's own pilot recorded is not piloted again until the task
+#   changes; a fresh explicit or routine assessment is approved without
+#   another pilot, and a stale one stays proposed until a new explicit
+#   assessment. `allowed_crews` and the complexity
 #   pools still decide what gets admitted.
 # - Without the flag the selection step returns no candidates and reports no
 #   pilot, so the pilot, record and wait steps are skipped.

@@ -4,7 +4,10 @@
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
 # proposed/backlog tasks in the active workspace with empty context_files or
 # unassessed complexity, excluding no-diff tasks. Explicit mode audits named
-# proposed/backlog tasks, including non-empty selectors. Any unsupported
+# proposed/backlog tasks, including non-empty selectors. A child an
+# approve-proposed drain dispatched is not that request: when an explicit or
+# routine pilot already certified an assessment, the child does not call the
+# provider for that task again. Any unsupported
 # explicit status refuses the whole selection before agent work or task
 # reservation; the refusal names every unsupported task and its current status.
 # The CLI preflights before submission; prepare checks again for direct callers

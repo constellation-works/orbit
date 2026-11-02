@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-10-30
+last_validated: 2026-11-01
 ---
 
 # Orbit Configuration
@@ -929,7 +929,7 @@ route. Resolved holds remove these actions. When an open pilot-admission
 decision exists, its **Decision needed** answers serve as the single action
 set instead. Promotion warnings keep their proposed-only semantics.
 
-An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
+An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds. A fresh assessment from an explicit or routine pilot is approved without another pilot. A stale one, including after a description or criteria edit, stays proposed until a new explicit assessment.
 
 ### `[workflow.mid_run_steering]` — operator comments after dispatch
 
