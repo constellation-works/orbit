@@ -327,7 +327,28 @@ assert.ok(unknown.includes('waits on work in review'), `an unforecastable review
 assert.deepEqual(coverageRow('Unknown review assumption'), { text: '1', warn: true });
 assert.deepEqual(coverageRow('History with unknown review'), { text: '7', warn: true });
 assert.deepEqual(coverageRow('Review mode dropped'), { text: '1', warn: true });
+assert.equal(coverageRow('Unreadable review checkpoint'), null, 'older payloads omit the unreadable-checkpoint row');
+assert.equal(body().querySelector('.fc-partial-history'), null, 'missing evidence does not render a partial-history note');
 assert.ok(!unknown.includes('mode_pooled_cell'), `an unknown assumption does not reveal the wire basis: ${unknown}`);
+
+const partialPayload = payload({
+  coverage: { review_checkpoint_unreadable: 2, history_review_mode_unknown: 2 },
+  tasks: [task({ id: 'ORB-7', title: 'Still forecast', review_mode: 'unknown', review_mode_fallback: true, basis: 'mode_pooled_cell' })],
+});
+partialPayload.inputs.review_evidence_gaps = [
+  { run_id: 'jrun-empty', reason: 'store error: invalid pipeline_state_json: EOF while parsing a value at line 1 column 0', coverage_gap: 'review_checkpoint_unreadable' },
+  { run_id: 'jrun-malformed', reason: 'store error: invalid pipeline_state_json: key must be a string at line 1 column 2', coverage_gap: 'review_checkpoint_unreadable' },
+];
+await render(partialPayload);
+const partial = text();
+assert.ok(partial.includes('6.5h') && partial.includes('20h'), `available forecast figures stay on the page: ${partial}`);
+assert.ok(!partial.includes("Couldn't load") && !partial.includes('Unable to load'), `a partial history is not a failed load: ${partial}`);
+assert.ok(partial.includes('Partial review history'), `the page names the partial history: ${partial}`);
+assert.ok(partial.includes('jrun-empty'), `the page names the affected run: ${partial}`);
+assert.ok(partial.includes('review_checkpoint_unreadable'), `the page names the coverage gap: ${partial}`);
+assert.ok(partial.includes('EOF while parsing a value'), `the page names why the checkpoint could not be read: ${partial}`);
+assert.ok(partial.includes('does not treat the gap as no review'), `the page refuses no-review credit: ${partial}`);
+assert.deepEqual(coverageRow('Unreadable review checkpoint'), { text: '2', warn: true });
 
 await render(payload({
   review: false,

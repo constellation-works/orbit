@@ -1,5 +1,7 @@
 //! Review policy changes must select their own observed delivery distribution.
 
+use std::collections::BTreeMap;
+
 use chrono::{Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
@@ -8,7 +10,10 @@ use orbit_store::contracts::{InvocationInsertParams, JobRunStepParams};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use orbit_types::workflow::{
-    JobRunState, JobTargetType, ReviewAdmission, ReviewBudget, ReviewTiming,
+    JobRunState, JobTargetType, PipelineState, ReviewAdmission, ReviewBudget,
+    ReviewGateAdmissionOutput, ReviewGateNotApplicable, ReviewTiming, SelectiveBeforeLandingMode,
+    SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs, SelectiveUnknownRisk,
+    evaluate_selective_review,
 };
 use serde_json::{Value, json};
 
@@ -103,13 +108,23 @@ fn record_activity(
     hours: u64,
     activity: &str,
 ) -> String {
+    record_admitted(runtime, task, &admission(timing), hours, activity)
+}
+
+fn record_admitted(
+    runtime: &OrbitRuntime,
+    task: &str,
+    admitted: &ReviewAdmission,
+    hours: u64,
+    activity: &str,
+) -> String {
     let now = Utc::now();
     let run = runtime
         .insert_job_run(
             "task_pr_pipeline",
             1,
             now,
-            Some(json!({"task_id": task, "review": admission(timing)})),
+            Some(json!({"task_id": task, "review": admitted})),
             None,
         )
         .unwrap();
@@ -168,6 +183,121 @@ fn pending(runtime: &OrbitRuntime, complexity: TaskComplexity, crew: &str) -> St
         })
         .unwrap()
         .id
+}
+
+fn selective_off_admission() -> ReviewAdmission {
+    let mut admitted = admission(ReviewTiming::None);
+    admitted.selective_before_landing = Some(SelectiveBeforeLandingPolicy::new(
+        SelectiveBeforeLandingMode::Enforce,
+        None,
+        Vec::new(),
+        SelectiveUnknownRisk::Review,
+        BTreeMap::new(),
+    ));
+    admitted
+}
+
+fn write_selective_not_required(runtime: &OrbitRuntime, run_id: &str, admitted: &ReviewAdmission) {
+    let policy = admitted
+        .selective_before_landing
+        .as_ref()
+        .expect("selective admission");
+    let receipt = evaluate_selective_review(
+        policy,
+        "ws_forecast_modes",
+        run_id,
+        &[],
+        ("base", "base-tree"),
+        ("head", "head-tree"),
+        SelectiveEvaluationInputs::default(),
+    );
+    let output =
+        ReviewGateAdmissionOutput::NotApplicable(ReviewGateNotApplicable::with_selective_receipt(
+            "selective_not_required",
+            Some(admitted),
+            receipt,
+        ));
+    let mut state = PipelineState::new(run_id.to_string(), "task_pr_pipeline".into(), json!({}));
+    state.record_pipeline_output(
+        "landing_review_gate_admit",
+        serde_json::to_value(output).expect("gate output"),
+    );
+    runtime.write_run_state(run_id, &state).unwrap();
+}
+
+/// Plant checkpoint bytes in this fixture's own store. The preserved
+/// historical checkpoint is not this database and is not modified.
+fn plant_checkpoint(runtime: &OrbitRuntime, run_id: &str, bytes: &str) {
+    let changed = runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+             SELECT workspace_id, run_id, ?1 FROM job_runs WHERE run_id = ?2 \
+             ON CONFLICT(workspace_id, run_id) DO UPDATE SET pipeline_state_json = excluded.pipeline_state_json",
+            rusqlite::params![bytes, run_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "fixture checkpoint for {run_id}");
+}
+
+fn checkpoint_bytes(runtime: &OrbitRuntime, run_id: &str) -> String {
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT pipeline_state_json FROM job_run_states WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn done_task(runtime: &OrbitRuntime, title: &str) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            status: Some(TaskStatus::Done),
+            complexity: TaskComplexity::Medium,
+            crew: Some("sample".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+}
+
+fn exempt_step(runtime: &OrbitRuntime, run_id: &str) {
+    let now = Utc::now();
+    runtime
+        .complete_job_run_step(
+            run_id,
+            &JobRunStepParams {
+                step_index: 1,
+                target_type: JobTargetType::Activity,
+                target_id: "review_gate_admit".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(0),
+                exit_code: Some(0),
+                agent_response_json: Some(json!({
+                    "applies": false,
+                    "reason": "no_diff_exemption",
+                    "timing": "before-landing",
+                    "timing_source": "workspace"
+                })),
+                state: JobRunState::Success,
+                lock_wait_ms: None,
+                error_code: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
 }
 
 fn forecast(runtime: &OrbitRuntime) -> Value {
@@ -418,10 +548,198 @@ fn scheduled_forecast_starts_at_or_after_not_before() {
     }
 }
 
+fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime("off");
+    let mut quiet_runs = Vec::new();
+    for _ in 0..5 {
+        let task = done_task(&runtime, "Unreviewed delivery");
+        quiet_runs.push(record_attempt(&runtime, &task, ReviewTiming::None, 1));
+    }
+    let exempt_task = done_task(&runtime, "Verified exempt delivery");
+    let exempt_run = record_activity(
+        &runtime,
+        &exempt_task,
+        ReviewTiming::BeforeLanding,
+        1,
+        "agent_implement",
+    );
+    exempt_step(&runtime, &exempt_run);
+    let selective = selective_off_admission();
+    let selective_task = done_task(&runtime, "Selective skip");
+    let selective_run =
+        record_admitted(&runtime, &selective_task, &selective, 1, "agent_implement");
+    write_selective_not_required(&runtime, &selective_run, &selective);
+    let reviewed = done_task(&runtime, "Reviewed delivery");
+    let reviewed_run = record_attempt(&runtime, &reviewed, ReviewTiming::BeforeLanding, 10);
+    let empty_task = done_task(&runtime, "Empty checkpoint");
+    let empty_run = record_admitted(
+        &runtime,
+        &empty_task,
+        &admission(ReviewTiming::None),
+        20,
+        "agent_implement",
+    );
+    exempt_step(&runtime, &empty_run);
+    plant_checkpoint(&runtime, &empty_run, "");
+    let malformed_task = done_task(&runtime, "Malformed checkpoint");
+    let malformed_admission = selective_off_admission();
+    let malformed_run = record_admitted(
+        &runtime,
+        &malformed_task,
+        &malformed_admission,
+        20,
+        "agent_implement",
+    );
+    plant_checkpoint(&runtime, &malformed_run, "{not json");
+    let pending_id = pending(&runtime, TaskComplexity::Medium, "sample");
+    let running = runtime
+        .add_task(TaskAddParams {
+            title: "Running with an unreadable checkpoint".into(),
+            status: Some(TaskStatus::InProgress),
+            complexity: TaskComplexity::Medium,
+            crew: Some("sample".into()),
+            context_files: vec!["file:running.rs".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let running_run = record_attempt(&runtime, &running, ReviewTiming::BeforeLanding, 0);
+    plant_checkpoint(&runtime, &running_run, "");
+    runtime
+        .update_task_with_identity(
+            &running,
+            TaskUpdateParams {
+                job_run_id: Some(Some(running_run.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+
+    let result = runtime
+        .serve_backlog_forecast(Default::default(), Some(1), None, false)
+        .expect("an unreadable historical checkpoint must not abort the forecast");
+    assert!(
+        runtime.backlog_forecasts(1).unwrap().is_empty(),
+        "a noncanonical forecast must not write the hourly snapshot"
+    );
+    let mut viewed = result;
+    let predictions = viewed["forecast"]["task_predictions"].take();
+    viewed["forecast"] = viewed["forecast"]["pre_regression_baseline"].take();
+    viewed["forecast"]["task_predictions"] = predictions;
+    let prediction = |id: &str| {
+        viewed["forecast"]["task_predictions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("missing prediction for {id}: {viewed}"))
+            .clone()
+    };
+    let backlog = prediction(&pending_id);
+    for metric in ["work_hours", "usd"] {
+        assert_eq!(
+            backlog[metric]["p50"], 1.0,
+            "{metric} no-review cell: {backlog}"
+        );
+        assert_eq!(
+            backlog[metric]["p90"], 1.0,
+            "{metric} no-review cell: {backlog}"
+        );
+    }
+    assert_eq!(backlog["review_mode"], "none", "{backlog}");
+    let running_row = prediction(&running);
+    assert_eq!(running_row["review_mode"], "unknown", "{running_row}");
+    assert_eq!(
+        running_row["review_mode_source"], "unreadable_run_checkpoint",
+        "{running_row}"
+    );
+    assert_eq!(
+        running_row["usd"]["p90"], 20.0,
+        "unreadable history keeps its cost: {running_row}"
+    );
+    assert_eq!(running_row["work_hours"]["p90"], 20.0, "{running_row}");
+    assert!(
+        running_row["usd"]["p50"].as_f64().unwrap() > 0.0,
+        "{running_row}"
+    );
+    assert_eq!(viewed["inputs"]["history_deliveries"], 10);
+    assert_eq!(viewed["inputs"]["history_review_modes"]["none"], 7);
+    assert_eq!(
+        viewed["inputs"]["history_review_modes"]["before_landing"],
+        1
+    );
+    assert_eq!(viewed["inputs"]["history_review_modes"]["unknown"], 2);
+    assert_eq!(viewed["coverage"]["history_review_mode_unknown"], 2);
+    assert_eq!(viewed["coverage"]["review_checkpoint_unreadable"], 3);
+    assert_eq!(
+        viewed["proposed_coverage"]["review_checkpoint_unreadable"],
+        3
+    );
+    let gaps = viewed["inputs"]["review_evidence_gaps"]
+        .as_array()
+        .expect("gaps");
+    let gap_ids: Vec<_> = gaps
+        .iter()
+        .map(|gap| gap["run_id"].as_str().unwrap().to_string())
+        .collect();
+    let mut expected = vec![
+        empty_run.clone(),
+        malformed_run.clone(),
+        running_run.clone(),
+    ];
+    expected.sort();
+    assert_eq!(gap_ids, expected, "{gaps:?}");
+    for gap in gaps {
+        assert_eq!(gap["coverage_gap"], "review_checkpoint_unreadable");
+        let reason = gap["reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with("store error: invalid pipeline_state_json:"),
+            "{reason}"
+        );
+    }
+    let empty_gap = gaps.iter().find(|gap| gap["run_id"] == empty_run).unwrap();
+    assert!(
+        empty_gap["reason"].as_str().unwrap().contains("EOF"),
+        "{empty_gap}"
+    );
+    for run_id in quiet_runs
+        .iter()
+        .chain([&exempt_run, &selective_run, &reviewed_run])
+    {
+        assert!(
+            !gap_ids.iter().any(|id| id == run_id),
+            "readable or missing evidence is not an unreadable gap: {run_id}"
+        );
+    }
+    assert!(runtime.read_run_state(&quiet_runs[0]).unwrap().is_none());
+    assert!(runtime.read_run_state(&selective_run).unwrap().is_some());
+    for run_id in [&empty_run, &malformed_run, &running_run] {
+        let error = runtime.read_run_state(run_id).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid pipeline_state_json"),
+            "{error}"
+        );
+    }
+    let exact = runtime
+        .read_run_states_exact(&[empty_run.clone(), malformed_run.clone()])
+        .unwrap_err();
+    assert!(
+        exact.to_string().contains("invalid pipeline_state_json"),
+        "{exact}"
+    );
+    assert_eq!(checkpoint_bytes(&runtime, &empty_run), "");
+    assert_eq!(checkpoint_bytes(&runtime, &malformed_run), "{not json");
+    assert_eq!(checkpoint_bytes(&runtime, &running_run), "");
+}
+
 crate::scenario_table!(
     review_modes,
     scheduled_forecast_starts_at_or_after_not_before,
     review_policy_selects_observed_delivery_distribution,
     thin_cells_preserve_mode_before_borrowing_pooled_history,
     historical_uncertainty_and_running_admission_remain_explicit,
+    unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown,
 );

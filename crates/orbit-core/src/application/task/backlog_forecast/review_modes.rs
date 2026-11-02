@@ -8,8 +8,8 @@ use chrono::Duration;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{
-    JobRun, JobRunState, JobTargetType, ReviewAdmission, ReviewGateAdmissionOutput, ReviewTiming,
-    SelectiveBeforeLandingMode, ShipMode,
+    JobRun, JobRunState, JobTargetType, PipelineState, ReviewAdmission, ReviewGateAdmissionOutput,
+    ReviewTiming, SelectiveBeforeLandingMode, ShipMode,
 };
 use serde::Serialize;
 
@@ -48,10 +48,23 @@ impl ReviewMode {
     }
 }
 
+/// Coverage key for a historical checkpoint the strict decoder refused.
+pub(super) const REVIEW_CHECKPOINT_UNREADABLE: &str = "review_checkpoint_unreadable";
+
+/// One historical run whose review checkpoint could not be read. Missing
+/// evidence is not a gap: only bytes the strict decoder rejected are.
+#[derive(Clone, Debug)]
+pub(super) struct ReviewEvidenceGap {
+    pub(super) run_id: String,
+    pub(super) reason: String,
+    pub(super) coverage_gap: &'static str,
+}
+
 /// Current policy is resolved through the delivery admission authority. A
 /// future light-delivery diff cannot yet be verified, so it retains policy.
 pub(super) struct ReviewHistory {
     modes: HashMap<String, BTreeSet<ReviewMode>>,
+    pub(super) gaps: BTreeMap<String, ReviewEvidenceGap>,
     current: ReviewAdmission,
 }
 
@@ -72,6 +85,7 @@ impl ReviewHistory {
             }
         }
         let mut modes: HashMap<String, BTreeSet<ReviewMode>> = HashMap::new();
+        let mut gaps: BTreeMap<String, ReviewEvidenceGap> = BTreeMap::new();
         for (run_id, invocations) in by_run {
             let run = runtime.stored_job_run(run_id)?;
             // Pilots, sweeps and coordinators are separate work, even when
@@ -82,7 +96,11 @@ impl ReviewHistory {
             {
                 continue;
             }
-            let mode = enforced_review_mode(runtime, run.as_ref(), &invocations)?;
+            let enforced = enforced_review_mode(runtime, run.as_ref(), &invocations)?;
+            if let Some(gap) = enforced.gap {
+                gaps.entry(gap.run_id.clone()).or_insert(gap);
+            }
+            let mode = enforced.mode;
             for invocation in invocations {
                 for id in &invocation.task_ids {
                     if task_ids.contains(id.as_str()) {
@@ -93,6 +111,7 @@ impl ReviewHistory {
         }
         Ok(Self {
             modes,
+            gaps,
             current: runtime.forecast_review_admission()?,
         })
     }
@@ -116,7 +135,7 @@ impl ReviewHistory {
         &self,
         runtime: &OrbitRuntime,
         task: &Task,
-    ) -> Result<(ReviewMode, String), OrbitError> {
+    ) -> Result<(ReviewMode, String, Option<ReviewEvidenceGap>), OrbitError> {
         if task.status == TaskStatus::InProgress {
             let run = task
                 .job_run_id
@@ -128,18 +147,27 @@ impl ReviewHistory {
                 .as_ref()
                 .and_then(|run| run.input.as_ref())
                 .and_then(|input| ReviewAdmission::from_run_input(input).ok().flatten());
-            if let Some(run) = &run
-                && run_review_exempt(runtime, run)?
-            {
-                return Ok((ReviewMode::None, "verified_run_exemption".into()));
+            if let Some(run) = &run {
+                let checkpoint = forecast_checkpoint(runtime, &run.run_id)?;
+                if let Some(gap) = unreadable_gap(&run.run_id, &checkpoint) {
+                    return Ok((
+                        ReviewMode::Unknown,
+                        "unreadable_run_checkpoint".into(),
+                        Some(gap),
+                    ));
+                }
+                if review_exempt(&checkpoint, run) {
+                    return Ok((ReviewMode::None, "verified_run_exemption".into(), None));
+                }
             }
-            return Ok(captured.map_or(
+            let (mode, source) = captured.map_or(
                 (ReviewMode::Unknown, "missing_run_admission".into()),
                 |admission| assumed_selective_mode(&admission, "captured"),
-            ));
+            );
+            return Ok((mode, source, None));
         }
         if task.tags.iter().any(|tag| tag == "no-diff-expected") {
-            return Ok((ReviewMode::None, "no_diff_expected".into()));
+            return Ok((ReviewMode::None, "no_diff_expected".into(), None));
         }
         let (mode, selective_source) = match self.current.selective_policy() {
             Some(policy) if self.current.timing == ReviewTiming::None => {
@@ -161,19 +189,31 @@ impl ReviewHistory {
             _ => (ReviewMode::from_timing(self.current.timing), None),
         };
         if let Some(source) = selective_source {
-            return Ok((mode, source.to_string()));
+            return Ok((mode, source.to_string(), None));
         }
         let route = runtime.forecast_task_delivery_mode(task);
         let Ok(route) = route else {
-            return Ok((ReviewMode::Unknown, "unresolved_delivery_route".into()));
+            return Ok((
+                ReviewMode::Unknown,
+                "unresolved_delivery_route".into(),
+                None,
+            ));
         };
         if route.is_none() {
-            return Ok((ReviewMode::Unknown, "custom_delivery_route".into()));
+            return Ok((ReviewMode::Unknown, "custom_delivery_route".into(), None));
         }
         if route == Some(ShipMode::Local) && mode != ReviewMode::None {
-            return Ok((ReviewMode::Unknown, "local_route_review_conflict".into()));
+            return Ok((
+                ReviewMode::Unknown,
+                "local_route_review_conflict".into(),
+                None,
+            ));
         }
-        Ok((mode, format!("current:{}", self.current.timing_source)))
+        Ok((
+            mode,
+            format!("current:{}", self.current.timing_source),
+            None,
+        ))
     }
 }
 
@@ -204,23 +244,84 @@ fn assumed_selective_mode(admission: &ReviewAdmission, origin: &str) -> (ReviewM
     )
 }
 
+struct EnforcedReview {
+    mode: ReviewMode,
+    gap: Option<ReviewEvidenceGap>,
+}
+
+fn decided(mode: ReviewMode) -> EnforcedReview {
+    EnforcedReview { mode, gap: None }
+}
+
+/// A historical checkpoint as the forecast may use it. Invalid JSON stays
+/// in the store; only this read classifies it, and only as unknown evidence.
+enum ForecastCheckpoint {
+    Missing,
+    Readable(Box<PipelineState>),
+    Unreadable { reason: String },
+}
+
+fn forecast_checkpoint(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<ForecastCheckpoint, OrbitError> {
+    match runtime.stored_run_state(run_id) {
+        Ok(None) => Ok(ForecastCheckpoint::Missing),
+        Ok(Some(state)) => Ok(ForecastCheckpoint::Readable(Box::new(state))),
+        Err(error) => {
+            if let OrbitError::Store(message) = &error
+                && message.starts_with("invalid pipeline_state_json:")
+            {
+                let reason = error.to_string();
+                tracing::warn!(
+                    run_id,
+                    reason,
+                    "backlog forecast: historical review checkpoint unreadable"
+                );
+                return Ok(ForecastCheckpoint::Unreadable { reason });
+            }
+            Err(error)
+        }
+    }
+}
+
+fn unreadable_gap(run_id: &str, checkpoint: &ForecastCheckpoint) -> Option<ReviewEvidenceGap> {
+    match checkpoint {
+        ForecastCheckpoint::Unreadable { reason } => Some(ReviewEvidenceGap {
+            run_id: run_id.to_string(),
+            reason: reason.clone(),
+            coverage_gap: REVIEW_CHECKPOINT_UNREADABLE,
+        }),
+        ForecastCheckpoint::Missing | ForecastCheckpoint::Readable(_) => None,
+    }
+}
+
 fn enforced_review_mode(
     runtime: &OrbitRuntime,
     run: Option<&JobRun>,
     invocations: &[&InvocationSpend],
-) -> Result<ReviewMode, OrbitError> {
+) -> Result<EnforcedReview, OrbitError> {
     let Some(run) = run else {
-        return Ok(ReviewMode::Unknown);
+        return Ok(decided(ReviewMode::Unknown));
     };
     let admission = run
         .input
         .as_ref()
         .and_then(|input| ReviewAdmission::from_run_input(input).ok().flatten());
     let Some(admission) = admission else {
-        return Ok(ReviewMode::Unknown);
+        return Ok(decided(ReviewMode::Unknown));
     };
+    let checkpoint = forecast_checkpoint(runtime, &run.run_id)?;
+    if let Some(gap) = unreadable_gap(&run.run_id, &checkpoint) {
+        // Unreadable bytes are not a missing row, an exemption, a completed
+        // review, or a selective skip. Spend on the run stays with the delivery.
+        return Ok(EnforcedReview {
+            mode: ReviewMode::Unknown,
+            gap: Some(gap),
+        });
+    }
     let mode = ReviewMode::from_timing(admission.timing);
-    let exempt = run_review_exempt(runtime, run)?;
+    let exempt = review_exempt(&checkpoint, run);
     let reviewers: Vec<_> = invocations
         .iter()
         .filter(|spend| spend.activity_id.as_deref() == Some("agent_review_repair"))
@@ -242,7 +343,7 @@ fn enforced_review_mode(
         // A selectively required review runs as a before-landing review
         // under a `none` timing; the executed reviewer is its proof.
         let selective_enforced = admission.selective_enforced();
-        return Ok(
+        return Ok(decided(
             if executed_review && !exempt && (mode != ReviewMode::None || selective_enforced) {
                 if selective_enforced && mode == ReviewMode::None {
                     ReviewMode::BeforeLanding
@@ -252,83 +353,85 @@ fn enforced_review_mode(
             } else {
                 ReviewMode::Unknown
             },
-        );
+        ));
     }
     if run
         .steps
         .iter()
         .any(|step| step.target_id == "agent_review_repair" && step.started_at.is_some())
     {
-        return Ok(ReviewMode::Unknown);
+        return Ok(decided(ReviewMode::Unknown));
     }
     if exempt {
-        return Ok(ReviewMode::None);
+        return Ok(decided(ReviewMode::None));
     }
     if admission.selective_enforced() && mode == ReviewMode::None {
         // No reviewer ran under selective enforcement: only the gate's
         // recorded selection distinguishes a skip from a pending or
         // missing decision, so absence of a reviewer proves neither.
-        return Ok(match selective_gate_decision(runtime, run)? {
+        return Ok(decided(match selective_gate_decision(&checkpoint) {
             Some(true) => ReviewMode::Unknown,
             Some(false) => ReviewMode::None,
             None => ReviewMode::Unknown,
-        });
+        }));
     }
     if mode == ReviewMode::None {
-        return Ok(mode);
+        return Ok(decided(mode));
     }
     // Only a recorded gate decision proves that a configured review was
     // exempted. Absence of reviewer telemetry alone proves nothing.
-    Ok(ReviewMode::Unknown)
+    Ok(decided(ReviewMode::Unknown))
 }
 
 /// The run's recorded selective decision: `Some(true)` required,
 /// `Some(false)` not required, `None` for unavailable, observe-only, or
 /// no recorded decision. Read from the landing gate's checkpointed
 /// output, never inferred from reviewer absence.
-fn selective_gate_decision(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-) -> Result<Option<bool>, OrbitError> {
+fn selective_gate_decision(checkpoint: &ForecastCheckpoint) -> Option<bool> {
     use orbit_types::workflow::SelectiveReviewResult;
-    let state = runtime.stored_run_state(&run.run_id)?;
-    let output = state
-        .as_ref()
-        .and_then(|state| state.pipeline.get("landing_review_gate_admit"));
-    let Some(output) = output else {
-        return Ok(None);
+    let ForecastCheckpoint::Readable(state) = checkpoint else {
+        return None;
     };
+    let output = state.pipeline.get("landing_review_gate_admit")?;
     let Ok(parsed) = serde_json::from_value::<ReviewGateAdmissionOutput>(output.clone()) else {
-        return Ok(None);
+        return None;
     };
     let receipt = match &parsed {
         ReviewGateAdmissionOutput::Admitted(admitted) => {
-            return Ok(admitted.selective_receipt.as_ref().map(|_| true));
+            return admitted.selective_receipt.as_ref().map(|_| true);
         }
         ReviewGateAdmissionOutput::NotApplicable(decision) => decision.selective_receipt.as_ref(),
         ReviewGateAdmissionOutput::PreflightPassed { .. } => None,
     };
-    Ok(receipt.and_then(|receipt| match receipt.result {
+    receipt.and_then(|receipt| match receipt.result {
         SelectiveReviewResult::Required => Some(true),
         SelectiveReviewResult::NotRequired => Some(false),
         SelectiveReviewResult::Unavailable => None,
-    }))
+    })
 }
 
-fn run_review_exempt(runtime: &OrbitRuntime, run: &JobRun) -> Result<bool, OrbitError> {
+fn review_exempt(checkpoint: &ForecastCheckpoint, run: &JobRun) -> bool {
+    // An unreadable checkpoint cannot verify an exemption, including one
+    // recorded only on the step row.
+    if matches!(checkpoint, ForecastCheckpoint::Unreadable { .. }) {
+        return false;
+    }
     let is_exemption = |output: &serde_json::Value| {
         matches!(serde_json::from_value::<ReviewGateAdmissionOutput>(output.clone()),
             Ok(ReviewGateAdmissionOutput::NotApplicable(decision))
                 if matches!(decision.reason.as_str(), "no_diff_exemption" | "skip_review_light_delivery"))
     };
-    let state = runtime.stored_run_state(&run.run_id)?;
-    Ok(state.as_ref().is_some_and(|state| {
+    let from_checkpoint = if let ForecastCheckpoint::Readable(state) = checkpoint {
         state
             .step_output_entries()
             .any(|(_, output)| is_exemption(output))
-    }) || run.steps.iter().any(|step| {
-        step.target_id == "review_gate_admit"
-            && step.state == JobRunState::Success
-            && step.agent_response_json.as_ref().is_some_and(is_exemption)
-    }))
+    } else {
+        false
+    };
+    from_checkpoint
+        || run.steps.iter().any(|step| {
+            step.target_id == "review_gate_admit"
+                && step.state == JobRunState::Success
+                && step.agent_response_json.as_ref().is_some_and(is_exemption)
+        })
 }
