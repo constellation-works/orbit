@@ -3,8 +3,15 @@
 A manager is a role an interactive session takes, not a program and not a
 second store. It holds no loop and no state of its own: everything it knows it
 reads from Orbit, and everything it does it writes through Orbit tools. Any
-session serving the `manager` MCP role can act as manager, and two manager
-sessions at once are safe because neither is authoritative.
+session serving the `manager` MCP role can act as manager for the read,
+relay, control, and summary steps, and two manager sessions at once are safe
+because neither is authoritative. Filing, editing, and commenting on the
+mandate assignment need the `tasks-write` toolset, which the plain `manager`
+MCP role does not list: run the manager server with that toolset added to
+the role (for example `orbit mcp serve --role manager --toolset tasks-write`),
+or hand those steps to a session that already has it. Adding the toolset
+changes only which tools the server lists and dispatches; it grants no
+authority.
 
 The manager does four things for the human: files and scopes mandates, relays
 grants, decisions and directions verbatim, controls residents, and summarises
@@ -21,6 +28,11 @@ A mandate is an `[orchestration]` assignment task tagged `resident`, carrying
 a `resident/mandate.json` artifact, plus a separate authority record. The
 mandate says what to achieve; the authority says what the resident may do.
 
+Filing steps 1–2 need the `tasks-write` toolset (`orbit.task.add` and
+`orbit.task.artifact.put` belong to it, so a plain `manager` MCP session is
+refused with `toolset_not_enabled`); reuse an existing assignment when the
+session cannot write, or hand the filing to a session with that surface.
+
 1. File or reuse the assignment in the owning workspace with
    `orbit.task.add`, tagged `resident`. Give it the goal as its description
    and exit criteria the resident can check against task state.
@@ -35,8 +47,9 @@ mandate says what to achieve; the authority says what the resident may do.
    non-empty granted authority. Without granted authority it can still run
    observe-only cycles if the human enables them.
 
-Editing the mandate is an ordinary task write and is not gated, but an edit
-cannot widen authority: the effective scope is the workspaces both the
+Editing the mandate is an ordinary task write (`orbit.task.update`) and needs
+the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
+widen authority — the effective scope is the workspaces both the
 mandate and the authority record cover. `orbit.resident.show` reports both
 records beside the effective authority.
 
@@ -131,7 +144,10 @@ checkpoints (or receives a synthesized checkpoint), and exits at its boundary.
 
 To take a mandate over: `takeover` with `by_session` naming your session,
 then work in the same assignment task and comment as usual — no export or
-import. When you hand it back, `release`; the next cycle reads the
+import. Working and commenting in the assignment needs the `tasks-write`
+toolset (`orbit.task.update` and comments through it); a plain `manager` MCP
+session must hand the takeover work to a session with that surface. When you
+hand it back, `release`; the next cycle reads the
 takeover-period comments as new non-resident comments and resumes from them.
 While taken over, do not act as if a cycle will run: nothing fires.
 
