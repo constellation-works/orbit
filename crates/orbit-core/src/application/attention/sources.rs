@@ -587,7 +587,7 @@ fn resident_stalled_items(
     settings: &AttentionSettings,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
     let mut items = Vec::new();
-    for metadata in runtime.list_task_metadata()? {
+    for metadata in runtime.observe_task_metadata()? {
         if metadata.status.is_terminal()
             || !metadata
                 .tags
@@ -652,6 +652,21 @@ fn resident_stalled_items(
     Ok(items)
 }
 
+/// The non-repairing claim inspection's pending-commit refusal, when one
+/// is pending. Task hydration reads (`get_task`, comments, history,
+/// artifacts) settle a pending commit as a side effect, so an
+/// observational attention read must degrade rather than reach them while
+/// a commit awaits an ordinary operational read.
+fn pending_commit_message(runtime: &OrbitRuntime) -> Option<String> {
+    if !runtime.coordination_task_reads_visible() {
+        return None;
+    }
+    match runtime.inspect_execution_claims() {
+        Err(error) if error.to_string().contains("pending commit") => Some(error.to_string()),
+        _ => None,
+    }
+}
+
 pub(super) fn read_attention_sources(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -682,6 +697,25 @@ pub(super) fn read_attention_sources(
                 "This source belongs to a later attention slice and is not implemented on this host"
                     .into(),
         });
+    }
+    // A pending task commit makes every task-backed source unreadable
+    // without recovery: degrade them instead of letting selection or
+    // hydration settle the journal. Notice, resident and task-level
+    // sources all read task records, so they share this refusal.
+    if let Some(message) = pending_commit_message(runtime) {
+        for kind in filter.kinds.iter().copied().filter(|kind| {
+            *kind == K::NoticeOpen
+                || *kind == K::ResidentStalled
+                || AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
+        }) {
+            result.degraded.push(AttentionDegraded {
+                scope: format!("workspace:{}", workspace.id),
+                kind: kind.as_str().into(),
+                code: "source_unavailable".into(),
+                message: message.clone(),
+            });
+        }
+        return Ok(result);
     }
     // notice_open is derived only on the home owner: a replica's notice
     // store is not authoritative, so it degrades like the task kinds.
@@ -762,7 +796,7 @@ pub(super) fn read_attention_sources(
         return Ok(result);
     }
     let started = Instant::now();
-    let tasks = runtime.list_task_metadata()?;
+    let tasks = runtime.observe_task_metadata()?;
     result
         .timings
         .insert("task_index".into(), started.elapsed().as_micros());

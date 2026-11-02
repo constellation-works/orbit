@@ -464,7 +464,7 @@ pub(super) fn read_runtime_attention(
     let sources = (|| {
         let tasks = if owner {
             runtime
-                .list_task_metadata()?
+                .observe_task_metadata()?
                 .into_iter()
                 .map(|task| (task.id.clone(), task))
                 .collect()
