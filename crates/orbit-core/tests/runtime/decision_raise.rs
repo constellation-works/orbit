@@ -111,6 +111,51 @@ fn raise_input(task: &str, question: &str) -> Value {
 }
 
 #[test]
+fn raised_decision_risk_and_category_are_stored_and_exposed() {
+    let fx = Fixture::new();
+    let task = fx.task("Risk decision", "dk");
+    let mut input = raise_input(&task, "Choose a risk?");
+    input["options"][0]["risk_tier"] = json!("routine");
+    input["options"][1]["risk_tier"] = json!("reversible");
+    input["options"][2]["risk_tier"] = json!("irreversible");
+    let mut invalid = input.clone();
+    invalid["options"][0]["risk_tier"] = json!("bogus");
+    assert!(fx.raise("claude", invalid).is_err());
+    let raised = fx.raise("claude", input).unwrap();
+    assert_eq!(raised["risk_tier"], "irreversible");
+    assert_eq!(raised["answers"][0]["risk_tier"], "reversible");
+    let category = format!(
+        "{}/agent_request/pricing",
+        fx.runtime.workspace_id().unwrap()
+    );
+    assert_eq!(raised["category"], category);
+    let shown = fx
+        .runtime
+        .run_tool("orbit.decision.show", json!({"id": raised["id"]}))
+        .unwrap();
+    assert_eq!(shown["risk_tier"], "irreversible");
+    assert_eq!(shown["category"], category);
+    let list = fx
+        .runtime
+        .run_tool("orbit.decision.list", json!({"task_id": task}))
+        .unwrap();
+    assert_eq!(list["requests"][0]["category"], category);
+    let other = fx.task("Undeclared risk", "dk");
+    let mut untopiced = raise_input(&other, "Another risk?");
+    untopiced.as_object_mut().unwrap().remove("topic");
+    let omitted = fx.raise("claude", untopiced).unwrap();
+    assert_eq!(
+        omitted["category"],
+        format!(
+            "{}/agent_request/untopiced",
+            fx.runtime.workspace_id().unwrap()
+        )
+    );
+    assert_eq!(omitted["risk_tier"], "unknown");
+    assert_eq!(omitted["answers"][0]["risk_tier"], "unknown");
+}
+
+#[test]
 fn equivalent_questions_are_deduplicated_only_within_their_task() {
     let fx = Fixture::new();
     let first = fx.task("First decision", "dk");

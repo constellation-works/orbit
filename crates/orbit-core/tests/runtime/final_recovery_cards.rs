@@ -75,6 +75,20 @@ fn a_decide_decision_opens_one_request_with_summary_options_and_recommendation()
         .unwrap()
         .unwrap();
     assert_eq!(request.gate, DecisionGate::BlockTriage);
+    assert_eq!(
+        request.risk_tier,
+        orbit_types::task::DecisionRiskTier::Reversible
+    );
+    assert_eq!(
+        request.category.as_deref(),
+        Some(format!("{}/block_triage", fx.runtime.workspace_id().unwrap()).as_str())
+    );
+    assert!(
+        request
+            .answers
+            .iter()
+            .all(|answer| answer.risk_tier == orbit_types::task::DecisionRiskTier::Reversible)
+    );
     assert_eq!(request.state, DecisionRequestState::Open);
     assert!(
         request
@@ -104,6 +118,35 @@ fn a_decide_decision_opens_one_request_with_summary_options_and_recommendation()
     assert_eq!(open["options"].as_array().unwrap().len(), 3, "{open}");
     assert_eq!(open["options"][0]["recommended"], true);
     assert_eq!(open["options"][1]["recommended"], false);
+}
+
+#[test]
+fn a_terminal_recovery_option_makes_the_request_irreversible() {
+    let fx = fixture();
+    let mut decision = data_semantics_decision();
+    decision["options"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("rewrite");
+    decision["options"][0]["action"] = json!({"kind": "reject"});
+    let (_, request_id) = blocked_on_decision(&fx, decision);
+    let request = fx
+        .runtime
+        .get_decision_request(&request_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request.answers[0].risk_tier,
+        orbit_types::task::DecisionRiskTier::Irreversible
+    );
+    assert_eq!(
+        request.answers[1].risk_tier,
+        orbit_types::task::DecisionRiskTier::Reversible
+    );
+    assert_eq!(
+        request.risk_tier,
+        orbit_types::task::DecisionRiskTier::Irreversible
+    );
 }
 
 #[test]

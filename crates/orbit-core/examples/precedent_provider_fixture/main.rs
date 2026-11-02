@@ -146,6 +146,7 @@ fn fixture(root: &Path) -> FixtureResult {
         ..Default::default()
     })?;
     let answer = DecisionAnswer {
+        risk_tier: Default::default(),
         id: "a".into(),
         label: "Cache".into(),
         consequence: "Keep cache".into(),

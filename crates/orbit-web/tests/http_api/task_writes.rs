@@ -495,12 +495,14 @@ fn dashboard_answers_a_decision_request_as_human() {
                 DecisionGate::BlockTriage,
                 vec![
                     DecisionAnswer {
+                        risk_tier: Default::default(),
                         id: "1".to_string(),
                         label: "Drop criterion 2".to_string(),
                         consequence: "the old API stays retired".to_string(),
                         option: None,
                     },
                     DecisionAnswer {
+                        risk_tier: Default::default(),
                         id: "dismiss".to_string(),
                         label: "Dismiss".to_string(),
                         consequence: "Leave blocked, stop asking for this episode.".to_string(),

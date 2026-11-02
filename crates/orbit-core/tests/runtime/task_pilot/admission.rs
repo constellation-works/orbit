@@ -1271,6 +1271,20 @@ fn an_enabled_pilot_hold_raises_one_open_decision_request() {
     let request = &requests[0];
     assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
     assert_eq!(
+        request.risk_tier,
+        orbit_types::task::DecisionRiskTier::Authority
+    );
+    assert_eq!(
+        request.category.as_deref(),
+        Some(
+            format!(
+                "{}/pilot_admission",
+                workspace.runtime.workspace_id().unwrap()
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(
         request.gate,
         orbit_types::task::DecisionGate::PilotAdmission
     );

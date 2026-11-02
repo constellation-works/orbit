@@ -259,7 +259,8 @@ impl OrbitRuntime {
                             chrono::Utc::now(),
                         )
                         .with_summary(question.clone(), Some(recommended.clone()))
-                        .with_topic_and_filer(topic.clone(), filer.clone());
+                        .with_topic_and_filer(topic.clone(), filer.clone())
+                        .with_category(&self.workspace_id()?);
                         self.stores().task_records().update(
                             &task_id,
                             TaskRecordUpdateParams {

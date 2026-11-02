@@ -693,7 +693,8 @@ impl OrbitRuntime {
             "final_recovery".to_string(),
             now,
         )
-        .with_summary(raise.summary.clone(), raise.recommended.clone());
+        .with_summary(raise.summary.clone(), raise.recommended.clone())
+        .with_category(&self.workspace_id()?);
         if let Some(action) = &raise.human_action {
             request = request.with_human_action(action.clone());
         }
@@ -809,6 +810,7 @@ impl Plan {
         self.raise = Some(RaisedDecision {
             summary: summary.trim().to_string(),
             answers: vec![DecisionAnswer {
+                risk_tier: Default::default(),
                 id: "done".to_string(),
                 label: "Done — requeue".to_string(),
                 consequence: "Confirms the action was taken; the task returns to backlog."

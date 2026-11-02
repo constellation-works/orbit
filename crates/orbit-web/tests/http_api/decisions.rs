@@ -92,6 +92,7 @@ fn decision_answer_refusals_keep_structured_client_errors() {
                 task.id.to_string(),
                 DecisionGate::BlockTriage,
                 vec![DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "dismiss".into(),
                     label: "Dismiss".into(),
                     consequence: "Leave blocked".into(),

@@ -97,6 +97,7 @@ mod muse_state_grant;
 #[cfg(unix)]
 mod origin_fetch_hold;
 mod pilot_warning_cards;
+mod precedent_history;
 mod rebase_recovery_attempts;
 mod recovery_fixture;
 mod relation_auto_close;

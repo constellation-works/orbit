@@ -153,12 +153,14 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
             DecisionGate::BlockTriage,
             vec![
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
                     option: None,
                 },
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),
@@ -172,11 +174,20 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
             chrono::Utc::now(),
         );
         let request_id = request.id.clone();
+        let mut entry = request.history_entry("system");
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(entry.note.as_ref().unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("risk_tier");
+        legacy.as_object_mut().unwrap().remove("category");
+        for answer in legacy["answers"].as_array_mut().unwrap() {
+            answer.as_object_mut().unwrap().remove("risk_tier");
+        }
+        entry.note = Some(legacy.to_string());
         runtime
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
-                    append_history: vec![request.history_entry("system")],
+                    append_history: vec![entry],
                     ..Default::default()
                 },
             )
@@ -212,6 +223,9 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
 
     let shown = fixture.json(&["decision", "show", &request_id, "--json"]);
     assert_eq!(shown["gate"], "block_triage", "{shown}");
+    assert_eq!(shown["risk_tier"], "unknown");
+    assert_eq!(shown["answers"][0]["risk_tier"], "unknown");
+    assert!(shown["category"].is_null());
     assert_eq!(shown["answers"][0]["label"], "Drop criterion 2");
 
     // A process that declares an agent identity is refused before any
@@ -332,8 +346,8 @@ fn decision_raise_cli_raises_lists_and_completes_on_answer() {
         "question": "Which price do we ship?",
         "topic": "pricing/sign-off",
         "options": [
-            {"label": "Keep it", "consequence": "No change."},
-            {"label": "Raise 10%", "consequence": "Edit the price table.", "recommended": true},
+            {"label": "Keep it", "consequence": "No change.", "risk_tier": "routine"},
+            {"label": "Raise 10%", "consequence": "Edit the price table.", "recommended": true, "risk_tier": "reversible"},
         ],
     })
     .to_string();
@@ -341,10 +355,18 @@ fn decision_raise_cli_raises_lists_and_completes_on_answer() {
     assert_eq!(raised["gate"], "agent_request", "{raised}");
     assert_eq!(raised["answers"][0]["label"], "Raise 10%", "{raised}");
     assert_eq!(raised["recommended"], "1", "{raised}");
+    assert_eq!(raised["risk_tier"], "reversible", "{raised}");
+    assert!(
+        raised["category"]
+            .as_str()
+            .unwrap()
+            .ends_with("/agent_request/pricing")
+    );
     let request_id = raised["id"].as_str().unwrap().to_string();
 
     let listed = fixture.json(&["decision", "list", "--topic", "pricing/sign-off", "--json"]);
     assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["requests"][0]["risk_tier"], "reversible");
     let other = fixture.json(&["decision", "list", "--topic", "pricing", "--json"]);
     assert_eq!(other["count"], 0, "{other}");
 
@@ -356,6 +378,10 @@ fn decision_raise_cli_raises_lists_and_completes_on_answer() {
         .failure();
     let still_open = fixture.json(&["decision", "show", &request_id, "--json"]);
     assert_eq!(still_open["state"], "open", "{still_open}");
+    assert_eq!(still_open["risk_tier"], "reversible");
+    let open = fixture.json(&["task", "show", &task_id, "--json"]);
+    assert_eq!(open["open_decisions"][0]["risk_tier"], "reversible");
+    assert_eq!(open["open_decisions"][0]["category"], raised["category"]);
 
     fixture
         .command(&["decision", "answer", &request_id, "1", "--json"])
@@ -414,12 +440,14 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             DecisionGate::BlockTriage,
             vec![
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
                     option: None,
                 },
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),

@@ -42,7 +42,8 @@ pub use request::{
     DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
     DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
     DecisionOptionError, DecisionOptionInput, DecisionRequest, DecisionRequestState,
-    DecisionResolution, DecisionRewrite, PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE,
-    PrecedentCitation, PrecedentSource, current_candidate_identity, decision_option_answers,
-    decision_requests_from_history, is_precedent_bookkeeping, open_decision_requests,
+    DecisionResolution, DecisionRewrite, DecisionRiskTier, PRECEDENT_ACTOR,
+    PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, current_candidate_identity,
+    decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
+    open_decision_requests,
 };

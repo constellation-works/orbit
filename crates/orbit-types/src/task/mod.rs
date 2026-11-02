@@ -42,7 +42,7 @@ pub use decision::{
     DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction,
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionOptionError,
     DecisionOptionInput, DecisionRequest, DecisionRequestState, DecisionResolution,
-    DecisionRewrite, DesktopMutationReceipt, DesktopMutationReceiptError,
+    DecisionRewrite, DecisionRiskTier, DesktopMutationReceipt, DesktopMutationReceiptError,
     FINAL_RECOVERY_DECIDED_EVENT, JobStepInvocation, PILOT_ADMISSION_DECIDED_EVENT,
     PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE, PilotAdmissionVerdict, PrecedentCitation,
     PrecedentSource, PublicationHistoryError, PublicationProofContainer, PublicationProofValue,

@@ -27,18 +27,15 @@ pub fn decision_precedents_from_history(
             if request.raised_at >= query.as_of {
                 return None;
             }
-            // Prefer the stored category when the request contract has one.
-            let category = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                .and_then(|note| {
-                    note.get("category")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
+            // Preserve which additive fields existed in the recorded event:
+            // defaulting a legacy request must not change its citation digest.
+            let recorded: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+            let category = recorded
+                .get("category")
+                .and_then(Value::as_str)
+                .map(str::to_string)
                 .unwrap_or_else(|| decision_precedent_category(&query.workspace_id, &request));
-            Some((request.id.clone(), (request, category)))
+            Some((request.id.clone(), (request, category, recorded)))
         })
         .collect();
     let mut events: Vec<_> = history
@@ -60,7 +57,7 @@ pub fn decision_precedents_from_history(
         else {
             continue;
         };
-        let Some((request, category)) = requests.get(&resolution.request_id) else {
+        let Some((request, category, recorded)) = requests.get(&resolution.request_id) else {
             continue;
         };
         if resolution.answered_at >= query.as_of || resolution.answered_at < request.raised_at {
@@ -114,9 +111,35 @@ pub fn decision_precedents_from_history(
         );
         // Content-address the immutable source events, including the request's
         // original category and options. Never dereference this citation.
+        let mut digest_request = serde_json::to_value(request).unwrap_or_default();
+        if let Some(fields) = digest_request.as_object_mut() {
+            for field in ["risk_tier", "category"] {
+                if recorded.get(field).is_none() {
+                    fields.remove(field);
+                }
+            }
+            if let (Some(answers), Some(recorded_answers)) = (
+                fields.get_mut("answers").and_then(Value::as_array_mut),
+                recorded.get("answers").and_then(Value::as_array),
+            ) {
+                for (answer, recorded_answer) in answers.iter_mut().zip(recorded_answers) {
+                    if recorded_answer.get("risk_tier").is_none()
+                        && let Some(fields) = answer.as_object_mut()
+                    {
+                        fields.remove("risk_tier");
+                    }
+                }
+            }
+        }
         let digest = orbit_types::assistance::assistance_digest(
-            &serde_json::to_vec(&(request, category, &resolution, &decided_by, decided_at))
-                .unwrap_or_default(),
+            &serde_json::to_vec(&(
+                digest_request,
+                category,
+                &resolution,
+                &decided_by,
+                decided_at,
+            ))
+            .unwrap_or_default(),
         );
         precedents.push(DecisionPrecedent {
             id: reference.clone(),
