@@ -358,6 +358,40 @@ fn tool_run_rejects_inactive_tools() {
         !refusal.contains("operator"),
         "the refusal must not offer a capability override:\n{refusal}"
     );
+    // The single-record route names the same agent search with the friction ID
+    // as the query; the tool itself stays inactive.
+    let refused_show = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.friction.show",
+            "--input",
+            "{\"id\":\"F2026-01-001\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"))
+        .get_output()
+        .stderr
+        .clone();
+    let refusal_show = String::from_utf8_lossy(&refused_show);
+    assert!(
+        refusal_show.contains("orbit.search"),
+        "the show refusal must name the supported agent search:\n{refusal_show}"
+    );
+    assert!(
+        refusal_show.contains("kind") && refusal_show.contains("friction"),
+        "the show refusal must name the friction search kind:\n{refusal_show}"
+    );
+    assert!(
+        refusal_show.contains("friction ID"),
+        "the show refusal must say the query selects one record:\n{refusal_show}"
+    );
+    assert!(
+        !refusal_show.contains("operator"),
+        "the show refusal must not offer a capability override:\n{refusal_show}"
+    );
     orbit_at_home(&work, &home)
         .args(["tool", "enable", "orbit.friction.list"])
         .assert()
@@ -372,7 +406,7 @@ fn tool_run_rejects_inactive_tools() {
         .stdout
         .clone();
     let events: Value = serde_json::from_slice(&output).unwrap();
-    for subcommand in ["run", "enable"] {
+    for (subcommand, expected) in [("run", 2), ("enable", 1)] {
         let attempts: Vec<_> = events
             .as_array()
             .unwrap()
@@ -381,13 +415,15 @@ fn tool_run_rejects_inactive_tools() {
             .collect();
         assert_eq!(
             attempts.len(),
-            1,
-            "one row per inactive {subcommand} refusal"
+            expected,
+            "{expected} rows for inactive {subcommand} refusals (list and show)"
         );
-        assert_eq!(
-            attempts[0]["status"], "denied",
-            "inactive {subcommand} is a policy denial"
-        );
+        for attempt in &attempts {
+            assert_eq!(
+                attempt["status"], "denied",
+                "inactive {subcommand} is a policy denial"
+            );
+        }
     }
 
     // The listing the refusal names answers the same agent: a friction filed
@@ -427,6 +463,32 @@ fn tool_run_rejects_inactive_tools() {
             .iter()
             .any(|hit| hit["id"] == filed["id"]),
         "the search the refusal names must list the friction just filed:\n{listing}"
+    );
+
+    // The single-record route the show refusal names answers the same agent:
+    // a query carrying the filed friction ID selects that record.
+    let filed_id = filed["id"].as_str().expect("filed friction id");
+    let singled = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            &format!("{{\"kind\":\"friction\",\"query\":\"{filed_id}\",\"model\":\"codex\"}}"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let singled: Value = serde_json::from_slice(&singled).unwrap();
+    assert!(
+        singled["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["id"] == filed["id"]),
+        "the search the show refusal names must select the filed friction by ID:\n{singled}"
     );
 }
 

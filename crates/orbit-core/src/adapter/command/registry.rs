@@ -399,6 +399,9 @@ fn agent_alternative(name: &str) -> Option<&'static str> {
         "orbit.friction.list" => {
             Some("Agents list friction with orbit.search (kind \"friction\", no query)")
         }
+        "orbit.friction.show" => Some(
+            "Agents read one friction record with orbit.search (kind \"friction\", query set to the friction ID)",
+        ),
         _ => None,
     }
 }
