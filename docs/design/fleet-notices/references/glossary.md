@@ -14,7 +14,7 @@ them a narrower sense.
 |------|---------|
 | **Author class** | `operator`, `orchestrator` or `agent`, derived by the owner from the caller's session; never an input. [notice-authority](../specs/notice-authority.md#poster-classes). |
 | **Brief block** | The `fleet_notices` JSON value in a managed agent's task context, marked `trust: untrusted_data`. [notice-delivery](../specs/notice-delivery.md#shape). |
-| **Corroboration** | A post matching an open notice by someone not allowed to edit it; bumps `reports` only. [notice-record](../specs/notice-record.md#dedupe). |
+| **Corroboration** | A non-repeat post matching an open notice by someone not allowed to edit it; bumps `reports` only. [notice-record](../specs/notice-record.md#dedupe). |
 | **Dedupe key** | The subject identity of a notice; at most one open notice per key per home workspace. [notice-record](../specs/notice-record.md#dedupe). |
 | **Dispatch hold** | The later extension in which an operator- or orchestrator-authored `maintenance` notice withholds unattended admission on named hosts. Not in v1. [2_design.md §7](../2_design.md#7-extension-point-maintenance-dispatch-hold). |
 | **Effective state** | `open`, `closed` or `expired`, computed on read from the row, the clock and the linked task. [notice-record](../specs/notice-record.md#effective-state). |
