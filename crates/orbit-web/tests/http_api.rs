@@ -91,6 +91,8 @@ mod log;
 mod log_render;
 #[path = "http_api/metrics_trends.rs"]
 mod metrics_trends;
+#[path = "http_api/notices.rs"]
+mod notices;
 #[path = "http_api/pagination.rs"]
 mod pagination;
 #[path = "http_api/plugins.rs"]
