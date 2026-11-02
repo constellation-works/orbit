@@ -164,7 +164,7 @@ Each applied change appends a `resident_authority_changed` event to the assignme
 
 ## MCP roles and authority
 
-The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint` and `orbit.resident.metrics`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
+The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
 
 A widening applies directly only when the caller is the operator, and the caller's role does not decide that. An MCP session is never the operator for this purpose, even one that holds operator capability, so its widening becomes a request. Its `orchestrator` and `model` arguments record attribution on that request and never grant anything.
 
@@ -185,6 +185,18 @@ Over MCP the same operations take these argument names: `task_id`, `add`, `works
 - A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 characters of notes. Each action key has the form `resident:<mandate>:<cycle>:<n>`, where `<n>` is a positive integer.
 
 `show` reports the latest checkpoint.
+
+## Evolution ledger
+
+The `resident` toolset also carries the evolution capability-gap ledger: `orbit.evolution.add` records an interactive cost event outside a checkpoint, and `orbit.evolution.list` and `orbit.evolution.show` inspect the resulting signatures and records.
+
+```bash
+orbit evolution add --event '{"kind":"manual_step","what":"Checked CI by hand","minutes":4,"retries":0,"slot_minutes":0,"wished":"Automatic CI recheck"}'
+orbit evolution list --state open
+orbit evolution show <evolution-id>
+```
+
+`orbit evolution decline <evolution-id> [--days <n>]` suppresses proposals for a signature. It is operator-only and CLI-only, so it is not listed over MCP.
 
 ## Related pages
 

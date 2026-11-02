@@ -205,7 +205,11 @@ keeps running leaves. `orbit run show` reports the claim stages.
 | `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
 | `orbit resident show <task>` / `list` | Show a mandate, its effective authority, grant history and open grant requests, or list mandates (`--all` includes ended ones). |
 | `orbit resident checkpoint <task> --record <json>` | Append the live cycle's `resident.checkpoint` record. It needs a matching live, unexpired cycle and writes nothing for a stale or duplicate record. |
-| `orbit resident metrics [--mandate <task>] [--since <window>] [--baseline <task>]` | Report the resident widening measures over a window: manual interventions, escalation load, reversal rate and recovery cost. Per mandate, or across mandates with workspace totals when `--mandate` is omitted. Read-only. |
+| `orbit resident metrics [--mandate <task>] [--since <window>] [--baseline <task>]` | Report the resident widening measures over a window: manual interventions, escalation load, reversal rate and crashed-cycle recovery cost, derived read-only from task history, decision requests, checkpoints and audit rows. Per mandate, or across mandates with workspace totals when `--mandate` is omitted. |
+| `orbit evolution add --event <json> [--mandate <task>] [--cycle <cycle>]` | Record an interactive cost event in the bound workspace. Signature events corroborate one non-terminal evolution record; unsigned costs are retained without creating a capability gap. |
+| `orbit evolution list [--state <state>] [--since <instant>]` | List evolution signatures with summed costs, sorted by minutes plus slot minutes. |
+| `orbit evolution show <id>` | Show one evolution record with its occurrences, proposal state, suppression window and all-time aggregates. |
+| `orbit evolution decline <id> [--days <n>]` | Operator-only: suppress proposals for a signature (default 30 days). CLI-only; not listed over MCP. |
 
 The mandate format and the authority rules are described in [Resident mandates](../resident-mandates/).
 
