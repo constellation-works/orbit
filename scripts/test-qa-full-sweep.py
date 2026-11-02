@@ -1014,6 +1014,14 @@ def validate_inventory(repo: Path, inventory: dict):
             if (not isinstance(rows, list) or not rows or len(rows) != len(set(rows))
                     or any(not isinstance(row, str) or not row.strip() for row in rows)):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral rows")
+        if is_node_test(scenario.get("command", [])) and "required_cases" not in scenario:
+            errors.append(f"scenario {scenario['id']} has no required browser cases")
+        if "required_cases" in scenario:
+            cases = scenario["required_cases"]
+            if (not isinstance(cases, list) or not cases
+                    or any(not isinstance(name, str) or not name.strip() for name in cases)
+                    or len(cases) != len(set(cases))):
+                errors.append(f"scenario {scenario['id']} has invalid required browser cases")
         for case, reason in scenario.get("coverage_gaps", {}).items():
             if not case or not isinstance(reason, str) or not reason.strip():
                 errors.append(f"scenario {scenario['id']} has an unexplained boundary coverage gap")
@@ -1617,6 +1625,68 @@ def validate_cargo_test_evidence(command, evidence, required_tests=(), required_
         raise ValueError(f"cargo test did not complete required behavioral rows: {sorted(missing_rows)}")
 
 
+def is_node_test(command):
+    return (len(command) >= 2 and Path(command[0]).name == "node"
+            and "--test" in command)
+
+
+def validate_node_test_evidence(command, evidence, required_cases=()):
+    """Require named Node TAP cases to have actually executed and passed.
+
+    A successful Node exit alone cannot establish that a browser measurement
+    ran: a required case may be skipped (kit unavailable / launch failure
+    converted to a skip) or absent (renamed/filtered). Mock cases in the same
+    files execute either way, so only the named cases are measurement evidence.
+    Populates executed/skipped/failed case lists on ``evidence`` before raising.
+    """
+    if not is_node_test(command):
+        return
+    output = evidence.get("stdout", "") + "\n" + evidence.get("stderr", "")
+    executed, skipped, failed = [], [], []
+    for raw in output.splitlines():
+        match = re.match(r"^(ok|not ok) \d+ - (.+)$", raw.strip())
+        if not match:
+            continue
+        name = match.group(2).strip()
+        directive = None
+        if " # " in name:
+            name, directive = (part.strip() for part in name.split(" # ", 1))
+        if match.group(1) == "not ok":
+            failed.append(name)
+        elif directive and directive.upper().startswith(("SKIP", "TODO")):
+            skipped.append(name)
+        else:
+            executed.append(name)
+    # Suite rows (e.g. a describe block) are not cases; required names are
+    # leaf cases, so suite pass/fail is covered by its leaf rows and exit code.
+    evidence["executed_cases"] = sorted(set(executed))
+    evidence["skipped_cases"] = sorted(set(skipped))
+    evidence["failed_cases"] = sorted(set(failed))
+    summary = {}
+    for key in ("tests", "pass", "fail", "skipped"):
+        found = re.search(rf"^# {key} (\d+)$", output, re.MULTILINE)
+        if found:
+            summary[key] = int(found.group(1))
+    if summary:
+        evidence["node_test_counts"] = summary
+    if evidence.get("exit_code") != 0:
+        raise ValueError("node test command did not exit successfully")
+    if evidence.get("output_truncated"):
+        raise ValueError("node test output was truncated; behavioral evidence is incomplete")
+    if failed or summary.get("fail"):
+        raise ValueError(f"node test reported failing cases: {sorted(set(failed))}")
+    if not executed:
+        raise ValueError("node test executed zero passing cases; check the selection")
+    skipped_required = sorted(set(required_cases) & set(skipped))
+    if skipped_required:
+        raise ValueError(f"required browser case skipped: {skipped_required}")
+    if skipped:
+        raise ValueError(f"node test skipped cases: {sorted(set(skipped))}")
+    missing = sorted(set(required_cases) - set(executed))
+    if missing:
+        raise ValueError(f"node test did not execute the required browser cases: {missing}")
+
+
 def scenario_decision(inventory, results, candidate_id):
     verify_retained_evidence(results)
     failures = []
@@ -1671,9 +1741,12 @@ def isolated_environment(temp: Path, host_env=None):
 
 def browser_environment(base: dict, playwright_browsers_path: Path | None,
                         browser_ld_library_path: str | None,
-                        browser_fontconfig_file: Path | None = None):
+                        browser_fontconfig_file: Path | None = None,
+                        playwright_module: Path | None = None):
     """Add only declared browser capability paths to the disposable child env."""
     env = dict(base)
+    if playwright_module:
+        env["PLAYWRIGHT_MODULE"] = str(playwright_module)
     if playwright_browsers_path:
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_browsers_path)
     if browser_ld_library_path:
@@ -3348,6 +3421,23 @@ def self_test():
     validate_cargo_test_evidence(command, named, ["required_behavior"])
     if named["passing_tests"] != ["required_behavior"]:
         raise AssertionError("named behavioral evidence was not retained")
+    node_command = ["node", "--test", "--test-reporter=tap", "fixture.test.mjs"]
+    executed_tap = ("TAP version 13\nok 1 - mock case\nok 2 - browser case executes\n"
+                    "1..2\n# tests 2\n# pass 2\n# fail 0\n# skipped 0\n")
+    node_evidence = {"stdout": executed_tap, "stderr": "", "exit_code": 0}
+    validate_node_test_evidence(node_command, node_evidence, ["browser case executes"])
+    if node_evidence["executed_cases"] != ["browser case executes", "mock case"]:
+        raise AssertionError("executed Node cases were not retained")
+    for tap, label in (
+            (executed_tap.replace("ok 2 - browser case executes", "ok 2 - browser case executes # SKIP"), "skipped"),
+            (executed_tap.replace("browser case executes", "renamed case"), "missing"),
+            (executed_tap.replace("ok 2 - browser case executes", "not ok 2 - browser case executes"), "failed")):
+        try:
+            validate_node_test_evidence(node_command, {"stdout": tap, "stderr": "", "exit_code": 0},
+                                        ["browser case executes"])
+        except ValueError:
+            continue
+        raise AssertionError(f"{label} Node case earned measurement evidence")
     packages = {"fixture": [{"name": "boundary", "kind": ["test"]},
                             {"name": "fixture", "kind": ["lib"], "test": True}]}
     for selector in (["--test", "boundary"], ["--lib"]):
@@ -3461,7 +3551,11 @@ def self_test():
             "LD_LIBRARY_PATH": "/host/browser-libraries",
             "FONTCONFIG_FILE": "/host/fonts.conf",
         })
-        browser = browser_environment(isolated, browser_cache, browser_libs, fontconfig)
+        playwright_module = temp / "playwright/index.mjs"
+        browser = browser_environment(isolated, browser_cache, browser_libs, fontconfig,
+                                      playwright_module)
+        if browser.get("PLAYWRIGHT_MODULE") != str(playwright_module):
+            raise AssertionError("declared Playwright module was dropped")
         if browser.get("PLAYWRIGHT_BROWSERS_PATH") != str(browser_cache):
             raise AssertionError("declared Playwright browser cache was dropped")
         if browser.get("LD_LIBRARY_PATH") != str(browser_libs):
@@ -3469,10 +3563,11 @@ def self_test():
         if any(key in isolated for key in ("ORBIT_ROOT", "PLAYWRIGHT_BROWSERS_PATH",
                                           "LD_LIBRARY_PATH", "FONTCONFIG_FILE")):
             raise AssertionError("isolated environment inherited host configuration")
-        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'ORBIT_ROOT']}))"],
+        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_MODULE', 'PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'ORBIT_ROOT']}))"],
                        cwd=temp, env=browser)
         child = parse_json(observed, "browser environment regression")
-        if child != {"PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
+        if child != {"PLAYWRIGHT_MODULE": str(playwright_module),
+                     "PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
                      "LD_LIBRARY_PATH": browser_libs, "FONTCONFIG_FILE": str(fontconfig),
                      "ORBIT_ROOT": None}:
             raise AssertionError(f"browser child environment is not bounded: {child!r}")
@@ -3670,6 +3765,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 raise ValueError(f"{path}: Linux cases require Linux execution evidence")
             validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),
                                          scenario.get("required_rows", []))
+            validate_node_test_evidence(result["command"], result, scenario.get("required_cases", []))
             result = finalize_result(dict(result), result["assertions"], candidate_id)
             imported.append({**result, "imported_from":str(path),
                              "evidence_sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
@@ -3799,7 +3895,8 @@ def main():
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
-                                          args.browser_ld_library_path, args.browser_fontconfig_file)
+                                          args.browser_ld_library_path, args.browser_fontconfig_file,
+                                          args.playwright_module)
         if browser_inputs_valid:
             probe, browser_record["version"] = inspect_browser_capability(
                 args.playwright_module, browser_env, repo)
@@ -3878,6 +3975,7 @@ def main():
                 try:
                     validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []),
                                                  scenario.get("required_rows", []))
+                    validate_node_test_evidence(command, evidence, scenario.get("required_cases", []))
                     if scenario["id"] == "npm-package":
                         assertions = []
                         assertions = validate_npm_result(repo, command, evidence)
@@ -3885,7 +3983,14 @@ def main():
                         assertions = []
                         assertions = validate_plugin_result(repo, command, evidence)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-                    failure = str(error) if failure is None else failure + "; " + str(error)
+                    # An exit-zero Node run whose only defect is a skipped case
+                    # is an unavailable capability, not a failure: surface it
+                    # as a SKIP notice so finalize_result keeps NOT_RUN.
+                    if (failure is None and evidence.get("exit_code") == 0
+                            and evidence.get("skipped_cases") and not evidence.get("failed_cases")):
+                        evidence["stderr"] = (evidence.get("stderr") or "") + f"\nSKIP: {error}"
+                    else:
+                        failure = str(error) if failure is None else failure + "; " + str(error)
                 if scenario["id"] in ("npm-package", "plugin-install") and failure:
                     assertions = []
                 result = {"scenario":scenario["id"],
