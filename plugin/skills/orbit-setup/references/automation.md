@@ -525,11 +525,15 @@ A granted script step runs on Linux under `linux-bwrap-script-v1` and on macOS
 under `macos-sandbox-script-v1`; other platforms refuse the step with
 `script_sandbox_unavailable`, and so does a step started inside another sandbox
 (a worker's own Seatbelt or Bubblewrap sandbox), which never runs nested. The
-script runs with `RLIMIT_CPU` at its timeout in CPU seconds and `RLIMIT_NOFILE`
-at 1024, which it cannot raise. On Linux it has
-no network unless its grant allows one: `--network https` shares the host
-network but admits outbound TCP to port 443 only (it needs Landlock ABI 4, so an
-older kernel refuses the step), and `--network any` shares it with no rule.
+`RLIMIT_CPU` soft limit is the timeout rounded up to whole CPU seconds per
+process, with a minimum of 1 CPU second, and its hard limit is 10 CPU seconds
+later, capped at the hard limit inherited by the wrapper. The script can raise
+its CPU soft limit up to that hard limit. `RLIMIT_NOFILE` is 1024 for both its
+soft and hard limits, capped at the wrapper's inherited hard limit, so the
+script cannot raise it. On Linux, network access is off unless allowed by the
+grant. `--network https` shares the host network but admits outbound TCP to
+port 443 only (it needs Landlock ABI 4, so an older kernel refuses the step),
+and `--network any` shares it with no rule.
 Only the variables named with `--env-pass` (or in the manifest's
 `requests.env_pass`) reach the script, copied from the environment of the
 process that runs the job; `ORBIT_*` names and the profile's own `PATH`,
