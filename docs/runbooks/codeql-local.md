@@ -3,7 +3,7 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-26
+last_validated: 2026-11-01
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
@@ -381,8 +381,21 @@ sandbox, Landlock and runtime modules, are outside the active cfg on any other
 host. A macOS extractor therefore always skips their semantic analysis, and a
 run there could never pass the extraction checks above. On a host whose
 `uname -s` is not `Linux`, the script exits 3 before preparing anything: no
-toolchain, database or query. On Linux every production module is active, so
-a skipped one is always the refusal above (exit 1), never a platform exclusion.
+toolchain, database or query.
+
+Linux is the coverage host: every production Rust file must be a module the
+Linux build compiles. A file that only another platform compiles triggers the
+refusal above (exit 1) on Linux too, with no platform exclusion. Code that
+runs only on macOS therefore keeps its module compiled on Linux and gates only
+what it cannot build there, such as a macOS system call or the call site
+that starts it. For example, the worker's resource watchdog (`usage/watchdog.rs`)
+and its per-process tree levels compile on Linux, where the worker's systemd
+scope enforces limits instead. Only macOS starts the watchdog, passing it the
+macOS session-tree reader. An item gated on a different platform inside an
+included module does not trigger the refusal; the extractor skips only modules
+it cannot place in the build. Before gating a whole production module on a
+non-Linux `cfg`, keep it compiled on Linux instead, or the next local run
+refuses extraction.
 
 Exit 3 is neither a failed check nor confirmation; the check is owed by a Linux
 run of the same command. Record the exact command as a `required` validation

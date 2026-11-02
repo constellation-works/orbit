@@ -107,8 +107,10 @@ pub(crate) fn diagnostic_step(
 }
 
 /// A watchdog cause must remain visible even when an earlier activity failed.
-/// Linux scope diagnostics retain their existing first-error policy.
-#[cfg(target_os = "macos")]
+/// Linux scope diagnostics retain their existing first-error policy. Only the
+/// macOS watchdog calls it; it compiles on Linux with the watchdog module.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn watchdog_diagnostic_step(
     runs: &dyn JobRunStoreBackend,
     run: &JobRun,

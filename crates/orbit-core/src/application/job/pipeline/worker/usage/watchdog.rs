@@ -1,5 +1,9 @@
 //! Polling containment inside the worker, so it survives the submitting CLI.
 //! Descendants receive TERM then KILL; the worker records failure and ends last.
+//!
+//! macOS starts it with the worker's session-tree reader. Linux compiles it
+//! (so CodeQL analyzes it) but never starts it: the worker's cgroup scope
+//! enforces the same limits there.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -9,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::process::ancestry::{self, ProcessStartKey};
+use orbit_common::process::ancestry::{self, ProcessStartKey, ProcessTreeProcess};
 use orbit_config::{MemoryLimit, MemoryUnit};
 use orbit_store::contracts::{WorkerResourceLimitEvidence, WorkerResourceLimitStoreBackend};
 use orbit_types::workflow::{JobRun, JobRunState};
 
-use super::tree::{self, TreeSampler};
+use super::tree::TreeSampler;
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::V2RunFinalizationOptions;
 use crate::application::job::pipeline::worker::scope::WORKER_RESOURCE_LIMIT_ERROR_CODE;
@@ -42,6 +46,7 @@ impl OrbitRuntime {
     pub(in crate::application::job::pipeline::worker) fn start_worker_watchdog(
         &self,
         run: &JobRun,
+        read_tree: impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static,
     ) -> Result<Option<WorkerWatchdog>, OrbitError> {
         let settings = self.context.settings().worker_containment();
         if !settings.enabled {
@@ -59,10 +64,7 @@ impl OrbitRuntime {
         let thread = thread::Builder::new()
             .name("orbit-worker-watchdog".into())
             .spawn(move || {
-                let mut tree = TreeSampler::new(
-                    tree::session_tree_reader(std::process::id()),
-                    ancestry::process_start_and_parent,
-                );
+                let mut tree = TreeSampler::new(read_tree, ancestry::process_start_and_parent);
                 loop {
                     if let Some(usage) = tree.usage()
                         && (memory_max.is_some_and(|max| usage.memory_bytes > max)

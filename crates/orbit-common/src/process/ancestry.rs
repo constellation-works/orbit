@@ -788,6 +788,25 @@ pub(super) mod darwin_tree {
 
 /// The kernel command name for this exact process, without command-line
 /// arguments. Returns `None` when the identity changed during the query.
+#[cfg(target_os = "linux")]
+pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
+    if process_start_key(key.pid) != Some(key) {
+        return None;
+    }
+    let name = std::fs::read(format!("/proc/{}/comm", key.pid)).ok()?;
+    if process_start_key(key.pid) != Some(key) {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&name)
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect(),
+    )
+}
+
+/// The kernel command name for this exact process, without command-line
+/// arguments. Returns `None` when the identity changed during the query.
 #[cfg(target_os = "macos")]
 pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
     if process_start_key(key.pid) != Some(key) {
@@ -816,7 +835,7 @@ pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
 
 /// Bind a recorded start key to the platform's identity-bound signal handle.
 /// A replacement between the identity check and a signal is never targeted.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn bind_process_start_key(
     key: ProcessStartKey,
 ) -> std::io::Result<Option<super::signal::BoundProcess>> {
