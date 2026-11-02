@@ -285,6 +285,13 @@ session works in the same assignment task and comments as usual. On `release`, t
 those comments as new non-resident comments and resumes from them; a takeover needs no export or
 import.
 
+**Role-scoped MCP surfaces.** Each role gets its own MCP surface, not the full default plus add-ons:
+`orbit mcp serve --role manager|resident|operator|agent` serves only that role's toolsets. A role
+limits what is advertised and never grants authority. Today every server advertises the 70-tool
+default, so the `resident` toolset above is an interim step. Splitting the default into capability
+toolsets that roles select from is follow-up work. Daniel (2026-11-02): "mcp surfaces are getting
+too large lately."
+
 ## 7. Notices
 
 Fleet notices ([ORB-21207]) are quoted into every managed agent's brief, which includes a resident
