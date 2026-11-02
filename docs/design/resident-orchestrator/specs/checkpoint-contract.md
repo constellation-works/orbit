@@ -28,10 +28,20 @@ The checkpoint is the resident's whole memory between cycles. If its shape were 
 cycle would re-interpret the last one, metrics could not count decisions or reversals, and a crash
 would leave no trace of what was half done. A validated record with action keys makes recovery
 mechanical and the evolution and metrics passes possible. The keys here are the cycle's
-`resident:<mandate>:<cycle>:<n>` keys. Slice 3 ([ORB-21244]) adds them as caller-supplied keys on
-the cycle's mutating tools. Until then, the dedupe Orbit already has (automation attempt, landing and
-visual follow-up keys, and guarded `request_id`s) does not take a resident key on those tools, so a
-retried cycle action gets no dedupe before that slice lands.
+`resident:<mandate>:<cycle>:<n>` keys. Core assigns them ([ORB-21244]): the cycle's tool guard
+numbers each admitted write under the assignment's write lock and returns the key as
+`resident_action_key`. No tool takes a caller-supplied resident key.
+
+### Action ledger
+
+Each key has `resident_action` history rows on the assignment: a `started` row before the call and
+an `ok`, `failed` or `refused` row after it, each with `{key, cycle, tool, input_digest, subject,
+phase, ref}` (`input_digest` a sha256 over the tool name and its input, `subject` the task or run it names,
+`ref` the created or affected id). The checkpoint write itself is not ledgered. In a recovery cycle
+(`recovery_of` set), a call whose tool and input digest match a dead-cycle row with phase `ok`
+returns `{"resident_action": "already_done", "key", "ref", "subject"}` without running or adding
+a row (the dead cycle's key stays the action's key); a match still `started` (the cycle died mid-call) is
+refused as `resident_action_in_doubt`, and the agent checks the subject's state by reading.
 
 ## `resident.checkpoint` v1
 
@@ -112,7 +122,7 @@ After acquiring its cycle lease, observe publishes `{cycle, run_id, expires_at}`
 `resident_cycle_changed` history entry. It supplies the previous cycle id as a compare-and-set
 precondition (null when none). Finalize clears the state with its own id as that precondition;
 a stale finalizer cannot erase a newer cycle. Cycle ids cannot be reused. There is no tool or
-CLI for publishing cycle state. Cycle firing and lease acquisition remain the later cycle slice.
+CLI for publishing cycle state. The cycle job ([ORB-21244]) is its only caller: observe publishes, and finalize, or the next observe after a dead cycle, clears.
 Until observe publishes a live cycle, checkpoint and request writes fail closed.
 
 The assignment write lock covers the live-cycle read, validation, duplicate check and append.
@@ -124,11 +134,12 @@ can arrive between cycles. The reported checkpoint authority never changes actua
 ### Synthesized checkpoint
 
 When the agent wrote no valid checkpoint, `resident_finalize` writes one with `outcome:
-incomplete`, `actions[]` rebuilt from audit rows under this cycle's action keys (the caller-supplied
-keys slice 3 adds; with `result` from the audit row), empty `decisions`, `costs` and `notes`, and an
+incomplete`, `actions[]` rebuilt from the cycle's action ledger rows (the last phase of each key gives its
+`result`), empty `decisions`, `costs` and `notes`, and an
 `error` field naming why (agent failed, budget exhausted, invalid record refused). If finalize
-itself never ran (process killed), the next observe treats the cycle as dead and the recovery
-cycle's checkpoint carries `recovery_of`.
+itself never ran (process killed), the next observe treats the cycle as dead, writes the same
+synthesized checkpoint for it, and starts a recovery cycle whose grant and checkpoint carry
+`recovery_of`.
 
 ## `resident.request` v1
 
@@ -187,7 +198,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 
 - [ORB-21229] — designed the checkpoint and resume contract
 - [ORB-21243] — implements the checkpoint tool and the request/answer shapes
-- [ORB-21244] — adds the caller-supplied action key on the cycle's mutating tools (slice 3)
+- [ORB-21244] — core-assigned action keys and the action ledger (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

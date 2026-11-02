@@ -288,6 +288,7 @@ A state trigger watches tasks, waits out a short debounce, and starts its job. I
 | `preparation_eligible` | `job:task_pilot_pipeline` | Proposed or backlog tasks that need a task-pilot assessment. The seeded task-pilot routine. |
 | `finding_unverified` | `job:finding_verification_pipeline` | Review-filed bugs with no verification verdict. |
 | `pilot_warnings_held` | `job:escalation_triage_pipeline` | Proposed tasks whose latest task-pilot assessment holds promotion on warnings. |
+| `resident_due` | `job:resident_cycle_pipeline` | Active resident mandates whose watched state changed, or whose heartbeat or deadline came, once their cadence floor allows and no cycle is live. One member per mandate; `batch_size` must be 1. The seeded `resident-cycle-<workspace>` routine, disabled. |
 | `block_escalated` | Retired | Kept so an old file still loads. Final recovery decides blocked tasks now, so a routine on this kind is skipped as retired. |
 | `decision_requested` | `job:decision_request_pipeline` | Tasks with an open decision request that has not been notified, one member per open request. The job is the decision channel's notification job; a routine on this kind needs it installed. |
 | `execution_failed` | Retired | Kept so an old file still loads. Its job, `task_triage_pipeline`, is no longer shipped, so the routine is skipped as retired. A failed run leaves its task blocked; returning it to the backlog is a human transition. |

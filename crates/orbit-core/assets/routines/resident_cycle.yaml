@@ -1,0 +1,41 @@
+# Default resident cycle routine. Seeded into `.orbit/routines/` on
+# `orbit init` with the routine name, this host's registered machine id
+# (`owner_machine`) and the workspace's registered base branch resolved at
+# seed time. It is intentionally disabled: running resident orchestrators on
+# a schedule is an explicit, versioned workspace decision.
+#
+# Each active mandate (an open assignment tagged `resident` with a valid
+# `resident/mandate.json`) is one member. A mandate is due when its wake
+# digest (watched tasks, decision requests, notices in scope and operator
+# comments on the assignment) differs from its last checkpoint's, its
+# heartbeat elapsed, its deadline passed or its last cycle died. It is
+# admitted once its cadence floor since the last cycle start allows it and
+# no cycle is live, one mandate per `resident_cycle_pipeline` run. A mandate
+# with no change and an unexpired heartbeat starts nothing.
+#
+# Only this host evaluates the trigger (`owner_machine`). See
+# docs/design/resident-orchestrator/2_design.md.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Run one bounded resident orchestrator cycle for each mandate that is due:
+  something it watches changed or its heartbeat elapsed, its cadence floor
+  allows a cycle and no cycle is live. Disabled by default; set enabled to
+  true in this versioned definition to opt this workspace in.
+enabled: false
+trigger:
+  state:
+    kind: resident_due
+    owner_machine: __ORBIT_OWNER_MACHINE__
+    branch: __ORBIT_BASE_BRANCH__
+    debounce_minutes: 1
+    max_wait_minutes: 5
+    max_items: 50
+    batch_size: 1
+    retries: 2
+    deadline_minutes: 60
+target: job:resident_cycle_pipeline
+policy:
+  timeout_minutes: 60
+  overlap: forbid
+  retries: {max: 0, backoff_minutes: 5}

@@ -97,7 +97,7 @@ to change that selection and reconcile an existing workspace. Every default star
 except `crew-performance-refresh`, which is seeded enabled because it
 no-ops while `workflow.crew_performance` is `off`. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
-`task-pilot`, `finding-verification` and `pilot-warning-triage`
+`task-pilot`, `finding-verification`, `pilot-warning-triage` and `resident-cycle`
 are state-triggered and additionally resolve this host's
 machine id as `trigger.state.owner_machine` and the registered base branch as
 `trigger.state.branch`; a second host registering the same workspace seeds
@@ -110,6 +110,7 @@ on this host.
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
 | `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a triager (from `workflow.purpose_crews.pilot_warning_triage`, else the hard tier) reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
+| `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |

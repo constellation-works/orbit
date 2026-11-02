@@ -1,0 +1,32 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: resident_finalize
+spec:
+  type: deterministic
+  description: >
+    Close the owning run's resident cycle. When the cycle wrote no
+    checkpoint, write a synthesized `incomplete` one whose actions are rebuilt
+    from the cycle's action rows, then clear the live cycle with this cycle as
+    the precondition. A run that holds no live cycle changes nothing.
+  input_schema_json:
+    type: object
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+  output_schema_json:
+    type: object
+    required: [task_id, finalized]
+    properties:
+      task_id:
+        type: string
+      finalized:
+        type: boolean
+      cycle:
+        type: string
+      synthesized:
+        type: boolean
+  action: resident_finalize
+  config: {}

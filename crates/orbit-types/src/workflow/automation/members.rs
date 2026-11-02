@@ -34,6 +34,11 @@ pub enum StateTriggerKind {
     /// request (and the binding it was raised against) is notified once
     /// and the member settles when the request leaves `open`.
     DecisionRequested,
+    /// A resident mandate whose wake digest changed since its last
+    /// checkpoint, or whose heartbeat elapsed, once its cadence floor allows
+    /// a cycle and no cycle is live: one member per mandate, admitted one at
+    /// a time.
+    ResidentDue,
 }
 
 impl StateTriggerKind {
@@ -55,6 +60,7 @@ impl StateTriggerKind {
             // ships in a later slice; a state routine on this kind targets
             // that job by this canonical name.
             StateTriggerKind::DecisionRequested => "decision_request_pipeline",
+            StateTriggerKind::ResidentDue => "resident_cycle_pipeline",
         }
     }
 }
@@ -363,6 +369,14 @@ impl StateTrigger {
                 "state trigger freshness applies to kind preparation_eligible only".into(),
             ));
         }
+        if self.kind == StateTriggerKind::ResidentDue
+            && self.batch_size.is_some_and(|size| size != 1)
+        {
+            return Err(super::super::error::WorkflowError::Invalid(
+                "state trigger kind resident_due runs one mandate per cycle: batch_size must be 1"
+                    .into(),
+            ));
+        }
         if self
             .batch_size
             .is_some_and(|size| !(1..=MAX_BATCH_SIZE.min(self.max_items)).contains(&size))
@@ -394,6 +408,9 @@ impl StateTrigger {
     /// Members one admission batches into a single attempt: the configured
     /// size, or the default, never above `max_items`.
     pub fn effective_batch_size(&self) -> usize {
+        if self.kind == StateTriggerKind::ResidentDue {
+            return 1;
+        }
         self.batch_size
             .unwrap_or(DEFAULT_BATCH_SIZE)
             .min(self.max_items)

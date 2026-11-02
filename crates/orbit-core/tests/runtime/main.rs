@@ -163,6 +163,7 @@ mod readiness_population;
 mod recovery_provider_auth;
 mod regression_risk;
 mod resident_authority;
+mod resident_cycle;
 mod resource_profiles;
 mod risk_history;
 

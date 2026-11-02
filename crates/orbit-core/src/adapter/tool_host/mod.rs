@@ -20,6 +20,7 @@ mod lease_tools;
 mod notice_tools;
 mod orchestrator_tools;
 mod pipeline_tools;
+mod resident_guard;
 mod resident_tools;
 mod search_tools;
 mod task;

@@ -42,6 +42,9 @@ pub(crate) struct Host<'a> {
     /// One provider-hold scan per evaluation clock, shared by observation and
     /// admission. Observation replaces it when its clock differs.
     pilot_hold: RefCell<Option<PilotHoldCache>>,
+    /// The clock resident observation judged cadence at, so admission in
+    /// the same evaluation judges it the same way.
+    resident_now: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>>,
     /// The routine's `when:` guard, evaluated once per evaluation at the
     /// first due member.
     guard: Option<String>,

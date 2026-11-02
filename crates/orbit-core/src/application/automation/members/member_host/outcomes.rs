@@ -48,6 +48,12 @@ impl Host<'_> {
             return self.decision_outcome(attempt, id, stopped, run.state);
         }
 
+        if self.trigger.kind
+            == orbit_types::workflow::automation::members::StateTriggerKind::ResidentDue
+        {
+            return self.resident_outcome(attempt, id, stopped);
+        }
+
         // Only the exact canonical deterministic apply steps can provide this
         // record. Agent prose and unrelated output keys are never searched.
         let steps = PilotSteps::of(self.runtime, &run, self.trigger.kind)?;

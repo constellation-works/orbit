@@ -9,7 +9,7 @@ use orbit_types::workflow::ResidentLiveCycle;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
-const CYCLE_CHANGED: &str = "resident_cycle_changed";
+pub(super) const CYCLE_CHANGED: &str = "resident_cycle_changed";
 
 pub(super) fn live_cycle_from_history(
     history: &[TaskHistoryEntry],

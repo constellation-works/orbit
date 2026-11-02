@@ -15,7 +15,7 @@
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
 //!   the seeded `task_pilot`, `finding_verification`,
-//!   and `pilot_warning_triage` definitions render this host's registered
+//!   `pilot_warning_triage` and `resident_cycle` definitions render this host's registered
 //!   machine id and the workspace's registered base branch [ORB-12745].
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
@@ -70,6 +70,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "pilot_warning_triage",
         include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
+    ),
+    (
+        "resident_cycle",
+        include_str!("../../../assets/routines/resident_cycle.yaml"),
     ),
     (
         "worktree_gc",

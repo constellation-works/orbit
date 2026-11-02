@@ -86,6 +86,8 @@ macro_rules! deterministic_action_catalog {
                 RecordProposedApprovals => "record_proposed_approvals",
                 RefreshBaselineHolds => "refresh_baseline_holds",
                 ReleaseLocks => "release_locks",
+                ResidentFinalize => "resident_finalize",
+                ResidentObserve => "resident_observe",
                 ReserveLocks => "reserve_locks",
                 ResolveDeliveryJob => "resolve_delivery_job",
                 ResolveWorkspaceShipInput => "resolve_workspace_ship_input",

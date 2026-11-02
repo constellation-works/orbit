@@ -17,7 +17,7 @@ related_artifacts: [ORB-21229, ORB-21263]
 # Resident Orchestrator — Design
 
 This document specifies how a resident orchestrator works and answers the nine design questions
-of [ORB-21229]. Slice 1 ([ORB-21242]) is in review and not yet landed; slices 2–10 are approved (`backlog`), so nothing here is shipped. Exact record shapes and tool contracts are in the specs:
+of [ORB-21229]. Slices 1 ([ORB-21242]) and 2 have landed; slice 3 ([ORB-21244], the cycle) is implemented as [§5.1](#51-slice-3-as-implemented) describes, and slices 4–10 are approved (`backlog`). Exact record shapes and tool contracts are in the specs:
 [mandate-and-authority](./specs/mandate-and-authority.md),
 [checkpoint-contract](./specs/checkpoint-contract.md),
 [manager-channel](./specs/manager-channel.md) and
@@ -242,11 +242,10 @@ none of them resolves a resident key from the cycle's mutating tools today:
 Both `request_id` forms accept only 1 to 128 ASCII letters, digits, `.`, `_` or `-`, so the `:` in a
 resident key is refused. Dispatch, requeue and promote do not accept a resident key on any
 agent-callable tool (`orbit.task.requeue` takes `id`, `reason` and `discard_candidate` only), and an
-ordinary `orbit.task.add` without `request_id` passes no action key. So a recovery cycle retrying
-with the dead cycle's `resident:` key gets no existing result today. Slice 3 ([ORB-21244]) exposes a
-caller-supplied key on the cycle's mutating tools (dispatch, requeue, promote, `orbit.task.add`) or
-specifies another dedupe mechanism; once it lands, a recovery cycle that retries an action with the
-dead cycle's key gets the existing result.
+ordinary `orbit.task.add` without `request_id` passes no action key. Slice 3 ([ORB-21244]) therefore takes
+the other route: core assigns the key. The cycle's tool guard numbers every write and records it in
+an action ledger, and a recovery cycle's identical retry gets the recorded result
+([§5.1](#51-slice-3-as-implemented)). No mutating tool takes a caller-supplied resident key.
 
 **Crash recovery.** A killed cycle leaves a held lease that expires (lease TTL = agent budget + 5
 min, 35 min by default from lease acquisition) and no checkpoint. The next cycle cannot start
@@ -276,6 +275,86 @@ the granting host's workspace catalog
 **Provider-neutral.** The cycle is an ordinary `agent_loop` with a crew from the mandate, so any
 registered crew can run a resident. Provider-specific continuity sits behind the adapter in
 [ORB-21246].
+
+### 5.1 Slice 3 as implemented
+
+Slice 3 ([ORB-21244]) ships the fire, the cycle job and the tool guard. Where it differs from the
+sections above, this subsection is the authority.
+
+**Fire.** The seeded `resident_cycle` routine (`resident-cycle-<workspace>`, disabled, owner-pinned
+like every state routine) uses the `resident_due` state kind with `batch_size: 1` (the kind refuses
+any other size). Each tick it reads every `resident`-tagged task in `proposed`, `backlog`,
+`in-progress` or `blocked` whose mandate is `active`, and computes:
+
+- the **wake digest**: a sha256 over the mandate, the authority revision, each watched task's id,
+  status and `updated_at`, the decision requests on the assignment and watched tasks (id and state),
+  the in-scope notices (id, revision, status) and the wake comments. Wake comments are every
+  `resident.answer`, and every other non-resident comment except, while a cycle is live, those
+  written by the cycle itself (only `human*` writers count inside a live window);
+- the **reasons**: `first_cycle`, `digest_changed` (against the last checkpoint's digest),
+  `heartbeat` (since the last cycle *start*, or task creation), `deadline` (once, when the deadline
+  passed after the last cycle started) and `recovery:<cycle>` (a dead live cycle);
+- **withheld**: `cycle_live` (a live cycle that is not dead) or `cadence_floor` (the floor since the
+  last cycle start has not elapsed).
+
+A due mandate becomes a member whose fingerprint is `after:<last cycle>|<digest or heartbeat>`, with
+its debounce clock at the last cycle start, so it is admitted on the first tick the floor allows.
+Admission re-evaluates with the observation's clock and retires a member whose reason changed. A
+cycle run settles its member once it stops: applied if it started its cycle, failed (and retried)
+otherwise. Control-action wakes (`wake`, `resume`, `release`) arrive with [ORB-21245]; until then a
+comment on the assignment wakes it.
+
+**Lease.** There is no separate fenced lease: the live-cycle record (`resident_cycle_changed`,
+compare-and-set) is the lease, with `expires_at` 40 minutes after observe (the agent step's 30 min
+wall clock plus margin). A live cycle is dead when it expired, or its run is terminal with a stopped
+owner, or the run is gone. Cycle ids are `rcy-<run id>`, so a retried member never reuses one.
+
+**Observe.** `resident_observe` re-checks due state under the run's own clock and either skips
+(`cycle_count: 0`, with `skip_reason`), or synthesizes the dead predecessor's `incomplete` checkpoint,
+publishes the live cycle and records a `resident_cycle_granted` history entry: the frozen grant
+(`rights`, `workspaces`, `observe_only`, `narrowed_by`, `recovery_of`, `digest`, `reasons`). An open
+maintenance notice in a covered workspace (or the global scope) empties the rights with
+`narrowed_by: notice:<id>`; a passed deadline does the same with `narrowed_by: deadline`. An
+unreadable notice store narrows too. The brief carries the mandate, the grant, the last 5
+checkpoints, open requests, comments since the last cycle, the wake, the notices (title and body as
+`untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
+reference arrive with [ORB-21250]. A resumed run that already holds its cycle re-enters it.
+
+**Finalize.** `resident_finalize` writes the synthesized `incomplete` checkpoint when the agent wrote
+none (its `actions[]` from the ledger rows under the cycle's keys) and clears the live cycle. A cycle
+whose finalize never ran is closed the same way by the next observe.
+
+**Tool guard.** Core, not the activity's tool list, scopes the cycle. A tool call carries the run id
+from the trusted managed-run binding, never from input. For a `resident_cycle_pipeline` run, reads
+pass; every write needs this run's live, unexpired cycle (else `resident_cycle_stale`), every
+`workspace`/`workspaces` input must resolve to a granted workspace or the assignment's own (else
+`resident_scope_refused`), and a right-gated write needs its right (else `resident_right_refused`,
+naming the observe-only cause when narrowed). The rights mapping is
+[mandate-and-authority](./specs/mandate-and-authority.md#rights--tools). Moving a task to `review`
+is allowed only for the assignment itself (the handoff); everything else that writes and is not in
+the mapping is refused as `resident_tool_refused`.
+
+**Action ledger.** Each admitted write (except the checkpoint itself) is keyed
+`resident:<mandate>:<cycle>:<n>`, numbered under the assignment's write lock. A `resident_action`
+history row with phase `started` precedes the call, and a row with `ok`, `failed` or `refused`
+follows it; the response carries `resident_action_key`. In a recovery cycle, a call with the same
+tool and input digest that the dead cycle recorded `ok` returns
+`{"resident_action": "already_done", "key", "ref", "subject"}` without running; one the dead cycle
+left `started` is refused as `resident_action_in_doubt` for the agent to check by reading.
+
+**Deviations from §4–§5.**
+
+- Wake reasons are coarse: `digest_changed` does not say which fact changed; the brief carries the
+  facts and the agent compares.
+- PR and CI state are seen only through watched task revisions (`updated_at`), not read from the PR
+  or CI evidence directly.
+- Writes from a resident run that this workspace's runtime does not hold (a cycle run in another
+  catalog workspace) are refused as `resident_scope_refused`: cross-workspace writes through another
+  workspace's MCP server are not supported in this slice.
+- `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`,
+  `orbit.notice.close` and `orbit.resident.grant` are refused to a cycle.
+- The heartbeat counts from the last cycle start, not the last checkpoint, so a cycle that never
+  checkpoints still cannot fire faster than the heartbeat.
 
 ## 6. The manager ↔ resident channel
 
@@ -421,7 +500,7 @@ the checkpoints above, by `orbit resident metrics` ([ORB-21247]); none needs a n
 | Manual interventions per mandate | Human writes on the mandate's assignment or watched tasks that are not answers to a resident escalation and not grants: requeues, cancels, manual status changes, operator steering comments, unprompted relays, `stop`/`takeover`. Reported per mandate and per active mandate-day | Task history writer labels, audit rows, `resident.answer` comments without a `request_id` |
 | Escalation load on the human | Resident-raised decision requests per mandate-day and per human-day across all mandates; median answer latency; share answered with the recommended option; expired-unanswered count | Decision requests filed by resident runs |
 | Reversal rate | Share of resident decisions and actions later undone by a human within 7 days: a promoted task sent back to `proposed` or rejected, a reverted merge, a requeue undone, a relay with `reverses: <decision>`, a vetoed digest decision | Checkpoint `decisions[]` and `actions[]` with action keys, joined to later human writes on the same subject |
-| Recovery cost of a crashed cycle | Cycles that ended without an agent checkpoint; time from the dead cycle's start to the next good checkpoint; recovery cycle slot minutes; actions repeated (must be 0 once slice 3's caller-supplied keys land); human interventions needed | Cycle leases, `outcome: incomplete` checkpoints, run records, action keys (slice 3, [ORB-21244]) |
+| Recovery cost of a crashed cycle | Cycles that ended without an agent checkpoint; time from the dead cycle's start to the next good checkpoint; recovery cycle slot minutes; actions repeated (must be 0: slice 3's action ledger answers a retried completed action); human interventions needed | Cycle leases, `outcome: incomplete` checkpoints, run records, action keys (slice 3, [ORB-21244]) |
 
 **Baseline.** `orbit resident metrics --baseline <assignment>` computes the same measures, where
 they are derivable, from an interactive orchestration task's history. The first baseline is
@@ -434,7 +513,7 @@ Measures that cannot be derived report `not_derivable`, never zero.
 - interventions per mandate no worse than the baseline, and falling over the pilot;
 - at most 2 resident escalations per mandate-day and at most 8 per human-day;
 - a reversal rate at or below 10 % over at least 30 resident decisions;
-- every crashed cycle recovered within one heartbeat with zero repeated actions (via the slice 3 keys) and no human step.
+- every crashed cycle recovered within one heartbeat with zero repeated actions (via the slice 3 action ledger) and no human step.
 
 ## 10. Migration and pilot
 
@@ -577,7 +656,7 @@ Proposals that the slices confirm:
 
 ## 13. Slices
 
-Slice 1 is in `review` ([ORB-21242]); slices 2–10 are approved (`backlog`) tasks in ws_orbit tagged `resident-orchestrator`. Dependencies are
+Slices 1 and 2 have landed and slice 3 is implemented ([§5.1](#51-slice-3-as-implemented)); slices 4–10 are approved (`backlog`) tasks in ws_orbit tagged `resident-orchestrator`. Dependencies are
 `blocked_by` links inside ws_orbit; cross-workspace links (the [ORB-21178] baseline) are
 `related_to`.
 
@@ -585,7 +664,7 @@ Slice 1 is in `review` ([ORB-21242]); slices 2–10 are approved (`backlog`) tas
 |---|---|---|---|
 | 1 | [ORB-21242] | Mandate record, operator-only grant, grant requests, narrowing, `resident show/list`, the `resident` toolset | — |
 | 2 | [ORB-21243] | `orbit.resident.checkpoint`, request/answer shapes, stale-cycle refusal | 1 |
-| 3 | [ORB-21244] | `resident_due`, cycle job, lease, action keys, authority-scoped tools, maintenance narrowing, mandate end | 1, 2 |
+| 3 | [ORB-21244] | `resident_due`, cycle job, lease, core-assigned action keys and ledger, authority-scoped tools, maintenance and deadline narrowing, the handoff to `review` | 1, 2 |
 | 4 | [ORB-21245] | `orbit.resident.control`, `orbit.resident.relay`, `resident` toolset, `resident_stalled` | 1, 2 |
 | 5 | [ORB-21246] | Brief reconstruction, continuity adapter | 3 |
 | 6 | [ORB-21247] | `orbit resident metrics`, baseline mode | 2, 3 |

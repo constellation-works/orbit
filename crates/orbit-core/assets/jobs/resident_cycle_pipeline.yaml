@@ -1,0 +1,50 @@
+# One bounded resident orchestrator cycle for one mandate.
+#
+# The `resident_due` state routine submits one run per due mandate, naming it
+# in `task_ids`. A mandate is due when its wake digest changed since its last
+# checkpoint, its heartbeat elapsed, its deadline passed or its last cycle
+# died, once its cadence floor allows a cycle and no cycle is live.
+# Design: docs/design/resident-orchestrator/2_design.md (§4, §5).
+#
+# 1. observe takes the cycle lease for this run, writes a dead predecessor's
+#    synthesized `incomplete` checkpoint, records this cycle's grant (the
+#    effective authority, observe-only while a maintenance notice is open in
+#    scope or the deadline has passed) and builds the brief. A mandate that is
+#    no longer due starts no cycle (`cycle_count: 0`).
+# 2. cycle is the resident's agent. Core scopes every tool call it makes to
+#    the cycle's grant and keys each write `resident:<mandate>:<cycle>:<n>`.
+#    It ends by writing one checkpoint through `orbit.resident.checkpoint`.
+# 3. finalize synthesizes an `incomplete` checkpoint when the agent wrote
+#    none, and clears the live cycle. When the agent step fails, finalize does
+#    not run; the next observe treats the cycle as dead and recovers it.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: resident_cycle_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 3
+  default_input:
+    task_ids: []
+    state_automation: null
+    source_revision: ""
+
+  steps:
+    - id: observe
+      target: activity:resident_observe
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+
+    - id: cycle
+      when: "{{ steps.observe.output.cycle_count }} != 0"
+      target: activity:resident_cycle
+      default_input:
+        brief: "{{ steps.observe.output }}"
+        crew: "{{ steps.observe.output.crew }}"
+
+    - id: finalize
+      target: activity:resident_finalize
+      default_input:
+        task_ids: "{{ input.task_ids }}"

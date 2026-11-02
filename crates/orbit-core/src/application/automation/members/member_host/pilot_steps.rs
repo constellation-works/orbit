@@ -52,7 +52,8 @@ impl PilotSteps {
             // Settled from triage markers, never from an apply checkpoint.
             StateTriggerKind::PilotWarningsHeld
             | StateTriggerKind::BlockEscalated
-            | StateTriggerKind::DecisionRequested => {
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => {
                 return Ok(Self {
                     prepare: None,
                     apply: None,

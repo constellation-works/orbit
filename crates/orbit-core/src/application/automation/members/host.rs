@@ -96,6 +96,7 @@ impl<'a> Host<'a> {
             head: RefCell::new(None),
             inspection_cache: None,
             pilot_hold: RefCell::new(None),
+            resident_now: std::cell::Cell::new(None),
             guard: None,
             guard_verdict: RefCell::new(None),
         }

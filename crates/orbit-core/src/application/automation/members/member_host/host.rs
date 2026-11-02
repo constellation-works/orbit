@@ -26,7 +26,10 @@ impl MemberHost for Host<'_> {
         }
         // Pilot preparation and finding verification best-effort fetch;
         // incident consumers retain their local-only source contract.
-        let head = if self.trigger.kind != StateTriggerKind::ExecutionFailed {
+        let head = if !matches!(
+            self.trigger.kind,
+            StateTriggerKind::ExecutionFailed | StateTriggerKind::ResidentDue
+        ) {
             self.source().preparation_head(branch)?
         } else {
             self.source().local_head(branch)?
@@ -107,7 +110,8 @@ impl MemberHost for Host<'_> {
             | StateTriggerKind::FindingUnverified
             | StateTriggerKind::PilotWarningsHeld
             | StateTriggerKind::BlockEscalated
-            | StateTriggerKind::DecisionRequested => None,
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => None,
         };
 
         Ok(keys
@@ -160,6 +164,7 @@ impl MemberHost for Host<'_> {
                 "escalation_triage"
             }
             StateTriggerKind::DecisionRequested => "decision_request",
+            StateTriggerKind::ResidentDue => "resident_cycle",
         };
 
         // Every batch member travels as an explicit task id. Finding
@@ -353,6 +358,14 @@ impl Host<'_> {
                 TaskStatus::Proposed,
                 TaskStatus::Review,
             ],
+            // A mandate cycles while its assignment is open and not handed
+            // off; review, done, archived and rejected end its cycles.
+            StateTriggerKind::ResidentDue => vec![
+                TaskStatus::Proposed,
+                TaskStatus::Backlog,
+                TaskStatus::InProgress,
+                TaskStatus::Blocked,
+            ],
         }
     }
 
@@ -370,7 +383,8 @@ impl Host<'_> {
             | StateTriggerKind::BlockEscalated
             | StateTriggerKind::ExecutionFailed
             | StateTriggerKind::FindingUnverified
-            | StateTriggerKind::DecisionRequested => None,
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => None,
         }
     }
 
