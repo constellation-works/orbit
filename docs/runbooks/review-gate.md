@@ -281,9 +281,11 @@ The owner enforces what it is owed in two places:
   current base. A passing rerun clears the failure, while the same signature
   failing again with a successful same-check run on the accepted base ancestry
   enters candidate recovery. When that rerun's evidence stays unreadable for
-  `max_base_ci_cycles` polls, the base pass alone enters candidate recovery,
-  and any other failure with unreadable rerun evidence stops naming the read
-  failure. If the evidence remains incomplete,
+  `max_base_ci_cycles` polls, a same-check base pass sends a flaky failure to
+  candidate recovery. Candidate failures keep their candidate repair/requeue
+  route, and inherited failures keep their base update/wait route. Other
+  failure classes with unreadable rerun evidence stop naming the read failure.
+  If the evidence remains incomplete,
   `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
   (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
   first, and names the missing evidence. Branch protection may still treat a skipped or
