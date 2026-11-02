@@ -17,7 +17,7 @@ use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
     DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState, RESIDENT_AUTHORITY_GRANT,
-    RESIDENT_AUTHORITY_REJECT, TaskArtifact,
+    RESIDENT_AUTHORITY_REJECT, TaskArtifact, TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
@@ -26,6 +26,7 @@ use orbit_types::workflow::{
     ResidentGrantRequest, ResidentMandate, ResidentRelay, ResidentRight, canonical_rights,
 };
 
+use super::control::{ResidentControlState, resident_control_from_history};
 use super::{resident_mandate_ended, resident_mandate_from_artifact};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
@@ -133,6 +134,17 @@ fn read_authority(
     })
 }
 
+fn grant_mandate_ended(
+    status: TaskStatus,
+    history: &[TaskHistoryEntry],
+) -> Result<bool, OrbitError> {
+    Ok(resident_mandate_ended(status)
+        || resident_control_from_history(history)
+            .map_err(OrbitError::Execution)?
+            .state
+            == ResidentControlState::Ended)
+}
+
 impl OrbitRuntime {
     /// `orbit.resident.grant`: widen (as the operator, or as a grant request
     /// for anyone else) or narrow a mandate's authority.
@@ -177,10 +189,9 @@ impl OrbitRuntime {
                 let history = self.get_task_history(&task_id)?;
                 let authority = read_authority(&history)?;
                 outcome = Some(if widening {
-                    if resident_mandate_ended(task.status) {
+                    if grant_mandate_ended(task.status, &history)? {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "task {task_id} is {}, so its mandate has ended and takes no grant",
-                            task.status
+                            "task {task_id} has an ended mandate and takes no grant"
                         )));
                     }
                     let mandate = resident_mandate_from_artifact(self, &task_id)?
@@ -541,6 +552,11 @@ impl OrbitRuntime {
             )));
         }
         let history = self.get_task_history(task_id)?;
+        if grant_mandate_ended(task.status, &history)? {
+            return Err(not_applicable(format!(
+                "task {task_id} has an ended mandate"
+            )));
+        }
         let authority = read_authority(&history)?;
         let DecisionBinding::ResidentAuthority { revision } = request.binding else {
             return Err(not_applicable(format!(

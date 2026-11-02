@@ -228,6 +228,84 @@ fn rejected_or_superseded_requests_change_nothing() {
     );
 }
 
+fn stopped_mandate_refuses_new_widening_and_allows_narrowing() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, _) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    call(
+        &runtime,
+        "orbit.resident.grant",
+        json!({"task_id": id, "add": ["dispatch"]}),
+        &operator(),
+    )
+    .unwrap();
+    call(
+        &runtime,
+        "orbit.resident.control",
+        json!({"task_id": id, "action": "stop", "reason": "Finished"}),
+        &operator(),
+    )
+    .unwrap();
+    let before = show(&runtime, &id)["authority"].clone();
+    for session in [&operator(), &orchestrator()] {
+        let error = call(
+            &runtime,
+            "orbit.resident.grant",
+            json!({"task_id": id, "add": ["merge"], "quote": QUOTE}),
+            session,
+        )
+        .expect_err("stopped mandates cannot be widened or request widening");
+        assert!(error.contains("ended"), "{error}");
+    }
+    assert_eq!(show(&runtime, &id)["authority"], before);
+    let narrowed = call(
+        &runtime,
+        "orbit.resident.grant",
+        json!({"task_id": id, "remove": ["dispatch"], "model": "claude"}),
+        &orchestrator(),
+    )
+    .unwrap();
+    assert_eq!(narrowed["outcome"], "narrowed");
+    assert_eq!(narrowed["authority"]["rights"], json!([]));
+}
+
+fn stopped_mandate_refuses_pending_grant_but_allows_rejection() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, _) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    let raise = |right| {
+        call(
+            &runtime,
+            "orbit.resident.grant",
+            json!({"task_id": id, "add": [right], "quote": QUOTE, "model": "claude"}),
+            &orchestrator(),
+        )
+        .unwrap()["request"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let grant = raise("dispatch");
+    let reject = raise("merge");
+    call(
+        &runtime,
+        "orbit.resident.control",
+        json!({"task_id": id, "action": "stop", "reason": "Finished"}),
+        &operator(),
+    )
+    .unwrap();
+    let before = show(&runtime, &id)["authority"].clone();
+    let error = runtime
+        .answer_decision_request_as_human(&grant, "grant", None, "human:daniel".into(), None)
+        .expect_err("a pending answer cannot widen a stopped mandate");
+    assert!(error.to_string().contains("ended"), "{error}");
+    assert_eq!(show(&runtime, &id)["authority"], before);
+    runtime
+        .answer_decision_request_as_human(&reject, "reject", None, "human:daniel".into(), None)
+        .unwrap();
+    assert_eq!(show(&runtime, &id)["authority"], before);
+}
+
 fn losing_the_resident_tag_clears_effective_authority_but_keeps_history() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = runtime_at(root.path());
@@ -670,6 +748,8 @@ fn resident_sensitive_checkpoint_is_refused_without_writes() {
 
 crate::scenario_table!(
     resident_authority,
+    stopped_mandate_refuses_pending_grant_but_allows_rejection,
+    stopped_mandate_refuses_new_widening_and_allows_narrowing,
     resident_sensitive_checkpoint_is_refused_without_writes,
     resident_stale_comment_is_refused_without_writes,
     agent_widening_is_a_request_the_human_answers,
