@@ -36,3 +36,7 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-30 08:41 | ORB-20129 | jrun-20261030-0838-c25 | incomplete_scan | operator requeued at 2026-10-30T09:50Z |
 | 2026-10-30 08:46 | ORB-20137 | jrun-20261030-0842-c4 | audit_incomplete | operator requeued at 2026-10-30T09:50Z |
 | 2026-10-31 08:39 | ORB-20455 | jrun-20261031-0836-c16 | scan_incomplete | human forced blocked->rejected at 2026-10-31T08:52Z |
+| 2026-10-27 19:44 | ORB-19150 | not recorded in triage comment | executor declares incomplete | blocked_task_triaged human_only in ORB-21505 resume pass |
+| 2026-10-30 08:45 | ORB-20129 | not recorded in triage comment | executor declares incomplete (incomplete_scan) | blocked_task_triaged human_only in ORB-21505 resume pass |
+| 2026-10-30 23:23 | ORB-20310 | not recorded in triage comment | executor declares incomplete (audit_incomplete) | blocked_task_triaged decision in ORB-21505 resume pass |
+| 2026-10-31 08:42 | ORB-20455 | not recorded in triage comment | executor declares incomplete (scan_incomplete) | blocked_task_triaged human_only in ORB-21505 resume pass |

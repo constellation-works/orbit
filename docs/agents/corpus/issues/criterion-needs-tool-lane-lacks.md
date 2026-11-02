@@ -52,3 +52,7 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-27 06:21 | ORB-19033 | jrun-20261027-0614-c1 | validation tool not available to the lane | human:daniel moved to rejected at 2026-10-27T10:08Z |
 | 2026-10-27 23:43 | ORB-19240 | jrun-20261027-2337-c4 | validation tool not available to the lane | system moved to done at 2026-10-28T00:54Z |
 | 2026-10-28 13:14 | ORB-19532 | jrun-20261028-1303-c1 | validation tool not available to the lane | system moved to done at 2026-10-28T21:52Z |
+| 2026-10-27 23:43 | ORB-19240 | not recorded in triage comment | criterion needs tool lane lacks | pilot_warning_triaged decision in ORB-21505 resume pass |
+| 2026-10-28 13:14 | ORB-19532 | not recorded in triage comment | criterion needs tool lane lacks | pilot_warning_triaged decision in ORB-21505 resume pass |
+| 2026-10-30 18:37 | ORB-20216 | not recorded in triage comment | criterion needs tool lane lacks | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-31 01:04 | ORB-20336 | not recorded in triage comment | criterion needs tool lane lacks | pilot_warning_triaged human_only in ORB-21505 resume pass |
