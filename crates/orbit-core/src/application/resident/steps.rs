@@ -75,7 +75,15 @@ impl OrbitRuntime {
         let history = self.get_task_history(&task_id)?;
         let view = self.resident_view(task.clone(), &history)?;
         if view.state().0 != ResidentMandateState::Active {
-            return Ok(skipped(&task_id, "mandate_not_active"));
+            // A stopped mandate never starts another cycle, but its live
+            // cycle may have died before finalizing: recover that handoff
+            // (final checkpoint, live entry cleared, assignment to review)
+            // instead of only skipping.
+            let mut result = skipped(&task_id, "mandate_not_active");
+            if view.state().0 == ResidentMandateState::Ended {
+                result["handoff"] = json!(self.hand_off_stopped_resident_at(&task_id, now)?);
+            }
+            return Ok(result);
         }
         let Ok(mandate) = view.mandate.clone() else {
             return Ok(skipped(&task_id, "mandate_invalid"));

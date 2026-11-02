@@ -323,10 +323,21 @@ impl OrbitRuntime {
 
     /// Move a stopped mandate's assignment to review with a synthesized
     /// handoff, unless a cycle is still live (its finalize does it then).
+    /// A live cycle that has died is closed here instead: its synthesized
+    /// `incomplete` checkpoint is written and its live entry cleared, so
+    /// retrying this handoff recovers a stop whose cycle never finalized.
     /// Returns what happened: `review`, `cycle_live`, `already`,
     /// `not_stopped` or `refused: <why>` when the lifecycle does not allow
     /// the move (a `proposed` assignment, say); the operator moves it then.
     pub(crate) fn hand_off_stopped_resident(&self, task_id: &str) -> Result<String, OrbitError> {
+        self.hand_off_stopped_resident_at(task_id, Utc::now())
+    }
+
+    pub(crate) fn hand_off_stopped_resident_at(
+        &self,
+        task_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<String, OrbitError> {
         let task = self.get_task(task_id)?;
         if task.status == TaskStatus::Review || resident_mandate_ended(task.status) {
             return Ok("already".into());
@@ -339,10 +350,21 @@ impl OrbitRuntime {
         else {
             return Ok("not_stopped".into());
         };
-        if let Some(live) = live_cycle_from_history(&history)?
-            && !self.resident_cycle_dead(&live, Utc::now())?
-        {
-            return Ok("cycle_live".into());
+        if let Some(live) = live_cycle_from_history(&history)? {
+            if !self.resident_cycle_dead(&live, now)? {
+                return Ok("cycle_live".into());
+            }
+            // The live cycle died before its finalizer could hand off:
+            // close it here, with its synthesized final checkpoint, so a
+            // later retry of this handoff recovers the stopped assignment
+            // instead of relying on a finalizer that will never run.
+            self.synthesize_resident_checkpoint(
+                task_id,
+                &live,
+                "the stopped cycle died before finalization (process killed or lease expired)",
+                None,
+            )?;
+            self.set_resident_live_cycle(task_id, Some(&live.cycle), None)?;
         }
         let summary = format!(
             "Resident stopped by {} at {}: {}\n\nNo further cycle runs. The latest checkpoint on this task is the resident's last state.",
