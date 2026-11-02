@@ -629,7 +629,7 @@ target `job:<name>` — and `type: shell` remains a load error. An older
 Orbit binary meeting `target: script:` reports a load error and runs
 nothing.
 
-**Running a script step (Linux).** At dispatch Orbit re-reads the
+**Running a script step.** At dispatch Orbit re-reads the
 manifest and entry from the run's worktree (or the workspace root, then
 read-only), snapshots them, and checks the grant before anything is
 spawned. A missing or expired grant (`grant_missing`), a changed script
@@ -640,7 +640,7 @@ host without the sandbox or a start inside another sandbox
 (`script_root_unavailable`) and a pull follower without a `--follower`
 grant (`script_follower_refused`) each fail the step without retry.
 
-The script runs under the `linux-bwrap-script-v1` Bubblewrap profile:
+On Linux, the script runs under the `linux-bwrap-script-v1` Bubblewrap profile:
 it sees the host runtime (`/usr`, the loader, resolver and CA files),
 its interpreter, the snapshot, its cwd (a run worktree read-write, the
 workspace root read-only), the cwd's Git metadata read-only, its
@@ -648,7 +648,26 @@ granted roots and a scratch directory at `/orbit-script` (`HOME`,
 `TMPDIR`, `in/`, `out/`). `.orbit/`, the global Orbit root and the
 credential paths under `HOME` are never visible.
 
-The grant's `network` decides what the script can reach. Under `none`
+On macOS, `macos-sandbox-script-v1` uses Seatbelt with the same granted
+paths, but sees the scratch directory at its host path. `HOME` and `TMPDIR`
+point to its `home/` and `tmp/` directories; `ORBIT_SCRIPT_IN` and
+`ORBIT_SCRIPT_OUT` point to its `in/` and `out/` directories. macOS permits
+only `network: none`; a network grant is refused before spawn with
+`script_sandbox_unavailable`. A nested Seatbelt sandbox cannot apply the
+profile and is also refused. With `machine.worker_containment = "strict"`,
+macOS refuses every script step because it cannot provide memory or task
+limits; `warn` or `off` allows the profile alone. The macOS profile also
+exposes file metadata outside granted paths, and a timed-out descendant that
+calls `setsid` can outlive the step while remaining sandboxed.
+
+Granted read and write roots are probed at grant time and again by the job
+process before spawn; write roots must allow creating and removing a file.
+On macOS, privacy permissions (TCC) apply in addition to the profile and may
+differ between the granting terminal and the process running the job. A
+permission refusal identifies the relevant System Settings privacy pane for
+the job process.
+
+On Linux, the grant's `network` decides what the script can reach. Under `none`
 (the default) it has its own network namespace with only its own
 loopback, so neither the network nor services listening on the host's
 `127.0.0.1` are reachable. Under `https` it shares the host network, and
@@ -669,11 +688,9 @@ passed. Each passed value is redacted (`[REDACTED]`) from the captured
 log, the stdout that becomes the step output, the recorded argv, and so
 from the `script_execution` entry, `orbit run show` and `orbit script
 history`. Declared output files are kept byte for byte and are not
-redacted. Script steps run only on Linux in this build: on macOS a
-granted step, networked or not, is refused with
-`script_sandbox_unavailable`, after the grant checks.
+redacted.
 
-**Input files (Linux).** A manifest declares its read-only inputs under
+**Input files.** A manifest declares its read-only inputs under
 `spec.files.inputs`, a list of `{from, as}` entries:
 
 ```yaml
@@ -690,8 +707,9 @@ spec:
 the step's cwd (the run worktree, or the workspace root). The result must
 resolve physically, with symlinks followed, to a regular file or a directory
 inside the cwd tree or a read root granted with `orbit script grant <name>
---read-root <path>`. Each input is bound read-only at `in/<as>` in the sandbox,
-that is `/orbit-script/in/<as>` or `$ORBIT_SCRIPT_IN/<as>`. `as` is a plain
+--read-root <path>`. Each input is available read-only at `$ORBIT_SCRIPT_IN/<as>`: Linux binds it
+at `/orbit-script/in/<as>`, while macOS copies it into the host scratch
+directory before spawn. The macOS copy counts against the scratch size limit. `as` is a plain
 file name: not empty, not `.` or `..`, and with no `/`. No two inputs in a
 manifest may share one. A file's digest is of its bytes; a directory's is a
 digest over its whole tree, without following symlinks inside it.
@@ -701,7 +719,7 @@ global Orbit root or a credential path under `HOME`, or is a directory holding
 an entry that is neither a file, a directory nor a symlink (or more than
 100,000 entries) refuses the step before spawn with
 `script_file_input_unavailable`, naming the input. Input admission runs before
-the host profile check, so on macOS this refusal can come before
+the host profile check, so this refusal can come before
 `script_sandbox_unavailable`. Successfully admitted inputs are recorded with
 their names, sources and SHA-256 digests on the attempt's `script_execution`
 entry.
@@ -739,7 +757,8 @@ outside those ranges fails the manifest when it loads, with the manifest file
 named.
 
 The script writes its files directly inside `out/`, which is
-`/orbit-script/out` in the sandbox or `$ORBIT_SCRIPT_OUT`. Subdirectories are
+`$ORBIT_SCRIPT_OUT` (`/orbit-script/out` on Linux, or the host scratch
+directory's `out/` on macOS). Subdirectories are
 not output.
 
 The grant sets the most a manifest may ask for. A grant without the output
@@ -758,9 +777,8 @@ refused before anything runs, with `grant_insufficient`, and the message names
 the flag to add. `orbit script show <name>` reports the requested and granted
 output limits.
 
-Output files apply where script steps run, which is Linux in this build. Orbit
-keeps them only when the attempt exits 0 and its stdout passes the JSON rules
-above. A nonzero exit, a signal, a timeout, a scratch breach or a manifest with
+Output files are supported on Linux and macOS. Orbit keeps them only when the
+attempt exits 0 and its stdout passes the JSON rules above. A nonzero exit, a signal, a timeout, a scratch breach or a manifest with
 no output caps keeps nothing. For a manifest without caps, `out/` is discarded
 with the scratch directory, and the step's output is its JSON alone.
 
