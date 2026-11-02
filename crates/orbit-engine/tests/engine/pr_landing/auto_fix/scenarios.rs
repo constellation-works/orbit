@@ -3558,6 +3558,55 @@ fn auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persisten
     );
 }
 
+/// [ORB-21436] A completion deadline expiring during the auto-fix
+/// required-checks read carries its own typed refusal: the run holds as
+/// `CompletionBudgetExpired`, not as inconclusive check evidence.
+#[test]
+fn auto_fix_required_checks_read_budget_expiry_holds_as_budget_expired() {
+    auto_fix_table(
+        "auto_fix::auto_fix_required_checks_read_budget_expiry_holds_as_budget_expired",
+        "expired",
+        |case, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            fx.script_checks(&["success"]);
+            let input = waited_auto_fix_input(&fx, 5, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let expiring = std::rc::Rc::clone(&clock);
+            let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+            let seen = std::rc::Rc::clone(&observed);
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || sampled.get(),
+                move |label, _remaining| {
+                    if label == "PR required checks" {
+                        seen.set(true);
+                        expiring.set(START + 5_001);
+                    }
+                },
+                || action(&host, "pr_complete", &input),
+            );
+            assert!(
+                observed.get(),
+                "{case}: the required-checks read carries the completion deadline"
+            );
+            let error = result.unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                        ..
+                    }
+                ),
+                "{case}: {error}"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
 fn required_check_evidence_case(case: &str, row: &std::path::Path) {
     let (fx, host) = opened_review(row);
     fx.script_checks(&["success"]);

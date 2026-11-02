@@ -500,12 +500,15 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
             // inconclusive evidence, not a verdict on the PR: auto-fix holds
             // (retryable by the next pass) instead of stopping for good. A
             // transient transport failure keeps its class so completion's
-            // observation hold (ForgeObservationUnavailable) still applies.
+            // observation hold (ForgeObservationUnavailable) still applies,
+            // and a cause carrying its own typed refusal (for example a
+            // completion-budget expiry) keeps that refusal [ORB-21436].
             let refusal = match wait {
                 BlockedCheckWait::AutoFix
-                    if !error.private_vcs_failure().is_some_and(|failure| {
-                        failure.class == PrivateVcsFailureClass::TransientObservation
-                    }) =>
+                    if !matches!(error, OrbitError::DeliveryRefused { .. })
+                        && !error.private_vcs_failure().is_some_and(|failure| {
+                            failure.class == PrivateVcsFailureClass::TransientObservation
+                        }) =>
                 {
                     Some(DeliveryRefusal::CheckEvidenceInconclusive)
                 }
