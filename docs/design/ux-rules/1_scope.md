@@ -9,7 +9,7 @@ next: "Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operat
 feature: ux-rules
 doc_role: scope
 type: design
-summary: "Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work"
+summary: "Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work"
 tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit, visual-review]
 ---
 
@@ -73,10 +73,11 @@ CLI.
 The two reviews' measurable checks become named rules in the repository, each a small
 module that returns pass or fail per target with its measurements. A runner executes every
 rule against every target it declares and writes one results file. A routine runs it and
-files one task per failing rule and target, deduplicated by a stable fingerprint, and
-comments on that task when the rule passes again. The two auto-tasks then read the results
-instead of re-measuring, and keep only the judgement findings. A newly reported regression
-becomes a new rule, not a new prompt paragraph.
+files one open task per declared defect group or, without one, per failing rule and
+target, deduplicated by a stable fingerprint, and comments on that task when the rule
+passes again. The two auto-tasks then read the results instead of re-measuring, and keep
+only the judgement findings. A newly reported regression becomes a new rule, not a new
+prompt paragraph.
 
 Unchanged: the delivery gate. Rules run on a schedule, outside the merge gate, so they add
 nothing to it. They are not tests: the workspace adds tests only with bug fixes, and rules
@@ -408,8 +409,9 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
   Lifecycle diagnostics padding, the grouped-help misalignment and the forecast unavailable
   reason.
 - Two runs on an unchanged commit and store produce the same fingerprints.
-- `file_rule_findings` files one task per new failing fingerprint up to the cap, comments
-  instead of filing for an open one, and comments once when it passes.
+- `file_rule_findings` files one task per new failing defect group or unannotated
+  fingerprint up to the cap, comments instead of filing for an open one, and comments once
+  when it passes.
 - `ux-review-ui` and `ux-review-cli` prompts no longer measure what a rule measures, and
   their pass reads the rule results.
 
