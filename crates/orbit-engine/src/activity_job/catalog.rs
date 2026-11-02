@@ -40,6 +40,10 @@ pub const AUTO_TASK_REF_PREFIX: &str = orbit_types::workflow::activity_job::AUTO
 #[derive(Debug, Default, Clone)]
 pub struct V2ActivityCatalog {
     inner: LayeredCatalog<ActivityV2>,
+    /// Activities withdrawn from resolution, keyed by name, with the reason
+    /// a job referencing one is refused. One unusable activity must not
+    /// take the rest of the catalog down with it.
+    unavailable: BTreeMap<String, String>,
 }
 
 /// Typed job adapter over the same layered YAML catalog loader used by
@@ -145,6 +149,13 @@ pub enum ResolveError {
     UnknownRefKind { step_id: String, target: String },
     #[error("step `{step_id}`: activity `{name}` not found in catalog")]
     ActivityNotInCatalog { step_id: String, name: String },
+    #[error("{referrer}activity `{name}` is unavailable: {reason}")]
+    ActivityUnavailable {
+        /// Prefix naming where the reference sits: a step id or a job field.
+        referrer: String,
+        name: String,
+        reason: String,
+    },
     #[error("job recovery_activity `{name}` not found in catalog")]
     RecoveryActivityNotInCatalog { name: String },
     #[error("job failure_activity `{name}` not found in catalog")]
@@ -270,24 +281,68 @@ impl V2ActivityCatalog {
     }
 
     /// Validate every agent-facing activity tool allowlist against a caller
-    /// supplied registry snapshot. This keeps `orbit-common` registry-agnostic
-    /// while letting core/engine fail malformed assets before dispatch.
-    pub fn validate_tool_allowlists<'a, I>(&self, registered_tools: I) -> Result<(), CatalogError>
+    /// supplied registry snapshot (keeping `orbit-common` registry-agnostic),
+    /// one activity at a time: every activity whose allowlist fails against `registered_tools` is withdrawn from
+    /// resolution and recorded as unavailable, and the rest of the catalog
+    /// stays usable. A job that references a withdrawn activity is refused
+    /// with [`ResolveError::ActivityUnavailable`], naming the activity and
+    /// the reason. Returns the failures so the caller can report them.
+    pub fn withdraw_invalid_tool_allowlists<'a, I>(
+        &mut self,
+        registered_tools: I,
+    ) -> Vec<CatalogError>
     where
         I: IntoIterator<Item = &'a str>,
     {
         let registered_tools: Vec<&str> = registered_tools.into_iter().collect();
+        let mut failures = Vec::new();
         for (name, activity) in &self.inner.entries {
-            validate_activity_tool_allowlist_against_registered_tools(
+            if let Err(source) = validate_activity_tool_allowlist_against_registered_tools(
                 activity,
                 registered_tools.iter().copied(),
-            )
-            .map_err(|source| CatalogError::ToolAllowlist {
-                name: name.clone(),
-                source,
-            })?;
+            ) {
+                failures.push(CatalogError::ToolAllowlist {
+                    name: name.clone(),
+                    source,
+                });
+            }
         }
-        Ok(())
+        for failure in &failures {
+            if let CatalogError::ToolAllowlist { name, source } = failure {
+                // The source path stays recorded so layer attribution still
+                // explains where the withdrawn activity came from.
+                self.inner.entries.remove(name);
+                self.unavailable
+                    .insert(name.clone(), format!("tool allowlist invalid: {source}"));
+            }
+        }
+        failures
+    }
+
+    /// Why `name` was withdrawn from the catalog, when it was.
+    pub fn unavailable_reason(&self, name: &str) -> Option<&str> {
+        self.unavailable.get(name).map(String::as_str)
+    }
+
+    /// Look up `name` for resolution: a withdrawn activity is refused with
+    /// its reason, a missing one with `not_found`.
+    fn resolve_activity(
+        &self,
+        name: &str,
+        referrer: impl FnOnce() -> String,
+        not_found: impl FnOnce() -> ResolveError,
+    ) -> Result<&ActivityV2, ResolveError> {
+        if let Some(activity) = self.get(name) {
+            return Ok(activity);
+        }
+        match self.unavailable_reason(name) {
+            Some(reason) => Err(ResolveError::ActivityUnavailable {
+                referrer: referrer(),
+                name: name.to_string(),
+                reason: reason.to_string(),
+            }),
+            None => Err(not_found()),
+        }
     }
 }
 
@@ -578,7 +633,8 @@ pub fn load_activity_catalog_asset(
 }
 
 /// Validate one loaded activity's tool allowlist the same way
-/// [`V2ActivityCatalog::validate_tool_allowlists`] does for a full catalog.
+/// [`V2ActivityCatalog::withdraw_invalid_tool_allowlists`] does for a full
+/// catalog.
 pub fn validate_catalog_activity_tools<'a, I>(
     name: &str,
     activity: &ActivityV2,
@@ -705,27 +761,45 @@ pub fn resolve_job_target_refs_with_scripts(
     scripts: &super::script_catalog::V2ScriptCatalog,
 ) -> Result<(), ResolveError> {
     job.resolved_recovery_activity = match job.recovery_activity.as_deref() {
-        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
-            ResolveError::RecoveryActivityNotInCatalog {
-                name: name.to_string(),
-            }
-        })?),
+        Some(name) => Some(
+            catalog
+                .resolve_activity(
+                    name,
+                    || "job recovery_activity: ".to_string(),
+                    || ResolveError::RecoveryActivityNotInCatalog {
+                        name: name.to_string(),
+                    },
+                )?
+                .clone(),
+        ),
         None => None,
     };
     job.resolved_failure_activity = match job.failure_activity.as_deref() {
-        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
-            ResolveError::FailureActivityNotInCatalog {
-                name: name.to_string(),
-            }
-        })?),
+        Some(name) => Some(
+            catalog
+                .resolve_activity(
+                    name,
+                    || "job failure_activity: ".to_string(),
+                    || ResolveError::FailureActivityNotInCatalog {
+                        name: name.to_string(),
+                    },
+                )?
+                .clone(),
+        ),
         None => None,
     };
     job.resolved_final_recovery_activity = match job.final_recovery_activity.as_deref() {
-        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
-            ResolveError::FinalRecoveryActivityNotInCatalog {
-                name: name.to_string(),
-            }
-        })?),
+        Some(name) => Some(
+            catalog
+                .resolve_activity(
+                    name,
+                    || "job final_recovery_activity: ".to_string(),
+                    || ResolveError::FinalRecoveryActivityNotInCatalog {
+                        name: name.to_string(),
+                    },
+                )?
+                .clone(),
+        ),
         None => None,
     };
 
@@ -741,12 +815,18 @@ fn resolve_step(
     scripts: &super::script_catalog::V2ScriptCatalog,
 ) -> Result<(), ResolveError> {
     step.resolved_recovery_activity = match step.recovery_activity.as_deref() {
-        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
-            ResolveError::StepRecoveryActivityNotInCatalog {
-                step_id: step.id.clone(),
-                name: name.to_string(),
-            }
-        })?),
+        Some(name) => Some(
+            catalog
+                .resolve_activity(
+                    name,
+                    || format!("step `{}`: recovery_activity: ", step.id),
+                    || ResolveError::StepRecoveryActivityNotInCatalog {
+                        step_id: step.id.clone(),
+                        name: name.to_string(),
+                    },
+                )?
+                .clone(),
+        ),
         None => None,
     };
 
@@ -838,12 +918,14 @@ fn resolve_ref(
                 step_id: step_id.to_string(),
                 target: r.target.clone(),
             })?;
-    let activity = catalog
-        .get(name)
-        .ok_or_else(|| ResolveError::ActivityNotInCatalog {
+    let activity = catalog.resolve_activity(
+        name,
+        || format!("step `{step_id}`: "),
+        || ResolveError::ActivityNotInCatalog {
             step_id: step_id.to_string(),
             name: name.to_string(),
-        })?;
+        },
+    )?;
     Ok(TargetStep {
         spec: activity.spec.clone(),
         activity_name: Some(name.to_string()),

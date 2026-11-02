@@ -27,7 +27,9 @@ impl RuntimeKernel {
     /// and workspace-local shipped names are skipped even when the global file
     /// is missing.
     /// Duplicate names inside one directory tree are still a hard error
-    /// (`CatalogError::DuplicateName`).
+    /// (`CatalogError::DuplicateName`). An activity whose tool allowlist does
+    /// not validate against the registered tools is withdrawn alone and
+    /// refused when a job references it.
     pub fn v2_activity_catalog(
         &self,
     ) -> Result<
@@ -75,8 +77,20 @@ impl RuntimeKernel {
                 catalog.load_files_prefer_existing(&files)?,
             );
         }
+        // An activity whose allowlist names a tool this workspace does not
+        // register (say, one from a plugin that is not installed) is withdrawn
+        // on its own: jobs that reference it are refused with the reason, and
+        // every other job keeps running. `orbit doctor` reports the fault.
         let registered_tools = self.allowlist_known_tool_names();
-        catalog.validate_tool_allowlists(registered_tools.iter().map(String::as_str))?;
+        for failure in
+            catalog.withdraw_invalid_tool_allowlists(registered_tools.iter().map(String::as_str))
+        {
+            tracing::warn!(
+                target: "orbit.core.assets",
+                error = %failure,
+                "activity withdrawn from the catalog"
+            );
+        }
 
         Ok(catalog)
     }

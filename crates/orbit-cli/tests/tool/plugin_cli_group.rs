@@ -724,6 +724,89 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+/// One plugin activity whose allowlist names a tool no installed plugin
+/// registers used to fail the whole activity catalog, so every job in the
+/// workspace failed at load with `build activity catalog: …` [ORB-21453].
+/// The activity is withdrawn alone: enable warns, an unrelated job runs, and
+/// only a job that uses the activity is refused, naming it and the tool.
+#[cfg(unix)]
+#[test]
+fn an_activity_naming_an_unregistered_tool_is_withdrawn_alone() {
+    let fixture = Fixture::new();
+    let source = fixture.source("lonely");
+    write_status_plugin(
+        &source,
+        "lonely",
+        "  definitions:\n    activities: [definitions/activities/*.yaml]\n",
+    );
+    let activities = source.join(".orbit-plugin/definitions/activities");
+    std::fs::create_dir_all(&activities).expect("activities dir");
+    std::fs::write(
+        activities.join("draft.yaml"),
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: lonely_draft\nspec:\n  \
+         type: agent_loop\n  description: Needs a tool from a plugin that is not installed.\n  \
+         tools:\n    - absent.fetch\n  input_schema_json:\n    type: object\n  \
+         instruction: Fetch.\n",
+    )
+    .expect("write activity");
+    fixture.add(&source, &[]);
+
+    let enabled = fixture.json(["plugin", "enable", "lonely"]);
+    assert!(
+        enabled["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().filter_map(Value::as_str).any(
+                |warning| warning.contains("lonely_draft") && warning.contains("absent.fetch")
+            )),
+        "enable warns about the unregistered tool: {enabled}"
+    );
+
+    let jobs = fixture.work.join(".orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).expect("jobs dir");
+    std::fs::write(
+        jobs.join("unrelated_nap.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: unrelated_nap\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        \
+         seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        \
+         config: {}\n",
+    )
+    .expect("write unrelated job");
+    std::fs::write(
+        jobs.join("uses_lonely.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: uses_lonely\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: draft\n      \
+         target: activity:lonely_draft\n",
+    )
+    .expect("write dependent job");
+
+    let unrelated = fixture
+        .command(["job", "run", "unrelated_nap", "--wait", "--json"])
+        .output()
+        .expect("run unrelated job");
+    let unrelated_json = stdout_json(&unrelated);
+    assert_eq!(
+        unrelated_json["state"],
+        "success",
+        "an unrelated job still runs: {unrelated_json} {}",
+        String::from_utf8_lossy(&unrelated.stderr)
+    );
+
+    let refused = fixture
+        .command(["job", "run", "uses_lonely", "--wait", "--json"])
+        .output()
+        .expect("run dependent job");
+    let refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        refusal.contains("activity `lonely_draft` is unavailable")
+            && refusal.contains("absent.fetch"),
+        "the dependent job is refused naming the activity and tool: {refusal}"
+    );
+}
+
 /// `--grant fs=data --grant fs=cache` used to record `fs=data,cache`. The next
 /// process then refused the row: `cache` is not a path continuation, so the
 /// plugin could not run even though enable had succeeded.
