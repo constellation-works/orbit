@@ -198,9 +198,10 @@ fn parse_json_envelope(
     let envelope = deserialize_envelope(candidate)?;
     let trace = synthesize_trace_from_parsed(exec_result, parsed);
 
-    // Parser-side mirror of the provider schema's status/error correlation
-    // (protocol_schema.rs), for transports that emit no schema-constrained
-    // output. The schema is the first layer; this remains the second.
+    // The provider schema does not enforce status/error correlation
+    // (protocol_schema.rs): `status` and `error` are independent properties
+    // with no conditional branches, so this parser is the layer that enforces
+    // it, including for transports that emit no schema-constrained output.
     let state = match envelope.status.as_str() {
         "success" => {
             if envelope.error.is_some() {
