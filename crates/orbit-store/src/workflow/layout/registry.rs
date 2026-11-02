@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 8;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 9;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -114,6 +114,17 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         // deserializes run state without the sets, so its next checkpoint
         // write silently drops the run's only references to the kept files,
         // and it reads the envelope as the branch's own output on resume.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 9,
+        name: "skipped-step-checkpoints",
+        description: "fence clients that cannot preserve skipped-step checkpoint markers; preserve existing records unchanged",
+        // A when-skipped step checkpoints success and null; skipped_steps
+        // keeps that null distinct from an executed step's actual output.
+        // Older writers drop the marker, and older readers restore the null
+        // as an output on resume, changing downstream template behavior.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

@@ -363,8 +363,12 @@ Any step may add `when` and `retry`.
 whose `when` is false is skipped: it succeeds without running, never
 retries, and records no output, so a later step that reads
 `{{ steps.<id>.output }}` from it fails with `no data recorded for step`.
-A resumed run treats the skipped step the same way: it does not run it
-again, and its output stays absent. A step that ran and returned `null`
+A resumed run whose checkpoint records the skipped-step marker treats the
+skipped step the same way: it does not run it again, and its output stays
+absent. Checkpoints created before skipped-step markers existed cannot
+distinguish a skipped step from one that ran and returned `null`; resuming
+those checkpoints restores the skipped step's output as `null`. Upgrading
+does not reconstruct missing markers. A step that ran and returned `null`
 keeps that `null` across a resume.
 
 ```yaml
