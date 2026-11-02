@@ -1,0 +1,18 @@
+Validate tool health
+
+Usage: orbit tool doctor [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          Print complete diagnostics for one tool (exact TOOL name)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

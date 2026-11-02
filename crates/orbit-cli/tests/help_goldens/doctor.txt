@@ -17,6 +17,9 @@ Options:
       --problems
           Print only failures and warnings
 
+      --check <NAME>
+          Print one check with its complete message and remediation (exact CHECK name)
+
       --fix-stale-locks
           Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace
 

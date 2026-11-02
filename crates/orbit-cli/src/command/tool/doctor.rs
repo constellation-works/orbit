@@ -1,13 +1,43 @@
-use orbit_core::OrbitRuntime;
+use clap::Args;
+use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::{Domain, Role};
 use serde_json::json;
 
-pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
+#[derive(Args)]
+pub struct ToolDoctorArgs {
+    /// Print complete diagnostics for one tool (exact TOOL name)
+    pub name: Option<String>,
+}
+
+pub(super) fn execute_tool_doctor(runtime: &OrbitRuntime, name: Option<&str>) -> CommandOut {
     use orbit_core::adapter::command::DoctorStatus;
 
     let results = runtime.doctor()?;
+    if let Some(name) = name {
+        let row = results
+            .iter()
+            .find(|row| row.tool_name == name)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("no tool diagnostic named '{name}'"))
+            })?;
+        let status = match row.status {
+            DoctorStatus::Ok => "ok",
+            DoctorStatus::Warning => "warning",
+            DoctorStatus::Error => "error",
+        };
+        return Ok(Payload::detail(
+            json!({
+                "tool_name": row.tool_name, "status": status, "message": row.message,
+            }),
+            format!(
+                "Tool: {}\nStatus: {status}\nDetails: {}",
+                row.tool_name, row.message
+            ),
+        )
+        .into());
+    }
     let mut issues = 0;
 
     use crate::output::table::{Column, Table};

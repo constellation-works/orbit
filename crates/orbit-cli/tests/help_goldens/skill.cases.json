@@ -1,0 +1,9 @@
+[
+  {
+    "argv": [
+      "skill",
+      "doctor"
+    ],
+    "golden": "skill/doctor.txt"
+  }
+]

@@ -559,7 +559,14 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             "admin".to_string(),
             None,
         ),
-        ToolSubcommand::Doctor => ("doctor", None, None, None, "admin".to_string(), None),
+        ToolSubcommand::Doctor(args) => (
+            "doctor",
+            args.name.clone(),
+            Some("tool".to_string()),
+            args.name.clone(),
+            "admin".to_string(),
+            None,
+        ),
     };
     let runtime_need = match &command.command {
         ToolSubcommand::Run(args) => match args.bootstrap_route() {

@@ -416,6 +416,15 @@ fn workspace() -> TestWorkspace {
 
 #[cfg(unix)]
 fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
+    run_cli_on_terminal_at_width(workspace, args, "120")
+}
+
+#[cfg(unix)]
+pub(super) fn run_cli_on_terminal_at_width(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+) -> Output {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::process::Stdio;
@@ -448,7 +457,7 @@ fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
         .env("HOME", &workspace.home)
         .env("USERPROFILE", &workspace.home)
         .env("TERM", "xterm-256color")
-        .env("COLUMNS", "120")
+        .env("COLUMNS", width)
         .env_remove("NO_COLOR")
         .env_remove("ORBIT_FORMAT")
         .args(args)
@@ -456,24 +465,24 @@ fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
         .stdout(Stdio::from(slave))
         .stderr(Stdio::piped())
         .spawn()
-        .expect("run task list on terminal");
+        .expect("run CLI on terminal");
     drop(command);
     let mut stdout = Vec::new();
     if let Err(error) = master.read_to_end(&mut stdout) {
         // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
         assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
     }
-    let status = child.wait().expect("wait for task list");
+    let status = child.wait().expect("wait for CLI");
     let mut stderr = Vec::new();
     child
         .stderr
         .take()
         .expect("captured stderr")
         .read_to_end(&mut stderr)
-        .expect("read task list stderr");
+        .expect("read CLI stderr");
     assert!(
         status.success(),
-        "task list failed\nstdout:\n{}\nstderr:\n{}",
+        "CLI command failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
