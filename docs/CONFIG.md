@@ -2718,7 +2718,10 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   original event's `GITHUB_SHA` and `GITHUB_REF`, while Orbit CI's candidate-build jobs explicitly
   check out the PR head rather than a merge with the current base. A passing rerun clears the failure;
   the same signature failing again with the passing base result enters the one automatic repair for
-  the candidate's own failure. If untouched-path evidence remains incomplete, landing stops after
+  the candidate's own failure. If that retry's evidence cannot be read or authenticated for
+  `max_base_ci_cycles` consecutive polls, the passing base result alone sends the failure to the
+  candidate's repair path, and any other failure with unreadable retry evidence stops in review
+  naming the read failure. If untouched-path evidence remains incomplete, landing stops after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
   whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
   protection's own reading of a skipped or neutral required check is unchanged. Without

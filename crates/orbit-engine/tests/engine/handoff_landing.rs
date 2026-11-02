@@ -713,6 +713,8 @@ struct ForgeState {
     unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
+    /// A read failure every retry-plan authentication returns.
+    rerun_plan_error: Option<&'static str>,
     /// Keep the failed rollup while replacement jobs have not registered.
     queued_rerun: bool,
     /// What the check reports on a head the branch update produced.
@@ -967,6 +969,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let candidate = &self.context.candidate;
         match operation {
             "ci.rerun_plan" => {
+                if let Some(error) = state.rerun_plan_error {
+                    return Err(OrbitError::Execution(error.into()));
+                }
                 let job = state.jobs.get(&state.head).unwrap();
                 if job.event != "pull_request" {
                     return Err(OrbitError::Execution("foreign retry event".into()));
@@ -2801,6 +2806,129 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
             );
         }
     }
+}
+
+/// The retry authentication read failures the ORB-21586 landing held on.
+const RETRY_UNREADABLE: &str = "workflow prerequisite evidence is unavailable \
+     (retry requires a completed failed attempt)";
+
+/// Land with a 60-second deadline and instant polls, counting the polls.
+fn land_counting_polls(forge: &FakeForge) -> (Result<Value, OrbitError>, usize) {
+    let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = polls.clone();
+    let outcome = orbit_engine::test_support::with_vcs_retry_wait(
+        move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        },
+        || {
+            land_with(
+                forge,
+                json!({"max_wait_seconds":60,"poll_interval_seconds":5}),
+            )
+        },
+    );
+    (outcome, polls.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// ORB-21586: an untouched-file failure whose same check passes on the base
+/// is the candidate's own. When its unchanged-head retry stays unreadable,
+/// the landing hands it to the repair path (or the requeue once the repair
+/// is spent) after the configured observation cycles, instead of waiting
+/// out the landing deadline.
+#[test]
+fn untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable() {
+    for spent in [false, true] {
+        let case = if spent {
+            "repair spent"
+        } else {
+            "repair available"
+        };
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, spent);
+        forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+        forge.job(&base, passed(2, 21));
+        {
+            let mut state = forge.state.lock().unwrap();
+            state.rerun_plan_error = Some(RETRY_UNREADABLE);
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+        }
+
+        let (outcome, polls) = land_counting_polls(&forge);
+
+        let error = outcome.expect_err(case);
+        assert!(
+            !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+                if refusal.error_code() == "delivery_base_checks_pending"),
+            "{case}: the landing must not wait out its deadline: {error}"
+        );
+        assert_eq!(polls, 2, "{case}: escalate on the third observation cycle");
+        assert_sent_len(&forge, "ci.rerun_plan", 3, case);
+        assert_not_sent(
+            &forge,
+            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+            case,
+        );
+        let step = if spent {
+            HandoffLandingStep::StopForRequeue
+        } else {
+            HandoffLandingStep::Stop { repairable: true }
+        };
+        assert_steps(&forge.steps(), &[step], case);
+        assert_reason(
+            &forge,
+            case,
+            &[
+                "classified `flaky`",
+                "the failure is the candidate's own",
+                "retry requires a completed failed attempt",
+            ],
+        );
+    }
+}
+
+/// ORB-21586: a failure whose retry evidence stays unreadable, and that no
+/// base pass attributes to the candidate, stops in review within the
+/// observation-cycle limit with the read failure as its reason, not a
+/// `waiting_for_base` hold until the landing deadline.
+#[test]
+fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
+    forge.state.lock().unwrap().rerun_plan_error = Some(RETRY_UNREADABLE);
+
+    let (outcome, polls) = land_counting_polls(&forge);
+
+    let error = outcome.expect_err("unreadable retry evidence stops the landing");
+    assert!(
+        !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+            if refusal.error_code() == "delivery_base_checks_pending"),
+        "the landing must not wait out its deadline: {error}"
+    );
+    assert_eq!(polls, 2, "stop on the third observation cycle");
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "unreadable retry",
+    );
+    assert_reason(
+        &forge,
+        "unreadable retry",
+        &[
+            "could not be read after 3 observation cycles",
+            "retry requires a completed failed attempt",
+        ],
+    );
+    let reason = forge.stop_reason();
+    assert!(!reason.contains("waiting for"), "{reason}");
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "unreadable retry",
+    );
 }
 
 /// [ORB-15956] A check that failed on the network is rerun once before it is

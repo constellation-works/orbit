@@ -348,6 +348,9 @@ deadline, an unresolved base wait stops in review with the reason `the base
 never recovered before the landing deadline`. Base-suspect observations also
 have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
 exhaustion stops in review naming the check, signature and missing evidence.
+CI retry evidence that stays unreadable (plan authentication or log reads) for
+the same cycle count escalates too: a failure whose same check passes on the
+base goes to candidate repair, and any other stops naming the read failure.
 Inspect the effective activity input and recorded deadline instead of
 extending or restarting the wait by assumption.
 

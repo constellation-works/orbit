@@ -169,7 +169,8 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         super::super::super::landing::checks::CiRerunStep::NotEligible => {
             Ok(CiRerunRecovery::NotEligible)
         }
-        super::super::super::landing::checks::CiRerunStep::Wait(reason) => {
+        super::super::super::landing::checks::CiRerunStep::Wait(reason)
+        | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
             // The shared bounded journal retains this observation; the caller
             // records the hold on the task and bounds it.
             Ok(CiRerunRecovery::Waiting(reason))

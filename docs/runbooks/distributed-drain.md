@@ -1811,6 +1811,11 @@ one. From then on:
     that head, including a repaired head, must clear it before merge. A
     skipped or neutral required result passes only when no run of that check
     failed on the head.
+    When the unchanged-head rerun's evidence cannot be read or
+    authenticated for `max_base_ci_cycles` consecutive polls, a failure
+    whose same check passes on the base goes to candidate repair (or the
+    requeue once spent), and any other such failure stops in review naming
+    the read failure, not `waiting_for_base`.
     Without decisive evidence, `handoff_land` stops in review after
     `max_base_ci_cycles` (default 3) observation cycles or the existing
     `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
