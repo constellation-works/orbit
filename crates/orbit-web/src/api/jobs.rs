@@ -391,11 +391,11 @@ pub(super) async fn resume_job_run_action(
         }
         Ok(runtime
             .submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref())
-            .map_err(|error| match error {
-                orbit_core::OrbitError::JobValidation(message) => {
+            .map_err(|error| match error.job_validation_message() {
+                Some(message) => {
                     (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
                 }
-                other => map_runtime_error(other),
+                None => map_runtime_error(error),
             }))
     })
     .await

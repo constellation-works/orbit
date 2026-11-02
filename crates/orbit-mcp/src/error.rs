@@ -114,6 +114,13 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
+        OrbitError::SourceRepairAuthorityRefused(code) => {
+            if code.reports_as_execution() {
+                "execution_failed"
+            } else {
+                "validation_failed"
+            }
+        }
         OrbitError::JobRunStateTransition(_) => "invalid_transition",
         // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
         // incumbent owner is an expected race, and the caller yields rather

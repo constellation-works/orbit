@@ -8,6 +8,7 @@ pub use kinds::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
     DecisionRefusalCode, DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind,
     PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
-    RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

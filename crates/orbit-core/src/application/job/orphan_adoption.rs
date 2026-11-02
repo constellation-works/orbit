@@ -381,7 +381,7 @@ impl OrbitRuntime {
             // Validation is the planner's answer about this run; anything
             // else (a store read, an unsettled claim journal) may answer
             // differently on a later pass.
-            Err(error @ OrbitError::JobValidation(_)) => {
+            Err(error) if error.job_validation_message().is_some() => {
                 skip(Skip::decided("not_resumable", error.to_string()))
             }
             Err(error) => skip(Skip::deferred("resume_unplannable", error.to_string())),

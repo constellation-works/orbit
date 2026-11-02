@@ -127,6 +127,13 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",
+        OrbitError::SourceRepairAuthorityRefused(code) => {
+            if code.reports_as_execution() {
+                "execution_failed"
+            } else {
+                "job_validation_failed"
+            }
+        }
         OrbitError::AgentProtocolViolation(_) => "agent_protocol_violation",
         OrbitError::UnsupportedAgentProvider(_) => "unsupported_agent_provider",
         OrbitError::OwnerUnavailable(_) => "owner_unavailable",
