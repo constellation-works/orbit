@@ -17,7 +17,7 @@ export async function check(ctx) {
       return "";
     };
     return H.all("button, a[href], input, select, textarea, img").map((el) => ({
-      selector: H.selectorOf(el), tag: el.tagName.toLowerCase(),
+      ...H.elementFacts(el), tag: el.tagName.toLowerCase(),
       type: el.getAttribute("type") ?? "",
       hiddenInput: el.tagName === "INPUT" && el.getAttribute("type") === "hidden",
       decorative: el.tagName === "IMG" && el.hasAttribute("alt") && el.getAttribute("alt") === "",
@@ -27,5 +27,5 @@ export async function check(ctx) {
   });
   const relevant = items.filter((item) => !item.hiddenInput && !item.ariaHidden);
   const failures = relevant.filter((item) => item.name === "" && !item.decorative);
-  return verdict(ctx, rule, relevant.length, failures);
+  return verdict(ctx, rule, relevant.length, failures, {}, relevant);
 }

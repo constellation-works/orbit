@@ -3,9 +3,20 @@
 //! pass comments exactly once, and the severity cap and floor hold.
 
 mod evidence;
+mod grouping;
 use evidence::{
     evidence_payload_allocations_ignore_candidate_multiplicity,
     repeated_evidence_is_attached_once_after_selection,
+};
+use grouping::{
+    bound_legacy_owner_ignores_aggregate_pass, fresh_evidence_rerun_after_interrupted_attach,
+    group_cap_files_one_whole_group, grouped_existing_owner_receives_new_variant_evidence,
+    grouped_independent_processes_share_owner, grouped_legacy_owner_reuse_excludes_terminal_tasks,
+    grouped_reruns_reconcile_only_all_known_variants,
+    grouped_terminal_only_legacy_creates_new_owner,
+    grouped_variants_preserve_observations_and_evidence, grouping_scope_and_cap_apply_to_causes,
+    observation_archives_are_reported_not_inflated, owner_context_lists_open_owner_groups,
+    replay_repairs_interrupted_group_attachments,
 };
 
 use orbit_core::{OrbitRuntime, TaskStatus};
@@ -263,11 +274,20 @@ fn default_ux_rules_pipeline_file_step_binds_optional_inputs() {
         include_str!("../../assets/activities/file_rule_findings.yaml"),
     )
     .unwrap();
+    std::fs::write(
+        activity_dir.join("prepare_rule_findings.yaml"),
+        include_str!("../../assets/activities/prepare_rule_findings.yaml"),
+    )
+    .unwrap();
 
     let mut pipeline: serde_yaml::Value =
         serde_yaml::from_str(include_str!("../../assets/jobs/ux_rules_pipeline.yaml")).unwrap();
     let steps = pipeline["spec"]["steps"].as_sequence().unwrap();
-    let mut file_step = steps[1].clone();
+    let mut file_step = steps
+        .iter()
+        .find(|step| step["id"] == "file")
+        .expect("file step")
+        .clone();
     file_step["default_input"]
         .as_mapping_mut()
         .unwrap()
@@ -315,6 +335,11 @@ fn ux_rules_pipeline_binds_config_defaults_and_explicit_overrides_win() {
     std::fs::write(
         activity_dir.join("file_rule_findings.yaml"),
         include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        activity_dir.join("prepare_rule_findings.yaml"),
+        include_str!("../../assets/activities/prepare_rule_findings.yaml"),
     )
     .unwrap();
 
@@ -391,6 +416,11 @@ fn ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset() {
     std::fs::write(
         activity_dir.join("file_rule_findings.yaml"),
         include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        activity_dir.join("prepare_rule_findings.yaml"),
+        include_str!("../../assets/activities/prepare_rule_findings.yaml"),
     )
     .unwrap();
 
@@ -527,6 +557,11 @@ fn documented_ux_rules_runner_template_is_not_refused_for_env_pass() {
     std::fs::write(
         activity_dir.join("file_rule_findings.yaml"),
         include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        activity_dir.join("prepare_rule_findings.yaml"),
+        include_str!("../../assets/activities/prepare_rule_findings.yaml"),
     )
     .unwrap();
 
@@ -676,6 +711,19 @@ fn mixed_surface_results_keep_their_filing_surface() {
 
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
+    bound_legacy_owner_ignores_aggregate_pass,
+    fresh_evidence_rerun_after_interrupted_attach,
+    replay_repairs_interrupted_group_attachments,
+    owner_context_lists_open_owner_groups,
+    group_cap_files_one_whole_group,
+    observation_archives_are_reported_not_inflated,
+    grouped_independent_processes_share_owner,
+    grouped_existing_owner_receives_new_variant_evidence,
+    grouped_terminal_only_legacy_creates_new_owner,
+    grouped_variants_preserve_observations_and_evidence,
+    grouping_scope_and_cap_apply_to_causes,
+    grouped_reruns_reconcile_only_all_known_variants,
+    grouped_legacy_owner_reuse_excludes_terminal_tasks,
     repeated_evidence_is_attached_once_after_selection,
     evidence_payload_allocations_ignore_candidate_multiplicity,
     mixed_surface_results_keep_their_filing_surface,

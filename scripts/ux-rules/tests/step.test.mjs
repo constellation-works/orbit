@@ -20,7 +20,7 @@ test("step merges surfaces and records a runner failure", () => {
     assert.equal(report.commit, "abc");
     assert.deepEqual(report.results.map((r) => [r.surface, r.status]), [["cli", "pass"], ["ui", "pass"], ["bad", "error"]]);
     assert.match(report.results[2].measurements.reason, /missing prerequisite/);
-    assert.deepEqual(report.summary, { pass: 2, fail: 0, error: 1, skipped: 0 });
+    assert.deepEqual(report.summary, { pass: 2, fail: 0, error: 1, skipped: 0, observations: 3, defect_groups: 0, reported: 3 });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -167,6 +167,50 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({results:[{rule:'x',
         return true;
       });
       assert.ok(!readdirSync(dir).some((name) => name.startsWith("ux-rules-")), mode);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ORB-21111: a full sweep's raw observations exceeded the 1 MiB stdout
+// budget. Raw archives travel as declared outputs, the owner context reaches
+// the runner, and an oversized filing document is refused, never truncated.
+test("step exports raw observation archives, passes the owner context and refuses an oversized document", () => {
+  const scratch = process.env.ORBIT_SCRATCH_DIR || path.resolve(".orbit/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(path.join(scratch, "ux-step-archive-"));
+  try {
+    const runner = path.join(dir, "runner.mjs");
+    writeFileSync(runner, `import {writeFileSync,mkdirSync,readFileSync} from 'node:fs'; import path from 'node:path'; import {createHash} from 'node:crypto';
+const args=process.argv; const out=args[args.indexOf('--out')+1]; const mode=args[args.indexOf('--surface')+1];
+const context=args.includes('--owner-context')?JSON.parse(readFileSync(args[args.indexOf('--owner-context')+1],'utf8')):null;
+mkdirSync(path.join(out,'archive'));
+const part=Buffer.from('raw-gzip-part');
+writeFileSync(path.join(out,'archive/observations.part00.gz'),part);
+const sha=mode==='mismatch'?'0'.repeat(64):createHash('sha256').update(part).digest('hex');
+const measurements=mode==='huge'?{blob:'x'.repeat(1100000)}:{groups:context?context.groups.length:-1};
+writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({results:[{rule:'ui.x',status:'pass',fingerprint:'x',measurements}],summary:{observations:40,defect_groups:7},archive:{encoding:'gzip',observation_count:40,parts:[{path:'archive/observations.part00.gz',bytes:part.length,sha256:sha}]}}));`);
+    const step = (mode, out) => execFileSync(process.execPath, ["scripts/ux-rules/step.mjs"], {
+      input: JSON.stringify({ surfaces: [mode], runner, orbit: process.execPath, owner_context: { schema_version: 1, groups: [{ rule: "ui.x", defect: { version: 1, key: "k" } }] } }),
+      env: { ...process.env, TMPDIR: dir, ORBIT_SCRIPT_OUT: out }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    });
+    const out = path.join(dir, "ok");
+    mkdirSync(out);
+    const report = JSON.parse(step("ui", out));
+    assert.equal(report.results[0].measurements.groups, 1, "the runner reads the owner context");
+    assert.deepEqual(report.summary, { pass: 1, fail: 0, error: 0, skipped: 0, observations: 40, defect_groups: 7, reported: 1 });
+    const [archive] = report.archives;
+    assert.equal(archive.surface, "ui");
+    const name = archive.parts[0].name;
+    assert.equal(readFileSync(path.join(out, name)).toString(), "raw-gzip-part");
+    assert.equal(name, `${archive.parts[0].sha256}.gz`);
+    for (const [mode, diagnostic] of [["mismatch", /does not match its descriptor/], ["huge", /over the 1048576-byte script stdout limit; no results were truncated/]]) {
+      const target = path.join(dir, mode);
+      mkdirSync(target);
+      assert.throws(() => step(mode, target), (error) => {
+        assert.match(error.stderr, diagnostic, mode);
+        assert.equal(error.stdout, "", mode);
+        return true;
+      });
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

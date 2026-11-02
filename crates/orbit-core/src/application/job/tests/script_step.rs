@@ -306,25 +306,37 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
     let mut job = orbit_engine::activity_job::load_job_asset(yaml)
         .unwrap()
         .spec;
-    // Resolve only the catalog activity; the real script target stays a script.
-    let activity = orbit_engine::activity_job::load_activity_asset(include_str!(
-        "../../../../assets/activities/file_rule_findings.yaml"
-    ))
-    .unwrap();
-    let orbit_types::workflow::JobV2StepBody::TargetRef(reference) = job.steps[1].body.clone()
-    else {
-        panic!("filer ref")
-    };
-    job.steps[1].body =
-        orbit_types::workflow::JobV2StepBody::Target(orbit_types::workflow::TargetStep {
-            spec: activity.spec.spec,
-            activity_name: Some("file_rule_findings".to_string()),
-            input_schema_json: Some(activity.spec.input_schema_json),
-            fs_profile: None,
-            default_input: reference.default_input,
-            timeout_seconds: reference.timeout_seconds,
-            session: None,
-        });
+    // Resolve only the catalog activities; the real script target stays a
+    // script. Steps: owners (0), run (1), file (2).
+    for (index, name, yaml) in [
+        (
+            0,
+            "prepare_rule_findings",
+            include_str!("../../../../assets/activities/prepare_rule_findings.yaml"),
+        ),
+        (
+            2,
+            "file_rule_findings",
+            include_str!("../../../../assets/activities/file_rule_findings.yaml"),
+        ),
+    ] {
+        let activity = orbit_engine::activity_job::load_activity_asset(yaml).unwrap();
+        let orbit_types::workflow::JobV2StepBody::TargetRef(reference) =
+            job.steps[index].body.clone()
+        else {
+            panic!("activity ref")
+        };
+        job.steps[index].body =
+            orbit_types::workflow::JobV2StepBody::Target(orbit_types::workflow::TargetStep {
+                spec: activity.spec.spec,
+                activity_name: Some(name.to_string()),
+                input_schema_json: Some(activity.spec.input_schema_json),
+                fs_profile: None,
+                default_input: reference.default_input,
+                timeout_seconds: reference.timeout_seconds,
+                session: None,
+            });
+    }
     let input = json!({"surfaces":["ui"],"runner":"runner.mjs","orbit":node});
     let host = EvidencePipeline {
         runtime: &runtime,
@@ -377,7 +389,7 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
     let artifacts = runtime.get_task_artifacts(task_id).unwrap();
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].content, png);
-    let set = &first.script_output_sets[&0]["run"];
+    let set = &first.script_output_sets[&1]["run"];
     if let Some(report_dir) = std::env::var_os("ORBIT_UX_EVIDENCE_REPORT_DIR") {
         let report_dir = std::path::PathBuf::from(report_dir);
         std::fs::create_dir_all(&report_dir).unwrap();
@@ -411,13 +423,13 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
         "identical replay deduplicates"
     );
     let mut checkpoint = first.clone();
-    checkpoint.step_states.remove(&1);
-    checkpoint.step_outputs.remove(&1);
+    checkpoint.step_states.remove(&2);
+    checkpoint.step_outputs.remove(&2);
     checkpoint.pipeline.as_object_mut().unwrap().remove("file");
-    checkpoint.next_step_index = 1;
+    checkpoint.next_step_index = 2;
     let resumed = run(Some(&checkpoint), Some(first.run_id.clone()));
     assert_eq!(resumed.pipeline["file"]["filed_count"], 0);
-    assert_eq!(resumed.script_output_sets[&0], first.script_output_sets[&0]);
+    assert_eq!(resumed.script_output_sets[&1], first.script_output_sets[&1]);
     // Genuine files from an unrelated run cannot be substituted, even if
     // the document bytes and evidence names are identical.
     let mut wrong = checkpoint.clone();
@@ -454,10 +466,10 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
             context.clone(),
         )
     };
-    let original = first.step_output(0).unwrap().clone();
+    let original = first.step_output(1).unwrap().clone();
     let refused = call(
         original.clone(),
-        serde_json::to_value(&second.script_output_sets[&0]["run"].files).unwrap(),
+        serde_json::to_value(&second.script_output_sets[&1]["run"].files).unwrap(),
     )
     .unwrap_err();
     assert!(refused.to_string().contains("not run"), "{refused}");
@@ -472,10 +484,10 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
             .contains("do not match")
     );
     let mut unpersisted = wrong.clone();
-    unpersisted.script_output_sets.remove(&0);
+    unpersisted.script_output_sets.remove(&1);
     unpersisted
         .script_output_sets
-        .insert(99, first.script_output_sets[&0].clone());
+        .insert(99, first.script_output_sets[&1].clone());
     runtime.write_run_state(&bad.run_id, &unpersisted).unwrap();
     assert!(
         call(original.clone(), serde_json::to_value(&set.files).unwrap())
@@ -487,7 +499,7 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
     let mut over_cap = wrong.clone();
     over_cap
         .script_output_sets
-        .get_mut(&0)
+        .get_mut(&1)
         .unwrap()
         .get_mut("run")
         .unwrap()
@@ -505,16 +517,16 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
         let mut malformed = original.clone();
         malformed["results"][0]["evidence"] = evidence;
         let mut state = wrong.clone();
-        state.record_step(0, JobRunState::Success, Some(malformed.clone()), None);
-        state.next_step_index = 1;
+        state.record_step(1, JobRunState::Success, Some(malformed.clone()), None);
+        state.next_step_index = 2;
         runtime.write_run_state(&bad.run_id, &state).unwrap();
         assert!(call(malformed, serde_json::to_value(&set.files).unwrap()).is_err());
     }
     let mut missing = original.clone();
     missing["results"][0]["evidence"] = json!(["missing.png"]);
     // Matching document checkpoint cannot grant access to an undeclared name.
-    wrong.record_step(0, JobRunState::Success, Some(missing.clone()), None);
-    wrong.next_step_index = 1;
+    wrong.record_step(1, JobRunState::Success, Some(missing.clone()), None);
+    wrong.next_step_index = 2;
     runtime.write_run_state(&bad.run_id, &wrong).unwrap();
     assert!(
         call(missing, serde_json::to_value(&set.files).unwrap())
@@ -523,8 +535,8 @@ writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({{schema_version:1,s
             .contains("not in the producer")
     );
     std::fs::write(&set.files[0].path, b"changed").unwrap();
-    wrong.record_step(0, JobRunState::Success, Some(original.clone()), None);
-    wrong.next_step_index = 1;
+    wrong.record_step(1, JobRunState::Success, Some(original.clone()), None);
+    wrong.next_step_index = 2;
     runtime.write_run_state(&bad.run_id, &wrong).unwrap();
     assert!(
         call(original, serde_json::to_value(&set.files).unwrap())

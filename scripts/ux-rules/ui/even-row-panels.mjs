@@ -13,7 +13,7 @@ export async function check(ctx) {
     const result = [];
     for (const [parent, panels] of byParent) {
       if (panels.length < 2) continue;
-      const items = panels.map((panel) => { const r = H.rect(panel); return { selector: H.selectorOf(panel), top_px: Math.round(r.top), height_px: Math.round(r.height) }; });
+      const items = panels.map((panel) => { const r = H.rect(panel); return { ...H.elementFacts(panel), top_px: Math.round(r.top), height_px: Math.round(r.height) }; });
       const rows = new Map();
       for (const item of items) { if (!rows.has(item.top_px)) rows.set(item.top_px, []); rows.get(item.top_px).push(item); }
       for (const rowItems of rows.values()) if (rowItems.length > 1) result.push({ parent: H.selectorOf(parent), items: rowItems });
@@ -26,5 +26,5 @@ export async function check(ctx) {
     const max = Math.max(...group.items.map((i) => i.height_px));
     for (const item of group.items) if (max - item.height_px > 4) failures.push({ ...item, parent: group.parent, sibling_height_px: max, delta_px: max - item.height_px });
   }
-  return verdict(ctx, rule, matched, failures);
+  return verdict(ctx, rule, matched, failures, {}, groups.flatMap((group) => group.items));
 }

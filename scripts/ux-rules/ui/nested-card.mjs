@@ -57,7 +57,7 @@ export async function check(ctx) {
         const stacked = margins.every((value) => near(value));
         result.push({
           panel: H.selectorOf(panel),
-          selector: H.selectorOf(child),
+          ...H.elementFacts(child),
           tag: child.tagName,
           role: child.getAttribute("role") ?? "",
           bordered: bordered(child),
@@ -70,5 +70,5 @@ export async function check(ctx) {
     return result;
   });
   const failures = found.filter((item) => (item.bordered || item.filled) && item.band !== true && !ALLOW.has(item.tag) && !item.role && !item.labelled);
-  return verdict(ctx, rule, found.length, failures);
+  return verdict(ctx, rule, found.length, failures, {}, found);
 }

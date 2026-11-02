@@ -152,7 +152,7 @@ export async function check(ctx) {
       if (edged.length === 0) continue;
       const inset = Math.round(Math.min(...edged.map((side) => gaps[side])) * 10) / 10;
       rows.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         container: H.selectorOf(box),
         inset_px: inset,
         ...sides,
@@ -162,15 +162,15 @@ export async function check(ctx) {
     }
     return {
       matched: rows.length,
+      rows,
       // A pixel of tolerance: a 0.x px miss of the floor is subpixel
       // rounding, not a visible defect. Glyphs past the edge (negative
       // inset) are overflow, which belongs to text-overflow.
       failures: rows
-        .filter((row) => row.inset_px >= -1 && row.inset_px + 1 < MIN)
-        .slice(0, 20),
+        .filter((row) => row.inset_px >= -1 && row.inset_px + 1 < MIN),
     };
   });
   return verdict(ctx, rule, found.matched, found.failures, {
     min_inset_px: MIN_INSET_PX,
-  });
+  }, found.rows);
 }

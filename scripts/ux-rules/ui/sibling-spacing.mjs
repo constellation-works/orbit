@@ -67,7 +67,7 @@ export async function check(ctx) {
     function measuredItem(el) {
       const style = getComputedStyle(el);
       return {
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         padding: style.padding,
         font_size: style.fontSize,
         font_weight: style.fontWeight,
@@ -182,6 +182,8 @@ export async function check(ctx) {
         if (item[key] === expected) continue;
         failures.push({
           selector: item.selector,
+          element: item.element,
+          discriminator: key,
           parent: group.parent,
           kind: group.kind,
           property: key,
@@ -191,5 +193,6 @@ export async function check(ctx) {
       }
     }
   }
-  return verdict(ctx, rule, matched, failures, { coverage: measured.coverage });
+  return verdict(ctx, rule, matched, failures, { coverage: measured.coverage },
+    measured.groups.flatMap((group) => group.items), ["padding", "font_size", "font_weight"]);
 }

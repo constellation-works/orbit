@@ -10,10 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::{FileLockOptions, acquire_exclusive_file_lock_with_report_scope};
 use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
-use super::rule_evidence;
+use super::{rule_evidence, rule_groups};
 use crate::OrbitRuntime;
 use crate::application::sweep_filing::{bounded_u64, is_open_ci_owner_status, truncate_chars};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
@@ -23,7 +25,7 @@ const DEFAULT_MAX_NEW_TASKS: u64 = 10;
 const MAX_NEW_TASKS: u64 = 50;
 const DEFAULT_RUNNER: &str = "scripts/ux-rules/run.mjs";
 
-fn severity_rank(severity: &str) -> u8 {
+pub(super) fn severity_rank(severity: &str) -> u8 {
     match severity.to_ascii_lowercase().as_str() {
         "critical" => 5,
         "high" => 4,
@@ -43,11 +45,11 @@ fn priority_for_rank(rank: u8) -> TaskPriority {
     }
 }
 
-fn field<'a>(value: &'a Value, key: &str) -> &'a str {
+pub(super) fn field<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-fn string_list(value: Option<&Value>) -> Vec<String> {
+pub(super) fn string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
         .map(|items| {
@@ -279,6 +281,11 @@ struct FilingCandidate {
     error_task: bool,
 }
 
+/// The read-only owner context `prepare_rule_findings` hands the producer.
+pub(crate) fn prepare_rule_findings(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+    rule_groups::owner_context(runtime)
+}
+
 pub(crate) fn file_rule_findings(
     runtime: &OrbitRuntime,
     input: &Value,
@@ -301,6 +308,11 @@ pub(crate) fn file_rule_findings(
         evidence_dir.as_deref(),
         consumer_run_id,
     )?;
+    if evidence.contains_key(rule_groups::STATE_PATH) {
+        return Err(OrbitError::InvalidInput("rule-findings/state.json is reserved for the filer observation registry; rename producer evidence".to_string()));
+    }
+    let archives =
+        rule_evidence::verify_observation_archives(runtime, input, &document, consumer_run_id)?;
     let settings = filer_settings(runtime, input)?;
     let surface = field(&document, "surface").to_string();
     let commit = field(&document, "commit").to_string();
@@ -310,6 +322,15 @@ pub(crate) fn file_rule_findings(
         .cloned()
         .unwrap_or_default();
 
+    // Serialize the complete read/merge/create/comment/evidence operation on
+    // the owner workspace. Stable advisory locks release on process death.
+    let _filing_lock = acquire_exclusive_file_lock_with_report_scope(
+        &runtime.paths().state_dir.join("locks/rule-findings.lock"),
+        "rule findings filing",
+        FileLockOptions::default(),
+    )
+    .map_err(|error| OrbitError::Io(format!("lock rule findings: {error}")))?;
+    let raw_observation_count = results.len();
     let mut counts = BTreeMap::from([
         ("pass", 0u64),
         ("fail", 0u64),
@@ -323,9 +344,14 @@ pub(crate) fn file_rule_findings(
         }
     }
 
-    // Open tasks already owning a fingerprint, read once for the whole run.
+    let prepared = rule_groups::prepare_groups(runtime, &results, &surface)?;
+    let results = prepared.results;
+
+    // Owners are read under the workspace filing lock, after grouping.
     let mut owners: BTreeMap<String, Task> = BTreeMap::new();
-    for task in runtime.list_tasks_by_tags(&["ux-rules".to_string()])? {
+    let mut owner_tasks = runtime.list_tasks_by_tags(&["ux-rules".to_string()])?;
+    owner_tasks.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+    for task in owner_tasks {
         if is_open_ci_owner_status(task.status)
             && let Some(fingerprint) = &task.rule_fingerprint
         {
@@ -337,6 +363,52 @@ pub(crate) fn file_rule_findings(
     let mut commented: Vec<Value> = Vec::new();
     let mut recorded_only: Vec<Value> = Vec::new();
     let mut skipped_existing: Vec<Value> = Vec::new();
+    let mut evidence_gaps: Vec<Value> = Vec::new();
+    // Producer failures without a cause identity stay on their aggregate
+    // fingerprint, which a bound legacy group can share.
+    let ungrouped_failing: BTreeSet<String> = results
+        .iter()
+        .filter(|result| result.get("defect").is_none() && field(result, "status") == "fail")
+        .map(|result| field(result, "fingerprint").to_string())
+        .collect();
+    let group_failing: BTreeSet<String> = results
+        .iter()
+        .filter(|result| result.get("defect").is_some() && field(result, "status") == "fail")
+        .map(|result| field(result, "fingerprint").to_string())
+        .collect();
+
+    // Even an unchanged or unmeasured grouped observation can introduce new
+    // evidence. Reconcile attachments once, without manufacturing a comment.
+    for result in &results {
+        if settings
+            .disabled
+            .iter()
+            .any(|rule| rule == field(result, "rule"))
+            || (field(result, "status") == "fail"
+                && severity_rank(field(result, "severity")) < settings.file_at_rank)
+        {
+            continue;
+        }
+        if let Some(owner) = owners.get(field(result, "fingerprint")) {
+            let artifacts = finding_artifacts(
+                runtime,
+                &owner.id,
+                result,
+                &evidence,
+                prepared.states.get(field(result, "fingerprint")),
+                &mut evidence_gaps,
+            )?;
+            if !artifacts.is_empty() {
+                runtime.update_task(
+                    &owner.id,
+                    TaskUpdateParams {
+                        upsert_artifacts: artifacts,
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+    }
 
     let mut comment_on = |runtime: &OrbitRuntime,
                           task_id: &str,
@@ -368,6 +440,19 @@ pub(crate) fn file_rule_findings(
         let Some(owner) = owners.get(fingerprint) else {
             continue;
         };
+        // An ungrouped pass (an old aggregate sharing the bound fingerprint
+        // included) cannot certify a cause group once the owner tracks
+        // member observations; only the group's own result can.
+        if result.get("defect").is_none()
+            && (prepared.states.contains_key(fingerprint)
+                || rule_groups::read_state(runtime, owner)?.is_some())
+        {
+            continue;
+        }
+        // Nor does a group pass while its fingerprint holds ambiguous failures.
+        if ungrouped_failing.contains(fingerprint) {
+            continue;
+        }
         if settings
             .disabled
             .iter()
@@ -496,6 +581,15 @@ pub(crate) fn file_rule_findings(
             }));
             continue;
         }
+        // The failing group result already reports this owner's state; a
+        // second, different measurement on the shared fingerprint would make
+        // every run look changed.
+        if result.get("defect").is_none() && group_failing.contains(&fingerprint) {
+            recorded_only.push(json!({
+                "fingerprint": fingerprint, "rule": rule, "reason": "covered_by_group",
+            }));
+            continue;
+        }
         let measurements = result.get("measurements").cloned().unwrap_or(json!({}));
         if let Some(owner) = owners.get(&fingerprint) {
             let rendered = measurements.to_string();
@@ -580,6 +674,15 @@ pub(crate) fn file_rule_findings(
         });
     }
 
+    for candidate in &mut candidates {
+        if let Some(state) = prepared.states.get(&candidate.fingerprint) {
+            candidate
+                .params
+                .description
+                .push_str(&rule_groups::state_description(state));
+        }
+    }
+
     // One task per fingerprint within this run: repeated results sharing a
     // fingerprint (including an error/fail collision on the same fingerprint)
     // keep the highest-severity candidate, first wins ties deterministically.
@@ -630,16 +733,15 @@ pub(crate) fn file_rule_findings(
         }
         let fingerprint = candidate.fingerprint.clone();
         let task = runtime.add_task(candidate.params)?;
-        let unique_artifacts: BTreeMap<_, _> = candidate
-            .evidence_names
-            .iter()
-            .filter_map(|name| evidence.get(name))
-            .map(|artifact| (&artifact.path, artifact))
-            .collect();
-        let artifacts: Vec<_> = unique_artifacts
-            .values()
-            .map(|artifact| (*artifact).clone())
-            .collect();
+        let result = json!({"evidence":candidate.evidence_names});
+        let artifacts = finding_artifacts(
+            runtime,
+            &task.id,
+            &result,
+            &evidence,
+            prepared.states.get(&fingerprint),
+            &mut evidence_gaps,
+        )?;
         if !artifacts.is_empty() {
             runtime.update_task(
                 &task.id,
@@ -677,13 +779,67 @@ pub(crate) fn file_rule_findings(
             "pass": counts["pass"], "fail": counts["fail"],
             "error": counts["error"], "skipped": counts["skipped"],
         },
+        "observation_count": document
+            .pointer("/summary/observations")
+            .and_then(Value::as_u64)
+            .unwrap_or(raw_observation_count as u64),
+        "reported_count": raw_observation_count,
+        "defect_group_count": prepared.group_count,
+        "legacy_duplicates": prepared.duplicates,
+        "historical_references": prepared.historical,
+        "archives": archives,
         "filed_count": filed.len(),
         "filed": filed,
         "commented": commented,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
+        "evidence_gaps": evidence_gaps,
         "recorded_only": recorded_only,
         "max_new_tasks": settings.max_new_tasks,
         "file_at": settings.file_at,
     }))
+}
+
+/// Compare manifests before materializing attachments. An interrupted initial
+/// update is repaired on replay, while identical runs leave no new revisions.
+/// Evidence named by an earlier, interrupted run that neither this report nor
+/// the owner holds is reported in `gaps` for that owner and dropped from the
+/// attached registry; the current evidence is still attached.
+fn finding_artifacts(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    result: &Value,
+    evidence: &BTreeMap<String, orbit_types::task::TaskArtifact>,
+    state: Option<&Value>,
+    gaps: &mut Vec<Value>,
+) -> Result<Vec<orbit_types::task::TaskArtifact>, OrbitError> {
+    let manifest = runtime.get_task_artifact_manifest(task_id)?;
+    let mut artifacts: BTreeMap<String, orbit_types::task::TaskArtifact> = BTreeMap::new();
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+    for name in string_list(result.get("evidence")) {
+        if let Some(artifact) = evidence.get(&name) {
+            artifacts.insert(artifact.path.clone(), artifact.clone());
+        } else if !manifest.iter().any(|entry| entry.path == name) {
+            missing.insert(name);
+        }
+    }
+    if !missing.is_empty() {
+        gaps.push(json!({
+            "task_id": task_id,
+            "fingerprint": field(result, "fingerprint"),
+            "missing_evidence": missing,
+        }));
+    }
+    if let Some(state) = state {
+        let artifact =
+            rule_groups::state_artifact(&rule_groups::without_evidence(state, &missing))?;
+        artifacts.insert(artifact.path.clone(), artifact);
+    }
+    artifacts.retain(|path, artifact| {
+        let digest = orbit_types::identity::lower_hex(Sha256::digest(&artifact.content));
+        !manifest.iter().any(|entry| {
+            entry.path == *path && entry.sha256 == digest && entry.media_type == artifact.media_type
+        })
+    });
+    Ok(artifacts.into_values().collect())
 }

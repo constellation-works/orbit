@@ -209,7 +209,7 @@ node scripts/ux-rules/run.mjs --surface cli --orbit "$(command -v orbit)" \
 
 The fingerprint is the rule id and the target (view, theme, width and state for UI; target
 id and argv for CLI), never a measurement or the failing element's selector, so the same
-defect keeps one fingerprint while its numbers or its first failing element change. The
+aggregate target keeps one fingerprint while its numbers or its first failing element change. The
 selector stays in `measurements`.
 
 The script adapter exports evidence to declared `ORBIT_SCRIPT_OUT` outputs before removing
@@ -220,10 +220,54 @@ Malformed, missing, symlinked, escaped and over-budget evidence fails explicitly
 reduce captures or split runs on exhaustion, and update/regrant existing script manifests
 with `files.outputs: {max_files: 64, max_file_bytes: 1048576}`. Read/network grants stay unchanged.
 
+### Producer-declared defect groups
+
+A result may declare `defect: {version: 1, key: "stable-cause"}`. The generic filer treats
+surface, rule, version and key as an opaque group identity. Each result remains a separate
+member observation with its original target, fingerprint, status, measurements, severity
+and screenshot references. UI member results keep the former aggregate fingerprint in
+`original_fingerprint`; the aggregate API used by visual review stays stable.
+
+The producer must prove equivalence: unique semantic element/component identity plus a
+fixed check discriminator for layout; bounded method, endpoint, status/failure class and
+source context for console failures. Meaningful query values are retained. Cross-page
+layout grouping needs an explicit shared component; unknown or ambiguous evidence is
+separate. The filer does not infer causes from selectors, status codes or model output.
+
+The owner stores the merged member registry in `rule-findings/state.json`. Every known
+member must appear and pass in the current report before one repair comment can be added;
+missing, skipped or errored members do not certify repair. A disappeared unmeasured cause
+stays unresolved. Evidence union includes lower-severity members and newly seen variants
+on existing owners. A bounded workspace advisory lock encloses ownership lookup, creation,
+registry/evidence reconciliation and comment comparison across processes. Creation embeds
+a recovery seed in its description, allowing replay after interrupted artifact attachment.
+Only open statuses own findings; terminal matches remain historical. Existing matching
+open owners bind deterministically and other matches are reported for operator disposition,
+without lifecycle changes. Grouping precedes severity selection and the new-task cap.
+Run output distinguishes raw observation counts, declared defect groups and filed tasks.
+
+A full UI sweep measures tens of thousands of member observations, more than the 4 MiB
+surface report and 1 MiB script stdout budgets, so the pipeline's first step,
+`prepare_rule_findings`, reads (never writes) the defect groups open owners track. The
+producer reports every failing, error and skipped observation, every observation of a group
+that fails in this run or is tracked, and one compact record per non-failing aggregate target;
+it only counts untracked passing members. The complete raw report is kept losslessly as gzip
+parts of at most 1 MiB among the script's declared outputs, sharing the 64-output grant with
+screenshots. Core checks the parts against the producer's persisted outputs and never
+inflates them. Budgets are not raised and nothing is truncated: a document that cannot fit
+refuses the step. Successful HTTP responses are passing cause observations, never
+diagnostics, so static resources cannot exhaust the bounded request context; a genuine
+overflow is still a `diagnostic-limit` error with no pass credit. A failure with no stable
+cause identity stays on its aggregate fingerprint (and with its legacy owner) instead of
+minting per-member tasks. A tracked console or page-error cause is credited a pass on a page
+whose console scope completes clean; element rules make no absence claim. Once an owner
+tracks a group, only the group's own result can post its repair comment, and evidence an
+interrupted filing lost is reported per owner instead of failing the whole filing.
+
 ### Filing
 
 A generic deterministic activity, `file_rule_findings`, reads a results file and keeps one
-task per fingerprint. It knows nothing about UI or CLI: any workspace script that writes the
+task per declared defect group or unannotated fingerprint. It knows nothing about UI or CLI: any workspace script that writes the
 schema above can use it.
 
 | Result | Open task with this fingerprint | Effect |

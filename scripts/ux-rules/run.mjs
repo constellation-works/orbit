@@ -1,10 +1,12 @@
 // UX rule runner. Loads scripts/ux-rules/<surface>/*.mjs and writes ux-rules.json.
 
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeFile } from "node:fs/promises";
 
+import { declaredUiObservations, expandUiObservations } from "./lib/ui-observations.mjs";
+import { filingDocument, writeObservationArchive } from "./lib/filing-report.mjs";
 import { createCliContext, resultOf } from "./lib/cli-context.mjs";
 import { loadManifest } from "./lib/manifest.mjs";
 import {
@@ -24,12 +26,17 @@ function usage() {
   return [
     "usage: node scripts/ux-rules/run.mjs --surface cli|ui --out <dir> [--orbit <binary>] [--rule <id>]",
     "       node scripts/ux-rules/run.mjs --surface ui --out <dir> (--base-url <url> | --fixture) [--manifest <path>...] [--rule <id>]",
+    "       [--owner-context <file>]",
     "",
     "Loads each module under scripts/ux-rules/<surface>/ that exports",
     "`rule` and `check`. UI targets are manifest views x rule widths x",
     "themes x states, against --base-url (live, read-only) or the view's",
     "manifest fixture server with --fixture. --manifest may repeat; the",
     `default is ${DEFAULT_UI_MANIFEST}.`,
+    "",
+    "ux-rules.json is the filing report; archive/ holds every raw",
+    "observation as gzip parts. --owner-context names the filer's owner",
+    "context JSON, whose tracked defect groups are reported in full.",
   ].join("\n");
 }
 
@@ -42,6 +49,7 @@ function parseArgs(argv) {
     baseUrl: "",
     fixture: false,
     manifests: [],
+    ownerContext: "",
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -63,6 +71,9 @@ function parseArgs(argv) {
       index += 1;
     } else if (token === "--manifest" && next) {
       args.manifests.push(next);
+      index += 1;
+    } else if (token === "--owner-context" && next) {
+      args.ownerContext = next;
       index += 1;
     } else if (token === "--fixture") {
       args.fixture = true;
@@ -223,6 +234,7 @@ async function runUiModules(modules, args) {
   const ctx = await createUiContext({ outDir: args.out, repoRoot });
   const servers = new Map();
   const results = [];
+  const aggregates = [];
   const serverFor = async (target) => {
     if (!args.fixture) return { baseUrl: args.baseUrl, placeholders: {} };
     const fixture = target.state === "empty" ? `${target.viewDef.fixture}:empty` : target.viewDef.fixture;
@@ -304,7 +316,13 @@ async function runUiModules(modules, args) {
             }),
           ];
         }
+        const expanded = [];
         for (const result of list) {
+          const members = expandUiObservations(result);
+          if (members.length !== 1 || members[0] !== result) aggregates.push(result);
+          expanded.push(...members);
+        }
+        for (const result of expanded) {
           if (result.status === "fail") {
             // Never silently discard a capture failure: a targeted
             // capture that cannot frame the measured element retains an
@@ -323,7 +341,7 @@ async function runUiModules(modules, args) {
   const reportTarget = args.fixture
     ? { mode: "fixture", manifests: args.manifests }
     : { mode: "live", base_url: args.baseUrl, manifests: args.manifests };
-  return { ctx, results, reportTarget };
+  return { ctx, results, aggregates, reportTarget };
 }
 
 async function main() {
@@ -341,6 +359,8 @@ async function main() {
   let results;
   let reportTarget;
   let kit;
+  let aggregates = [];
+  const ownerContext = args.ownerContext ? JSON.parse(await readFile(path.resolve(args.ownerContext), "utf8")) : null;
   if (args.surface === "cli") {
     ctx = await createCliContext({
       orbit: args.orbit,
@@ -356,22 +376,34 @@ async function main() {
     const ui = await runUiModules(modules, args);
     ctx = ui.ctx;
     results = ui.results;
+    aggregates = ui.aggregates;
     reportTarget = ui.reportTarget;
     kit = ui.ctx.kit;
   }
-  results.sort((left, right) => left.fingerprint.localeCompare(right.fingerprint));
-  const report = {
+  const byFingerprint = (left, right) => left.fingerprint.localeCompare(right.fingerprint);
+  results.sort(byFingerprint);
+  aggregates.sort(byFingerprint);
+  const header = {
     schema_version: 1,
     surface: args.surface,
     commit: ctx?.commit ?? "",
     host: ctx?.host ?? "",
     ...(kit ? { kit } : {}),
     target: reportTarget,
-    results,
-    summary: summarize(results),
   };
-  const destination = path.join(path.resolve(args.out), "ux-rules.json");
-  await writeFile(destination, `${JSON.stringify(report, null, 2)}\n`);
+  const outDir = path.resolve(args.out);
+  // The archive keeps each aggregate's declared observations before member
+  // deduplication, so repeated failures of one identity are not lost.
+  const archive = await writeObservationArchive(outDir, {
+    ...header,
+    results,
+    aggregates: aggregates.map((aggregate) => ({ ...aggregate, observations: declaredUiObservations(aggregate) })),
+    summary: summarize(results),
+  });
+  const filing = filingDocument({ surface: args.surface, results, aggregates, ownerContext });
+  const report = { ...header, results: filing.results, summary: filing.summary, archive };
+  const destination = path.join(outDir, "ux-rules.json");
+  await writeFile(destination, `${JSON.stringify(report)}\n`);
   process.stdout.write(
     `${destination} pass=${report.summary.pass} fail=${report.summary.fail} error=${report.summary.error} skipped=${report.summary.skipped}\n`,
   );

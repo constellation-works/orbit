@@ -30,7 +30,7 @@ export async function check(ctx) {
     // inside its first legend), and their descendants' text. aria-disabled and
     // cosmetic classes or colour tokens do not exempt text.
     const inactiveControl = "button:disabled, input:disabled, select:disabled, textarea:disabled, optgroup:disabled, option:disabled";
-    let matched = 0; let unmeasurable = 0; let exempt = 0; const failures = [];
+    let matched = 0; let unmeasurable = 0; let exempt = 0; const failures = []; const rows = [];
     for (const el of H.all("*")) {
       const ownText = [...el.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim() !== "");
       if (!ownText) continue;
@@ -47,10 +47,12 @@ export async function check(ctx) {
       const size = H.px(s.fontSize); const weight = Number.parseInt(s.fontWeight, 10) || 400;
       const large = size >= 24 || (size >= 18.66 && weight >= 700);
       const needed = large ? 3 : 4.5;
-      if (ratio < needed) failures.push({ selector: H.selectorOf(el), ratio: Math.round(ratio * 100) / 100, needed, font_size: s.fontSize, text: (el.textContent ?? "").trim().slice(0, 60) });
+      const row = { ...H.elementFacts(el), ratio: Math.round(ratio * 100) / 100, needed, font_size: s.fontSize, text: (el.textContent ?? "").trim().slice(0, 60) };
+      rows.push(row);
+      if (ratio < needed) failures.push(row);
       if (failures.length >= 20) break;
     }
-    return { matched, unmeasurable, exempt, failures };
+    return { matched, unmeasurable, exempt, rows, failures };
   });
-  return verdict(ctx, rule, m.matched, m.failures, { unmeasurable: m.unmeasurable, disabled_exempt: m.exempt });
+  return verdict(ctx, rule, m.matched, m.failures, { unmeasurable: m.unmeasurable, disabled_exempt: m.exempt }, m.rows);
 }

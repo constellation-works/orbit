@@ -77,6 +77,7 @@ macro_rules! deterministic_action_catalog {
                 PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
                 PrepareEscalationTriage => "prepare_escalation_triage",
                 PrepareFindingVerification => "prepare_finding_verification",
+                PrepareRuleFindings => "prepare_rule_findings",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
                 PullRefill => "pull_refill",

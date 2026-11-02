@@ -112,6 +112,65 @@ fn producer_set(
     Ok(Some(set.clone()))
 }
 
+/// Check the producer's raw observation archives without inflating them. With
+/// a bound producer each declared part must be one of its persisted outputs
+/// with the declared size and digest; inline or file results report the
+/// descriptor unverified. Returns the bounded summaries for the run output.
+pub(super) fn verify_observation_archives(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    document: &Value,
+    consumer_run_id: Option<&str>,
+) -> Result<Vec<Value>, OrbitError> {
+    let Some(archives) = document.get("archives") else {
+        return Ok(Vec::new());
+    };
+    let archives = archives
+        .as_array()
+        .ok_or_else(|| invalid("archives must be an array of archive descriptors"))?;
+    let set = producer_set(runtime, input, document, consumer_run_id)?;
+    let mut summaries = Vec::with_capacity(archives.len());
+    for archive in archives {
+        let parts = archive
+            .get("parts")
+            .and_then(Value::as_array)
+            .filter(|parts| !parts.is_empty() && parts.len() <= MAX_FILES)
+            .ok_or_else(|| invalid("an observation archive needs 1 to 64 parts"))?;
+        let mut names = Vec::with_capacity(parts.len());
+        for part in parts {
+            let name = part.get("name").and_then(Value::as_str).unwrap_or("");
+            let bytes = part.get("bytes").and_then(Value::as_u64);
+            let sha256 = part.get("sha256").and_then(Value::as_str).unwrap_or("");
+            if name.is_empty() || sha256.is_empty() || bytes.is_none_or(|bytes| bytes > MAX_BYTES) {
+                return Err(invalid(
+                    "an archive part needs a name, at most 1 MiB of bytes and a sha256",
+                ));
+            }
+            if let Some(set) = &set
+                && !set.files.iter().any(|file| {
+                    file.name == name && Some(file.bytes) == bytes && file.sha256 == sha256
+                })
+            {
+                return Err(invalid(format!(
+                    "archive part {name:?} is not a matching producer output"
+                )));
+            }
+            names.push(Value::from(name));
+        }
+        summaries.push(serde_json::json!({
+            "surface": archive.get("surface").cloned().unwrap_or(Value::Null),
+            "encoding": archive.get("encoding").cloned().unwrap_or(Value::Null),
+            "observation_count": archive.get("observation_count").cloned().unwrap_or(Value::Null),
+            "uncompressed_bytes": archive.get("uncompressed_bytes").cloned().unwrap_or(Value::Null),
+            "uncompressed_sha256": archive.get("uncompressed_sha256").cloned().unwrap_or(Value::Null),
+            "gzip_sha256": archive.get("gzip_sha256").cloned().unwrap_or(Value::Null),
+            "parts": names,
+            "verified": set.is_some(),
+        }));
+    }
+    Ok(summaries)
+}
+
 /// Read all named evidence before the filer mutates tasks. Paths are names,
 /// never authority to read host files. A script binding takes precedence over
 /// the legacy workspace-confined evidence directory.

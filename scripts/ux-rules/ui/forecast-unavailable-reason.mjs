@@ -2,6 +2,7 @@
 // The API (GET /api/diagnostics/backlog_forecast) is the fixture: when it reports
 // unavailable reasons, the rendered view must carry data-forecast-reason with a
 // known kind and visible reason text, never a bare "unavailable".
+import { declareUiObservations } from "../lib/ui-observations.mjs";
 import { measureInPage, uiResultOf } from "../lib/ui-context.mjs";
 export const KNOWN_REASONS = ["regression_history_missing", "risk_unestimated", "arrival_conflict_unknown", "insufficient_history", "empty", "transport", "unknown"];
 export const rule = { id: "ui.forecast-unavailable-reason", title: "Unavailable backlog forecast names its reason", severity: "medium", surface: "ui", targets: { views: ["tasks-list", "analytics-forecast"], widths: [1440] } };
@@ -31,14 +32,19 @@ export async function check(ctx) {
     return uiResultOf(rule, target, "skipped", { measurements: { reason: "forecast API not reachable on this target", status: api.status } });
   }
   const reasons = apiReasons(api.json);
-  const dom = await measureInPage(ctx, (H) => H.all("[data-forecast-reason]").map((el) => ({ reason: el.dataset.forecastReason, text: (el.textContent ?? "").trim().slice(0, 160), selector: H.selectorOf(el) })));
+  const dom = await measureInPage(ctx, (H) => H.all("[data-forecast-reason]").map((el) => ({ reason: el.dataset.forecastReason, text: (el.textContent ?? "").trim().slice(0, 160), ...H.elementFacts(el) })));
+  const observed = (result) => declareUiObservations(result, [{
+    status: result.status,
+    identity: [target.view, target.theme, target.state, "forecast-unavailable-reason"],
+    measurement: { api_reasons: reasons, dom_reasons: dom },
+  }]);
   if (reasons.length === 0) {
-    return uiResultOf(rule, target, "pass", { measurements: { api_unavailable: false, dom_reasons: dom } });
+    return observed(uiResultOf(rule, target, "pass", { measurements: { api_unavailable: false, dom_reasons: dom } }));
   }
   const named = dom.filter((entry) => KNOWN_REASONS.includes(entry.reason) && entry.text !== "");
   const covers = named.some((entry) => reasons.includes(entry.reason));
-  return uiResultOf(rule, target, covers ? "pass" : "fail", {
+  return observed(uiResultOf(rule, target, covers ? "pass" : "fail", {
     selector: covers ? "" : "[data-forecast-reason]",
     measurements: { api_unavailable: true, api_reasons: reasons, dom_reasons: dom, known_reasons: KNOWN_REASONS },
-  });
+  }));
 }

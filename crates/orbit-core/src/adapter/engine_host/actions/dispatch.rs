@@ -203,6 +203,12 @@ pub(crate) fn run_deterministic(
         }
         // Keep one task per rule-result fingerprint from a results document
         // any workspace script wrote; surface-agnostic by schema.
+        // Read-only owner context: the defect groups open owners track, so
+        // the producer reports every observation of those groups.
+        CoreDeterministicAction::PrepareRuleFindings => {
+            rule_findings_filing::prepare_rule_findings(runtime)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
         CoreDeterministicAction::FileRuleFindings => {
             rule_findings_filing::file_rule_findings(runtime, input, owner_run_id(&tool_context))
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))

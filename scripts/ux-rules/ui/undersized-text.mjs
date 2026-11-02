@@ -74,7 +74,7 @@ export async function check(ctx) {
         style.textTransform === "uppercase" &&
         H.px(style.letterSpacing) >= size * 0.05;
       rows.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         font_size_px: Math.round(size * 10) / 10,
         overline,
         text: text.slice(0, 80),
@@ -83,14 +83,14 @@ export async function check(ctx) {
     }
     return {
       matched: rows.filter((row) => !row.overline).length,
+      rows: rows.filter((row) => !row.overline),
       // Floor is the theme's smallest named content size: 11px column
       // heads. Smaller text (10.5px copy buttons, micro notes) is a finding.
       failures: rows
-        .filter((row) => !row.overline && row.font_size_px < 11)
-        .slice(0, 20),
+        .filter((row) => !row.overline && row.font_size_px < 11),
     };
   });
   return verdict(ctx, rule, found.matched, found.failures, {
     min_font_px: MIN_FONT_PX,
-  });
+  }, found.rows);
 }

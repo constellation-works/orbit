@@ -297,7 +297,7 @@ on the operator-only `orbit.workflow.run.show`.
   (`origin` on `orbit.task.list`) filters by it.
 - `rule_fingerprint` is the stable rule-result fingerprint the
   `file_rule_findings` filer stamps at filing, so one open task owns one
-  failing rule result however it is retitled. It is absent on every task
+  failing rule result or producer-declared defect group however it is retitled. Grouped observations, original target fingerprints and evidence mappings live in `rule-findings/state.json`; matching terminal tasks remain historical. It is absent on every task
   the filer did not create, is not settable through task create or update,
   and is readable through the `rule_fingerprint` show projection.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
