@@ -6,6 +6,8 @@
 //! synthesized `incomplete` checkpoint and its recovery never repeats an
 //! action the dead cycle completed.
 
+mod control_admission;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

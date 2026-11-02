@@ -1,11 +1,16 @@
 //! Trusted observe/finalize integration. The assignment lock fences a cycle
-//! change against a comment append; no agent-facing tool can set this state.
+//! change against a comment append and serializes admission with manager
+//! control; no agent-facing tool can set this state.
+
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::ResidentLiveCycle;
 
+use super::ResidentMandateState;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
@@ -30,7 +35,10 @@ impl OrbitRuntime {
     /// Publish or clear the live cycle under the assignment's write lock.
     /// Observe calls this after acquiring its lease; finalize clears with its
     /// own cycle as `expected_cycle`, so a dead finalizer cannot clear a newer
-    /// cycle. This trusted runtime entry point has no tool/CLI write surface.
+    /// cycle. Publication rechecks the mandate's active state under the same
+    /// lock as manager control; clearing an admitted cycle remains allowed
+    /// after pause, takeover or stop. This trusted runtime entry point has no
+    /// tool/CLI write surface.
     pub fn set_resident_live_cycle(
         &self,
         task_id: &str,
@@ -47,12 +55,23 @@ impl OrbitRuntime {
                 "live cycle needs a cycle id, run id and future lease expiry".into(),
             ));
         }
+        #[cfg(feature = "test-support")]
+        if next.is_some() {
+            test_support::before_resident_cycle_publication();
+        }
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
                 let task = self.get_task(task_id)?;
                 self.ensure_resident_comment_assignment(&task)?;
                 let history = self.get_task_history(task_id)?;
+                if next.is_some()
+                    && self.resident_view(task, &history)?.state().0 != ResidentMandateState::Active
+                {
+                    return Err(OrbitError::PolicyDenied(
+                        "resident_cycle_not_active: the mandate no longer admits new cycles".into(),
+                    ));
+                }
                 let current = live_cycle_from_history(&history)?;
                 if current.as_ref().map(|cycle| cycle.cycle.as_str()) != expected_cycle {
                     return Err(OrbitError::PolicyDenied(

@@ -24,6 +24,9 @@ mod guard;
 mod metrics;
 mod steps;
 
+#[cfg(feature = "test-support")]
+pub use cycle::test_support::with_resident_cycle_admission_checkpoint;
+
 use orbit_common::OrbitError;
 use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskHistoryEntry, TaskStatus,
