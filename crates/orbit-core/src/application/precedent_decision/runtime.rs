@@ -96,6 +96,7 @@ impl OrbitRuntime {
                 work_id: None,
                 sealed_at: None,
                 admission_gap: None,
+                assist: None,
             };
             if !options_admissible(request) {
                 receipt.admission_gap = Some("options_not_admissible".into());
@@ -147,12 +148,15 @@ impl OrbitRuntime {
         service: &AssistanceService,
     ) -> Result<(), OrbitError> {
         let workspace = self.workspace_id()?;
-        if self.coordination_write_owner().is_some()
-            || service
-                .assistance_shadow_policy_epoch(&workspace, PRECEDENT_DECISION_USE_CASE)?
-                .is_none()
-        {
+        if self.coordination_write_owner().is_some() {
             return Ok(());
+        }
+        if service
+            .assistance_shadow_policy_epoch(&workspace, PRECEDENT_DECISION_USE_CASE)?
+            .is_none()
+        {
+            // A withdrawn grant still suspends this workspace's enablements.
+            return self.run_precedent_assist(service);
         }
         let open = self.list_decision_requests(None, None, false)?;
         let mut reconciled = 0;
@@ -193,7 +197,8 @@ impl OrbitRuntime {
                 seal_settled_receipt(&path, service, Some(&work_id))?;
             }
         }
-        self.seal_settled_precedent_decisions(service)
+        self.seal_settled_precedent_decisions(service)?;
+        self.run_precedent_assist(service)
     }
 
     /// One private receipt, including a sealed prediction. Decision surfaces

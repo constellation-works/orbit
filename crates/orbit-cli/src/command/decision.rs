@@ -12,7 +12,10 @@
 //! registering, revoking and rotating are refused from an agent envelope
 //! here, and the CLI's pre-dispatch gate already refuses every plain
 //! command to a plugin callback, so no running code can mint itself a
-//! human.
+//! human. `assist …` enables, disables and shows precedent-decision
+//! categories in core's host-only store; enabling and disabling are
+//! refused from an agent envelope here and in core, and plugin callbacks
+//! are refused by the same pre-dispatch gate.
 
 use std::fmt::Write as _;
 
@@ -61,6 +64,9 @@ impl Execute for DecisionCommand {
             | DecisionVerb::ChannelList
             | DecisionVerb::ChannelRevoke
             | DecisionVerb::ChannelRotateKey => channel_execute(runtime, spec.verb, &input),
+            DecisionVerb::AssistEnable
+            | DecisionVerb::AssistDisable
+            | DecisionVerb::AssistStatus => assist_execute(runtime, spec.verb, &input),
             DecisionVerb::Answer => {
                 let id = required(&input, "id")?;
                 let answer = required(&input, "answer")?;
@@ -258,6 +264,93 @@ fn channel_execute(
         }
         _ => Err(OrbitError::Execution(
             "decision channel dispatch reached a non-channel verb".into(),
+        )),
+    }
+}
+
+fn assist_execute(
+    runtime: &OrbitRuntime,
+    verb: DecisionVerb,
+    input: &serde_json::Map<String, Value>,
+) -> CommandOut {
+    if !matches!(verb, DecisionVerb::AssistStatus)
+        && orbit_common::governance::authorization::agent_context_declared()
+    {
+        return Err(OrbitError::PolicyDenied(
+            "enabling or disabling a precedent-decision category is the operator's: it is refused from an agent envelope".into(),
+        ));
+    }
+    fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
+        serde_json::to_value(value).map_err(|error| {
+            OrbitError::Execution(format!("serialize precedent-decision enablements: {error}"))
+        })
+    }
+    let operator = operator_label(runtime);
+    match verb {
+        DecisionVerb::AssistEnable => {
+            let category = required(input, "category")?;
+            let readout = required(input, "readout")?;
+            let status = runtime.enable_precedent_assist(&category, &readout, &operator)?;
+            let record = &status.enablement;
+            let blocks = vec![Block::text(format!(
+                "Enabled model answers in `{}` at threshold {:.2} under policy {} ({}), model revision {}, from readout {}. Only routine and reversible requests are answered; {:.0}% go to you anyway.",
+                record.category,
+                record.threshold,
+                record.policy_version,
+                record.policy_digest,
+                record.model_revision,
+                record.readout,
+                record.holdback_share * 100.0,
+            ))];
+            Ok(Payload::blocks(serialize(&status)?, blocks).into())
+        }
+        DecisionVerb::AssistDisable => {
+            let category = required(input, "category")?;
+            let status = runtime.disable_precedent_assist(&category, &operator)?;
+            let blocks = vec![Block::text(format!(
+                "`{}` is {}; its open requests wait for a human answer.",
+                status.enablement.category, status.effective_state
+            ))];
+            Ok(Payload::blocks(serialize(&status)?, blocks).into())
+        }
+        DecisionVerb::AssistStatus => {
+            let statuses = runtime.precedent_assist_status()?;
+            let mut table = Table::new(vec![
+                Column::new("CATEGORY"),
+                Column::new("STATE").fixed(),
+                Column::new("THRESHOLD").fixed(),
+                Column::new("POLICY").fixed(),
+                Column::new("WINDOW").fixed(),
+                Column::new("READOUT"),
+                Column::new("ENDED"),
+            ])
+            .empty_message("no precedent-decision categories enabled on this host");
+            for status in &statuses {
+                let record = &status.enablement;
+                let agreed = record
+                    .window
+                    .iter()
+                    .filter(|outcome| outcome.agreed)
+                    .count();
+                let ended = record
+                    .ended
+                    .as_ref()
+                    .map(|ended| format!("{} by {} at {}", ended.reason, ended.by, ended.at))
+                    .unwrap_or_default();
+                table.add_row(vec![
+                    record.category.clone(),
+                    status.effective_state.clone(),
+                    format!("{:.2}", record.threshold),
+                    record.policy_version.clone(),
+                    format!("{agreed}/{}", record.window.len()),
+                    record.readout.clone(),
+                    ended,
+                ]);
+            }
+            Ok(Payload::blocks(serialize(&statuses)?, vec![Block::table(table)]).into())
+        }
+        _ => Err(OrbitError::Execution(
+            "decision assist dispatch reached a non-assist verb".into(),
         )),
     }
 }

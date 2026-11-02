@@ -94,6 +94,7 @@ pub(super) fn dispatch(
                     "review": decision_request_json(&entry.review),
                     "request": decision_request_json(&entry.request),
                 })).collect::<Vec<_>>(),
+                "assist_demoted": digest.assist_demoted,
                 "count": digest.requests.len(),
             });
             if !digest.warnings.is_empty() {
@@ -136,6 +137,11 @@ pub(super) fn dispatch(
         | DecisionVerb::ChannelRotateKey => Err(OrbitError::PolicyDenied(
             "decision channels are registered from the operator CLI: use `orbit decision channel register|list|revoke|rotate-key`".into(),
         )),
+        DecisionVerb::AssistEnable | DecisionVerb::AssistDisable | DecisionVerb::AssistStatus => {
+            Err(OrbitError::PolicyDenied(
+                "precedent-decision categories are enabled from the operator CLI: use `orbit decision assist enable|disable|status`".into(),
+            ))
+        }
     }
 }
 

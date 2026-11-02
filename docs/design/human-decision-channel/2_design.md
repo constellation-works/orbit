@@ -1,8 +1,8 @@
 ---
 title: "Human decision channel — Design"
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: human-decision-channel
 doc_role: design
@@ -638,9 +638,10 @@ Ordered; each slice is independently deliverable and leaves the tree shippable.
 answer from recorded human precedent and, only in enabled low-risk categories,
 answers on its own ([precedent-decisions](../decision-assistance/specs/precedent-decisions.md)).
 This section records what that consumer needs from the channel. §11.1 and
-§11.2–§11.3 are implemented; nothing yet calls the model apply step, so no request
-is model-answered until the self-answer slice (§11.4). With the consumer off,
-every surface above behaves as it does today.
+§11.2–§11.4 are implemented. The model apply step's only caller is the
+self-answer step, which runs only in a category the operator enabled. With the
+consumer off, or no category enabled, every surface above behaves as it does
+today.
 
 ### 11.1 Request options, risk tier and category
 
@@ -678,7 +679,8 @@ writer label is never a human label, and the channel's delegated-human authority
 or precedent answer.
 
 As implemented ([ORB-21092]), the apply step is an internal entry point
-(`apply_model_decision_answer` in `decision_model.rs`) with no caller yet. It
+(`apply_model_decision_answer` in `decision_model.rs`) whose only caller is the
+self-answer step of an enabled category (§11.4). It
 refuses, writing nothing, a request that is not open, an answer it does not
 allow, a tier other than `routine` or `reversible`, a `model_answer_review`
 request, a citation whose category differs from the request's, and a probability
@@ -728,8 +730,14 @@ an enabled category it waits up to the consumer's `assist_wait_seconds` before
 notifying, and notifies as usual unless the model answered. No agent-side call,
 answer authority or channel registration changes. Shadow enqueue is implemented
 and default-off: the raise path records the request before it builds a packet,
-does not wait for a model, and does not show the prediction. The notification
-wait and self-answer are not implemented.
+does not wait for a model, and does not show the prediction.
+
+In an enabled category ([ORB-21097]), the `DecisionRequested` trigger withholds
+the notification (`precedent_decision_wait`) while a `routine` or `reversible`,
+non-holdback request is inside `assist_wait_seconds` and not yet routed. The
+owner tick then applies a qualifying answer through the §11.2 apply step or
+routes the request to the human. A demoted category is listed in the digest's
+`assist_demoted`. The consumer spec's "As implemented" section has the rules.
 
 ### 11.5 Slices
 
@@ -738,13 +746,13 @@ The channel-side ones are:
 
 1. **Risk tier and category on requests** ([ORB-21091]) — §11.1.
 2. **Model-answer provenance, review gate and veto** ([ORB-21092]) — §11.2–§11.3.
-   Implemented; the apply step has no caller yet.
+   Implemented; the self-answer step is the apply step's caller.
 3. **Enablement and self-answer, including the notification wait**
-   ([ORB-21097]) — §11.4.
+   ([ORB-21097]) — §11.4. Implemented, default-off.
 
 ## Task References
 
-- [ORB-21097] — proposes category enablement, self-answer and the notification wait for precedent decisions.
+- [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
 - [ORB-21091] — proposes per-answer risk tier and a stored category on decision requests.
 - [ORB-21089] — designs precedent-answered decisions and the channel changes in §11.

@@ -1,8 +1,8 @@
 ---
 title: "Proposal: precedent-answered human decisions"
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: decision-assistance
 doc_role: spec
@@ -13,7 +13,7 @@ tags: [decision-assistance, human-decision-channel]
 
 # Proposal: precedent-answered human decisions
 
-Status: **shadow consumer implemented and default-off** (packet, enqueue on raise, hidden seal, join export). Model-answer provenance, the review gate and veto are implemented with no caller ([ORB-21092]). Self-answer, notification wait, and the statistical readout are not implemented ([ORB-21089]).
+Status: **implemented and default-off.** The shadow consumer (packet, enqueue on raise, hidden seal, join export), model-answer provenance, review gate and veto ([ORB-21092]), the offline readout ([ORB-21096]), and category enablement, self-answer, holdback, notification wait and demotion ([ORB-21097]) are implemented. Nothing self-answers until the operator enables a category; see §As implemented.
 The [scope](../1_scope.md) keeps the older consumers parked. This consumer is a
 separate evaluation candidate. Its labels are real, structured human answers to
 [human decision channel](../../human-decision-channel/2_design.md) requests, not
@@ -367,6 +367,59 @@ For a request in an enabled category:
    task write lock, binding, state, expiry and answer re-checked. The writer is the
    `model` actor (§Recording), never a human label.
 
+### As implemented
+
+[ORB-21097] implements the enablement, self-answer and drift rules above, with
+these concrete choices:
+
+- **Store.** `<global>/state/decision-channels/precedent-assist.json`, masked
+  from agent and plugin sandboxes like the channel store. Each record holds the
+  category, state (`enabled`, `disabled`, `demoted`, `suspended`), policy
+  version, digest and model revision, threshold and `min_accuracy` from the
+  readout, the readout reference, the operator, the consumer settings, the
+  rolling window, and why it ended. A random host key, written with the store,
+  keys the holdback hash.
+- **Enable checks.** The readout is a task artifact `<task>/<path>` with
+  `format_version` `decision-assistance-eval/4` and `readout_version`
+  `precedent-decision-readout/1`, no `validation_errors`, an `evidence_status`
+  of recorded human decisions, and the live shadow grant's digest. The category
+  must be in the caller's workspace, name a gate the model may answer, and meet
+  each registered target: `scored ≥ min_samples`, Wilson lower bound
+  `≥ min_accuracy`, `coverage ≥ min_coverage`, `ece ≤ max_ece`. The CLI and
+  core refuse an agent envelope; the CLI pre-dispatch gate refuses plugin
+  callbacks; the tool surface refuses all three `assist` verbs.
+- **Settings.** `assist_wait_seconds` 120, holdback 10%, `demotion_window` 30,
+  `max_vetoes` 2 and `precedent_half_life_days` 90 are fixed defaults recorded
+  on each enablement; they are not configurable yet.
+- **Suggested.** The granted template sets no per-question `min_confidence`, so
+  the service reports a complete answer set as `uncertain`. The host derives
+  this consumer's `suggested`: a complete (`suggested`, or `uncertain` with
+  reason `complete`) result, not abstaining, at or above the threshold, with at
+  least one supporting unreversed precedent (support probability ≥ 0.5), a
+  conflict probability below 0.5, no deterministic contradiction, an untruncated
+  packet, and the enablement's policy digest and model revision. The readout's
+  coverage is defined on the same terms, so a readout must be scored with that
+  derived disposition to pass.
+- **Wait and routing.** The `DecisionRequested` trigger withholds the
+  notification while an enabled, self-answerable, non-holdback request is
+  inside its wait and unrouted. The owner tick routes each sealed request once:
+  `self_answered`, `holdback`, `excluded_tier`, `closed`, or
+  `declined:<reason>` (`timeout`, `not_suggested`, `below_threshold`,
+  `no_supporting_precedent`, `conflict`, `contradiction`, `truncated`, `stale`,
+  `apply_refused`, …). The apply step still answers only `agent_request`
+  requests, so final-recovery requests route `declined:apply_refused`.
+- **Window.** Holdback and excluded-tier predictions that were covered at the
+  threshold are scored once the human answers; confirms count as agreement and
+  vetoes (and `orbit decision reverse` of a model answer) as disagreement.
+  Vetoes demote at once on reaching `max_vetoes`; the Wilson bar is judged once
+  the window holds `demotion_window` outcomes. With the defaults (30 outcomes,
+  `min_accuracy` ≥ 0.95) even 30 agreements give a lower bound of 0.886, so a
+  full window always demotes: an enablement lasts at most 30 scored outcomes
+  until these settings are tuned.
+- **Digest.** `orbit.decision.digest` returns `assist_demoted`: every demoted
+  category of the workspace with its evidence, until the operator re-enables
+  or disables it.
+
 ## Recording, veto and feedback
 
 ### `answered_by: model`
@@ -512,7 +565,7 @@ by this design.
    actor and citation, the `model_answer_review` gate, the generalised reversal,
    the digest `model_answered` section, confirmation-only precedent and corpus
    rules. Depends on 1. Implemented: the internal apply step answers agent
-   requests only and has no caller until slice 7; `model_answered` lists every
+   requests only and its caller is slice 7's self-answer step; `model_answered` lists every
    model answer whose review is still open.
 3. **Precedent-provider contract and built-in provider** ([ORB-21093]). The
    `orbit.precedent-provider/1` contract, host validation, the Orbit-history
@@ -528,14 +581,14 @@ by this design.
 7. **Category enablement, self-answer and drift** ([ORB-21097]). The
    `orbit decision assist` surface and store, holdback, notification wait,
    self-answer apply, contradiction downgrade and automatic demotion. Depends on
-   2, 5, 6.
+   2, 5, 6. Implemented, default-off (§As implemented).
 
 The orbit-office decision ledger provider is designed in the paired orbit-office
 task and depends only on slice 3's contract.
 
 ## Task References
 
-- [ORB-21097] — proposes category enablement, self-answer, holdback and demotion.
+- [ORB-21097] — implements category enablement, self-answer, holdback and demotion.
 - [ORB-21096] — proposes the `decision-assistance-eval/4` evaluator contract.
 - [ORB-21095] — proposes the shadow precedent-decision consumer.
 - [ORB-21094] — proposes packet-bound choice questions in the assistance service.

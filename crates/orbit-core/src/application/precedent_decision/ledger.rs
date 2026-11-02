@@ -29,6 +29,25 @@ pub struct PrecedentDecisionReceipt {
     pub work_id: Option<String>,
     pub sealed_at: Option<DateTime<Utc>>,
     pub admission_gap: Option<String>,
+    /// How an enabled category routed this request. Absent on every
+    /// receipt outside an enabled category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assist: Option<PrecedentAssistRouting>,
+}
+
+/// Where an enabled category sent one request, and whether its prediction
+/// has entered the rolling demotion window.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PrecedentAssistRouting {
+    /// `self_answered`, `holdback`, `excluded_tier`, `closed`, or
+    /// `declined:<reason>`.
+    pub route: String,
+    pub at: DateTime<Utc>,
+    /// The prediction was scored against the human answer, or found
+    /// unscorable, so the window never counts it twice.
+    #[serde(default)]
+    pub scored: bool,
 }
 
 pub(super) fn receipt_path(

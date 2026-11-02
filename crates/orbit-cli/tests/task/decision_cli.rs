@@ -1060,3 +1060,73 @@ fn decision_cli_shows_and_answers_a_script_grant_request() {
     assert_eq!(grant.digest, digest);
     assert_eq!(grant.provenance, "cli");
 }
+
+/// `orbit decision assist enable|disable` is the operator's: refused from an
+/// agent envelope and through the tool surface, writing nothing; `status`
+/// reads the host-only store.
+#[test]
+fn decision_assist_cli_refuses_agents_and_the_tool_surface() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_assist_cli_refuses_agents_and_the_tool_surface",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_id = shown["workspace_id"].as_str().unwrap_or("ws").to_string();
+    let category = format!("{workspace_id}/agent_request/pricing");
+
+    for verb in [
+        vec![
+            "decision",
+            "assist",
+            "enable",
+            &category,
+            "--readout",
+            "ORB-1/readout.json",
+        ],
+        vec!["decision", "assist", "disable", &category],
+    ] {
+        let output = fixture
+            .command(&verb)
+            .env("ORBIT_AGENT_NAME", "muse")
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let stderr = String::from_utf8(output).unwrap();
+        assert!(
+            stderr.contains("refused from an agent envelope"),
+            "`orbit {}` must be refused for an agent: {stderr}",
+            verb.join(" ")
+        );
+    }
+    fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.decision.assist_enable",
+            "--input",
+            &serde_json::json!({"category": category, "readout": "ORB-1/readout.json"}).to_string(),
+        ])
+        .assert()
+        .failure();
+
+    // Without a live shadow grant the operator's own enable is refused too,
+    // and nothing is written.
+    fixture
+        .command(&[
+            "decision",
+            "assist",
+            "enable",
+            &category,
+            "--readout",
+            "ORB-1/readout.json",
+        ])
+        .assert()
+        .failure();
+    let status = fixture.json(&["decision", "assist", "status", "--json"]);
+    assert_eq!(status, serde_json::json!([]), "{status}");
+}

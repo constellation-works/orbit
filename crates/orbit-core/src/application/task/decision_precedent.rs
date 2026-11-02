@@ -187,11 +187,21 @@ impl OrbitRuntime {
                     .find(|candidate| candidate.id == request_id);
                 Ok(())
             })?;
-        reopened.ok_or_else(|| {
+        let reopened = reopened.ok_or_else(|| {
             OrbitError::Execution(format!(
                 "decision request `{request_id}` vanished after it was re-opened"
             ))
-        })
+        })?;
+        // The operator reversing a model answer counts against its category
+        // like a veto.
+        if located
+            .resolution
+            .as_ref()
+            .is_some_and(|resolution| resolution.model.is_some())
+        {
+            self.note_precedent_assist_review(&located, true);
+        }
+        Ok(reopened)
     }
 
     /// The reversal step shared by `orbit decision reverse` and a model

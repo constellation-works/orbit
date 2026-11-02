@@ -61,6 +61,16 @@ pub type AssistanceSettingsLoader =
     Arc<dyn Fn() -> Result<AssistanceSettings, OrbitError> + Send + Sync>;
 pub type AssistanceClock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
+/// What identifies one live host grant: its digest (which covers the policy,
+/// including its model revision, and the shared limits and budget), and the
+/// policy version and model revision it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistancePolicyIdentity {
+    pub digest: String,
+    pub policy_version: String,
+    pub model_revision: String,
+}
+
 pub struct AssistanceService {
     store: Arc<dyn AssistanceStoreBackend>,
     adapter: Arc<dyn AssistanceAdapter>,
@@ -88,6 +98,29 @@ impl AssistanceService {
             .assistance_policy(workspace, use_case)
             .filter(|p| p.mode == AssistanceMode::Shadow)
             .map(|p| preparation::assistance_policy_digest(&settings, p))
+            .transpose()
+    }
+
+    /// The live shadow grant's digest, policy version and model revision,
+    /// for a consumer that binds an operator enablement to the exact grant
+    /// it was measured under. `None` unless the grant is shadow.
+    pub fn assistance_shadow_policy_identity(
+        &self,
+        workspace: &str,
+        use_case: &str,
+    ) -> Result<Option<AssistancePolicyIdentity>, OrbitError> {
+        let settings = (self.settings)()?;
+        settings.validate_assistance_settings()?;
+        settings
+            .assistance_policy(workspace, use_case)
+            .filter(|p| p.mode == AssistanceMode::Shadow)
+            .map(|p| {
+                Ok(AssistancePolicyIdentity {
+                    digest: preparation::assistance_policy_digest(&settings, p)?,
+                    policy_version: p.policy_version.clone(),
+                    model_revision: p.model_revision.clone(),
+                })
+            })
             .transpose()
     }
 
