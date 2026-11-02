@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.43.0 — 2026-11-02
+
+### Breaking Changes
+
+- **Visual capture flag renamed**: `orbit visual capture` takes the task as `--id`, matching its MCP tool. `orbit visual capture --task <id>` removed → use `--id <id>`. ([ORB-20890])
+- **Layout version 8**: kept script output files and parallel script-branch checkpoints are stored as durable run artifacts, and older binaries refuse an upgraded workspace → upgrade every host in lockstep before opening it. ([ORB-20866])
+- **New persisted fields**: application consent scopes and operations, decision options and assistance questions gain fields that older binaries, followers included, refuse → upgrade followers together with the owner. ([ORB-21038])
+- **Explicit re-pilot**: the first pilot still runs automatically, but a material edit now holds dispatch as stale instead of re-piloting. Automatic re-piloting removed → use `orbit task repilot <id>` or Readiness "Skip pilot". ([ORB-21073])
+- **SQLite permission repair**: where safe descriptor handling is unavailable, Orbit no longer repairs database permissions in place. Unsafe automatic repair removed → quiesce database users and repair offline, then retry. ([ORB-20977])
+
+### Highlights
+
+- **Application consent v2**: apps declare named, rate-limited scopes with field-level operation bounds, validated at consent time. Callbacks, including auto-task callbacks, are bound to the approved payload, and every admission is audited. ([ORB-21038])
+- **Pilot control**: a held assessment is re-checked only where it went stale, a `no-pilot` tag opts a ready task out, and Readiness offers an operator "Skip pilot". ([ORB-21238])
+- **Fleet notices**: an opt-in `notice` MCP toolset and `orbit notice` CLI post fleet-wide notices with expiry and linked-task closure. ([ORB-21211])
+- **Precedent-answered decisions**: decision requests carry a per-answer risk tier, and a precedent provider and shadow consumer predict answers from recorded decisions without acting on them yet. ([ORB-21089])
+- **Visual review**: the reviewer flags design-rule and quality issues, and UX findings are grouped by underlying defect across screen sizes. ([ORB-21111])
+
 ## 0.42.0 — 2026-11-01
 
 ### Breaking Changes
