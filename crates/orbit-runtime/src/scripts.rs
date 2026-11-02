@@ -262,6 +262,9 @@ pub struct ScriptGrantOptions {
     pub write_roots: Vec<PathBuf>,
     pub env_pass: Vec<String>,
     pub follower: bool,
+    /// The step timeout ceiling the grant records, in seconds. Unset keeps
+    /// the default ceiling; a re-grant never inherits or widens it on its own.
+    pub timeout_seconds: Option<u64>,
     /// The most output files one step may keep. Unset keeps the default
     /// ceiling; a re-grant never inherits or widens it on its own.
     pub output_max_files: Option<u32>,
@@ -280,13 +283,21 @@ pub struct ScriptGrantOptions {
     pub expected_digest: Option<String>,
 }
 
-/// The output limits one grant records: the defaults, with each
-/// acknowledged override checked against the hard ceilings.
+/// The limits one grant records: the defaults, with each acknowledged
+/// override checked against the hard ceilings.
 fn grant_output_limits(
     name: &str,
     options: &ScriptGrantOptions,
 ) -> Result<ScriptGrantLimits, OrbitError> {
     let mut limits = ScriptGrantLimits::default();
+    if let Some(seconds) = options.timeout_seconds {
+        if seconds == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout must be at least 1 second; nothing was granted"
+            )));
+        }
+        limits.timeout_max_seconds = seconds;
+    }
     if let Some(files) = options.output_max_files {
         if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILES).contains(&files) {
             return Err(OrbitError::InvalidInput(format!(

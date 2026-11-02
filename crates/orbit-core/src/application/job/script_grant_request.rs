@@ -358,6 +358,7 @@ impl OrbitRuntime {
             &ScriptGrantOptions {
                 network: Some(requested.network),
                 follower: requested.host_role == ScriptHostRole::Follower,
+                timeout_seconds: requested.timeout_seconds,
                 output_max_files: requested.output_max_files,
                 output_max_file_bytes: requested.output_max_file_bytes,
                 grantor: Some(actor_label.to_string()),
@@ -580,6 +581,7 @@ impl OrbitRuntime {
                 &ScriptGrantOptions {
                     network: Some(requested.network),
                     follower: host_role == ScriptHostRole::Follower,
+                    timeout_seconds: requested.timeout_seconds,
                     output_max_files: requested.output_max_files,
                     output_max_file_bytes: requested.output_max_file_bytes,
                     grantor: Some(grantor),
