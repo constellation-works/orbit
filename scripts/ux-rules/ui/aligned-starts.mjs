@@ -183,7 +183,7 @@ export async function check(ctx) {
                 return { unavailable: true, element: el, reason: "content geometry unavailable" };
               }
               const offset = (line - (scrollTop % line)) % line;
-              if (offset >= contentHeight) {
+              if (offset + line > contentHeight) {
                 return { unavailable: true, element: el, reason: "content geometry unavailable" };
               }
               top = contentTop + offset;
