@@ -203,7 +203,7 @@ score = min(raw, (units × raw + K × fleet_average) ÷ (units + K)),   K = 30
 
 Smoothing only lowers a score. A row above the fleet average is pulled down toward it, the more the less work backs it, so three lucky tasks cannot top a ranking: a 40-unit row keeps 57% of its lead over the average and a 450-unit row 94%. A row at or below the average keeps its raw score. Pulling it up would let a small row rise on the rest of the fleet's evidence; under two-sided smoothing, two rows with the same raw score below the average ranked the smaller one first. Now a row never outranks a larger one with the same raw score: the larger one is pulled down less, or both keep their raw score and the tie goes to the row with more units.
 
-Shrinking toward the average narrows a small row's lead but cannot reverse it: when a 40-unit row's raw score is above a 450-unit row's, it still ranks first. A raw advantage from what a row is credited for, rather than how well its work turned out, has to be removed in the terms; §5.1 removes the orchestrators' complexity weighting for this reason.
+Shrinking toward the average can reverse the order of rows with different support: with a fleet average of 100, a 40-unit row with raw 106 scores about 103.43, below a 450-unit row with raw 105, which scores about 104.69. It does not remove a systematic raw advantage from what a row is credited for rather than how well its work turned out; §5.1 removes the orchestrators' complexity weighting for this reason.
 
 ### 4.3 Minimum support
 
