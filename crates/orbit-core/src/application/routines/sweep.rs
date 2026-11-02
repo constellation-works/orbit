@@ -494,6 +494,11 @@ pub(crate) fn run_sweep_at_with_providers_at(
             {
                 tracing::debug!("delivery quality reconciliation deferred");
             }
+            if runtime.coordination_write_owner().is_none()
+                && runtime.run_precedent_decision_tick().is_err()
+            {
+                tracing::debug!("precedent decision reconciliation deferred");
+            }
         }
     }
     // [ORB-14273] After the executable generation settles, the clock resumes each

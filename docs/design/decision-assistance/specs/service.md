@@ -311,4 +311,5 @@ no external network calls and isolates its home/workspace in a child process:
 ```sh
 mkdir -p .orbit/tmp
 scripts/build-budget.py -- cargo run -p orbit-core --example precedent_provider_fixture -- .orbit/tmp
+scripts/build-budget.py -- cargo run -p orbit-core --example precedent_decision_fixture -- .orbit/tmp
 ```

@@ -716,6 +716,7 @@ impl OrbitRuntime {
                 },
             ))
         })?;
+        self.note_open_precedent_decision(&request);
         Ok(())
     }
 }

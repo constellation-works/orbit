@@ -179,6 +179,11 @@ impl OrbitRuntime {
                 outcome = Some((stored, true));
                 Ok(())
             })?;
+        if let Some((request, true)) = &outcome
+            && request.state == DecisionRequestState::Open
+        {
+            self.note_open_precedent_decision(request);
+        }
         Ok(outcome)
     }
 }

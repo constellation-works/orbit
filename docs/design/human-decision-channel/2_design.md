@@ -701,7 +701,10 @@ leaves the request open), the channel enqueues the consumer's assessment. In
 shadow mode it notifies the human immediately and never shows the prediction. In
 an enabled category it waits up to the consumer's `assist_wait_seconds` before
 notifying, and notifies as usual unless the model answered. No agent-side call,
-answer authority or channel registration changes.
+answer authority or channel registration changes. Shadow enqueue is implemented
+and default-off: the raise path records the request before it builds a packet,
+does not wait for a model, and does not show the prediction. The notification
+wait and self-answer are not implemented.
 
 ### 11.5 Proposed slices
 

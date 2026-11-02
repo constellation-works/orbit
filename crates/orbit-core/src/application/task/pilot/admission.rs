@@ -790,6 +790,7 @@ impl OrbitRuntime {
         if !self.decision_channel_enabled() {
             return Ok(());
         }
+        let mut raised = None;
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
@@ -834,8 +835,13 @@ impl OrbitRuntime {
                         ..Default::default()
                     },
                 )?;
+                raised = Some(request);
                 Ok(())
-            })
+            })?;
+        if let Some(request) = raised {
+            self.note_open_precedent_decision(&request);
+        }
+        Ok(())
     }
 
     /// Whether the task currently carries a pilot-admission hold that an
