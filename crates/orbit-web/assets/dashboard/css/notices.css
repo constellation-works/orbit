@@ -29,6 +29,13 @@
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
 .notices-layout { grid-template-columns: minmax(0, 1fr); }
+/* One inset for the whole Notices column: the body takes the panel's 16px
+   horizontal inset (the same as the panel header and the explainer above it),
+   so section titles, the post form's and cards' borders and the empty-state
+   text all start on that edge; content inside a bordered form or card sits
+   one card padding (12px) further in. */
+#notices-body { padding-inline: 16px; }
+#notices-body > .panel-placeholder { padding-inline: 0; }
 .notice-row {
   border: 1px solid var(--border);
   border-radius: 8px;
