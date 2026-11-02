@@ -54,6 +54,7 @@ pub struct Column {
     sizing: Sizing,
     overflow: Overflow,
     keep_when_uniform: bool,
+    neutral_when_filtered: bool,
 }
 
 impl Column {
@@ -69,6 +70,7 @@ impl Column {
             sizing: Sizing::Flexible,
             overflow: Overflow::Tail,
             keep_when_uniform: false,
+            neutral_when_filtered: false,
         }
     }
 
@@ -97,12 +99,22 @@ impl Column {
         self
     }
 
-    /// Keep this column even when every row carries the same value. Pass the
-    /// filter's presence: a user who asked for `--status done` expects `STATUS`
-    /// to stay on screen even though it now carries no information.
+    /// Keep this column when every row carries the same value because the
+    /// caller filtered on it. The table also renders its cells neutrally.
     #[must_use]
     pub fn filtered(mut self, filtered: bool) -> Self {
-        self.keep_when_uniform = filtered;
+        if filtered {
+            self.keep_when_uniform = true;
+        }
+        self.neutral_when_filtered = filtered;
+        self
+    }
+
+    /// Keep this column when every row carries the same value for a reason
+    /// other than a caller filter.
+    #[must_use]
+    pub fn keep_when_uniform(mut self, keep: bool) -> Self {
+        self.keep_when_uniform = keep;
         self
     }
 }
@@ -473,6 +485,11 @@ impl Table {
     /// mode.
     fn cell(&self, row: &[Cell], index: usize, width: usize) -> Cell {
         let cell = cell_at(row, index);
+        let cell = if self.columns[index].neutral_when_filtered {
+            Cell::new(cell.content())
+        } else {
+            cell
+        };
         if self.columns[index].overflow != Overflow::Middle {
             return cell;
         }

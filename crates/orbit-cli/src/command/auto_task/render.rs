@@ -110,7 +110,10 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
 
     let mut table = Table::new(vec![
         Column::new("NAME").fixed(),
-        Column::new("STATE").fixed().filtered(true),
+        Column::new("STATE")
+            .fixed()
+            .keep_when_uniform(true)
+            .filtered(filter.enabled_only || filter.disabled_only),
         Column::new("SCHEDULE").fixed(),
         Column::new("TITLE"),
     ])

@@ -99,6 +99,7 @@ pub(crate) fn run_history_payload(
     failures: bool,
 ) -> CommandOut {
     let include_job_id = params.job_id.is_none();
+    let task_filtered = params.task_id.is_some();
     let state_filtered = params.state.is_some() || !params.states.is_empty();
     let runs = read.list(runtime, params)?;
     let list_states = runtime.read_job_run_list_states(&runs)?;
@@ -149,12 +150,15 @@ pub(crate) fn run_history_payload(
     // `orbit run show <run_id>` prints a run's untruncated error message.
     columns.extend([
         // Identity and timing stay visible even when a task filter makes them uniform.
-        Column::new("TASK").fixed().filtered(true),
+        Column::new("TASK")
+            .fixed()
+            .keep_when_uniform(true)
+            .filtered(task_filtered),
         Column::new("ATTEMPT").number(),
         Column::new("STATE").fixed().filtered(state_filtered),
         Column::new("STARTED_AT").fixed(),
         Column::new("FINISHED_AT").fixed(),
-        Column::new("DURATION").fixed().filtered(true),
+        Column::new("DURATION").fixed().keep_when_uniform(true),
     ]);
     if incidents {
         columns.push(Column::new("CASCADED").number());
@@ -162,7 +166,7 @@ pub(crate) fn run_history_payload(
     // Appended last, so the columns before it keep their positions for `cut`.
     // Kept even when every row repeats one error: a shared root cause is the finding.
     if show_errors {
-        columns.push(Column::new("ERROR").filtered(true));
+        columns.push(Column::new("ERROR").keep_when_uniform(true));
     }
     let mut table = Table::new(columns).empty_message("no runs recorded");
     for ((index, cascaded), error) in rows.iter().zip(&errors) {
