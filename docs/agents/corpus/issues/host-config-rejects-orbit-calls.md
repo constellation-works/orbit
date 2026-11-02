@@ -37,3 +37,6 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-11-01 04:39 | ORB-20736 | jrun-20261101-0435-c1 | [plugin_enablement] table rejected when loading task tool requirements | operator requeued at 2026-11-01T04:50Z |
 
 Implementers are affected too: the run cannot write its execution summary, so applies_to covers both activities.
+| 2026-10-31 02:47 | ORB-20352 | jrun-20261031-0229-c6 | host config rejects Orbit calls | final_recovery escalated, untriaged in ORB-21505 resume pass |
+| 2026-10-31 02:39 | ORB-20357 | jrun-20261031-0226-c4 | host config rejects Orbit calls | final_recovery escalated, untriaged in ORB-21505 resume pass |
+| 2026-10-31 02:38 | ORB-20359 | jrun-20261031-0235-c3 | host config rejects Orbit calls | final_recovery escalated, untriaged in ORB-21505 resume pass |

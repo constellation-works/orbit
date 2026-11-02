@@ -35,3 +35,6 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-28 21:30 | ORB-19595 | jrun-20261028-2121-t1 | criterion 2 requires owner sign-off before implementation | system moved to done at 2026-10-28T21:49Z |
 | 2026-10-28 21:35 | ORB-19593 | jrun-20261028-2131-c14 | owner_signoff_required, stopped before edit | human forced blocked->proposed at 2026-10-28T21:38Z |
 | 2026-10-28 21:35 | ORB-19594 | jrun-20261028-2132-c5 | owner_signoff_required, stopped before edit | human forced blocked->proposed at 2026-10-28T21:39Z |
+| 2026-10-28 21:28 | ORB-19593 | not recorded in triage comment | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-28 21:28 | ORB-19594 | not recorded in triage comment | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-28 21:30 | ORB-19595 | not recorded in triage comment | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
