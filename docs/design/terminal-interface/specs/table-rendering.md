@@ -88,7 +88,7 @@ The single-record commands for truncatable columns, including diagnostic and par
 - [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
 - [ORB-12113] — Keep plain-output columns stable rather than suppressing uniform values.
 - [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
-- [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
+- [ORB-21575] — Add full detail recovery for audited truncated views.
 - [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
