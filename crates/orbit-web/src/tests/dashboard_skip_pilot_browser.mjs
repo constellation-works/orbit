@@ -107,8 +107,42 @@ export async function assertSkipPilot(browser, origin, evidence) {
     entry = { task_id: 'SKIP-1', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'SKIP-0', status: 'backlog' }] };
     await refresh();
     await skip.waitFor({ state: 'detached' });
+
+    // [ORB-21278] A refusal while a description draft keeps the detail open
+    // repaints beside Skip pilot. The draft text and its selection survive the
+    // refusal, and a retried skip that lands clears it with the editor open.
+    task.tags = ['docs'];
+    entry = stale;
+    await refresh();
+    await skip.waitFor({ state: 'visible' });
+    await detail.locator('.description-block button.field-edit').first().click();
+    const draft = detail.locator('.description-block textarea');
+    await draft.fill('Unsaved operator draft');
+    await draft.evaluate(node => node.setSelectionRange(3, 9));
+    const feedback = detail.locator('.readiness-skip-pilot .operator-record-refusal');
+    refusal = true;
+    await skip.click();
+    await feedback.filter({ hasText: 'authorization_denied' }).waitFor();
+    check(await skip.isEnabled(), 'A refused skip with an open draft must keep the control available');
+    check(await draft.isVisible(), 'A refused skip must keep the description editor open');
+    check(await draft.inputValue() === 'Unsaved operator draft', 'A refused skip must keep the unsaved draft text');
+    check(await draft.evaluate(node => node.selectionStart === 3 && node.selectionEnd === 9), 'A refused skip must keep the draft selection');
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+      await feedback.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `skip-pilot-refusal-draft-dark-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    refusal = false;
+    await skip.click();
+    await skip.waitFor({ state: 'detached' });
+    check(await feedback.count() === 0, 'A landed skip must clear the refusal beside the action');
+    check(await draft.isVisible(), 'A landed skip must keep the description editor open');
+    check(await draft.inputValue() === 'Unsaved operator draft', 'A landed skip must keep the unsaved draft text');
+    check(await draft.evaluate(node => node.selectionStart === 3 && node.selectionEnd === 9), 'A landed skip must keep the draft selection');
+
     check(errors.length === 0, errors.join('\n'));
-    fs.writeFileSync(path.join(evidence, 'skip-pilot-result.json'), JSON.stringify({ passed: true, patches, refusal: true, declined: true, restoredOnRemoval: true, hiddenWhenNotPilotHeld: true }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'skip-pilot-result.json'), JSON.stringify({ passed: true, patches, refusal: true, declined: true, restoredOnRemoval: true, hiddenWhenNotPilotHeld: true, refusalWithOpenDraft: true }, null, 2));
   } finally {
     await page.close();
   }

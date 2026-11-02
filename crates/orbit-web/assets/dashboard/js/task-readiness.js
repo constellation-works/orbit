@@ -447,6 +447,8 @@ function buildSkipPilot(task, context) {
     button,
     el("span", { class: "readiness-fix", text: label }),
   ]);
+  // A kept draft repaints this refusal in place, as the pilot hold's does.
+  wrap.dataset.operatorRecordFeedback = "true";
   const refusal = operatorRecordRefusalNode(task);
   if (refusal) wrap.appendChild(refusal);
   return wrap;
