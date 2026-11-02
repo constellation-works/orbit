@@ -435,6 +435,17 @@ fn assess_disposition(
     finding: Option<&str>,
     disposition: &str,
 ) {
+    assess_with(workspace, task, finding, disposition, json!({}));
+}
+
+/// [`assess_disposition`] with `extra` assessment fields merged in.
+fn assess_with(
+    workspace: &Workspace,
+    task: &Task,
+    finding: Option<&str>,
+    disposition: &str,
+    extra: serde_json::Value,
+) {
     let prepared = workspace.prepare(&[&task.id]);
     let current = got(workspace, task);
     let mut assessment = json!({
@@ -464,6 +475,9 @@ fn assess_disposition(
                 "evidence": "The same README repair is already covered by existing work.",
             })
         };
+    }
+    for (field, value) in extra.as_object().unwrap() {
+        assessment[field] = value.clone();
     }
     let applied = workspace.action(
         "apply_task_pilot_results",
@@ -910,6 +924,116 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
     let (workspace, task) = fresh_validation("The repair is observable.");
     assess(&workspace, &task, Some("utility_warnings"));
     assert_admission(&workspace, &task, None);
+}
+
+const RESERVED_FINDING: &str = "a governed operation reserved for the";
+
+fn reserved_findings(workspace: &Workspace, task: &Task) -> usize {
+    last_audit(workspace, task)["assessment"]["validation_tool_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|warning| warning.as_str().unwrap().contains(RESERVED_FINDING))
+        .count()
+}
+
+/// [ORB-21291] A criterion that names an operator-only tool only as what the
+/// change edits does not hold once the pilot classifies it as the subject.
+fn operator_tool_named_as_the_change_subject_does_not_hold() {
+    let (workspace, task) = fresh_validation(
+        "The description `orbit.pipeline.invoke` advertises names its operator handoff, shown by the tool-list golden.",
+    );
+    let prepared = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        prepared["partitions"][0]["operator_tool_candidates"][&task.id],
+        json!([{"criterion": 1, "tool": "orbit.pipeline.invoke"}]),
+        "{prepared}"
+    );
+    assess_with(
+        &workspace,
+        &task,
+        None,
+        "selectors",
+        json!({"operator_tool_classifications": [{
+            "criterion": 1, "tool": "orbit.pipeline.invoke", "classification": "subject",
+            "reason": "The criterion checks the advertised description text, not a run.",
+        }]}),
+    );
+    let audit = last_audit(&workspace, &task);
+    assert!(audit["operator_validation_hold"].is_null(), "{audit}");
+    assert_eq!(
+        audit["assessment"]["operator_tool_classifications"][0]["classification"],
+        "subject"
+    );
+    assert_eq!(reserved_findings(&workspace, &task), 0, "{audit}");
+    assert_no_event(&workspace, &task, "operator_validation_held");
+    assert_admission(&workspace, &task, None);
+    assert_workflow_admitted(&workspace, &task);
+}
+
+/// [ORB-21291] An `invoke` classification keeps the operator handoff.
+fn operator_tool_the_criterion_must_invoke_still_holds() {
+    let (workspace, task) =
+        fresh_validation("Run the live evaluation with `orbit.pipeline.invoke`.");
+    assess_with(
+        &workspace,
+        &task,
+        None,
+        "selectors",
+        json!({"operator_tool_classifications": [{
+            "criterion": 1, "tool": "orbit.pipeline.invoke", "classification": "invoke",
+            "reason": "Validation runs the live evaluation.",
+        }]}),
+    );
+    let audit = last_audit(&workspace, &task);
+    assert_req0(&audit["operator_validation_hold"]["requirements"], 1);
+    assert_eq!(
+        audit["operator_validation_hold"]["requirements"][0]["tool"],
+        "orbit.pipeline.invoke"
+    );
+    assert_eq!(reserved_findings(&workspace, &task), 1, "{audit}");
+    assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+    assert!(
+        workflow_refusal(&workspace, &task)
+            .contains("criterion 1 requires `orbit.pipeline.invoke`")
+    );
+}
+
+/// [ORB-21291] A detected mention without a usable classification fails safe.
+fn unclassified_or_malformed_operator_tool_classification_still_holds() {
+    let subject = |criterion: serde_json::Value, tool: &str, classification: &str, reason: &str| {
+        json!({"operator_tool_classifications": [{
+            "criterion": criterion, "tool": tool,
+            "classification": classification, "reason": reason,
+        }]})
+    };
+    for extra in [
+        json!({}),
+        json!({"operator_tool_classifications": "subject"}),
+        json!({"operator_tool_classifications": ["subject"]}),
+        subject(json!(1), "orbit.pipeline.invoke", "subject", " "),
+        subject(json!(1), "orbit.pipeline.invoke", "maybe", "Unsure."),
+        subject(json!("1"), "orbit.pipeline.invoke", "subject", "Text only."),
+        subject(
+            json!(2),
+            "orbit.pipeline.invoke",
+            "subject",
+            "Wrong criterion.",
+        ),
+        subject(json!(1), "orbit.task.requeue", "subject", "Wrong tool."),
+        json!({"operator_tool_classifications": [
+            {"criterion": 1, "tool": "orbit.pipeline.invoke", "classification": "subject", "reason": "Text."},
+            {"criterion": 1, "tool": "orbit.pipeline.invoke", "classification": "invoke", "reason": "Run."},
+        ]}),
+    ] {
+        let (workspace, task) =
+            fresh_validation("The description `orbit.pipeline.invoke` advertises is reworded.");
+        assess_with(&workspace, &task, None, "selectors", extra.clone());
+        let audit = last_audit(&workspace, &task);
+        assert_req0(&audit["operator_validation_hold"]["requirements"], 1);
+        assert_eq!(reserved_findings(&workspace, &task), 1, "{extra}: {audit}");
+        assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+    }
 }
 
 fn changed_criteria_make_the_pilot_validation_assessment_stale() {
@@ -1816,7 +1940,10 @@ crate::scenario_table!(
     repairable_tool_findings_and_expected_denials_remain_advisory,
     changed_criteria_make_the_pilot_validation_assessment_stale,
     legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit,
-    operator_validation_hold_is_retained_when_warnings_exceed_cap
+    operator_validation_hold_is_retained_when_warnings_exceed_cap,
+    operator_tool_named_as_the_change_subject_does_not_hold,
+    operator_tool_the_criterion_must_invoke_still_holds,
+    unclassified_or_malformed_operator_tool_classification_still_holds
 );
 
 crate::scenario_table!(

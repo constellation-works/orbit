@@ -360,6 +360,67 @@ pub(crate) fn operator_validation_requirements(
         .collect()
 }
 
+/// Assessment field in which the pilot classifies each detected operator-only
+/// tool mention [ORB-21291]: `invoke` when validating the criterion means
+/// running the tool, `subject` when the criterion names it only as what the
+/// change edits (its code, description, schema, docs or tests).
+pub(crate) const OPERATOR_TOOL_CLASSIFICATIONS: &str = "operator_tool_classifications";
+
+/// One pilot classification of a detected `(criterion, tool)` mention.
+#[derive(Deserialize)]
+struct OperatorToolClassification {
+    criterion: usize,
+    tool: String,
+    classification: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Whether `assessment` classifies `requirement` as the change's subject.
+///
+/// Fails safe: a missing field, a malformed entry, a `subject` without a
+/// reason, or any `invoke` (or unknown) classification for the same mention
+/// keeps the requirement, so the task holds as before.
+fn classified_as_subject(assessment: &Value, requirement: &OperatorValidationRequirement) -> bool {
+    let Some(entries) = assessment
+        .get(OPERATOR_TOOL_CLASSIFICATIONS)
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let mut subject = false;
+    for entry in entries {
+        let Ok(entry) = OperatorToolClassification::deserialize(entry) else {
+            continue;
+        };
+        if entry.criterion != requirement.criterion || entry.tool != requirement.tool {
+            continue;
+        }
+        let reasoned = entry
+            .reason
+            .as_deref()
+            .is_some_and(|reason| !reason.trim().is_empty());
+        if entry.classification == "subject" && reasoned {
+            subject = true;
+        } else {
+            return false;
+        }
+    }
+    subject
+}
+
+/// The detected operator requirements the pilot did not classify as the
+/// change's subject: only those hold admission as an operator handoff.
+pub(crate) fn invoked_operator_requirements(
+    assessment: &Value,
+    requirements: Vec<OperatorValidationRequirement>,
+) -> Vec<OperatorValidationRequirement> {
+    requirements
+        .into_iter()
+        .filter(|requirement| !classified_as_subject(assessment, requirement))
+        .collect()
+}
+
 /// Status, priority, attribution, comments and execution evidence are not
 /// assessed validation material; editing them must not release a hold.
 fn validation_material(task: &Task) -> String {
@@ -617,10 +678,13 @@ impl OrbitRuntime {
                 if !edited {
                     let mut registered = self.allowlist_known_tool_names();
                     registered.sort();
-                    let requirements = operator_validation_requirements(task, &registered)
-                        .into_iter()
-                        .filter(is_candidate_requirement)
-                        .collect::<Vec<_>>();
+                    let requirements = invoked_operator_requirements(
+                        assessment,
+                        operator_validation_requirements(task, &registered),
+                    )
+                    .into_iter()
+                    .filter(is_candidate_requirement)
+                    .collect::<Vec<_>>();
                     if !requirements.is_empty() {
                         return Ok(Some(PilotAdmissionHold::OperatorValidation(
                             OperatorValidationHold::new(task, requirements),

@@ -432,7 +432,15 @@ another OS (see [Native host evidence](#native-host-evidence)).
   `required_tools` grants allowlist membership, not capability, and an
   implementing agent must never set an authority environment variable to get
   past that gate. Write the criterion as an explicit operator handoff, or scope
-  it to the registered dispatch path an agent can reach.
+  it to the registered dispatch path an agent can reach. A criterion that
+  names an operator-only tool only as the **subject** of the change (its code,
+  description, schema, docs or tests: "`orbit.task.requeue` refuses a dirty
+  handoff, shown by a runtime test") does not hold: the pilot classifies each
+  detected mention as `subject` or `invoke` with a one-line reason in its
+  assessment's `operator_tool_classifications`. Only `invoke` (meeting the
+  criterion means running the tool) becomes an operator validation hold and
+  keeps this finding; a mention the pilot leaves unclassified, or classifies
+  malformed, holds as `invoke`.
 - **External credentials.** `github.*` reads depend on authentication the lane
   may not hold, so state that precondition instead of treating a
   capability-unavailable result as a pass.

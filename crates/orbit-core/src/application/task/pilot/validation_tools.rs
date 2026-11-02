@@ -244,13 +244,8 @@ impl ImplementationLane {
             ));
         }
 
-        if let Some(operation) = governed_tool(tool)
-            && !operation.allowed.contains(&McpCapability::Agent)
-        {
-            findings.push(format!(
-                "acceptance criterion requires `{tool}`, a governed operation reserved for the {} capability; `required_tools` grants allowlist membership only, so route this validation to an explicit operator handoff instead of expecting the implementing agent to perform it",
-                capability_label(operation.allowed)
-            ));
+        if let Some(finding) = operator_reserved_finding(tool) {
+            findings.push(finding);
         }
 
         if let Some((_, credential)) = EXTERNAL_CREDENTIALS
@@ -261,6 +256,54 @@ impl ImplementationLane {
                 "acceptance criterion requires `{tool}`, whose result depends on {credential} in the executing lane; `required_tools` cannot supply credentials, so state that precondition or hand the check to an operator"
             ));
         }
+    }
+}
+
+/// The finding for a tool reserved for a non-agent capability, or `None` when
+/// the implementing agent may call it.
+fn operator_reserved_finding(tool: &str) -> Option<String> {
+    let operation = governed_tool(tool)?;
+    (!operation.allowed.contains(&McpCapability::Agent)).then(|| {
+        format!(
+            "acceptance criterion requires `{tool}`, a governed operation reserved for the {} capability; `required_tools` grants allowlist membership only, so route this validation to an explicit operator handoff instead of expecting the implementing agent to perform it",
+            capability_label(operation.allowed)
+        )
+    })
+}
+
+/// Drop the operator-reserved finding for each tool whose every detected
+/// criterion mention the pilot classified as the change's subject
+/// [ORB-21291]. Such a criterion edits or tests the tool; nobody has to run
+/// it, so neither a hold nor this warning applies. A tool with any mention
+/// left unclassified, malformed or classified `invoke` keeps its finding.
+pub(super) fn drop_subject_operator_warnings(
+    assessment: &mut Value,
+    lane: &ImplementationLane,
+    task: &Task,
+) {
+    let detected = lane.operator_requirements(task);
+    if detected.is_empty() {
+        return;
+    }
+    let invoked = super::admission::invoked_operator_requirements(assessment, detected.clone());
+    let subject_only = detected
+        .iter()
+        .map(|requirement| requirement.tool.as_str())
+        .filter(|tool| !invoked.iter().any(|requirement| requirement.tool == *tool))
+        .filter_map(operator_reserved_finding)
+        .collect::<BTreeSet<_>>();
+    if subject_only.is_empty() {
+        return;
+    }
+    if let Some(warnings) = assessment
+        .get_mut(super::VALIDATION_TOOL_WARNINGS)
+        .and_then(Value::as_array_mut)
+    {
+        warnings.retain(|warning| {
+            warning
+                .as_str()
+                .is_none_or(|text| !subject_only.contains(text))
+        });
     }
 }
 
