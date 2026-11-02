@@ -32,3 +32,5 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 15:14 | ORB-18099 | jrun-20261025-1451-c1 | sandbox-exec exit 71, confined tests unexecuted | merged outside Orbit at 2026-10-25T15:44Z, settled done |
 | 2026-10-28 02:00 | ORB-19265 | jrun-20261028-0149-c1 | Seatbelt block, environment unchanged | human forced blocked->review at 2026-10-28T02:16Z |
 | 2026-10-30 04:33 | ORB-20040 | jrun-20261030-0423-c4 | bwrap unavailable on owning host | merged outside Orbit at 2026-10-30T05:00Z, settled done |
+| 2026-10-25 08:47 | ORB-18196 | not recorded in triage comment | nested sandbox profile cannot be applied in worker | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
+| 2026-10-26 15:07 | ORB-18547 | jrun-20261026-1425-c1 | nested sandbox profile cannot be applied in worker | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |

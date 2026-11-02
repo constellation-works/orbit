@@ -44,3 +44,6 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-31 04:29 | ORB-20373 | jrun-20261031-0424-c1 | creation targets absent, no creation authorization | system moved to done at 2026-10-31T06:29Z |
 | 2026-10-31 04:31 | ORB-20375 | jrun-20261031-0426-c1 | creation targets absent, no creation authorization | system moved to done at 2026-10-31T05:13Z |
 | 2026-10-31 04:40 | ORB-20371 | jrun-20261031-0435-c1 | creation targets absent, no creation authorization | system moved to done at 2026-10-31T05:15Z |
+| 2026-10-25 03:49 | ORB-18079 | not recorded in triage comment | new-file targets absent, no context_creation_authorized; operator must grant exa | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
+| 2026-10-25 04:36 | ORB-18083 | not recorded in triage comment | new-file targets absent, no context_creation_authorized; operator must grant exa | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
+| 2026-10-26 05:10 | ORB-18473 | not recorded in triage comment | new-file targets absent, no context_creation_authorized; operator must grant exa | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
