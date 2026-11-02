@@ -1,12 +1,13 @@
-//! `GET /api/notices`: retained closed/expired history must not consume
-//! the capacity that shows open notices (ORB-21551).
+//! `GET /api/notices`: complete aggregate reads and retained-history visibility.
 
 use chrono::{Duration, Utc};
-use orbit_core::OrbitError;
 use orbit_core::application::notice::{NoticeCaller, NoticePostRequest, NoticeSelector};
+use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::record::NoticeKind;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workspace::{WorkspaceCheckout, WorkspaceStatus};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 use super::support::{Fixture, isolated, json_ok};
 
@@ -25,9 +26,8 @@ fn operator_caller() -> NoticeCaller {
     }
 }
 
-fn post(fixture: &Fixture, kind: NoticeKind, title: &str, dedupe_key: &str) -> String {
-    fixture
-        .runtime
+fn post(runtime: &OrbitRuntime, kind: NoticeKind, title: &str, dedupe_key: &str) -> String {
+    runtime
         .post_notice(
             &operator_caller(),
             NoticePostRequest {
@@ -53,7 +53,7 @@ fn post(fixture: &Fixture, kind: NoticeKind, title: &str, dedupe_key: &str) -> S
 fn seed_saturated_history(fixture: &Fixture) -> String {
     for index in 0..200 {
         let id = post(
-            fixture,
+            &fixture.runtime,
             NoticeKind::Incident,
             &format!("saturated incident {index}"),
             &format!("saturated-incident-{index}"),
@@ -64,7 +64,7 @@ fn seed_saturated_history(fixture: &Fixture) -> String {
             .unwrap();
     }
     post(
-        fixture,
+        &fixture.runtime,
         NoticeKind::Maintenance,
         "planned maintenance window",
         "open-maintenance",
@@ -160,6 +160,133 @@ fn open_maintenance_survives_closed_incidents_older_than_24_hours() {
                 json!([]),
                 "notices ended over 24h ago stay out of recent, without hiding open ones"
             );
+        },
+    );
+}
+
+/// Add another owner-local workspace without making any HTTP request.
+fn seed_second_workspace(fixture: &Fixture) -> (PathBuf, String) {
+    let repo = fixture.path("second");
+    let work = repo.join(".orbit");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("config.yaml"),
+        "schema_version: 1\nworkspace_id: ws_second\n",
+    )
+    .unwrap();
+    std::fs::write(work.join("config.toml"), "").unwrap();
+    let registry_path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry =
+        orbit_registry::workspace_registry::load_registry_from(&registry_path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = "ws_second".into();
+    workspace.name = "second".into();
+    workspace.status = WorkspaceStatus::Active;
+    let checkout = WorkspaceCheckout::owner(workspace.id.clone(), repo, work.clone());
+    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap();
+    let notice_id = post(&runtime, NoticeKind::Incident, "second incident", "second");
+    registry.workspaces.push(workspace);
+    registry.checkouts.push(checkout);
+    orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path).unwrap();
+    (work, notice_id)
+}
+
+fn assert_notice_ids(payload: &Value, key: &str, ids: &[&str]) {
+    let notices = payload[key].as_array().unwrap();
+    assert_eq!(notices.len(), ids.len(), "{payload}");
+    for id in ids {
+        assert!(
+            notices.iter().any(|notice| notice["id"] == *id),
+            "{key} must include {id}: {payload}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_notices_resolve_cold_registered_workspaces() {
+    isolated(
+        "notices::aggregate_notices_resolve_cold_registered_workspaces",
+        || {
+            let fixture = Fixture::new();
+            let first = post(
+                &fixture.runtime,
+                NoticeKind::Maintenance,
+                "first maintenance",
+                "first",
+            );
+            let closed = post(
+                &fixture.runtime,
+                NoticeKind::Info,
+                "resolved info",
+                "closed",
+            );
+            fixture
+                .runtime
+                .close_notice(
+                    &operator_caller(),
+                    NoticeSelector::Id(closed.clone()),
+                    "resolved",
+                )
+                .unwrap();
+            let (_, second) = seed_second_workspace(&fixture);
+            let server = fixture.server(false);
+            // /healthz is the harness readiness probe; no workspace route
+            // has populated this server's runtime cache.
+            let payload = json_ok(server.get("/api/notices?workspace=all"));
+            assert_notice_ids(&payload, "open", &[&first, &second]);
+            assert_notice_ids(&payload, "banner", &[&first, &second]);
+            assert_notice_ids(&payload, "recent", &[&closed]);
+            assert_eq!(payload["degraded"], json!([]));
+        },
+    );
+}
+
+#[test]
+fn aggregate_notices_report_broken_config_and_recover_without_warming() {
+    isolated(
+        "notices::aggregate_notices_report_broken_config_and_recover_without_warming",
+        || {
+            let fixture = Fixture::new();
+            let first = post(
+                &fixture.runtime,
+                NoticeKind::Maintenance,
+                "healthy maintenance",
+                "first",
+            );
+            let (second_work, second) = seed_second_workspace(&fixture);
+            let server = fixture.server(false);
+            // Warm both runtimes so this case isolates config invalidation
+            // from the cold-cache regression above.
+            json_ok(server.get("/api/workspaces"));
+            let read = || json_ok(server.get("/api/notices?workspace=all"));
+            assert_notice_ids(&read(), "open", &[&first, &second]);
+
+            std::fs::write(second_work.join("config.toml"), "# valid config edit\n").unwrap();
+            let payload = read();
+            assert_notice_ids(&payload, "open", &[&first, &second]);
+            assert_eq!(payload["degraded"], json!([]));
+
+            std::fs::write(second_work.join("config.toml"), "[broken\n").unwrap();
+            for _ in 0..2 {
+                let payload = read();
+                assert_notice_ids(&payload, "open", &[&first]);
+                assert_notice_ids(&payload, "banner", &[&first]);
+                let degraded = payload["degraded"].as_array().unwrap();
+                assert_eq!(degraded.len(), 1, "{payload}");
+                assert!(
+                    degraded[0].as_str().unwrap().contains("ws_second"),
+                    "{payload}"
+                );
+            }
+            std::fs::write(second_work.join("config.toml"), "# repaired config\n").unwrap();
+            let payload = read();
+            assert_notice_ids(&payload, "open", &[&first, &second]);
+            assert_eq!(payload["degraded"], json!([]));
         },
     );
 }

@@ -167,8 +167,12 @@ The dashboard renders title and body as text nodes, never as HTML, under the exi
 CSP. It reads through the same core read the tool uses: `GET /api/notices` (with
 `?workspace=all` for the aggregate view) returns the open notices, the banner subset and the last
 24 h of closed and expired notices with `ended_label` saying how each ended (`closed by …`,
-`linked task done`, `expired at …`). The operator forms write through `POST /api/notices` and
-`POST /api/notices/<id>/close`, which call the same core post and close as the tools and require an
+`linked task done`, `expired at …`). The aggregate view resolves every registered active
+owner-local workspace, including those not yet opened by another dashboard request. Config
+edits rebuild that workspace on the next notice read. Unavailable workspaces are named in
+`degraded` while healthy workspaces remain visible; a later read retries resolution, so repairing
+a broken config restores its notices without visiting another view. The operator forms write through
+`POST /api/notices` and `POST /api/notices/<id>/close`, which call the same core post and close as the tools and require an
 operator session. The banner shows while an incident or maintenance notice is in that read, on
 every view, with title, scope, age and time to expiry and a link to the Notices view.
 
