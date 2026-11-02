@@ -105,6 +105,75 @@ epoch. Live evaluation and advisory activation need a separate operator
 decision identifying the evaluated contract, evidence permissions and budget;
 they are not enabled by default.
 
+### Precedent retrieval grants
+
+`assistance.precedent_providers` is an optional host-only array (default `[]`).
+Each entry grants one exact `workspace_id`, plus `built_in` (default `false`)
+and an ordered `plugin_tools` list (default `[]`):
+
+```toml
+[[assistance.precedent_providers]]
+workspace_id = "ws_example"
+built_in = true
+plugin_tools = ["history.retrieve"]
+```
+
+This retrieves decision evidence only. It starts no model calls, notifications,
+or automatic answers. Only active, granted, read-only plugin tools are
+eligible. Each receives `orbit.precedent-provider/1` through ordinary audited
+plugin dispatch, with its existing callback session and sandbox. The built-in
+decision-history source runs first; plugin source order follows configuration.
+Removing the entry disables retrieval on the next call.
+
+There are at most `128` workspace entries and `8` plugin tools per entry;
+duplicate workspaces or tool names are refused. The provider boundary caps each
+query at `K = 32`, `65536` request bytes, and `262144` response bytes.
+
+### Precedent-decision shadow consumer
+
+`use_case = "precedent_decision"` is the shadow consumer for an open human
+decision. It stays off until a host policy sets `mode = "shadow"`:
+
+```toml
+[[assistance.policies]]
+workspace_id = "ws_example"
+use_case = "precedent_decision"
+mode = "shadow"
+model = "gpt-6-luna"
+model_revision = "r1"
+policy_version = "v1"
+contract_digest = "sha256:<64-lowercase-hex-of-precedent-decision/1-template>"
+evidence_fields = ["option_ids", "request", "task_context", "precedents", "provenance"]
+evidence_ref_prefixes = ["task:", "decision:"]
+credential_env = "ORBIT_ASSISTANCE_PRECEDENT"
+```
+
+`off` and `advisory` enqueue nothing and do not consult precedent providers.
+Shadow builds one packet after a request is raised and still open, enqueues it,
+and seals the settled prediction in a private ledger. The dashboard, mail,
+`orbit decision show`, the digest, and advisory reads do not show that
+prediction.
+
+The grant's `evidence_fields` must include `option_ids` (the packet-bound
+choice, at most `8` ids). Also grant `request`, `task_context`, `precedents`,
+and `provenance` when that evidence should leave the host, and allow
+`evidence_ref_prefixes` `task:` and `decision:`. A granted `precedents` value
+carries each retained record's question, option labels and consequences,
+bounded context, and citation (`source`, `ref`, digest); those option ids are
+local to the historical record. Omitting `precedents` keeps that text on the
+host. Credential-pattern redaction still applies to the values that are sent,
+and the serialized request stays within `limits.max_request_bytes`. The
+contract digest is the granted question template `precedent-decision/1`, not a
+per-request expansion. Retrieval uses at most eight precedents, each text bound
+to `2000` bytes. Fund `budget` with a named epoch, ceilings, and verified
+pricing, or calls are refused as above.
+
+This mode never answers a decision, never changes workflow authority, and does
+not wait before notifying the human. To disable it, set `mode = "off"` or
+remove the policy. Corpus auto rules that answer repeated decisions from stored
+rules are separate; see
+[Precedent for repeated decisions](../../how-to/decision-channels/#precedent-for-repeated-decisions).
+
 Read the whole table with `orbit config get assistance`; replace it with
 `orbit config set --global assistance '<table>'`. Its nested fields are not
 separate settable keys.
