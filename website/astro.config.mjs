@@ -225,6 +225,7 @@ export default defineConfig({
             { slug: 'reference/scheduling-yaml', label: 'Scheduling YAML' },
             { slug: 'reference/policy-format', label: 'Policy format' },
             { slug: 'reference/plugin-manifest', label: 'Plugin manifest' },
+            { slug: 'reference/application-consent', label: 'Application consent' },
             { slug: 'reference/executor-yaml', label: 'Executor YAML' },
             { slug: 'reference/scoping', label: 'Scoping rules' },
           ],
