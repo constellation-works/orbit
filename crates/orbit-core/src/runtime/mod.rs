@@ -55,7 +55,10 @@ impl OrbitRuntime {
         self.kernel
     }
 
-    fn from_kernel_ref(kernel: &RuntimeKernel) -> &Self {
+    /// View a kernel a kernel interface lent back, such as the runtime a
+    /// [`WorkspaceCatalog`](workspace::catalog::WorkspaceCatalog) hook receives,
+    /// as the runtime that owns it.
+    pub fn from_kernel_ref(kernel: &RuntimeKernel) -> &Self {
         // SAFETY: `OrbitRuntime` is `repr(transparent)` over its only field,
         // a `RuntimeKernel`, so both types share one layout and the cast
         // keeps the reference's lifetime and validity.

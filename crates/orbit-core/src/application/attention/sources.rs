@@ -1,5 +1,4 @@
 //! Task-level adapters over the existing authoritative predicates.
-use super::{cursor, filter::AttentionFilter};
 use crate::{
     OrbitRuntime,
     application::task::{
@@ -9,6 +8,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
 use orbit_config::AttentionSettings;
 use orbit_types::{
     record::{EffectiveStatus, Notice, NoticeKind},
@@ -110,7 +110,7 @@ impl Subject<'_> {
         self.tool_next("orbit.task.show", "Inspect the task")
     }
 }
-fn attention_reason(source: &str) -> String {
+pub(super) fn attention_reason(source: &str) -> String {
     let line = source.split_whitespace().collect::<Vec<_>>().join(" ");
     if line.chars().count() <= 240 {
         line
@@ -581,10 +581,13 @@ pub(super) fn read_attention_sources(
         degraded: vec![],
         timings: BTreeMap::new(),
     };
+    // Kinds whose sources later slices own are accepted by name and reported
+    // as unreadable, never as an empty all-clear. `host_unhealthy` is read by
+    // the caller, beside these task-level sources.
     for kind in filter
         .kinds
         .iter()
-        .filter(|kind| !AttentionKind::IMPLEMENTED.contains(&kind.as_str()))
+        .filter(|kind| !AttentionKind::DEFAULT_NAMES.contains(&kind.as_str()))
     {
         result.degraded.push(AttentionDegraded {
             scope: format!("workspace:{}", workspace.id),
@@ -594,13 +597,6 @@ pub(super) fn read_attention_sources(
                 "This source belongs to a later attention slice and is not implemented on this host"
                     .into(),
         });
-    }
-    if !filter
-        .kinds
-        .iter()
-        .any(|kind| AttentionKind::IMPLEMENTED.contains(&kind.as_str()))
-    {
-        return Ok(result);
     }
     // notice_open is derived only on the home owner: a replica's notice
     // store is not authoritative, so it degrades like the task kinds.
@@ -629,22 +625,30 @@ pub(super) fn read_attention_sources(
             .timings
             .insert("notice_open".into(), started.elapsed().as_micros());
     }
-    let task_kinds_selected = filter.kinds.iter().any(|kind| {
-        kind.as_str() != "notice_open" && AttentionKind::IMPLEMENTED.contains(&kind.as_str())
-    });
-    if !task_kinds_selected {
+    let task_kinds = filter
+        .kinds
+        .iter()
+        .copied()
+        .filter(|kind| AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str()))
+        .collect::<Vec<_>>();
+    if task_kinds.is_empty() {
         return Ok(result);
     }
     if !runtime.coordination_task_reads_visible() {
-        for kind in filter.kinds.iter().filter(|kind| **kind != K::NoticeOpen) {
-            result.degraded.push(AttentionDegraded {
-                scope: format!("workspace:{}", workspace.id),
-                kind: kind.as_str().into(),
-                code: "source_unavailable".into(),
-                message:
-                    "Task records on a replica are not authoritative; read the workspace owner"
-                        .into(),
-            });
+        // A replica is not authoritative for task, decision or review
+        // records. On the aggregator's candidate read the owner reports them,
+        // so the replica stays silent; a direct read says where to look.
+        if !filter.candidate_read {
+            for kind in task_kinds {
+                result.degraded.push(AttentionDegraded {
+                    scope: format!("workspace:{}", workspace.id),
+                    kind: kind.as_str().into(),
+                    code: "source_unavailable".into(),
+                    message:
+                        "Task records on a replica are not authoritative; read the workspace owner"
+                            .into(),
+                });
+            }
         }
         return Ok(result);
     }

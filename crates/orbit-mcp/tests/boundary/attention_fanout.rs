@@ -1,0 +1,302 @@
+//! The attention fan-out on the federated mux: authority per host, unreadable
+//! destinations as items, the outer deadline, and one cursor across hosts.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use orbit_common::OrbitError;
+use orbit_mcp::McpHost;
+use orbit_mcp::federated::{
+    AttentionFanout, Destination, DestinationProbe, DestinationSnapshot, FederatedMcpHost,
+    RoutedSession,
+};
+use orbit_types::tool::{ToolSessionContext, mcp_advertised_tool_name};
+use serde_json::{Value, json};
+
+use crate::scripted_destination::{OWNER_MACHINE, workspace};
+
+const FOLLOWER_MACHINE: &str = "hm_follower";
+
+#[derive(Clone)]
+enum Behaviour {
+    Answer(Value),
+    Down,
+    AnswersAs(&'static str),
+    WithoutAttention,
+    Slow(Duration),
+}
+
+/// Destinations whose behaviour a test changes between polls.
+#[derive(Clone, Default)]
+struct Fleet {
+    behaviours: Arc<Mutex<HashMap<String, Behaviour>>>,
+    hops: Arc<Mutex<Vec<(String, Value)>>>,
+}
+
+impl Fleet {
+    fn set(&self, machine_id: &str, behaviour: Behaviour) {
+        self.behaviours
+            .lock()
+            .unwrap()
+            .insert(machine_id.to_string(), behaviour);
+    }
+}
+
+fn snapshot(machine_id: &str) -> DestinationSnapshot {
+    DestinationSnapshot {
+        machine_id: machine_id.to_string(),
+        // Both hosts list the workspace the owner owns.
+        workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+        ..Default::default()
+    }
+}
+
+impl DestinationProbe for Fleet {
+    fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
+        Ok(snapshot(&destination.machine_id))
+    }
+
+    fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        let behaviour = self.behaviours.lock().unwrap()[&destination.machine_id].clone();
+        match behaviour {
+            Behaviour::Down => Err(OrbitError::UnreachableDestination(format!(
+                "{}: ssh: connect to host owner port 22: Connection refused\nsecond line",
+                destination.machine_id
+            ))),
+            Behaviour::Slow(delay) => {
+                std::thread::sleep(delay);
+                Err(OrbitError::UnreachableDestination("late".into()))
+            }
+            behaviour => Ok(Box::new(Route {
+                machine_id: destination.machine_id.clone(),
+                behaviour,
+                hops: Arc::clone(&self.hops),
+            })),
+        }
+    }
+}
+
+struct Route {
+    machine_id: String,
+    behaviour: Behaviour,
+    hops: Arc<Mutex<Vec<(String, Value)>>>,
+}
+
+impl RoutedSession for Route {
+    fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError> {
+        let answering = match self.behaviour {
+            Behaviour::AnswersAs(other) => other.to_string(),
+            _ => self.machine_id.clone(),
+        };
+        Ok(snapshot(&answering))
+    }
+
+    fn advertised_tools(&mut self) -> Result<Vec<String>, OrbitError> {
+        let mut tools = vec!["orbit_workspace_list".to_string()];
+        if !matches!(self.behaviour, Behaviour::WithoutAttention) {
+            tools.push(mcp_advertised_tool_name("orbit.attention"));
+        }
+        Ok(tools)
+    }
+
+    fn supports_tool_argument(&mut self, name: &str, argument: &str) -> Result<bool, OrbitError> {
+        Ok(name == "orbit.attention" && argument == "candidate_read")
+    }
+
+    fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        session_context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        assert_eq!(name, "orbit.attention");
+        assert_eq!(
+            session_context.mcp_client_name.as_deref(),
+            Some("orbit-federated-mux"),
+            "a hop must announce the aggregator so the destination honours candidate_read"
+        );
+        self.hops
+            .lock()
+            .unwrap()
+            .push((self.machine_id.clone(), arguments));
+        match &self.behaviour {
+            Behaviour::Answer(body) => Ok(body.clone()),
+            _ => unreachable!("only answering destinations are called"),
+        }
+    }
+}
+
+fn item(kind: &str, machine_id: &str, task: &str, fingerprint: &str) -> Value {
+    json!({
+        "id": format!("att_{kind}_{task}"),
+        "kind": kind,
+        "severity": "medium",
+        "workspace": {"id": "ws_orbit", "name": "orbit"},
+        "host": {"machine_id": machine_id, "name": machine_id},
+        "refs": {"task_id": task},
+        "task": {"status": "proposed", "tags": [], "title": task},
+        "since": "2026-11-01T00:00:00Z",
+        "age_seconds": 3600,
+        "reason": format!("{task} holds a warning"),
+        "detail": {},
+        "next": {"summary": "Re-pilot", "command": format!("orbit task show {task}")},
+        "fingerprint": fingerprint,
+    })
+}
+
+fn candidate_read(items: Vec<Value>) -> Value {
+    json!({
+        "schema_version": 1,
+        "generated_at": "2026-11-02T00:00:00Z",
+        "candidate_read": true,
+        "filters": {"workspace": [{"id": "ws_orbit", "name": "orbit"}]},
+        "counts": {"matching": items.len(), "returned": items.len(), "truncated": false,
+                   "by_kind": {}, "by_severity": {}},
+        "cursor": {"next": "atc1.discarded", "status": "none"},
+        "items": items,
+        "degraded": [],
+        "message": "candidate items",
+    })
+}
+
+fn mux(fleet: &Fleet, budget: Duration) -> FederatedMcpHost {
+    FederatedMcpHost::new(
+        vec![
+            Destination::local(FOLLOWER_MACHINE, "mac"),
+            Destination::ssh("owner.example", OWNER_MACHINE),
+        ],
+        Arc::new(fleet.clone()),
+    )
+    .with_attention_fanout(AttentionFanout {
+        budget,
+        cursor_ttl_hours: 24,
+        host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+    })
+}
+
+fn attention(mux: &FederatedMcpHost, input: Value) -> Value {
+    mux.call_tool("orbit_attention", input, ToolSessionContext::default())
+        .expect("the fan-out answers even when a host does not")
+}
+
+fn kinds(response: &Value) -> Vec<&str> {
+    response["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// A host that goes unreachable and comes back must not re-inject what the
+/// caller already saw: the cursor minted while `degraded` was non-empty
+/// carries the seen hashes forward (attention-cursor rule 4).
+#[test]
+fn an_owner_that_drops_out_and_returns_does_not_reinject_seen_items() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    let owner_items = candidate_read(vec![item("pilot_warning", OWNER_MACHINE, "ORB-1", "fp_1")]);
+    fleet.set(OWNER_MACHINE, Behaviour::Answer(owner_items.clone()));
+    let mux = mux(&fleet, Duration::from_secs(20));
+
+    let first = attention(&mux, json!({"all": true}));
+    assert_eq!(kinds(&first), ["pilot_warning"], "{first}");
+    assert_eq!(first["items"][0]["host"]["machine_id"], OWNER_MACHINE);
+    assert_eq!(
+        first["items"][0]["workspace"]["selector"],
+        format!("{OWNER_MACHINE}/ws_orbit"),
+        "items carry the selector their host lists: {first}"
+    );
+    assert_eq!(first["hosts"].as_array().unwrap().len(), 2, "{first}");
+    for (_, hop) in fleet.hops.lock().unwrap().iter() {
+        assert_eq!(hop["candidate_read"], true, "{hop}");
+        assert_eq!(hop["all"], true, "{hop}");
+        assert!(
+            hop.get("since").is_none() && hop.get("limit").is_none(),
+            "{hop}"
+        );
+    }
+
+    fleet.set(OWNER_MACHINE, Behaviour::Down);
+    let blind = attention(&mux, json!({"all": true, "since": first["cursor"]["next"]}));
+    assert_eq!(kinds(&blind), ["host_unhealthy"], "{blind}");
+    let unhealthy = &blind["items"][0];
+    assert_eq!(
+        unhealthy["severity"], "critical",
+        "the owner of an in-scope workspace: {blind}"
+    );
+    assert_eq!(unhealthy["detail"]["cause"], "unreachable_destination");
+    assert_eq!(unhealthy["host"]["name"], "dk-server-2");
+    assert_eq!(unhealthy["workspace"], json!({"id": null, "name": null}));
+    assert!(
+        unhealthy["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("dk-server-2 unreachable: "),
+        "{unhealthy}"
+    );
+    assert_eq!(
+        blind["degraded"][0]["code"], "unreachable_destination",
+        "{blind}"
+    );
+
+    // Excluding the kind hides the item, never the blind spot.
+    let excluded = attention(
+        &mux,
+        json!({"all": true, "exclude_kind": "host_unhealthy", "since": first["cursor"]["next"]}),
+    );
+    assert_eq!(excluded["items"], json!([]), "{excluded}");
+    assert_eq!(excluded["degraded"][0]["code"], "unreachable_destination");
+    let message = excluded["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("No items found; 1 sources could not be read"),
+        "an empty list with a blind host is not all-clear: {message}"
+    );
+
+    fleet.set(OWNER_MACHINE, Behaviour::Answer(owner_items));
+    let recovered = attention(&mux, json!({"all": true, "since": blind["cursor"]["next"]}));
+    assert_eq!(
+        recovered["items"],
+        json!([]),
+        "the returning owner re-injected an item already shown: {recovered}"
+    );
+    assert_eq!(recovered["counts"]["unchanged"], 1, "{recovered}");
+}
+
+/// A pinned identity mismatch and a binary without the tool are
+/// `host_unhealthy` with the federated routing identity, and a slow host is
+/// cut at the outer deadline instead of holding the call.
+#[test]
+fn unreadable_destinations_become_items_within_the_budget() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+
+    for (behaviour, cause) in [
+        (
+            Behaviour::AnswersAs("hm_impostor"),
+            "unreachable_destination",
+        ),
+        (Behaviour::WithoutAttention, "tool_not_on_this_host"),
+    ] {
+        fleet.set(OWNER_MACHINE, behaviour);
+        let response = attention(&mux(&fleet, Duration::from_secs(20)), json!({}));
+        assert_eq!(kinds(&response), ["host_unhealthy"], "{response}");
+        assert_eq!(response["items"][0]["detail"]["cause"], cause, "{response}");
+        assert_eq!(response["degraded"][0]["code"], cause, "{response}");
+    }
+
+    fleet.set(OWNER_MACHINE, Behaviour::Slow(Duration::from_secs(5)));
+    let started = Instant::now();
+    let response = attention(&mux(&fleet, Duration::from_millis(300)), json!({}));
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "one slow host held the call for {:?}",
+        started.elapsed()
+    );
+    assert_eq!(kinds(&response), ["host_unhealthy"], "{response}");
+    assert_eq!(
+        response["items"][0]["detail"]["cause"],
+        "unreachable_destination"
+    );
+}

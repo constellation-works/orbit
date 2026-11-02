@@ -1,7 +1,7 @@
 [
   {
     "name": "orbit_attention",
-    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting and notice_open. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
+    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, notice_open and host_unhealthy. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. On the federated server a call without a host-qualified workspace reads every host; an unreadable host is a host_unhealthy item plus a degraded entry. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and provider kinds are not yet implemented.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -214,6 +214,10 @@
           "description": "Public response limit, 1–500 (default 100).",
           "minimum": 1,
           "maximum": 500
+        },
+        "candidate_read": {
+          "type": "boolean",
+          "description": "Reserved for Orbit's federated aggregator; never send it."
         }
       },
       "additionalProperties": true

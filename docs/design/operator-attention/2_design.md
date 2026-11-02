@@ -11,13 +11,13 @@ summary: "Design of orbit attention: derived-view architecture, code placement, 
 tags: [operator-attention, operator-ux]
 paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-types/src/tool/attention.rs", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, human-decision-channel, federated-mcp, host-registry, distributed-drain]
-related_artifacts: [ORB-21164]
+related_artifacts: [ORB-21164, ORB-21171]
 ---
 
 # Operator Attention — Design
 
 This document describes how `orbit attention` fits together and where it lands in the code.
-The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; runtime, provider and cross-host sources remain later slices. The prescriptive contracts live in the specs:
+The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; federation and `host_unhealthy` in slice 4. The runtime and provider sources remain later slices. The prescriptive contracts live in the specs:
 [attention-item](./specs/attention-item.md) (kinds, schema, severity),
 [attention-filters](./specs/attention-filters.md),
 [attention-cursor](./specs/attention-cursor.md) and
@@ -80,10 +80,12 @@ needed, which the slice verifies before it merges.
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | the planned `attention.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
-| Derivation, folding, severity, fingerprint, filters, cursor codec, local multi-workspace aggregation | `crates/orbit-core/src/application/attention/` (`sources/` per kind, `derive.rs`, `severity.rs`, `fingerprint.rs`, `filter.rs`, `cursor.rs`, `aggregate.rs`) |
+| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for the task-level kinds, `host.rs` for local `host_unhealthy`) |
+| Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
+| Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
 | Authorization | a catalog entry allowing `Agent` and `Operator`; the runtime kinds check capability themselves and degrade ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)) |
-| Cross-host fan-out and merge | `crates/orbit-mcp/src/federated/` (the same client code the CLI's routed calls use) |
+| Cross-host fan-out and merge | `crates/orbit-mcp/src/federated/attention_aggregate.rs` (the same federated client the CLI's routed calls use; `orbit attention` reaches it from `host_route.rs` preflight) |
 | `[attention]` configuration | `crates/orbit-config` |
 
 The core derivation function is a pure function of a runtime handle and a filter. The CLI,

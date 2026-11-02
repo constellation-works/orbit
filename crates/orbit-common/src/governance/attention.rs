@@ -1,8 +1,18 @@
-//! The read-only attention operation, shared by CLI and MCP.
+//! The read-only attention operation, shared by CLI and MCP, and the
+//! semantics every responder applies: filters, the delta cursor and the
+//! public page.
+pub mod cursor;
+pub mod filter;
+pub mod page;
+
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, operation_registry,
+    ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry,
 };
+
+/// The MCP client name the federated aggregator initializes its hops with.
+/// A destination honours `candidate_read` only from a session that names it.
+pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
 use orbit_types::tool::McpToolScope;
 operation_registry! {
     noun: ATTENTION;
@@ -50,7 +60,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     verb: AttentionVerb::Query,
     cli_path: &["query"],
     tool_name: "orbit.attention",
-    tool_description: "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting and notice_open. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
+    tool_description: "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, notice_open and host_unhealthy. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. On the federated server a call without a host-qualified workspace reads every host; an unreadable host is a host_unhealthy item plus a degraded entry. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and provider kinds are not yet implemented.",
     cli_about: "List what waits on an operator",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -67,14 +77,14 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
             ParamType::Switch,
             "Read every active workspace on this host.",
             CliArgKind::flag("all"),
-            "Read every active workspace on this host",
+            "Read every active workspace on this host and every registered host",
         ),
         both(
             "host",
             ParamType::StringList,
             "Host name or machine id (repeatable).",
             CliArgKind::flag("host"),
-            "Host name or machine id (repeatable)",
+            "Host name or machine id (repeatable); narrows which hosts are read",
         ),
         both(
             "kind",
@@ -152,6 +162,11 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
             "Public response limit, 1–500 (default 100).",
             CliArgKind::flag("limit"),
             "Public response limit, 1–500 (default 100)",
+        ),
+        mcp_only(
+            "candidate_read",
+            ParamType::Boolean,
+            "Reserved for Orbit's federated aggregator; never send it.",
         ),
     ]],
     at_least_one_of: &[],

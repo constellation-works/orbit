@@ -88,6 +88,11 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         // A replica may resolve an existing host-local legacy friction. Core
         // checks the update's fields and still refuses every other mutation.
         "orbit_friction_update" => McpToolClass::Execute,
+        // The named fan-out read is never refused: each destination derives
+        // only the kinds its checkout role is authoritative for (an owner its
+        // task-level kinds, every host its own health), so it is answerable
+        // everywhere, like workspace discovery.
+        "orbit_attention" => McpToolClass::Unclassified,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].

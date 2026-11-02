@@ -219,6 +219,8 @@ impl OrbitToolServer {
         // one session can never accumulate two identities; `None` here means
         // this session is anonymous, not that the previous claim still holds.
         trusted.self_reported_actor = announced.self_reported_actor;
+        // Replaced, like the actor claim: a re-initialize never inherits it.
+        trusted.mcp_client_name = announced.mcp_client_name;
         trusted.trace_id = None;
         self.replace_session_context(trusted);
     }
@@ -708,6 +710,8 @@ pub(super) fn session_context_from_initialize(
     ToolSessionContext {
         workspace,
         self_reported_actor: self_reported_actor_from_initialize(request, transport_meta),
+        mcp_client_name: Some(request.client_info.name.trim().to_string())
+            .filter(|name| !name.is_empty()),
         ..ToolSessionContext::default()
     }
 }

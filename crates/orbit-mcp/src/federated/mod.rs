@@ -15,6 +15,7 @@
 //! implicit local destination and is not declared as an SSH row. No
 //! destination's answer is cached between calls.
 
+mod attention_aggregate;
 mod capability;
 mod config;
 mod descriptor;
@@ -23,6 +24,7 @@ mod notice_aggregate;
 mod probe;
 mod task_route;
 
+pub use self::attention_aggregate::AttentionFanout;
 pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };

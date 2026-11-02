@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
-related_artifacts: [ORB-21164]
+related_artifacts: [ORB-21164, ORB-21171]
 last_updated: 2026-11-02
 ---
 
@@ -256,6 +256,29 @@ found; N sources could not be read`.
 A destination that answers but is under a different `machine_id` than its pin follows the same
 path with `detail.cause = unreachable_destination` and a reason naming the mismatch; it is not
 queried for items.
+
+A destination that answers but whose binary version or pull-protocol fingerprint differs from
+the accepting host's, as `orbit host list` reports skew, is still read. The aggregator adds one
+`host_unhealthy` item for it with `detail.cause = version_skew`, severity as above, and no
+`degraded` entry, because nothing was left unread.
+
+### Local host health
+
+Each destination reports its own health as part of its candidate read, once per in-scope
+workspace checkout: one `host_unhealthy` item when any default `orbit doctor` workspace check
+fails or warns, with `detail.cause = doctor` and the failing checks in `detail.checks` (errors
+first, at most 32). Those checks include the follower's latest pull drain, so an owner refusing
+its `orbit.drain.probe` on protocol skew appears here. Severity is `critical` when the answering
+host owns the workspace, otherwise `high`; `since` is `null` because the doctor records no
+onset, and the fingerprint covers each failing check's name and status, not its message. A
+session without the Operator capability gets a `degraded` entry with code `capability` instead.
+
+### CLI routing
+
+On a machine with registered hosts, `orbit attention` takes the aggregator path when the call
+names a scope (`--all`, `--host`, `--workspace`) or runs outside any workspace. A bare call inside
+a workspace checkout, a call with `--root`, and a machine with no registered hosts read locally.
+The rendered table adds a `HOST` column when the envelope carries `hosts`.
 
 ## Cursor and recovery across hosts
 

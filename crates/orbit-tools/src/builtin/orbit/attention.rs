@@ -8,12 +8,18 @@ use orbit_common::{
 use serde_json::Value;
 impl GuardedModes for AttentionVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
-        if input.get("candidate_read").is_some() {
+        let session = &ctx.session_context;
+        // The reserved hop input is honoured only on a session the federated
+        // aggregator opened. The name is self-reported: this keeps ordinary
+        // clients on the public page size, it is not an authentication check.
+        if input.get("candidate_read").is_some()
+            && session.mcp_client_name.as_deref()
+                != Some(orbit_common::governance::attention::ATTENTION_AGGREGATOR_CLIENT)
+        {
             return Some(Err(
                 orbit_common::governance::attention::attention_candidate_read_refusal(),
             ));
         }
-        let session = &ctx.session_context;
         if session
             .transport
             .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)

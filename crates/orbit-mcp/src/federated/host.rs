@@ -41,6 +41,7 @@ pub struct FederatedMcpHost {
     /// owner route a claimed worker or pull drain uses.
     task_prefixes: Option<TaskPrefixTable>,
     local_mirror: Option<LocalMirrorHint>,
+    attention: super::attention_aggregate::AttentionFanout,
 }
 
 impl FederatedMcpHost {
@@ -50,7 +51,25 @@ impl FederatedMcpHost {
             probe,
             task_prefixes: None,
             local_mirror: None,
+            attention: super::attention_aggregate::AttentionFanout::default(),
         }
+    }
+
+    /// The deadline, cursor lifetime and host names the attention fan-out uses.
+    pub fn with_attention_fanout(
+        mut self,
+        fanout: super::attention_aggregate::AttentionFanout,
+    ) -> Self {
+        self.attention = fanout;
+        self
+    }
+
+    pub(super) fn attention_fanout(&self) -> &super::attention_aggregate::AttentionFanout {
+        &self.attention
+    }
+
+    pub(super) fn probe(&self) -> Arc<dyn DestinationProbe> {
+        Arc::clone(&self.probe)
     }
 
     /// Route id-only task calls to the host their prefix names.
@@ -509,6 +528,11 @@ impl crate::McpHost for FederatedMcpHost {
         {
             return self.route_task_call(name, &task_id, input, session_context);
         }
+        // The named fan-out read: a selector-less attention call reads every
+        // destination and merges explicitly instead of `unknown_selector`.
+        if let Some(aggregated) = self.aggregate_attention(name, &input, &session_context) {
+            return aggregated;
+        }
         if let Some(aggregated) =
             self.aggregate_notice_list(name, input.clone(), session_context.clone())
         {
@@ -642,7 +666,7 @@ fn session_cannot_authorize_governed_tool(
 
 /// The operator's config pin is the identity of record; a live answer only
 /// confirms it.
-fn confirm_pinned_identity(
+pub(super) fn confirm_pinned_identity(
     destination: &Destination,
     snapshot: &DestinationSnapshot,
 ) -> Result<(), OrbitError> {
@@ -719,7 +743,7 @@ fn destination_arguments(input: Value, workspace_id: &str) -> Value {
     Value::Object(object)
 }
 
-fn tool_on_surface(advertised: &[String], name: &str) -> bool {
+pub(super) fn tool_on_surface(advertised: &[String], name: &str) -> bool {
     let wire = mcp_advertised_tool_name(name);
     advertised
         .iter()
