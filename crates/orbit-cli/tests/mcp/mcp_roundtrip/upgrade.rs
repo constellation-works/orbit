@@ -1371,24 +1371,30 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
         Some(old_digest.as_str())
     );
 
-    // Well-formed JSON that rmcp cannot decode receives an id-less error.
-    // None of these ids may pin the session forever, including batch input
-    // (the stdio transport accepts individual messages only).
+    // Well-formed JSON that the transport cannot decode receives an id-less
+    // error. None of these ids may pin the session forever, including batch
+    // input (the stdio transport accepts individual messages only).
     for invalid in [
         json!({"jsonrpc":"2.0", "id":1001, "method":"tools/call", "params":"x"}),
         json!({"jsonrpc":"1.0", "id":1002, "method":"ping"}),
         json!([{"jsonrpc":"2.0", "id":1003, "method":"ping"}]),
     ] {
         client.send(&invalid);
-        let reply: Value = serde_json::from_str(
-            &client
-                .lines
-                .recv_timeout(RESPONSE_TIMEOUT)
-                .expect("rejection"),
-        )
-        .expect("JSON rejection");
-        assert!(reply.get("id").is_none(), "{reply}");
-        assert_eq!(reply["error"]["code"], -32600, "{reply}");
+        let received = match client.lines.recv_timeout(RESPONSE_TIMEOUT) {
+            Ok(received) => received,
+            Err(error) => {
+                panic!("rejection of {invalid} ({error}); {}", server_stderr.tail())
+            }
+        };
+        let reply: Value = match serde_json::from_str(&received) {
+            Ok(reply) => reply,
+            Err(error) => panic!(
+                "JSON rejection of {invalid}: {error}; raw {received}; {}",
+                server_stderr.tail()
+            ),
+        };
+        assert!(reply.get("id").is_none(), "{invalid} -> {reply}");
+        assert_eq!(reply["error"]["code"], -32600, "{invalid} -> {reply}");
     }
     // The compatibility path silently drops an undecodable non-standard
     // notification even when the sender included an id. A subsequent ping
@@ -1422,6 +1428,255 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
         running_digest(&workspace, pid).as_deref(),
         Some(new_digest.as_str())
     );
+}
+
+/// A permitted image read is larger than Tokio's 2 MiB stdout chunk because
+/// the base64 is sent twice. The invalid request is written only after that
+/// many bytes of the image frame have already arrived, while its newline is
+/// still outstanding, and the two records must stay separate JSON values.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_pipelined_invalid_request_stays_outside_a_large_image_response() {
+    // `tokio::io::blocking::DEFAULT_MAX_BUF_SIZE` for Stdout. A frame above
+    // this is where a second stdout writer can splice.
+    const STDOUT_CHUNK: usize = 2 * 1024 * 1024;
+    const READ_SIZE: usize = 64 * 1024;
+
+    fn write_message(stdin: &mut std::process::ChildStdin, message: &Value) {
+        let mut line = serde_json::to_string(message).expect("serialize message");
+        line.push('\n');
+        std::io::Write::write_all(stdin, line.as_bytes()).expect("write stdin");
+        std::io::Write::flush(stdin).expect("flush stdin");
+    }
+
+    fn pull_stdio(
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        deadline: Instant,
+    ) {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        assert!(!wait.is_zero(), "timed out reading stdio");
+        ask.send(READ_SIZE).expect("stdout reader");
+        let read = data
+            .recv_timeout(wait)
+            .unwrap_or_else(|error| panic!("stdio read ({error})"));
+        let bytes = read.unwrap_or_else(|error| panic!("stdio read ({error})"));
+        assert!(!bytes.is_empty(), "mcp serve closed stdout");
+        pending.extend_from_slice(&bytes);
+    }
+
+    fn take_line(
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        deadline: Instant,
+    ) -> String {
+        loop {
+            if let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = pending.drain(..=end).collect();
+                let line = String::from_utf8(line).expect("stdio line is utf-8");
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                return line;
+            }
+            pull_stdio(pending, ask, data, deadline);
+        }
+    }
+
+    fn exchange(
+        stdin: &mut std::process::ChildStdin,
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        next_id: &mut i64,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        *next_id += 1;
+        let id = *next_id;
+        let mut message = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        if !params.is_null() {
+            message["params"] = params;
+        }
+        write_message(stdin, &message);
+        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        loop {
+            let line = take_line(pending, ask, data, deadline);
+            let parsed: Value = serde_json::from_str(&line)
+                .unwrap_or_else(|error| panic!("stdio frame is not one JSON value ({error})"));
+            if parsed.get("id").and_then(Value::as_i64) == Some(id) {
+                return parsed;
+            }
+        }
+    }
+
+    let workspace = McpWorkspace::init();
+    let mut command = McpWorkspace::orbit_command(&workspace.work, &workspace.home);
+    command
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = spawn_copied_orbit(&mut command).expect("mcp serve");
+    let mut stdin = child.stdin.take().expect("server stdin");
+    let stdout = child.stdout.take().expect("server stdout");
+    let (ask_tx, ask_rx) = std::sync::mpsc::channel::<usize>();
+    let (data_tx, data_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut buf = vec![0u8; READ_SIZE];
+        while let Ok(want) = ask_rx.recv() {
+            let n = want.min(buf.len());
+            let read = match std::io::Read::read(&mut stdout, &mut buf[..n]) {
+                Ok(0) => Ok(Vec::new()),
+                Ok(n) => Ok(buf[..n].to_vec()),
+                Err(error) => Err(error),
+            };
+            if data_tx.send(read).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut pending = Vec::<u8>::new();
+    let mut next_id = 0i64;
+
+    let workspace_path = workspace.work.display().to_string();
+    let initialized = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "initialize",
+        McpClient::initialize_params("orbit-mcp-roundtrip-test", Some(&workspace_path)),
+    );
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+    write_message(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+
+    let task = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "tools/call",
+        json!({
+            "name": "orbit_task_add",
+            "arguments": {
+                "title": "Wide image frame",
+                "description": "A permitted image artifact whose MCP read exceeds one stdout chunk",
+                "complexity": "low",
+                "model": "codex",
+            },
+        }),
+    );
+    assert_eq!(task["result"]["isError"], false, "{task}");
+    let task_id = task["result"]["structuredContent"]["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    let source = workspace.work.join(".orbit/tmp/shots/wide.png");
+    std::fs::create_dir_all(source.parent().expect("shot directory parent"))
+        .expect("shot directory");
+    let mut image = std::fs::File::create(&source).expect("image file");
+    std::io::Write::write_all(&mut image, b"\x89PNG\r\n\x1a\n").expect("png signature");
+    image
+        .set_len(orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES)
+        .expect("image length");
+    drop(image);
+    let stored = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "tools/call",
+        json!({
+            "name": "orbit_task_artifact_put",
+            "arguments": {
+                "id": task_id,
+                "source_path": source.display().to_string(),
+                "path": "shots/wide.png",
+                "model": "codex",
+            },
+        }),
+    );
+    assert_eq!(stored["result"]["isError"], false, "{stored}");
+
+    next_id += 1;
+    let call_id = next_id;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": call_id,
+            "method": "tools/call",
+            "params": {
+                "name": "orbit_task_artifact_get",
+                "arguments": { "id": task_id, "path": "shots/wide.png" },
+            },
+        }),
+    );
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut sent_during_frame = false;
+    let image_line = loop {
+        if !sent_during_frame && pending.len() > STDOUT_CHUNK && !pending.contains(&b'\n') {
+            write_message(
+                &mut stdin,
+                &json!({"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": "x"}),
+            );
+            sent_during_frame = true;
+        }
+        if let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+            assert!(
+                sent_during_frame,
+                "the image frame ended before it crossed one stdout chunk, so the invalid request never overlapped it"
+            );
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            break String::from_utf8(line).expect("image frame is utf-8");
+        }
+        pull_stdio(&mut pending, &ask_tx, &data_rx, deadline);
+    };
+    let image_len = image_line.len();
+    let image: Value = serde_json::from_str(image_line.trim_end()).unwrap_or_else(|error| {
+        panic!("image frame is not one JSON value ({error}), {image_len} bytes")
+    });
+    assert!(
+        image_len > STDOUT_CHUNK,
+        "the image read must exceed one stdout chunk so framing is checked past the split, got {image_len} bytes"
+    );
+    assert_eq!(image.get("id").and_then(Value::as_i64), Some(call_id));
+    assert_eq!(image["result"]["isError"], false);
+    assert_eq!(
+        image["result"]["structuredContent"]["presentation"],
+        "image"
+    );
+
+    let rejection_line = take_line(&mut pending, &ask_tx, &data_rx, deadline);
+    let rejection: Value = serde_json::from_str(&rejection_line)
+        .unwrap_or_else(|error| panic!("rejection frame is not one JSON value ({error})"));
+    assert!(rejection.get("id").is_none(), "{rejection}");
+    assert_eq!(rejection["error"]["code"], -32600, "{rejection}");
+
+    let ping = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "ping",
+        Value::Null,
+    );
+    assert_eq!(ping["result"], json!({}), "{ping}");
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

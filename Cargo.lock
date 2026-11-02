@@ -2195,6 +2195,7 @@ name = "orbit-mcp"
 version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "libc",
  "orbit-common",
@@ -2208,6 +2209,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
