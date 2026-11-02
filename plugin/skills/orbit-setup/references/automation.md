@@ -628,11 +628,12 @@ one run per task, and
 `orbit clock tick --dry-run` lists the batch it would admit. Narrow the
 predicate to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
 scheduled pilot off proposals a human has not looked at yet. Unknown keys and
-an empty `statuses` fail the definition closed. The resolved predicate is part
-of each task's material fingerprint, so changing it re-prepares tasks assessed
-under the old one; the default predicate keeps the fingerprints a workspace
-accepted before the block existed. Explicit runs (`orbit run task-pilot <id>`)
-ignore the block.
+an empty `statuses` fail the definition closed. The predicate selects eligible
+never-assessed tasks for their first automatic assessment. It is also part of
+the material fingerprint checked during preparation and apply, but changing it
+does not queue another assessment for a task with an applied assessment. The
+default predicate keeps fingerprints accepted before the block existed. Explicit
+runs (`orbit run task-pilot <id>`) ignore the block.
 
 An active pilot temporarily holds its tasks across routines, drains, manual
 runs and targeted CI-sweep pilots, from the reservation its prepare step writes
@@ -646,15 +647,34 @@ claimed task edited before its batch is prepared is claimed afresh on its own;
 the rest of the batch is piloted. Inspect
 `orbit run show <RUN_ID> -s prepare --json` to find the holder.
 
-Which edits make an assessed task due again is `[workflow.task_pilot_freshness]`
-in `config.toml`. By default only a change to the title, description,
-acceptance criteria, plan or selectors does; retagging, reassigning crew, and
-merges to the branch do not. Add fields to `material_fields` (`tags`, `crew`,
-`tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`) or
-set `source_sensitivity` to `context_files` (a merge that touches a task's
-selector paths) or `any` (every merge). A `freshness:` block under the
-routine's `trigger.state` overrides either key for that routine. Changing the
-resolved value re-prepares tasks assessed under the old one.
+`[workflow.task_pilot_freshness]` controls material drift checks, not automatic
+re-piloting. By default `material_fields` covers title, description, acceptance
+criteria, plan and selectors. It can also include `tags`, `crew`, `tools`,
+`type`, `complexity`, `relations`, `dependencies` and `instructions`.
+`source_sensitivity` defaults to `ignore`; choose `context_files` to check
+branch changes at selector paths or `any` to check every branch-head move.
+These settings guard prepare/apply and assessment admission. A `freshness:`
+block under the routine's `trigger.state` overrides either key for that routine:
+routine value, then workspace config, then default. Changing material or the
+resolved policy does not queue another pilot for an assessed task.
+
+For example, after choosing a policy, set and inspect the workspace values:
+
+```bash
+orbit config set workflow.task_pilot_freshness.source_sensitivity context_files
+orbit config get workflow.task_pilot_freshness.source_sensitivity
+orbit config get workflow.task_pilot_freshness.material_fields
+orbit config show --all                    # effective config and provenance
+orbit routine show task_pilot              # inspect routine overrides
+orbit run readiness <id> --json             # inspect task holds
+```
+
+Description or criteria edits hold dispatch as `pilot_assessment_stale` until
+an explicit assessment completes, unless an authorized operator skips pilot
+admission with `no-pilot`. Other readiness, dependency, lock and delivery gates
+still apply. For the operator's explicit `orbit task repilot <id>` procedure,
+no-pilot authority and bounded re-check/full behavior, follow
+[task-pilot orchestration](../../orbit-orchestrate/references/orchestration.md).
 
 **Upgrading from the cron form.** A workspace seeded before the state form
 holds a cron `task_pilot.yaml` (`*/40 * * * *`). `orbit workspace sync` refreshes
