@@ -546,6 +546,34 @@
       "path": null,
       "shadowed_by": []
     },
+    "notice.brief_body_chars": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_delivery": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_max_items": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_read_timeout_ms": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "notice.default_expiry_hours.incident": {
       "scope": "built-in",
       "state": "default",
