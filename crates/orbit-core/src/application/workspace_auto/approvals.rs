@@ -12,7 +12,9 @@
 //! certified assessment came from an explicit or routine pilot, and is still
 //! fresh, is approved here without another provider call. A drain child that
 //! stood down cannot claim that receipt as an unfinished approval. A stale
-//! one, or one with a holding warning, stays proposed and is not selected again.
+//! one (its description or criteria changed after the assessment) is selected
+//! again for a fresh pilot like a new proposal, unless a live execution claim
+//! holds it; one with a holding warning stays proposed and is not selected again.
 //! Every other approval happens in the task-pilot apply boundary under the
 //! drain's verified authority, so the qualification checked here is a cost
 //! filter, not the gate. Targeted task ids and promotion authority are not a
@@ -71,8 +73,8 @@ use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
     ExplicitAssessmentReuse, approval_disqualification, approved_by_drain,
-    classify_explicit_assessment_reuse, held_classification, promote_reusable_assessment,
-    task_pilot_warnings,
+    classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
+    promote_reusable_assessment, task_pilot_warnings,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -157,6 +159,10 @@ fn approval_snapshot(
         reusable: Vec::new(),
     };
     let holders = runtime.pilot_preparation_holders()?;
+    // A stale assessment on a claimed task keeps holding: the claim is still
+    // executing against the meaning the claim froze. Everywhere else a stale
+    // assessment is a repilot candidate below, not an operator hold.
+    let claimed_tasks = live_execution_claim_tasks(runtime)?;
     for task in proposed {
         let held = |reason: &str, detail: Option<String>, findings: Vec<DrainHoldFinding>| {
             DrainWaitingTask {
@@ -221,6 +227,7 @@ fn approval_snapshot(
             .find(|entry| !is_decision_neutral(entry));
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
             && let Some(classification) = held_classification(runtime, entry)
+            && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
             let findings = if classification == "warnings" {
                 task_pilot_warnings(
@@ -283,18 +290,27 @@ fn approval_snapshot(
                 continue;
             }
             ExplicitAssessmentReuse::Hold { reason, detail } => {
-                let findings = if reason == "warnings" {
-                    task_pilot_warnings(
-                        task.status,
-                        &runtime.get_task_comments(&task.id)?,
-                        &task.dependencies(),
-                        &|id: &str| runtime.warning_prerequisite_is_done(id),
-                    )
+                // The task's meaning changed after its certified assessment
+                // and no claim holds it: queue a fresh pilot like a new
+                // proposal instead of holding for an operator repilot. The
+                // unresolved-pilot checks below still hold it when that
+                // repilot already failed.
+                if reason == "changed_since_pilot" && !claimed_tasks.contains(&task.id) {
+                    // Fall through to the unresolved checks and candidacy.
                 } else {
-                    Vec::new()
-                };
-                snapshot.held.push(held(reason, detail, findings));
-                continue;
+                    let findings = if reason == "warnings" {
+                        task_pilot_warnings(
+                            task.status,
+                            &runtime.get_task_comments(&task.id)?,
+                            &task.dependencies(),
+                            &|id: &str| runtime.warning_prerequisite_is_done(id),
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    snapshot.held.push(held(reason, detail, findings));
+                    continue;
+                }
             }
             ExplicitAssessmentReuse::NotReusable => {}
         }
@@ -307,6 +323,7 @@ fn approval_snapshot(
         // after that apply must not hide the reuse [ORB-21206]. A drain
         // child's own unapproved apply is not reusable, so it stays held.
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
+            && held_classification(runtime, entry).is_none()
             && let Some(pilot) = pilots.iter().find(|pilot| {
                 !pilot.is_live()
                     && pilot.task_ids.contains(&task.id)
@@ -560,12 +577,17 @@ fn record_unresolved_pilot(
     }
     // A child that stood down did not apply the explicit assessment. Keep
     // its certified reuse or hold decision instead of recording an unrelated
-    // unresolved-child marker against it.
-    if !matches!(
-        classify_explicit_assessment_reuse(runtime, &task)?,
-        ExplicitAssessmentReuse::NotReusable
-    ) {
-        return Ok(());
+    // unresolved-child marker against it. A stale (`changed_since_pilot`)
+    // assessment is the exception: the child was dispatched to repilot it,
+    // so its failure is a failed repilot and is recorded, holding the task
+    // until its meaning changes again or an operator acts.
+    match classify_explicit_assessment_reuse(runtime, &task)? {
+        ExplicitAssessmentReuse::NotReusable => {}
+        ExplicitAssessmentReuse::Hold {
+            reason: "changed_since_pilot",
+            ..
+        } => {}
+        _ => return Ok(()),
     }
     let history = runtime.get_task_history(task_id)?;
     let latest = history

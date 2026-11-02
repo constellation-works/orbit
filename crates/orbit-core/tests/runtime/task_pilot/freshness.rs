@@ -249,7 +249,7 @@ fn admission_reuses_an_explicit_assessment_off_the_scan_page() {
     );
 }
 
-fn automatic_discovery_skips_previously_piloted_tasks_after_edits() {
+fn automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit() {
     let workspace = Workspace::new();
     let task = workspace.task("automatic discovery");
     let discover = || {
@@ -260,6 +260,9 @@ fn automatic_discovery_skips_previously_piloted_tasks_after_edits() {
     };
     assert_eq!(discover()["task_ids"], json!([task.id]));
     assess(&workspace, &task, true);
+    // Fresh: the applied assessment still certifies the task, so automatic
+    // discovery leaves it alone.
+    assert_eq!(discover()["task_ids"], json!([]));
     workspace
         .runtime
         .run_tool(
@@ -269,7 +272,9 @@ fn automatic_discovery_skips_previously_piloted_tasks_after_edits() {
             }),
         )
         .unwrap();
-    assert_eq!(discover()["task_ids"], json!([]));
+    // The description edit makes the assessment stale: discovery queues a
+    // fresh pilot without an operator repilot.
+    assert_eq!(discover()["task_ids"], json!([task.id]));
     assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
 }
 
@@ -543,7 +548,7 @@ crate::scenario_table!(
     routine_reuse_obeys_configured_material_source_and_consumer_policy,
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
     admission_reuses_an_explicit_assessment_off_the_scan_page,
-    automatic_discovery_skips_previously_piloted_tasks_after_edits,
+    automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit,
     edited_assessment_blocks_dispatch_until_explicit_repilot
 );
 

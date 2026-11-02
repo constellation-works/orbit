@@ -1394,28 +1394,125 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     assert_eq!(ws.pilot_applications(&assessed), 1);
 }
 
-fn a_stale_explicit_assessment_stays_proposed_until_a_new_explicit_pilot() {
-    let (ws, drain) = harness();
+fn record_execution_claim(ws: &Workspace, task: &Task) {
+    let claim = orbit_store::contracts::ExecutionClaim {
+        claim_id: "stale-repilot-claim".into(),
+        task_id: task.id.clone(),
+        request_id: "stale-repilot-request".into(),
+        executed_on: orbit_store::contracts::ExecutionLocation {
+            machine_id: "fixture-machine".into(),
+            machine_name: None,
+        },
+        run_context: orbit_store::contracts::AdmissionRunContext {
+            run_id: "fixture-claim-run".into(),
+            job_name: "task_pr_pipeline".into(),
+            machine_name: None,
+        },
+        footprint: Vec::new(),
+        reservation_id: "stale-repilot-reservation".into(),
+        reservation_expires_at: (Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),
+        phase: orbit_store::contracts::ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    let connection = rusqlite::Connection::open(ws.runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                ws.runtime.workspace_id().unwrap(),
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+}
+
+/// Apply one unpromoted explicit assessment, then edit the description so
+/// the certified assessment is stale. Returns the task in that state.
+fn stale_explicit_task(ws: &Workspace) -> Task {
     let task = ws.readme_task("edited");
-    let (explicit, prepared) = explicit_pilot(&ws, &task);
+    let (explicit, prepared) = explicit_pilot(ws, &task);
     let applied = ws.apply_unpromoted(&explicit, &prepared, &task);
     assert_eq!(applied["status"], "succeeded", "{applied}");
     ws.finish(&explicit, JobRunState::Success);
     ws.edit_description(&task);
+    assert_status(ws, &task, TaskStatus::Proposed);
+    assert_eq!(ws.pilot_applications(&task), 1);
+    task
+}
+
+fn a_stale_explicit_assessment_is_repiloted_by_the_drain_and_admitted() {
+    let (ws, drain) = harness();
+    let task = stale_explicit_task(&ws);
+    // No operator repilot: the drain queues a fresh pilot like a new proposal.
+    let selection = ws.select(&drain);
+    assert_task_ids(&selection, &[&task]);
+    assert_eq!(selection["reused"], json!([]), "{selection}");
+    assert!(held_reason(&selection, &task).is_none(), "{selection}");
+    // The dispatched child assesses the edited task instead of standing down.
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    ws.set_trigger(&pilot, JobRunTrigger::child());
+    let prepared = ws.prepare_named(&pilot, std::slice::from_ref(&task.id));
+    assert_eq!(prepared["task_count"], 1, "{prepared}");
+    let applied = ws
+        .action(
+            "apply_task_pilot_results",
+            json!({
+                "run_id": pilot, "workspace_path": ws.repo, "prepared": prepared,
+                "results": [{
+                    "partition_index": 0, "task_ids": [task.id],
+                    "tasks": [assessment(&task)],
+                }],
+                "promotion_authorized": true,
+                "drain_promotion": {"run_id": drain},
+            }),
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    ws.finish(&pilot, JobRunState::Success);
+    assert_eq!(ws.pilot_applications(&task), 2);
+    assert_status(&ws, &task, TaskStatus::Backlog);
+}
+
+fn a_failed_repilot_of_a_stale_assessment_still_holds() {
+    let (ws, drain) = harness();
+    let task = stale_explicit_task(&ws);
+    let selection = ws.select(&drain);
+    assert_task_ids(&selection, &[&task]);
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    ws.pilot_failed(&pilot);
+    ws.record(&drain);
+    let next = ws.select(&drain);
+    assert_task_ids(&next, &[]);
+    assert_held(&next, &task, "pilot_unresolved");
+    assert_status(&ws, &task, TaskStatus::Proposed);
+    // A later drain holds it too, until the task changes or an operator acts.
+    let later = ws.drain();
+    let held = ws.select(&later);
+    assert_task_ids(&held, &[]);
+    assert_held(&held, &task, "pilot_unresolved");
+}
+
+fn a_stale_assessment_on_a_claimed_task_still_holds() {
+    let (ws, drain) = harness();
+    let task = stale_explicit_task(&ws);
+    record_execution_claim(&ws, &task);
     let selection = ws.select(&drain);
     assert_task_ids(&selection, &[]);
     assert_eq!(selection["reused"], json!([]), "{selection}");
     assert_held(&selection, &task, "changed_since_pilot");
     assert_status(&ws, &task, TaskStatus::Proposed);
     assert_eq!(ws.pilot_applications(&task), 1);
-    let (_again, _reprepared) = explicit_pilot(&ws, &task);
-    assert_eq!(ws.pilot_applications(&task), 1);
 }
 
 crate::scenario_table!(
     explicit_assessment_reuse_scenarios,
     explicit_assessment_is_promoted_once_while_the_drain_child_stands_down,
-    a_stale_explicit_assessment_stays_proposed_until_a_new_explicit_pilot
+    a_stale_explicit_assessment_is_repiloted_by_the_drain_and_admitted,
+    a_failed_repilot_of_a_stale_assessment_still_holds,
+    a_stale_assessment_on_a_claimed_task_still_holds
 );
 crate::scenario_table!(
     tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass_scenarios,

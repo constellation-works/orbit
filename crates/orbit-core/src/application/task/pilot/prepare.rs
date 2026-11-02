@@ -136,6 +136,9 @@ pub(crate) fn prepare(
         }
     }
 
+    // Automatic discovery only: tasks reselected because their meaning
+    // changed after their applied assessment (see `stale_repilot_candidate`).
+    let mut stale_repilot_ids = BTreeSet::new();
     let (mode, task_ids, task_snapshots, mut excluded) = if explicit_mode {
         let all_tasks = runtime.list_tasks().map_err(|error| {
             DispatchError::action_failed(action, format!("list workspace tasks: {error}"))
@@ -251,6 +254,8 @@ pub(crate) fn prepare(
                 .then(left.id.cmp(&right.id))
         });
 
+        let claimed_tasks = super::drain_promotion::live_execution_claim_tasks(runtime)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         let mut selected = Vec::new();
         let mut excluded = ExcludedEvidence::default();
         for envelope in &envelopes {
@@ -271,14 +276,34 @@ pub(crate) fn prepare(
                         .then_some("active_pilot_prepared")
                 })
                 .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
-            let reason = if reason.is_none() && already_piloted(runtime, action, &envelope.id)? {
+            // A task whose meaning changed after its applied assessment is
+            // discovered again for a fresh pilot, unless a live execution
+            // claim holds it or a repilot already failed. Its assessed
+            // selectors and complexity are the stale assessment's output, so
+            // they do not exclude it either.
+            let stale_repilot = matches!(reason, None | Some("context_files_not_empty"))
+                && stale_repilot_candidate(runtime, action, &envelope.id, &claimed_tasks)?;
+            let reason = if stale_repilot && reason == Some("context_files_not_empty") {
+                None
+            } else {
+                reason
+            };
+            let reason = if reason.is_none()
+                && !stale_repilot
+                && already_piloted(runtime, action, &envelope.id)?
+            {
                 Some("assessment_already_applied")
             } else {
                 reason
             };
             match reason {
                 Some(reason) => excluded.record(&envelope.id, reason, &active_preparations),
-                None => selected.push(envelope),
+                None => {
+                    if stale_repilot {
+                        stale_repilot_ids.insert(envelope.id.clone());
+                    }
+                    selected.push(envelope);
+                }
             }
         }
 
@@ -341,7 +366,9 @@ pub(crate) fn prepare(
             .get_task(&task_id)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if !explicit_mode {
-            if let Some(outcome) = left_automatic_selection(&snapshot, &task) {
+            if let Some(outcome) =
+                left_automatic_selection(&snapshot, &task, stale_repilot_ids.contains(&task_id))
+            {
                 superseded_during_preparation.push(outcome);
                 continue;
             }
@@ -619,13 +646,18 @@ fn pilot_run_id(input: &Value) -> Option<&str> {
 /// The superseded outcome for an automatically selected task that another
 /// writer moved out of automatic selection after its envelope was read, or
 /// `None` while hydration still selects it.
-fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
-    automatic_exclusion_reason(
+fn left_automatic_selection(selected: &Value, task: &Task, stale_repilot: bool) -> Option<Value> {
+    let exclusion = automatic_exclusion_reason(
         task.status,
         &task.context_files,
         task.complexity,
         &task.tags,
     )?;
+    // A stale-repilot selection keeps its assessed selectors and complexity:
+    // they are the stale assessment's output, not a move out of selection.
+    if stale_repilot && exclusion == "context_files_not_empty" {
+        return None;
+    }
     let (reason, detail) = if task.status.is_terminal() {
         ("task_terminal", "task became terminal after selection")
     } else if selected["status"] != json!(task.status) {
@@ -642,6 +674,61 @@ fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
         task.status,
         detail,
     ))
+}
+
+/// Whether `task_id`'s latest applied assessment no longer certifies its
+/// current meaning (description or acceptance criteria changed after it),
+/// no live execution claim holds the task, and no repilot already failed:
+/// automatic discovery reselects such a task for a fresh pilot instead of
+/// leaving it held for an operator repilot. A failed repilot is the newest
+/// `task_pilot_unresolved` record after the latest apply; it keeps the task
+/// held until its meaning changes again (a newer assessment) or an operator
+/// acts, matching the drain's unresolved hold.
+fn stale_repilot_candidate(
+    runtime: &OrbitRuntime,
+    action: &str,
+    task_id: &str,
+    claimed_tasks: &BTreeSet<String>,
+) -> Result<bool, DispatchError> {
+    if claimed_tasks.contains(task_id) {
+        return Ok(false);
+    }
+    let task = runtime.get_task(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id}: {error}"))
+    })?;
+    if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+        return Ok(false);
+    }
+    let history = runtime.get_task_history(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
+    })?;
+    let latest_applied = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "task_pilot_applied")
+        .map(|entry| entry.at);
+    if history.iter().any(|entry| {
+        entry.event == "task_pilot_unresolved"
+            && latest_applied.is_none_or(|applied| entry.at > applied)
+    }) {
+        return Ok(false);
+    }
+    let comments = runtime.get_task_comments(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
+    })?;
+    let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
+        return Ok(false);
+    };
+    if !super::is_operation_id(receipt.operation_id) {
+        return Ok(false);
+    }
+    let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
+        return Ok(false);
+    };
+    super::freshness::pilot_requirements_stale(&task, &audit, receipt.operation_id, &|| {
+        runtime.get_task_history(task_id)
+    })
+    .map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }
 
 fn already_piloted(
