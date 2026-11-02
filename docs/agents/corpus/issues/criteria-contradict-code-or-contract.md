@@ -49,3 +49,4 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-31 05:00 | ORB-20391 | jrun-20261031-0447-c3 | criterion contradicts code or contract | system moved to done at 2026-10-31T06:39Z |
 | 2026-10-31 05:27 | ORB-20400 | jrun-20261031-0520-c4 | criterion contradicts code or contract | system moved to done at 2026-10-31T06:42Z |
 | 2026-11-01 03:28 | ORB-20702 | jrun-20261101-0321-c1 | criterion contradicts code or contract | system moved to done at 2026-11-01T03:57Z |
+| 2026-10-26 07:11 | ORB-18545 | not recorded in triage comment | criterion contradicts code or contract | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |

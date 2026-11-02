@@ -35,3 +35,6 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-30 20:40 | ORB-20156 | jrun-20261030-2040-t2 | Mac layout 3 versus owner schema | merged outside Orbit at 2026-10-30T20:52Z, settled done |
 | 2026-10-31 01:16 | ORB-20250 | jrun-20261031-0023-c1 | retained candidate on Mac, sandbox blocked | human forced blocked->done at 2026-10-31T01:26Z |
 | 2026-10-31 01:45 | ORB-20339 | jrun-20261031-0130-c1 | upgrade_pending, run on Mac | human:daniel moved to backlog at 2026-10-31T01:52Z |
+| 2026-10-21 07:23 | ORB-17437 | jrun-20261021-0723-t1 | human_only: blocking run on another host, operator on owning host must inspect o | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
+| 2026-10-23 04:53 | ORB-17664 | jrun-20261023-0452-t1 | human_only: blocking run on another host, operator on owning host must inspect o | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
+| 2026-10-26 15:07 | ORB-18547 | jrun-20261026-1425-c1 | human_only: blocking run on another host, operator on owning host must inspect o | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
