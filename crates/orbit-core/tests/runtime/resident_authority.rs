@@ -746,8 +746,60 @@ fn resident_sensitive_checkpoint_is_refused_without_writes() {
     assert_eq!(stored, record, "safe checkpoint text stays verbatim");
 }
 
+fn relay_returns_comment_and_answer_matching_the_advertised_output() {
+    use orbit_common::governance::operation::OperationVerb;
+    use orbit_common::governance::resident::ResidentVerb;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, _) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    let quote = "Ship CSV first.";
+    let relayed = call(
+        &runtime,
+        "orbit.resident.relay",
+        json!({"task_id": id, "quote": quote,
+               "source": {"human": "daniel", "via": "chat", "said_at": "2026-11-02T10:00:00Z"},
+               "orchestrator": "sol", "model": "claude"}),
+        &orchestrator(),
+    )
+    .unwrap();
+
+    // The advertised output names exactly the fields the relay returns:
+    // a comment named by position (comments carry no ids) and the record.
+    let description = ResidentVerb::Relay.spec().tool_description;
+    assert!(
+        description.contains("Output {task_id, comment, answer}"),
+        "relay description must advertise comment and answer, not a comment id: {description}"
+    );
+    assert!(
+        !description.contains("comment_id"),
+        "relay description must not advertise a comment_id: {description}"
+    );
+    let mut keys: Vec<&str> = relayed
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["answer", "comment", "task_id"]);
+    assert_eq!(relayed["task_id"], id);
+    let comments = runtime.get_task_comments(&id).unwrap();
+    assert_eq!(relayed["comment"]["index"], comments.len());
+    assert!(relayed["comment"]["at"].is_string());
+    assert!(relayed["comment"]["by"].is_string());
+    assert_eq!(relayed["answer"]["kind"], "resident.answer");
+    assert_eq!(relayed["answer"]["mandate"], id);
+    assert_eq!(relayed["answer"]["quote"], quote);
+    assert_eq!(relayed["answer"]["source"]["human"], "daniel");
+    assert!(relayed["answer"]["relayed_by"].is_object());
+    let stored: Value = serde_json::from_str(&comments.last().unwrap().message).unwrap();
+    assert_eq!(stored, relayed["answer"], "answer is the record as written");
+}
+
 crate::scenario_table!(
     resident_authority,
+    relay_returns_comment_and_answer_matching_the_advertised_output,
     stopped_mandate_refuses_pending_grant_but_allows_rejection,
     stopped_mandate_refuses_new_widening_and_allows_narrowing,
     resident_sensitive_checkpoint_is_refused_without_writes,
