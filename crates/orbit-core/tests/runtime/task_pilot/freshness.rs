@@ -372,6 +372,118 @@ fn automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit() 
     assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
 }
 
+fn automatic_discovery_retries_failed_repilot_only_after_new_requirements() {
+    for field in ["description", "acceptance_criteria"] {
+        let workspace = Workspace::new();
+        let task = workspace.task("failed repilot");
+        apply_explicit_pilot_assessment(&workspace, &task, false);
+        edit_description_and_tags(&workspace, &task.id, &[]);
+        assert_eq!(discover(&workspace)["task_ids"], json!([task.id]));
+
+        // Model the durable failure a drain records after its stale repilot
+        // exits without applying an assessment. Exercise discovery through
+        // the public prepare action, with real task updates and receipts.
+        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(
+                &workspace.runtime.global_root(),
+            ),
+        )
+        .unwrap();
+        let backends = orbit_store::compose::workspace_coordinated_backends(
+            registry,
+            workspace.runtime.workspace_id().unwrap(),
+            workspace.runtime.sqlite_store().unwrap(),
+        )
+        .unwrap();
+        backends
+            .task
+            .history
+            .update_task_history(
+                &task.id,
+                orbit_store::contracts::TaskHistoryUpdateParams {
+                    actor: "system".into(),
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: "task_pilot_unresolved".into(),
+                        note: Some(json!({"pilot_run_id": "failed-repilot"}).to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(discover(&workspace)["task_ids"], json!([]));
+        workspace
+            .runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": task.id, "model": "codex",
+                    "title": "Administrative rename", "tags": ["metadata"],
+                    "plan": "Administrative plan update.",
+                    "execution_summary": "Still held.", "comment": "Observation.",
+                    "priority": "high", "description": "Changed requirements.",
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            discover(&workspace)["task_ids"],
+            json!([]),
+            "metadata and an unchanged description must preserve the failure hold"
+        );
+
+        let mut edit = json!({"id": task.id, "model": "codex"});
+        edit[field] = if field == "description" {
+            json!("Requirements changed again after the failed repilot.")
+        } else {
+            json!(["A new acceptance criterion after the failed repilot."])
+        };
+        workspace
+            .runtime
+            .run_tool("orbit.task.update", edit)
+            .unwrap();
+        let retried = discover(&workspace);
+        assert_eq!(
+            retried["task_ids"],
+            json!([task.id]),
+            "a later {field} edit must release the failed repilot: {retried}"
+        );
+        let holder = workspace.hold(&[&task.id]);
+        assert_eq!(
+            discover(&workspace)["task_ids"],
+            json!([]),
+            "the fresh pilot's live preparation must prevent duplicate selection"
+        );
+        workspace.runtime.cancel_job_run(&holder).unwrap();
+        let applied = workspace.action(
+            "apply_task_pilot_results",
+            apply_input(&workspace, &retried),
+        );
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        for _ in 0..2 {
+            assert_eq!(
+                discover(&workspace)["task_ids"],
+                json!([]),
+                "the fresh assessment must not queue another automatic pilot"
+            );
+        }
+        assert_eq!(
+            workspace
+                .runtime
+                .get_task_history(&task.id)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.event == "task_pilot_applied")
+                .count(),
+            2
+        );
+    }
+}
+
 #[cfg(unix)]
 fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exec sleep 30"]);
@@ -596,6 +708,7 @@ crate::scenario_table!(
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
     admission_reuses_an_explicit_assessment_off_the_scan_page,
     automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit,
+    automatic_discovery_retries_failed_repilot_only_after_new_requirements,
     stale_scoped_no_diff_task_is_excluded_while_eligible_stale_task_is_selected,
     stale_scoped_pr_route_task_without_forge_is_excluded_while_local_route_is_selected
 );

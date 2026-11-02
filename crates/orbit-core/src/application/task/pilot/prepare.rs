@@ -2,7 +2,10 @@
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT, Task,
+    TaskComplexity, TaskStatus, task_fields_updated_documents,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -701,12 +704,13 @@ fn left_automatic_selection(
 
 /// Whether `task_id`'s latest applied assessment no longer certifies its
 /// current meaning (description or acceptance criteria changed after it),
-/// no live execution claim holds the task, and no repilot already failed:
+/// no live execution claim holds the task, and no failed repilot holds its
+/// current requirements:
 /// automatic discovery reselects such a task for a fresh pilot instead of
 /// leaving it held for an operator repilot. A failed repilot is the newest
 /// `task_pilot_unresolved` record after the latest apply; it keeps the task
-/// held until its meaning changes again (a newer assessment) or an operator
-/// acts, matching the drain's unresolved hold.
+/// held until a later description/criteria edit, a newer assessment or an
+/// operator action, matching the drain's unresolved hold.
 fn stale_repilot_candidate(
     runtime: &OrbitRuntime,
     action: &str,
@@ -730,9 +734,27 @@ fn stale_repilot_candidate(
         .rev()
         .find(|entry| entry.event == "task_pilot_applied")
         .map(|entry| entry.at);
+    // Only a later requirements edit releases a failed repilot. Envelope,
+    // plan and execution-summary updates must not restart automatic retries.
+    let latest_requirements_edit = history
+        .iter()
+        .rev()
+        .find(|entry| {
+            entry.event == TASK_FIELDS_UPDATED_EVENT
+                && task_fields_updated_documents(entry.note.as_deref().unwrap_or_default())
+                    .iter()
+                    .any(|document| {
+                        matches!(
+                            *document,
+                            DESCRIPTION_DOCUMENT | ACCEPTANCE_CRITERIA_DOCUMENT
+                        )
+                    })
+        })
+        .map(|entry| entry.at);
     if history.iter().any(|entry| {
         entry.event == "task_pilot_unresolved"
             && latest_applied.is_none_or(|applied| entry.at > applied)
+            && latest_requirements_edit.is_none_or(|edited| entry.at >= edited)
     }) {
         return Ok(false);
     }
