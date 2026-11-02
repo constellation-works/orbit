@@ -469,6 +469,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.mcp.role": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.mcp.toolsets": {
       "scope": "built-in",
       "state": "default",

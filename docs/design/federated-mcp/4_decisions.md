@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Standing rules for the federated MCP mux: destinations are configured, 
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-21263, ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
@@ -214,6 +214,34 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.
 - Cost: **an operator who wants a genuinely narrower remote surface has nothing to reach for.** The answer is a second SSH key and account, or not granting the login; Orbit deliberately does not reimplement multi-tenancy.
 
+## An MCP role limits the surface, never the authority
+
+**Recorded:** 2026-11 · [ORB-21263]
+
+**Code anchors:** `crates/orbit-types/src/tool/mcp_toolset.rs::McpRole`, `crates/orbit-tools/src/mcp_toolsets.rs::builtin_mcp_toolset`, `crates/orbit-mcp/src/toolset.rs::with_mcp_toolsets`, `crates/orbit-mcp/src/remote/proxy.rs::remote_surface_args`
+
+### Context
+
+Every `orbit mcp serve` advertised the always-on default toolset, about 40 builtin tools, and opt-in toolsets could only add to it. Manager, resident-cycle, operator-console and leaf-agent sessions all carried the same large surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately" and "we may need a task that will group mcp toolsets into roles."
+
+### Decision
+
+**Split the default toolset into capability toolsets, put every tool in exactly one, and define roles as named sets of toolsets in one place.** `orbit mcp serve --role <role>` (or the global `machine.mcp.role`) serves the role's toolsets plus the always-on discovery `core`; `--toolset` adds to it. The prescriptive contract is [specs/mcp-roles.md](./specs/mcp-roles.md).
+
+1. **A role is placement, not permission.** It limits what MCP lists and dispatches, exactly as a disabled toolset already did. Operator-only tools still need operator capability under every role, and `orbit tool run`, activities and plugin callbacks see every tool. Making a role grant anything would have created a second authorization axis that a launch argv could widen.
+2. **No role means today's surface.** Without `--role` or `machine.mcp.role` the advertised list is byte-identical to the pre-role default, so running long-lived MCP clients keep working. Changing the default role is a separate decision, after the 30-day compatibility window.
+3. **Placement is one table.** Builtin MCP tools are placed by name in one table; a tool missing from it makes MCP definition building fail, so no tool ships unplaced. Plugin tools fall back to `plugins`; a manifest-declared toolset is deferred because it would be a persisted manifest contract and would let a plugin place itself in a role's surface.
+4. **Size is budgeted.** Each role has a recorded tool-count and approximate-token budget, checked in CI, so a role's surface cannot quietly grow.
+
+Rejected alternative: **a `resident` add-on toolset for the resident orchestrator.** Another opt-in toolset only adds to the 40-tool default; it cannot serve less. Also rejected: **filtering roles by tool annotation** (for example, read-only hints). Annotations are client UX hints and the plugin ones are author-declared, so they are not a stable basis for a surface definition.
+
+### Consequences
+
+- `--toolset default` and `machine.mcp.toolsets = ["default"]` still name the pre-role surface, now the default tier.
+- `orbit tool list` reports a toolset for every tool, `local` for those no server lists.
+- `--mode remote` forwards `--role` to the destination; a destination older than roles refuses a role argv, so roles over remote mode need both hosts on a release that has them (hosts deploy in lockstep). Without a role the remote argv is unchanged.
+- Cost: moving a tool between toolsets changes every role that serves either, which the role budgets and the role roundtrip tests surface in review.
+
 ## Task References
 
 - [ORB-11008] — recorded the prior federated MCP policy that these rules implement
@@ -233,5 +261,6 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-12563] — the same rationale applied to the dashboard
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
+- [ORB-21263] — MCP roles and the toolset split
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

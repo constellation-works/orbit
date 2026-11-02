@@ -589,3 +589,45 @@ fn tool_run_serves_the_owner_local_read_only_drain_surface() {
     assert!(refusal.contains("capability denied"), "{refusal}");
     assert!(refusal.contains("agent"), "{refusal}");
 }
+
+/// [ORB-21263] Every tool `orbit tool list` reports belongs to exactly one
+/// MCP toolset, inactive ones included, so every role can be stated in
+/// toolsets. A builtin MCP tool missing from the toolset table reports none.
+#[test]
+fn every_listed_tool_belongs_to_one_mcp_toolset() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+
+    let output = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json", "--all"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("tool list JSON");
+    assert!(!tools.is_empty());
+    let unplaced = tools
+        .iter()
+        .filter(|tool| {
+            tool["mcp_toolset"]
+                .as_str()
+                .is_none_or(|toolset| toolset.parse::<orbit_types::tool::McpToolset>().is_err())
+        })
+        .map(|tool| tool["name"].to_string())
+        .collect::<Vec<_>>();
+    assert!(unplaced.is_empty(), "tools without a toolset: {unplaced:?}");
+    // The always-on core is discovery only; no registry tool joins it.
+    let core = tools
+        .iter()
+        .filter(|tool| tool["mcp_toolset"] == "core")
+        .map(|tool| tool["name"].to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        core.is_empty(),
+        "registry tools in the always-on core: {core:?}"
+    );
+}

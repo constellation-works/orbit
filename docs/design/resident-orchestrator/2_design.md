@@ -11,7 +11,7 @@ summary: "Roles, mandate and authority, resident lifecycle and fires, the bounde
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request.rs"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance, granted-tools]
-related_artifacts: [ORB-21229]
+related_artifacts: [ORB-21229, ORB-21263]
 ---
 
 # Resident Orchestrator — Design
@@ -44,7 +44,8 @@ of [ORB-21229]. Nothing here is built. Exact record shapes and tool contracts ar
 | Resident | One per mandate; Orbit cycles, no process between them | No (the OS clock fires it) | Only in Orbit: mandate, checkpoints, task state | Checkpoints, dispatches and promotions within authority, escalations, cost events |
 | Leaf executor | The existing drain and leaf pipeline | — | — | Unchanged |
 
-The manager is a role, not a program. Orbit ships it a toolset and a skill reference
+The manager is a role, not a program. Orbit ships it an MCP role (`orbit mcp serve --role manager`)
+and a skill reference
 ([ORB-21250]), not a process. Any session that loads them can act as manager, and two manager
 sessions at once are safe because neither holds state: both read and write the same records. The
 manager does four things for the human: files and scopes mandates; relays grants, decisions and
@@ -276,7 +277,8 @@ registered crew can run a resident. Provider-specific continuity sits behind the
 ## 6. The manager ↔ resident channel
 
 The channel mostly composes existing records. It adds the grant, relay and control writes and the
-`show`/`list` reads, all in an opt-in `resident` MCP toolset ([specs/manager-channel.md](./specs/manager-channel.md)):
+`show`/`list` reads, all in a `resident` MCP toolset that the `manager` and `resident` MCP roles
+serve ([specs/manager-channel.md](./specs/manager-channel.md)):
 
 | Manager wants to | Mechanism | New? |
 |---|---|---|
@@ -306,12 +308,15 @@ session works in the same assignment task and comments as usual. On `release`, t
 those comments as new non-resident comments and resumes from them; a takeover needs no export or
 import.
 
-**Role-scoped MCP surfaces.** Today `orbit mcp serve` has no `--role` flag: it enables the default
-toolset and adds any opt-in toolsets selected with `--toolset`. The tool-list golden assigns 39
-registered tools to the default toolset; the default agent server's `tools/list` snapshot advertises
-26 names. The `--operator` flag grants operator authority. The `resident` toolset above is proposed,
-not an existing toolset. Splitting the default into capability toolsets selected by role is follow-up
-work owned by ORB-21263. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
+**Role-scoped MCP surfaces.** Each session serves only its role's surface, through an MCP role
+rather than one more add-on toolset ([federated-mcp specs/mcp-roles.md](../federated-mcp/specs/mcp-roles.md),
+[ORB-21263]). Every tool belongs to one capability toolset, and `orbit mcp serve --role <role>` (or the
+global `machine.mcp.role`) serves the role's toolsets; `--toolset` adds to it. A role grants no
+authority: `--operator` still decides operator capability. Today `--role manager` serves task and run
+reads, decisions, notices and search, and `--role resident` adds task writes and dispatch for the
+bounded cycle. When the `resident` toolset ([ORB-21245]) lands, it joins both roles: relay and control
+for the manager, the resident's own reads and checkpoints for the cycle. Without a role a server still
+serves the pre-role default surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
 
 ## 7. Notices
 
@@ -562,7 +567,7 @@ Proposals that the slices confirm:
 | Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/application/resident/` |
 | Cycle job and activities | a new `resident_cycle_pipeline` job under `crates/orbit-core/assets/jobs/` and `resident_*` activities under `crates/orbit-core/assets/activities/` |
 | Seeded routines | `crates/orbit-core/assets/routines/` (disabled) |
-| `resident` toolset | `crates/orbit-types/src/tool/mcp_toolset.rs` |
+| `resident` toolset, `manager` and `resident` MCP roles | `crates/orbit-types/src/tool/mcp_toolset.rs` |
 | `resident_stalled` attention kind | the attention item kinds of [ORB-21168] |
 | Skill references | `crates/orbit-core/assets/skills/orbit/references/` |
 
@@ -629,5 +634,6 @@ Every slice is a `proposed` task in ws_orbit tagged `resident-orchestrator`. Dep
 - [ORB-21249] — slice 8: evolution pass and digest
 - [ORB-21250] — slice 9: skill references
 - [ORB-21251] — slice 10: pilot
+- [ORB-21263] — MCP roles: the manager and resident surfaces
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

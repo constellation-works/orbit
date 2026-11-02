@@ -5533,6 +5533,7 @@ mod desktop;
 #[cfg(unix)]
 mod routine_outputs;
 
+mod roles;
 mod root_selection;
 mod transport_operations;
 

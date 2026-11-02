@@ -19,8 +19,8 @@ pub struct ToolInfo {
     pub active: bool,
     pub builtin: bool,
     pub parameters: Vec<orbit_types::tool::ToolParam>,
-    /// The `orbit mcp serve` toolset that advertises this tool; `None` for a
-    /// tool MCP never advertises.
+    /// The `orbit mcp serve` toolset this tool belongs to (`local` for a
+    /// tool MCP never advertises); `None` only for an unclassified builtin.
     pub mcp_toolset: Option<orbit_types::tool::McpToolset>,
 }
 
@@ -419,6 +419,7 @@ fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
         active: true,
         builtin: false,
         parameters: schema.parameters,
-        mcp_toolset: None,
+        // A catalogued external tool is never advertised over MCP.
+        mcp_toolset: Some(orbit_types::tool::McpToolset::Local),
     }
 }

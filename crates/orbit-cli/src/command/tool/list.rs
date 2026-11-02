@@ -2,7 +2,10 @@ use clap::Args;
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use orbit_core::OrbitError;
+use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
+
+use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
 use super::support::{format_required_tool_input_summary, tool_status};
@@ -12,15 +15,34 @@ pub struct ToolListArgs {
     /// Include inactive tools that are hidden from the default agent surface
     #[arg(long)]
     pub all: bool,
+    /// List only the tools an `orbit mcp serve --role <ROLE>` server
+    /// advertises, with the role's tool count and approximate token size:
+    /// `operator`, `manager`, `resident`, `agent` or `reader`.
+    #[arg(long, value_name = "ROLE")]
+    pub role: Option<String>,
 }
 
 impl Execute for ToolListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let tools = if self.all {
+        let mut tools = if self.all {
             runtime.list_all_tools()?
         } else {
             runtime.list_tools()?
         };
+        let role = self
+            .role
+            .as_deref()
+            .map(|name| {
+                name.parse::<McpRole>()
+                    .map_err(|error| OrbitError::InvalidInput(format!("--role: {error}")))
+            })
+            .transpose()?;
+        if let Some(role) = role {
+            tools.retain(|tool| {
+                tool.mcp_toolset
+                    .is_some_and(|toolset| toolset != McpToolset::Local && role.includes(toolset))
+            });
+        }
 
         let records: Vec<Value> = tools
             .iter()
@@ -63,6 +85,30 @@ impl Execute for ToolListArgs {
                 Cell::new(&tool.description),
             ]);
         }
-        Ok(Payload::list(records, table).into())
+        let Some(role) = role else {
+            return Ok(Payload::list(records, table).into());
+        };
+        let surface = orbit_mcp::mcp_surface_report(&McpToolsetSelection::for_role(role))?;
+        let summary = format!(
+            "role {role}: {} builtin MCP tools, about {} tokens (toolsets: {})",
+            surface.tools,
+            surface.approx_tokens,
+            surface
+                .toolsets
+                .iter()
+                .map(|toolset| toolset.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let doc = json!({
+            "role": role,
+            "toolsets": surface.toolsets,
+            "surface": {
+                "tools": surface.tools,
+                "approx_tokens": surface.approx_tokens,
+            },
+            "tools": records,
+        });
+        Ok(Payload::blocks(doc, vec![Block::text(summary), Block::table(table)]).into())
     }
 }

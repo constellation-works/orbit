@@ -783,6 +783,17 @@ pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<Strin
     Ok(names.iter().map(|name| name.trim().to_string()).collect())
 }
 
+/// `machine.mcp.role`: unset, or one role name.
+pub(super) fn resolve_mcp_role(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, "machine.mcp.role")? else {
+        return Ok(None);
+    };
+    let role = raw
+        .parse::<orbit_types::tool::McpRole>()
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.role: {error}")))?;
+    Ok(Some(role.as_str().to_string()))
+}
+
 pub(super) fn resolve_name_list(
     raw: Option<Vec<String>>,
     key: &str,

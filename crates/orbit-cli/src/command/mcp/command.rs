@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
-use orbit_types::tool::McpToolsetSelection;
+use orbit_types::tool::{McpRole, McpToolsetSelection};
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
@@ -185,7 +185,10 @@ pub struct ServeArgs {
     /// Attribute tasks this session creates to a named orchestrator crew, unless the call names one itself.
     #[arg(long, value_name = "CREW")]
     pub orchestrator: Option<String>,
-    /// Advertise these opt-in toolsets beside the default one, as a comma-separated list: `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, `notice`, or `all`.
+    /// Serve only one role's toolsets: `operator` (every toolset), `manager`, `resident`, `agent` or `reader`. Replaces the `machine.mcp.role` host config. A role limits what is advertised and callable over MCP; it grants no authority. Without a role the server advertises the default surface. `orbit tool list --role <ROLE>` lists a role's tools and size.
+    #[arg(long, value_name = "ROLE")]
+    pub role: Option<String>,
+    /// Advertise these toolsets beside the role's, or beside the default surface without a role, as a comma-separated list such as `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, `notice`, `tasks-write` or `dispatch`; `default` names the default surface and `all` every toolset. Replaces the `machine.mcp.toolsets` host config. `orbit tool list` shows each tool's toolset.
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
 }
@@ -229,7 +232,11 @@ impl ServeArgs {
                     ssh_host,
                     orchestrator: self.orchestrator,
                     authority: requested_authority(self.operator),
-                    toolsets: resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?,
+                    toolsets: resolve_mcp_toolsets(
+                        &global_root,
+                        self.role.as_deref(),
+                        self.toolset.as_deref(),
+                    )?,
                 })?
             }
             Some(ServeMode::Federated) => {
@@ -239,7 +246,11 @@ impl ServeArgs {
                          '{ssh_host}'; register remote hosts with `orbit host add <ssh-target>`"
                     )));
                 }
-                let toolsets = resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?;
+                let toolsets = resolve_mcp_toolsets(
+                    &global_root,
+                    self.role.as_deref(),
+                    self.toolset.as_deref(),
+                )?;
                 super::server::serve_mcp_federated_stdio(
                     global_root,
                     self.orchestrator,
@@ -249,12 +260,19 @@ impl ServeArgs {
             }
             None => {
                 // An Orbit SSH route (the mux, a worker or drain route) names
-                // no toolset: its caller filters, so this end serves them all.
-                let toolsets = if self.toolset.is_none() && self.remote_caller_machine_id.is_some()
+                // no role or toolset: its caller filters, so this end serves
+                // them all.
+                let toolsets = if self.toolset.is_none()
+                    && self.role.is_none()
+                    && self.remote_caller_machine_id.is_some()
                 {
                     McpToolsetSelection::all()
                 } else {
-                    resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?
+                    resolve_mcp_toolsets(
+                        &global_root,
+                        self.role.as_deref(),
+                        self.toolset.as_deref(),
+                    )?
                 };
                 super::server::serve_mcp_stdio(
                     global_root,
@@ -275,25 +293,28 @@ impl ServeArgs {
     }
 }
 
-/// The toolsets a server advertises: `--toolset` when given, else the
-/// `machine.mcp.toolsets` host config, else the default toolset alone, plus
-/// any a managed run's dispatch stamped in `ORBIT_ACTIVITY_MCP_TOOLSETS`.
+/// The toolsets a server advertises: the role (`--role`, else the
+/// `machine.mcp.role` host config) or the default surface without one, plus
+/// the named toolsets (`--toolset`, else `machine.mcp.toolsets`), plus any a
+/// managed run's dispatch stamped in `ORBIT_ACTIVITY_MCP_TOOLSETS`.
 ///
 /// An unreadable host config or stamp falls back without it, with a warning,
-/// rather than refusing to serve: a toolset trims context, it grants nothing.
+/// rather than refusing to serve: a role or toolset trims context, it grants
+/// nothing. A malformed flag or config value is refused.
 pub(super) fn resolve_mcp_toolsets(
     global_root: &Path,
-    flag: Option<&str>,
+    role_flag: Option<&str>,
+    toolset_flag: Option<&str>,
 ) -> Result<McpToolsetSelection, OrbitError> {
-    let selection = configured_mcp_toolsets(global_root, flag)?;
+    let selection = configured_mcp_toolsets(global_root, role_flag, toolset_flag)?;
     let Some(stamped) = std::env::var(ACTIVITY_MCP_TOOLSETS_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
     else {
         return Ok(selection);
     };
-    match McpToolsetSelection::parse_list(&stamped) {
-        Ok(stamped) => Ok(selection.union(&stamped)),
+    match selection.clone().with_names(stamped.split(',')) {
+        Ok(stamped) => Ok(stamped),
         Err(error) => {
             tracing::warn!(
                 target: "orbit.mcp",
@@ -307,34 +328,65 @@ pub(super) fn resolve_mcp_toolsets(
 
 fn configured_mcp_toolsets(
     global_root: &Path,
-    flag: Option<&str>,
+    role_flag: Option<&str>,
+    toolset_flag: Option<&str>,
 ) -> Result<McpToolsetSelection, OrbitError> {
-    if let Some(flag) = flag {
-        return McpToolsetSelection::parse_list(flag)
-            .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}")));
-    }
-    let config =
-        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root));
-    match config {
-        Ok(config) => McpToolsetSelection::from_names(
-            config
-                .snapshot
-                .machine_mcp_toolsets
-                .iter()
-                .map(String::as_str),
-        )
-        .map_err(|error| {
-            OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_TOOLSETS_CONFIG_KEY))
-        }),
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.mcp",
-                %error,
-                "could not read {}; serving the default MCP toolset",
-                orbit_mcp::MCP_TOOLSETS_CONFIG_KEY
-            );
-            Ok(McpToolsetSelection::default_only())
+    let flagged_role = role_flag
+        .map(|role| {
+            role.parse::<McpRole>()
+                .map_err(|error| OrbitError::InvalidInput(format!("--role: {error}")))
+        })
+        .transpose()?;
+    let flagged_toolsets = toolset_flag.map(|list| list.split(',').collect::<Vec<_>>());
+    // Both flags given: the host config has nothing left to say.
+    let config = if flagged_role.is_some() && flagged_toolsets.is_some() {
+        None
+    } else {
+        match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
+            global_root,
+        )) {
+            Ok(config) => Some(config.snapshot),
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.mcp",
+                    %error,
+                    "could not read {} or {}; serving without them",
+                    orbit_mcp::MCP_ROLE_CONFIG_KEY,
+                    orbit_mcp::MCP_TOOLSETS_CONFIG_KEY
+                );
+                None
+            }
         }
+    };
+    let role = match flagged_role {
+        Some(role) => Some(role),
+        None => config
+            .as_ref()
+            .and_then(|config| config.machine_mcp_role.as_deref())
+            .map(|role| {
+                role.parse::<McpRole>().map_err(|error| {
+                    OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_ROLE_CONFIG_KEY))
+                })
+            })
+            .transpose()?,
+    };
+    let base = role.map_or_else(
+        McpToolsetSelection::default_only,
+        McpToolsetSelection::for_role,
+    );
+    match flagged_toolsets {
+        Some(names) => base
+            .with_names(names)
+            .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}"))),
+        None => base
+            .with_names(
+                config
+                    .iter()
+                    .flat_map(|config| config.machine_mcp_toolsets.iter().map(String::as_str)),
+            )
+            .map_err(|error| {
+                OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_TOOLSETS_CONFIG_KEY))
+            }),
     }
 }
 

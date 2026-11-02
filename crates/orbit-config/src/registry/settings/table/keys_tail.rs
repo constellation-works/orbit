@@ -27,9 +27,15 @@ macro_rules! with_tail_keys {
     },
     machine_mcp_toolsets: Vec<String> => Vec<String> {
         key: "machine.mcp.toolsets", value_type: "array<string>",
-        description: "Opt-in MCP toolsets orbit mcp serve and listen advertise beside the default: leases, experiments, analytics, decision-channel, agent-invoke, notice or all.",
+        description: "MCP toolsets orbit mcp serve and listen advertise beside the role or the default surface, such as leases, experiments, analytics, decision-channel, agent-invoke, notice or all.",
         section: ConfigSection::Machine, order: 85,
         resolve: |raw: Option<Vec<String>>| resolve_mcp_toolsets(raw),
+    },
+    machine_mcp_role: Option<String> => String {
+        key: "machine.mcp.role", value_type: "string",
+        description: "Default MCP role orbit mcp serve and listen serve: operator, manager, resident, agent or reader. Unset serves the default surface.",
+        section: ConfigSection::Machine, order: 86,
+        resolve: |raw: Option<String>| resolve_mcp_role(raw),
     },
     decision_channel_enabled: bool => bool {
         key: "decision_channel.enabled", value_type: "bool",

@@ -7,7 +7,7 @@
     "status": "active",
     "builtin": true,
     "parameters": [],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "github.pr.list",
@@ -42,7 +42,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "github.run.list",
@@ -89,7 +89,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "github.run.logs",
@@ -160,7 +160,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "github.run.view",
@@ -183,7 +183,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.agent.invoke",
@@ -395,7 +395,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.auto_task.list",
@@ -430,7 +430,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.auto_task.mint",
@@ -459,7 +459,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.auto_task.update",
@@ -524,7 +524,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.automation.explain",
@@ -553,7 +553,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.codebase.analytics",
@@ -612,7 +612,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "codebase"
   },
   {
     "name": "orbit.codebase.related",
@@ -653,7 +653,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "codebase"
   },
   {
     "name": "orbit.codebase.show",
@@ -718,7 +718,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "codebase"
   },
   {
     "name": "orbit.command.exec",
@@ -759,7 +759,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "exec"
   },
   {
     "name": "orbit.crew.ladder",
@@ -840,7 +840,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "decisions"
   },
   {
     "name": "orbit.decision.raise",
@@ -881,7 +881,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "decisions"
   },
   {
     "name": "orbit.decision.show",
@@ -904,7 +904,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "decisions"
   },
   {
     "name": "orbit.decision.submit",
@@ -998,7 +998,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.drain.claim.settle",
@@ -1051,7 +1051,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.drain.claims",
@@ -1061,7 +1061,7 @@
     "status": "active",
     "builtin": true,
     "parameters": [],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.drain.probe",
@@ -1096,7 +1096,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.drain.receipt.lookup",
@@ -1125,7 +1125,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.experiment.abandon",
@@ -1669,7 +1669,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-write"
   },
   {
     "name": "orbit.friction.update",
@@ -1722,7 +1722,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-write"
   },
   {
     "name": "orbit.lease.check",
@@ -2324,7 +2324,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "dispatch"
   },
   {
     "name": "orbit.pipeline.wait",
@@ -2365,7 +2365,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.routine.control",
@@ -2442,7 +2442,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "automation"
   },
   {
     "name": "orbit.search",
@@ -2507,7 +2507,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "search"
   },
   {
     "name": "orbit.task.add",
@@ -2656,7 +2656,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-write"
   },
   {
     "name": "orbit.task.artifact.get",
@@ -2697,7 +2697,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.artifact.put",
@@ -2732,7 +2732,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-write"
   },
   {
     "name": "orbit.task.block_triage",
@@ -2821,7 +2821,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.eligible",
@@ -2868,7 +2868,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.list",
@@ -3011,7 +3011,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.pull",
@@ -3094,7 +3094,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   },
   {
     "name": "orbit.task.reconcile_review",
@@ -3153,7 +3153,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.recover_claim",
@@ -3200,7 +3200,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.repilot",
@@ -3229,7 +3229,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.requeue",
@@ -3264,7 +3264,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.retry_handoff",
@@ -3323,7 +3323,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.review_reset",
@@ -3364,7 +3364,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.revoke_handoff",
@@ -3411,7 +3411,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.show",
@@ -3500,7 +3500,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.update",
@@ -3739,7 +3739,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "tasks-write"
   },
   {
     "name": "orbit.visual.capture",
@@ -3774,7 +3774,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "ui"
   },
   {
     "name": "orbit.workflow.auto",
@@ -3887,7 +3887,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "dispatch"
   },
   {
     "name": "orbit.workflow.run.list",
@@ -3946,7 +3946,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "runs"
   },
   {
     "name": "orbit.workflow.run.observe",
@@ -3963,7 +3963,7 @@
         "required": true
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "runs"
   },
   {
     "name": "orbit.workflow.run.resume",
@@ -3992,7 +3992,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "dispatch"
   },
   {
     "name": "orbit.workflow.run.show",
@@ -4027,7 +4027,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "runs"
   },
   {
     "name": "orbit.workflow.ship",
@@ -4080,7 +4080,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "dispatch"
   },
   {
     "name": "proc.spawn",
@@ -4109,6 +4109,6 @@
         "required": false
       }
     ],
-    "mcp_toolset": null
+    "mcp_toolset": "local"
   }
 ]
