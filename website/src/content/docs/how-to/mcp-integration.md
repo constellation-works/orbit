@@ -131,7 +131,7 @@ toolsets it enables. `orbit tool list` shows each tool's toolset.
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
 | `agent-invoke` | `orbit.agent.invoke`. A managed implement or review-repair run that is offered explorer delegation enables it on its own server; the operator invocation is deprecated. |
 | `notice` | `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and `orbit.notice.show`: fleet notices, short expiring announcements every agent and operator in their scope should see |
-| `resident` | `orbit.resident.grant`, `orbit.resident.show` and `orbit.resident.list`: resident orchestrator mandates and their authority. Widening a mandate's authority from an MCP session raises a decision request for the human instead of applying |
+| `resident` | `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list` and `orbit.resident.checkpoint`: resident orchestrator mandates, their authority and the live cycle's checkpoint record. Widening a mandate's authority from an MCP session raises a decision request for the human instead of applying |
 | `local` | Tools no MCP server lists (`proc.spawn`, `github.*`, the drain tools); `orbit tool run` and activities reach them |
 
 Without a role, a server lists `core` plus the default surface: every

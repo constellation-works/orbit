@@ -44,4 +44,8 @@ sidebar:
     <h3>Scoping rules</h3>
     <p>Where Orbit stores each artifact type.</p>
   </a>
+  <a class="orbit-card" href="./resident-mandates/">
+    <h3>Resident mandates</h3>
+    <p>The mandate artifact, its validated fields, effective authority, and the grant, show, list and checkpoint commands.</p>
+  </a>
 </div>
