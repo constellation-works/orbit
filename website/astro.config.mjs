@@ -205,6 +205,7 @@ export default defineConfig({
             { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
             { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
+            { slug: 'how-to/fleet-notices', label: 'Post and retire fleet notices' },
             { slug: 'how-to/diagnostics', label: 'Investigate failures from the terminal' },
             { slug: 'how-to/state-and-backup', label: 'Back up and move Orbit state' },
             { slug: 'how-to/workspace-maintenance', label: 'Maintain and remove workspaces' },

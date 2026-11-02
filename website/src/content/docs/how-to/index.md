@@ -59,6 +59,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
 ## Operate
 
 <div class="orbit-card-grid">
+  <a class="orbit-card" href="./fleet-notices/">
+    <h3>Post and retire fleet notices</h3>
+    <p>Share scoped operational information, inspect it, and close it when it no longer applies.</p>
+  </a>
   <a class="orbit-card" href="./diagnostics/">
     <h3>Investigate Failures from the Terminal</h3>
     <p>Trace a failure through doctor, run output, host logs, audit events, and server health checks.</p>
