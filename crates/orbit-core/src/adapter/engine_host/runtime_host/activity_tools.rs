@@ -72,6 +72,7 @@ pub(super) fn resolve_activity_tools(
             effective_tools,
             omitted_requirement_notes,
             granted_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
         });
     }
 
@@ -88,6 +89,7 @@ pub(super) fn resolve_activity_tools(
         effective_tools,
         omitted_requirement_notes,
         granted_tools: Vec::new(),
+        suppressed_tools: Vec::new(),
     })
 }
 
@@ -118,7 +120,7 @@ pub(super) fn resolve_activity_tool_denials(
     } else {
         GrantedDenyLifts::default()
     };
-    let deny_policy = ActivityToolDenyPolicy {
+    let mut deny_policy = ActivityToolDenyPolicy {
         activity: activity.to_string(),
         disallow_list: disallow_list
             .iter()
@@ -126,6 +128,26 @@ pub(super) fn resolve_activity_tool_denials(
             .cloned()
             .collect(),
     };
+    // When `notice.agent_posting` is off the notice tools leave the
+    // effective baseline; they must also enter the deny policy, because a
+    // deny-mode child ignores the legacy allowlist and would otherwise
+    // still call them. Added here, before admission, so neither a required
+    // tool nor a granted lift (which only lifts declared entries) re-opens
+    // a suppressed name. Retained reads such as `orbit.notice.list` are
+    // not in `NOTICE_AGENT_TOOLS` and stay callable.
+    let suppressed_tools: Vec<String> = if runtime.notice_settings().agent_posting {
+        Vec::new()
+    } else {
+        NOTICE_AGENT_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect()
+    };
+    for tool in &suppressed_tools {
+        if !deny_policy.denies(tool) {
+            deny_policy.disallow_list.push(tool.clone());
+        }
+    }
     let (requested_tools, omitted_requirement_notes) =
         admit_required_tools(runtime, &tasks, Some(&deny_policy)).map_err(|error| match error {
             DispatchError::RequiredToolAdmission {
@@ -159,6 +181,7 @@ pub(super) fn resolve_activity_tool_denials(
         effective_tools,
         omitted_requirement_notes,
         granted_tools: grants.lifted.into_iter().collect(),
+        suppressed_tools,
     })
 }
 

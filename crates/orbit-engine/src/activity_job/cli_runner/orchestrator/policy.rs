@@ -176,6 +176,15 @@ pub(super) fn resolve_activity_tool_grant(
     };
     if let Some(disallow_list) = tool_disallow_list.as_mut() {
         lift_granted_denials(disallow_list, &mut activity_tools, claimed);
+        // A host switch that suppressed a tool from the effective baseline
+        // must also deny it to the child: deny mode ignores the legacy
+        // allowlist, so the removal alone would leave the tool callable.
+        // Added after the granted lift, so a grant cannot re-open it.
+        for tool in &activity_tools.suppressed_tools {
+            if !tool_allowed(tool, disallow_list) {
+                disallow_list.push(tool.clone());
+            }
+        }
     }
     if claimed && tool_disallow_list.is_none() {
         restrict_allowlist(

@@ -30,9 +30,12 @@ fn runtime_at_config(root: &Path, config: &str) -> OrbitRuntime {
 
 const CONFIG_NO_AGENT_POSTING: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[notice]\nagent_posting = false\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
 
-/// The effective tools of one shipped activity, resolved through its own
-/// declared disallow list.
-fn activity_effective_tools(runtime: &OrbitRuntime, activity: &str) -> Vec<String> {
+/// The resolved tools of one shipped activity, through its own declared
+/// disallow list.
+fn activity_resolved_tools(
+    runtime: &OrbitRuntime,
+    activity: &str,
+) -> orbit_engine::ResolvedActivityTools {
     let yaml = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("assets/activities/{activity}.yaml")),
@@ -46,7 +49,48 @@ fn activity_effective_tools(runtime: &OrbitRuntime, activity: &str) -> Vec<Strin
     runtime
         .resolve_activity_tool_denials(&[], activity, &denied)
         .unwrap()
-        .effective_tools
+}
+
+/// The declared disallow list of one shipped activity.
+fn activity_declared_disallow_list(activity: &str) -> Vec<String> {
+    let yaml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("assets/activities/{activity}.yaml")),
+    )
+    .unwrap();
+    let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("agent activity")
+    };
+    spec.tool_disallow_list.unwrap_or_default()
+}
+
+/// The deny policy a child receives for one shipped activity: its declared
+/// disallow list plus the host-suppressed tools the dispatcher stamps.
+fn propagated_deny_policy(
+    runtime: &OrbitRuntime,
+    activity: &str,
+) -> orbit_types::workflow::ActivityToolDenyPolicy {
+    let resolved = activity_resolved_tools(runtime, activity);
+    let mut disallow_list = activity_declared_disallow_list(activity);
+    for tool in &resolved.suppressed_tools {
+        if !disallow_list.contains(tool) {
+            disallow_list.push(tool.clone());
+        }
+    }
+    orbit_types::workflow::ActivityToolDenyPolicy {
+        activity: activity.to_string(),
+        disallow_list,
+    }
+}
+
+/// Whether the propagated managed policy permits `tool` for `activity`.
+fn propagated_policy_allows(runtime: &OrbitRuntime, activity: &str, tool: &str) -> bool {
+    let context = orbit_tools::ToolContext {
+        tool_deny_policy: Some(propagated_deny_policy(runtime, activity)),
+        ..Default::default()
+    };
+    orbit_runtime::tool_exec::check_activity_tool_policy(tool, &context).is_ok()
 }
 
 fn session(capability: McpCapability) -> ToolSessionContext {
@@ -950,15 +994,25 @@ fn agent_posting_baseline_and_switch_govern_managed_runs() {
     // The three agent activities carry exactly the notice write tools in
     // their baselines; no other notice tool is granted by this slice.
     for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
-        let effective = activity_effective_tools(&runtime, activity);
+        let resolved = activity_resolved_tools(&runtime, activity);
+        assert!(
+            resolved.suppressed_tools.is_empty(),
+            "{activity} must suppress nothing when agent posting is on: {:?}",
+            resolved.suppressed_tools
+        );
         for tool in [
             "orbit.notice.post",
             "orbit.notice.show",
             "orbit.notice.close",
+            "orbit.notice.list",
         ] {
             assert!(
-                effective.iter().any(|name| name == tool),
+                resolved.effective_tools.iter().any(|name| name == tool),
                 "{activity} baseline must carry {tool}"
+            );
+            assert!(
+                propagated_policy_allows(&runtime, activity, tool),
+                "{activity} child policy must allow {tool} when agent posting is on"
             );
         }
     }
@@ -995,17 +1049,43 @@ fn agent_posting_baseline_and_switch_govern_managed_runs() {
     let task = add_task(&runtime, "Silenced agent's bound task");
     let agent = agent_session(&runtime, &task);
     for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
-        let effective = activity_effective_tools(&runtime, activity);
+        let resolved = activity_resolved_tools(&runtime, activity);
         for tool in [
             "orbit.notice.post",
             "orbit.notice.show",
             "orbit.notice.close",
         ] {
             assert!(
-                !effective.iter().any(|name| name == tool),
+                !resolved.effective_tools.iter().any(|name| name == tool),
                 "{activity} baseline must omit {tool} when agent posting is off"
             );
+            assert!(
+                resolved.suppressed_tools.iter().any(|name| name == tool),
+                "{activity} must suppress {tool} for its child when agent posting is off: {:?}",
+                resolved.suppressed_tools
+            );
+            assert!(
+                propagated_deny_policy(&runtime, activity).denies(tool),
+                "{activity} stamped deny list must contain {tool} when agent posting is off"
+            );
+            assert!(
+                !propagated_policy_allows(&runtime, activity, tool),
+                "{activity} child policy must refuse {tool} when agent posting is off"
+            );
         }
+        // The retained read stays in the baseline and callable through the
+        // propagated policy.
+        assert!(
+            resolved
+                .effective_tools
+                .iter()
+                .any(|name| name == "orbit.notice.list"),
+            "{activity} baseline must retain orbit.notice.list when agent posting is off"
+        );
+        assert!(
+            propagated_policy_allows(&runtime, activity, "orbit.notice.list"),
+            "{activity} child policy must allow orbit.notice.list when agent posting is off"
+        );
     }
     refused(
         call(
@@ -1036,6 +1116,16 @@ fn agent_posting_baseline_and_switch_govern_managed_runs() {
         ),
         "notice_agent_posting_disabled",
     );
+    // The operator's own reads are unaffected by the agent switch.
+    let shown = call(
+        &runtime,
+        "orbit.notice.show",
+        json!({"id": operator_id}),
+        &operator,
+    )
+    .unwrap();
+    assert_eq!(shown["notice"]["id"], operator_id);
+    call(&runtime, "orbit.notice.list", json!({}), &operator).unwrap();
 }
 
 /// A link must resolve on the home owner: a task id whose prefix this

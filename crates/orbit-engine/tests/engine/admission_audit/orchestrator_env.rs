@@ -283,6 +283,91 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
     );
 }
 
+/// A host-suppressed tool leaves the effective baseline and also enters
+/// the deny list the child receives, because deny mode ignores the legacy
+/// allowlist. A retained read stays callable.
+#[test]
+fn run_cli_backend_stamps_suppressed_tools_in_child_deny_list() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_stamps_suppressed_tools_in_child_deny_list"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat > /dev/null
+fail() {
+  printf '%s\n' "{\"schemaVersion\":1,\"status\":\"failed\",\"error\":{\"code\":\"$1\",\"message\":\"$1\",\"details\":null}}"
+  exit 1
+}
+[ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,orbit.notice.post,orbit.notice.show,orbit.notice.close" ] || fail suppressed_deny_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,proc.spawn,github.run.list,orbit.notice.list" ] || fail suppressed_effective_tools_wrong
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
+"#,
+    );
+    let audit = persisted_writer(
+        &temp.path().join("audit"),
+        "job-suppressed-deny",
+        "grok:grok-build",
+    );
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tool_disallow_list = Some(vec!["orbit.workflow.ship".to_string()]);
+    let host = TestHost::with_command(script.display().to_string())
+        .with_additional_tools(&[
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+            "orbit.notice.list",
+        ])
+        .with_suppressed_tools(&[
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+        ]);
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-suppressed-deny",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+    assert!(
+        outcome.success,
+        "child had an unexpected suppressed-tool policy: {:?}",
+        outcome.output
+    );
+    let tool_disallow_list = audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .find_map(|event| match event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                tool_disallow_list, ..
+            } => tool_disallow_list,
+            _ => None,
+        })
+        .expect("tool allowlist audit event");
+    assert_eq!(
+        tool_disallow_list,
+        [
+            "orbit.workflow.ship".to_string(),
+            "orbit.notice.post".to_string(),
+            "orbit.notice.show".to_string(),
+            "orbit.notice.close".to_string(),
+        ]
+    );
+}
+
 /// An allowlisted activity gets the same claimed-mode guard as a deny-listed
 /// one: an allowlist the removal empties refuses every tool (an empty
 /// `ORBIT_ACTIVITY_TOOLS` reads as unrestricted), and a wildcard covering
