@@ -41,6 +41,7 @@ fn agent_loop_activity(
             regression_risk_instruction: None,
             explore_instruction: None,
             explore_brief_instruction: None,
+            notice_instruction: None,
             tools,
             on_denial: OnDenial::Terminate,
             model: None,

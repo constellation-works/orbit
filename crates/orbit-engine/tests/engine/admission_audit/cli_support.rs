@@ -184,6 +184,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         regression_risk_instruction: None,
         explore_instruction: None,
         explore_brief_instruction: None,
+        notice_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

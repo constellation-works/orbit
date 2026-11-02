@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Slice 2, ORB-21212: brief delivery of open notices as untrusted data"
+next: "Slice 3, ORB-21213: managed-agent posting"
 feature: fleet-notices
 doc_role: overview
 type: design
@@ -70,9 +70,10 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Slice 1 ([ORB-21211]) is built: the notice store, the `orbit.notice.*` tools, `orbit notice` and the
-opt-in `notice` toolset. Brief delivery, managed-agent posting, federation and the dashboard are
-later slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placement proposals.
+Slices 1–2 ([ORB-21211], [ORB-21212]) are built: the notice store, the `orbit.notice.*` tools,
+`orbit notice`, the opt-in `notice` toolset, and brief delivery of open notices into opted-in
+agent prompts as untrusted data. Managed-agent posting, federation and the dashboard are later
+slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placement proposals.
 
 | Concern | File | Task |
 |---------|------|------|
@@ -98,5 +99,6 @@ later slices ([2_design.md §8](./2_design.md#8-slices)); their locations are pl
 - [ORB-21208] — orbit-office scribe routes `#board` markers to the notice tools (client of the API)
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
 - [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset
+- [ORB-21212] — slice 2: brief delivery as untrusted data
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

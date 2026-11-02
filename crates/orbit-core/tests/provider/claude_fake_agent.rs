@@ -179,6 +179,7 @@ fn spec() -> AgentLoopSpec {
         regression_risk_instruction: None,
         explore_instruction: None,
         explore_brief_instruction: None,
+        notice_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("claude-opus-4-8".to_string()),

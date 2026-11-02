@@ -275,6 +275,21 @@ pub enum V2AuditEventKind {
         task_id: String,
         brief: crate::workflow::ExploreBriefRecord,
     },
+    /// The fleet notices one prompt build quoted as untrusted data, emitted
+    /// once per dispatch of an activity that declares a
+    /// `notice_instruction` whenever its prompt carries the block (the
+    /// `unavailable` marker included, with no notices). It records what
+    /// the host wrote, never that the agent read it.
+    NoticesDelivered {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        /// Each delivered notice as `id@revision`.
+        notices: Vec<String>,
+        /// Open notices in scope the brief's item bound omitted.
+        omitted: u64,
+    },
     /// Whether an image-input invocation returned its canary code, emitted
     /// once per invocation whose provider finished its turn. Two misses in a
     /// row hold the crew for visual purposes; the code itself is never
@@ -515,6 +530,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::AgentCorpusApplied { .. } => "activity.agent_corpus_applied",
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
             V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
+            V2AuditEventKind::NoticesDelivered { .. } => "activity.notices_delivered",
             V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",
             V2AuditEventKind::ExperimentOverlayApplied { .. } => {
                 "activity.experiment_overlay_applied"
@@ -583,6 +599,7 @@ pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
     ),
     ("agent_corpus_applied", "activity.agent_corpus_applied"),
     ("explore_brief_applied", "activity.explore_brief_applied"),
+    ("notices_delivered", "activity.notices_delivered"),
     ("image_canary_checked", "activity.image_canary_checked"),
     (
         "experiment_overlay_applied",

@@ -91,6 +91,15 @@ pub struct NoticeSettings {
     pub orchestrator_posts_per_hour: u32,
     /// `notice.retention_days` (default 30).
     pub retention_days: u32,
+    /// `notice.brief_delivery` (default `true`): quote open notices into
+    /// opted-in activities' prompts as untrusted data.
+    pub brief_delivery: bool,
+    /// `notice.brief_max_items` (default 5).
+    pub brief_max_items: u32,
+    /// `notice.brief_body_chars` (default 600).
+    pub brief_body_chars: u32,
+    /// `notice.brief_read_timeout_ms` (default 2000).
+    pub brief_read_timeout_ms: u32,
 }
 
 /// One hour value per notice kind.
@@ -128,6 +137,10 @@ impl Default for NoticeSettings {
             agent_posts_per_task_per_day: 5,
             orchestrator_posts_per_hour: 30,
             retention_days: 30,
+            brief_delivery: true,
+            brief_max_items: 5,
+            brief_body_chars: 600,
+            brief_read_timeout_ms: 2000,
         }
     }
 }
@@ -590,6 +603,10 @@ impl ConfigSnapshot {
             agent_posts_per_task_per_day: self.notice_agent_posts_per_task_per_day,
             orchestrator_posts_per_hour: self.notice_orchestrator_posts_per_hour,
             retention_days: self.notice_retention_days,
+            brief_delivery: self.notice_brief_delivery,
+            brief_max_items: self.notice_brief_max_items,
+            brief_body_chars: self.notice_brief_body_chars,
+            brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
         }
     }
 

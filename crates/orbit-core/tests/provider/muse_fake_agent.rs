@@ -179,6 +179,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         regression_risk_instruction: None,
         explore_instruction: None,
         explore_brief_instruction: None,
+        notice_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some(MODEL.to_string()),

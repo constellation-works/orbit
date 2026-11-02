@@ -644,6 +644,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Option<ExploreBriefAdmission> {
         NullRuntimeHost::explore_brief_for_activity(self, run_id, activity_name, input)
     }
+    fn notices_for_agent_input(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<orbit_types::workflow::FleetNoticeBrief> {
+        NullRuntimeHost::notices_for_agent_input(self, run_id, activity_name, input)
+    }
     fn experiment_overlays_for_activity(
         &self,
         run_id: &str,

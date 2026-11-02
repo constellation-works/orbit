@@ -2,11 +2,12 @@ use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
+use orbit_types::record::Notice;
 use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
     refuses_implementer_writes,
 };
-use orbit_types::workflow::ExploreBriefAdmission;
+use orbit_types::workflow::{ExploreBriefAdmission, FleetNoticeBrief};
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
@@ -180,6 +181,166 @@ pub(crate) fn explore_brief_for_agent_input(
 ) -> Option<ExploreBriefAdmission> {
     let task_id = singular_task_id_from_input(input)?;
     Some(runtime.explore_brief_for_dispatch(run_id, task_id))
+}
+
+/// The `fleet_notices` brief for one prompt build, or `None` when
+/// `notice.brief_delivery` is off or no notice is open in scope. Notices
+/// are advisory, so the read runs under `notice.brief_read_timeout_ms` on
+/// its own thread and any failure or timeout answers the `unavailable`
+/// block instead of refusing or delaying the dispatch. A claimed leaf
+/// reads through the worker binding's owner route as a host call to
+/// `orbit.notice.list`; every other run reads its owner's store.
+pub(crate) fn notices_for_agent_input(
+    runtime: &OrbitRuntime,
+    _run_id: &str,
+    _activity_name: &str,
+    _input: &Value,
+) -> Option<FleetNoticeBrief> {
+    let settings = *runtime.notice_settings();
+    if !settings.brief_delivery {
+        return None;
+    }
+    let read = {
+        let runtime = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("fleet-notice-brief".to_string())
+            .spawn(move || {
+                let _ = sender.send(read_open_notices_for_brief(&runtime));
+            });
+        match spawned {
+            Ok(_) => receiver.recv_timeout(std::time::Duration::from_millis(u64::from(
+                settings.brief_read_timeout_ms,
+            ))),
+            Err(error) => {
+                return Some(unavailable_fleet_notice_brief(&format!(
+                    "notice read could not start: {error}"
+                )));
+            }
+        }
+    };
+    let notices = match read {
+        Ok(Ok(notices)) => notices,
+        Ok(Err(error)) => return Some(unavailable_fleet_notice_brief(&error.to_string())),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            return Some(unavailable_fleet_notice_brief("notice read timed out"));
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return Some(unavailable_fleet_notice_brief("notice read failed"));
+        }
+    };
+    build_fleet_notice_brief(notices, &settings)
+}
+
+/// The effective-open notices a brief considers, before its bounds apply.
+fn read_open_notices_for_brief(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<Notice>, orbit_common::OrbitError> {
+    if runtime.worker_invocation().is_some() {
+        let value = runtime.route_worker_host_tool(
+            "orbit.notice.list",
+            serde_json::json!({ "status": "open", "limit": 200 }),
+        )?;
+        let notices = value
+            .get("notices")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
+        return serde_json::from_value(notices).map_err(|error| {
+            orbit_common::OrbitError::Store(format!("owner notice read response: {error}"))
+        });
+    }
+    Ok(runtime
+        .list_notices(&crate::application::notice::NoticeListFilter {
+            limit: 200,
+            ..Default::default()
+        })?
+        .notices)
+}
+
+/// Order, bound and quote `notices` as the `untrusted_data` block: kind,
+/// then reports descending, then newest update first, at most
+/// `brief_max_items`, each body cut to `brief_body_chars` characters. No
+/// evidence and no field naming a tool or command reaches the brief.
+fn build_fleet_notice_brief(
+    mut notices: Vec<Notice>,
+    settings: &orbit_config::NoticeSettings,
+) -> Option<FleetNoticeBrief> {
+    if notices.is_empty() {
+        return None;
+    }
+    notices.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| right.reports.count.cmp(&left.reports.count))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let total = notices.len();
+    notices.truncate(settings.brief_max_items.max(1) as usize);
+    let omitted = u64::try_from(total - notices.len()).unwrap_or(u64::MAX);
+    let delivered = notices
+        .iter()
+        .map(|notice| format!("{}@{}", notice.id, notice.revision))
+        .collect::<Vec<_>>();
+    let entries = notices
+        .iter()
+        .map(|notice| {
+            let body_chars = notice.body.chars().count();
+            let limit = settings.brief_body_chars as usize;
+            let (body, body_truncated) = if body_chars > limit {
+                (notice.body.chars().take(limit).collect::<String>(), true)
+            } else {
+                (notice.body.clone(), false)
+            };
+            let mut entry = serde_json::json!({
+                "id": notice.id,
+                "revision": notice.revision,
+                "kind": notice.kind.as_str(),
+                "scope": notice.scope.as_str(),
+                "title": notice.title,
+                "body": body,
+                "body_truncated": body_truncated,
+                "author_class": notice.author.class.as_str(),
+                "reports": notice.reports.count,
+                "opened_at": notice.opened_at.to_rfc3339(),
+                "expires_at": notice.expires_at.to_rfc3339(),
+            });
+            if let Some(task_id) = &notice.author.task_id {
+                entry["author_task"] = Value::String(task_id.clone());
+            }
+            if let Some(linked) = &notice.linked_task {
+                let mut linked_task = serde_json::json!({ "id": linked.id });
+                if let Some(status) = &linked.status {
+                    linked_task["status"] = Value::String(status.clone());
+                }
+                entry["linked_task"] = linked_task;
+            }
+            entry
+        })
+        .collect::<Vec<_>>();
+    Some(FleetNoticeBrief {
+        block: serde_json::json!({
+            "trust": "untrusted_data",
+            "read_at": chrono::Utc::now().to_rfc3339(),
+            "omitted": omitted,
+            "notices": entries,
+        }),
+        notices: delivered,
+        omitted,
+    })
+}
+
+/// The fail-open marker a failed or timed-out notice read leaves.
+fn unavailable_fleet_notice_brief(reason: &str) -> FleetNoticeBrief {
+    FleetNoticeBrief {
+        block: serde_json::json!({
+            "trust": "untrusted_data",
+            "unavailable": true,
+            "reason": reason.chars().take(200).collect::<String>(),
+        }),
+        notices: Vec::new(),
+        omitted: 0,
+    }
 }
 
 /// The required commands this invocation's pipeline runs itself on the final

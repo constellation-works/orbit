@@ -78,6 +78,12 @@ pub struct AgentLoopSpec {
     /// declares it, so review and recovery never receive one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explore_brief_instruction: Option<String>,
+    /// How the agent must treat the task context's `fleet_notices` block,
+    /// appended to the instruction only when the host delivers one for this
+    /// prompt. Declaring it is what asks the host for open notices; absent,
+    /// the prompt carries no block and no notice read happens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the

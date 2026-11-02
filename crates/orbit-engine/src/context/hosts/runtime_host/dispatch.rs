@@ -214,6 +214,21 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Option<ExploreBriefAdmission>;
 
+        /// The `fleet_notices` brief `activity_name` of `run_id` adds to its
+        /// task context: the bounded block marked `untrusted_data` and the
+        /// `id@revision` of each notice it carries. The engine asks only
+        /// for an activity that declares a `notice_instruction`, at every
+        /// prompt build. `None` when the workspace switch is off or no
+        /// notice is open in scope; a read that fails or times out answers
+        /// the `unavailable` block instead, never an error, so dispatch
+        /// always proceeds.
+        fn notices_for_agent_input(
+            &self,
+            run_id: &str,
+            activity_name: &str,
+            input: &Value,
+        ) -> Option<orbit_types::workflow::FleetNoticeBrief>;
+
         /// The live experiment arms `activity_name` of `run_id` applies for the
         /// task its `input` names: each arm's instruction for the activity's
         /// role (already part of [`Self::tag_instructions_for_activity`]) and
