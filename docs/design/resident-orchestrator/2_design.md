@@ -508,6 +508,20 @@ they are derivable, from an interactive orchestration task's history. The first 
 crash recovery are mostly not: a chat loop that died left no record, which is part of the point.
 Measures that cannot be derived report `not_derivable`, never zero.
 
+**As implemented ([ORB-21247]).** `orbit resident metrics [--mandate <task>] [--since <window>]
+[--baseline <task>]` (tool `orbit.resident.metrics`, read-only; `--since` takes a span such as
+`7d`, `24h` or `2w`, or an RFC 3339 instant, default `30d`) reports per mandate and, without
+`--mandate`, across mandates with workspace totals. A resident-raised escalation is a decision
+request named by a checkpoint `requests[]` or a `resident.request` record, or an agent-raised
+request on a task related to the assignment. A reversal is counted once per checkpoint decision
+or completed action: a `resident.answer` with `reverses` naming the decision id or action key, or
+a human status write on the action's subject to `proposed` or `rejected` (or a revert), within
+7 days of the checkpoint. Recovery cost counts `outcome: incomplete` checkpoints, measures to
+the next non-`incomplete` checkpoint from the dead cycle's recorded start, sums recovery-cycle
+time to its checkpoint as slot minutes, and counts a completed dead-cycle action run again as
+`ok` (rather than the ledger's `already_done`) as a repeat. A baseline task with no checkpoints
+reports reversals and recovery as `not_derivable`.
+
 **The widening bar** (proposed, decided by the human at the pilot's go/no-go):
 
 - interventions per mandate no worse than the baseline, and falling over the pilot;

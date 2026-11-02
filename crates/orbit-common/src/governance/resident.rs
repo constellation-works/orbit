@@ -28,6 +28,8 @@ operation_registry! {
         Show => SHOW,
         /// Every mandate in the workspace.
         List => LIST,
+        /// The four widening measures, per mandate and across mandates.
+        Metrics => METRICS,
     }
 }
 
@@ -180,6 +182,45 @@ const CHECKPOINT_PARAMS: &[ParamSpec] = &[
         "Complete resident.checkpoint v1 JSON object",
     )),
 ];
+
+const METRICS_PARAMS: &[ParamSpec] = &[
+    both(
+        "mandate",
+        ParamType::String,
+        "One mandate's assignment task. Without it, every resident mandate in the workspace is reported, with workspace totals.",
+        CliArgKind::flag("mandate"),
+        "Report only this mandate's assignment task",
+    ),
+    both(
+        "since",
+        ParamType::String,
+        "Window start: a span such as 7d, 24h or 2w, or an RFC 3339 instant. Defaults to 30d.",
+        CliArgKind::flag("since"),
+        "Window: a span such as 7d, 24h or 2w, or an RFC 3339 instant (default 30d)",
+    ),
+    both(
+        "baseline",
+        ParamType::String,
+        "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero.",
+        CliArgKind::flag("baseline"),
+        "Compute the same measures for this interactive assignment task",
+    ),
+];
+
+const METRICS: OperationSpec<ResidentVerb> = OperationSpec {
+    verb: ResidentVerb::Metrics,
+    cli_path: &["metrics"],
+    tool_name: "orbit.resident.metrics",
+    tool_description: "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: manual interventions (per mandate and per active mandate-day), escalation load (per mandate-day and per human-day, median answer latency, share answered with the recommended option, expired-unanswered), reversal rate (resident decisions and actions a human undid within 7 days, each counted once) and crashed-cycle recovery cost (cycles without a checkpoint, time to the next good checkpoint, recovery slot minutes, repeated actions, human interventions needed). With baseline, the same measures for an interactive assignment task; a measure that cannot be derived reports not_derivable, never zero. Read-only.",
+    cli_about: "Report resident interventions, escalation load, reversals and recovery cost",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[METRICS_PARAMS, ATTRIBUTION],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
 
 const CHECKPOINT: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Checkpoint,

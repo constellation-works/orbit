@@ -2503,6 +2503,47 @@
     "mcp_toolset": "resident"
   },
   {
+    "name": "orbit.resident.metrics",
+    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: manual interventions (per mandate and per active mandate-day), escalation load (per mandate-day and per human-day, median answer latency, share answered with the recommended option, expired-unanswered), reversal rate (resident decisions and actions a human undid within 7 days, each counted once) and crashed-cycle recovery cost (cycles without a checkpoint, time to the next good checkpoint, recovery slot minutes, repeated actions, human interventions needed). With baseline, the same measures for an interactive assignment task; a measure that cannot be derived reports not_derivable, never zero. Read-only.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "mandate",
+        "description": "One mandate's assignment task. Without it, every resident mandate in the workspace is reported, with workspace totals.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "since",
+        "description": "Window start: a span such as 7d, 24h or 2w, or an RFC 3339 instant. Defaults to 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "baseline",
+        "description": "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "orchestrator",
+        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
     "name": "orbit.resident.show",
     "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     "enabled": true,

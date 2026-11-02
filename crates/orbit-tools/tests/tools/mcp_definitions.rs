@@ -108,6 +108,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.resident.checkpoint",
             "orbit.resident.grant",
             "orbit.resident.list",
+            "orbit.resident.metrics",
             "orbit.resident.show",
             "orbit.routine.control",
             "orbit.search",
