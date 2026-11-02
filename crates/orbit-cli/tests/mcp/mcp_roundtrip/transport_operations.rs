@@ -1396,6 +1396,10 @@ fn artifact_and_auto_task_stdio_contracts() {
             stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape as fn(),
         ),
         (
+            "stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state",
+            stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state as fn(),
+        ),
+        (
             "stdio_drain_and_ship_starts_report_their_notices",
             stdio_drain_and_ship_starts_report_their_notices as fn(),
         ),
