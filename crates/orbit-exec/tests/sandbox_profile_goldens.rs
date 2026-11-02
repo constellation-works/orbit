@@ -25,7 +25,10 @@
 //! [`orbit_exec::compile_linux_build_argv`]; the rendering elides the host's
 //! system runtime binds, which vary by distribution. macOS runs no `fetch`
 //! phase, so [`orbit_exec::compile_macos_build_profile`] renders only
-//! `plugin_build_offline`.
+//! `plugin_build_offline`. The macOS script-step profile renders through
+//! [`orbit_exec::compile_macos_script_profile`] for a run worktree
+//! (`script_worktree`) and a read-only workspace root
+//! (`script_read_only_root`).
 //!
 //! The fixture renders in a child of this binary with a cleared environment
 //! and a fixture `HOME`, so provider and Cargo overrides on the host cannot
@@ -138,6 +141,10 @@ fn render_compiled_profiles_in_a_pinned_environment() {
     }
     let text = fixture.render_build_macos(BuildPhaseNetwork::None);
     std::fs::write(macos.join("plugin_build_offline.sbpl"), text).expect("write build sbpl");
+    for (name, cwd_writable) in SCRIPT_CASES {
+        let text = fixture.render_script_macos(cwd_writable);
+        std::fs::write(macos.join(format!("{name}.sbpl")), text).expect("write script sbpl");
+    }
     #[cfg(target_os = "linux")]
     {
         let linux = output.join("linux");
@@ -266,6 +273,11 @@ const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
     ("plugin_build_offline", BuildPhaseNetwork::None),
 ];
 
+/// The macOS script profile (`docs/design/script-steps/1_scope.md` §3), for a
+/// run worktree cwd and for the workspace root read-only.
+const SCRIPT_CASES: [(&str, bool); 2] =
+    [("script_worktree", true), ("script_read_only_root", false)];
+
 /// One activity policy and the provider whose CLI it confines.
 struct Case {
     name: &'static str,
@@ -301,6 +313,9 @@ struct Fixture {
     plugin_state: PathBuf,
     build_dir: PathBuf,
     build_readable: Vec<PathBuf>,
+    script_scratch: PathBuf,
+    script_readable: Vec<PathBuf>,
+    script_writable: Vec<PathBuf>,
 }
 
 impl Fixture {
@@ -321,6 +336,13 @@ impl Fixture {
             toolchain.clone(),
             home.join(".rustup/settings.toml"),
         ];
+        let script_scratch = repo.join(".orbit/state/scripts/runs/run-golden/render-00000000");
+        let script_readable = vec![
+            PathBuf::from("/bin/sh"),
+            root.join("library"),
+            global.join("bin/orbit"),
+        ];
+        let script_writable = vec![root.join("outbox")];
         for dir in [
             home.join(".ssh"),
             root.join("runtime"),
@@ -351,6 +373,10 @@ impl Fixture {
             build_dir.join("src"),
             toolchain.join("bin"),
             home.join(".cargo/bin"),
+            repo.join(".git/worktrees/orbit-jrun-golden"),
+            root.join("library"),
+            root.join("outbox"),
+            global.join("bin"),
         ] {
             std::fs::create_dir_all(&dir).expect("fixture dir");
         }
@@ -363,6 +389,23 @@ impl Fixture {
         std::fs::write(home.join(".rustup/settings.toml"), "").expect("rustup settings");
         std::os::unix::fs::symlink(root.join("outside"), redirected_global.join("cache"))
             .expect("redirect the host cache store");
+        std::fs::write(global.join("bin/orbit"), "").expect("orbit binary");
+        std::fs::write(
+            worktree.join(".git"),
+            format!(
+                "gitdir: {}/.git/worktrees/orbit-jrun-golden\n",
+                repo.display()
+            ),
+        )
+        .expect("worktree git pointer");
+        std::fs::write(
+            repo.join(".git/worktrees/orbit-jrun-golden/commondir"),
+            "../..\n",
+        )
+        .expect("worktree commondir");
+        for dir in orbit_exec::SCRIPT_SCRATCH_DIRS {
+            std::fs::create_dir_all(script_scratch.join(dir)).expect("script scratch");
+        }
         Self {
             root,
             home,
@@ -375,6 +418,9 @@ impl Fixture {
             plugin_state,
             build_dir,
             build_readable,
+            script_scratch,
+            script_readable,
+            script_writable,
         }
     }
 
@@ -385,6 +431,31 @@ impl Fixture {
             home: Some(self.home.as_os_str()),
             network,
         }
+    }
+
+    fn render_script_macos(&self, cwd_writable: bool) -> String {
+        let cwd = if cwd_writable {
+            &self.worktree
+        } else {
+            &self.repo
+        };
+        let masked = [
+            cwd.join(".orbit"),
+            self.global.clone(),
+            self.repo.join(".orbit"),
+        ];
+        let spec = orbit_exec::ScriptSandboxSpec {
+            cwd,
+            cwd_writable,
+            scratch: &self.script_scratch,
+            readable: &self.script_readable,
+            writable: &self.script_writable,
+            masked: &masked,
+            home: Some(self.home.as_os_str()),
+            inputs: &[],
+            network: orbit_exec::ScriptSandboxNetwork::None,
+        };
+        self.normalize(&orbit_exec::compile_macos_script_profile(&spec).expect("script profile"))
     }
 
     fn render_build_macos(&self, network: BuildPhaseNetwork) -> String {

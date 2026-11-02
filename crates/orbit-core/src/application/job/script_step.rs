@@ -1,6 +1,13 @@
 //! One attempt of a `target: script:<name>` step on this host (script steps
-//! §2–§5): resolve the cwd, snapshot the script, check its grant, probe the
-//! script profile, then run the snapshot under it.
+//! §2–§5): resolve the cwd, snapshot the script, check its grant, probe its
+//! granted roots, probe the script profile (`linux-bwrap-script-v1` or
+//! `macos-sandbox-script-v1`), then run the snapshot under it.
+//!
+//! The granted roots are probed again here, in the job's process, before
+//! anything is created or spawned: on macOS, privacy permissions belong to
+//! the process that runs the job, not the one that granted. On macOS,
+//! `strict` worker containment refuses every step, as macOS has no kernel
+//! containment for a script.
 //!
 //! Every check that can refuse runs before anything is spawned, and each
 //! refusal names its `script_refusal` code. The job executor decides what
@@ -29,8 +36,8 @@ use orbit_engine::{
     ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,
 };
 use orbit_exec::{
-    SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxInput,
-    ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxSpec,
+    SCRIPT_SCRATCH_DIRS, ScriptRootAccess, ScriptRunEnd, ScriptSandboxInput, ScriptSandboxNetwork,
+    ScriptSandboxRequest, ScriptSandboxSpec,
 };
 use orbit_types::workflow::activity_job::{
     ScriptExecutionRecord, ScriptGrant, ScriptHostRole, ScriptNetwork, script_refusal,
@@ -39,10 +46,43 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
-    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_scope_launcher,
+    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_containment_is_strict,
+    script_scope_launcher,
 };
 use crate::application::job::script_inputs::{ScriptInputSources, admit_script_inputs};
 use crate::application::job::script_outputs::keep_declared_outputs;
+
+/// This host's script profile, as `orbit doctor` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptSandboxReport {
+    /// The profile a script step would run under, or why none can be
+    /// applied here (the `script_sandbox_unavailable` reason).
+    pub profile: Result<&'static str, String>,
+    /// The profile's documented gaps against the Linux profile (macOS).
+    pub gaps: Option<&'static str>,
+    /// Whether `machine.worker_containment = strict` refuses every script
+    /// step on this host (macOS, which has no kernel containment).
+    pub strict_refuses: bool,
+}
+
+impl OrbitRuntime {
+    /// Probe the script profile the way a step does before spawn.
+    pub fn script_sandbox_report(&self) -> ScriptSandboxReport {
+        let macos = cfg!(target_os = "macos");
+        ScriptSandboxReport {
+            profile: orbit_exec::probe_script_sandbox(),
+            gaps: macos.then_some(orbit_exec::SCRIPT_MACOS_PROFILE_GAPS),
+            strict_refuses: macos
+                && script_containment_is_strict(self.context.settings().worker_containment()),
+        }
+    }
+}
+
+/// Why `machine.worker_containment = strict` refuses a script step on macOS.
+const MACOS_STRICT_REFUSAL: &str = "machine.worker_containment is strict, and macOS gives a \
+     script step no kernel containment (no memory or task limits), so strict refuses every \
+     script step on macOS; set machine.worker_containment to warn to run it under the profile \
+     alone";
 
 /// The timeout a step gets when neither the step nor the manifest sets one.
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 600;
@@ -202,12 +242,13 @@ fn prepare_and_run(
     record.env_pass_unset = passed.unset.clone();
 
     let input_text = admitted_input(&snapshot, &request.input)?;
+    let home = std::env::var_os("HOME");
+    probe_granted_roots(&grant, home.as_deref())?;
 
     // Declared inputs resolve after the grant checks, so a refusal records
     // the grant, and before the profile probe and anything created or
     // spawned, so the refusal names the input on any host.
     let masked = script_masked_trees(runtime, &cwd);
-    let home = std::env::var_os("HOME");
     let admitted = admit_script_inputs(
         &asset.spec.files.inputs,
         &request.input,
@@ -222,6 +263,17 @@ fn prepare_and_run(
     let (inputs, input_files): (Vec<ScriptSandboxInput>, Vec<_>) = admitted.into_iter().unzip();
     record.input_files = input_files;
 
+    // macOS gives a script no kernel containment (no memory or task
+    // limits), so strict containment refuses every script step there. It is
+    // a host policy, decided before the profile is probed.
+    if cfg!(target_os = "macos")
+        && script_containment_is_strict(runtime.context.settings().worker_containment())
+    {
+        return Err(refuse(
+            script_refusal::SANDBOX_UNAVAILABLE,
+            MACOS_STRICT_REFUSAL,
+        ));
+    }
     // After the grant checks, so a refusal on a host without the profile
     // still records which script and grant it refused.
     let profile = orbit_exec::probe_script_sandbox().map_err(|reason| {
@@ -244,28 +296,6 @@ fn prepare_and_run(
 
     let args = render_script_args(&asset.spec.args, &request.input)
         .map_err(|error| refuse(script_refusal::INPUT_INVALID, error.to_string()))?;
-    for root in &grant.read_roots {
-        if !root.exists() {
-            return Err(refuse(
-                script_refusal::ROOT_UNAVAILABLE,
-                format!("granted read root {} does not exist", root.display()),
-            ));
-        }
-    }
-    for root in &grant.write_roots {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "an operator-granted write root is an external directory, not Orbit state; \
-                      it keeps the operator's umask like a plugin write root"
-        )]
-        std::fs::create_dir_all(root).map_err(|error| {
-            refuse(
-                script_refusal::ROOT_UNAVAILABLE,
-                format!("create granted write root {}: {error}", root.display()),
-            )
-        })?;
-    }
-
     // One environment for both the availability probe and the launch, so
     // the probe answers for the environment `systemd-run` will actually
     // get [ORB-20661].
@@ -390,6 +420,33 @@ fn script_masked_trees(runtime: &OrbitRuntime, cwd: &Path) -> Vec<PathBuf> {
         masked.push(orbit_dir);
     }
     masked
+}
+
+/// Repeat the grant-time root probe in the job's process before anything
+/// is created or spawned: every granted read and write root must exist,
+/// lie outside the credential paths and be readable (and a write root
+/// writable) by this process. On macOS, privacy permissions are granted to
+/// the process that runs the job, which need not be the one that granted.
+fn probe_granted_roots(grant: &ScriptGrant, home: Option<&std::ffi::OsStr>) -> Result<(), Refusal> {
+    let roots = grant
+        .read_roots
+        .iter()
+        .map(|root| (root, ScriptRootAccess::Read))
+        .chain(
+            grant
+                .write_roots
+                .iter()
+                .map(|root| (root, ScriptRootAccess::Write)),
+        );
+    for (root, access) in roots {
+        orbit_exec::probe_script_root(root, access, home).map_err(|reason| {
+            refuse(
+                script_refusal::ROOT_UNAVAILABLE,
+                format!("{reason}; nothing was run"),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// The verified grant for `script`, admitted for this host's role.
@@ -719,7 +776,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
             .map_err(unwritable)?;
     }
 
-    let mount = Path::new(SCRIPT_SANDBOX_MOUNT);
+    let mount = orbit_exec::script_scratch_path_in_sandbox(scratch);
     let mut argv: Vec<String> = interpreter.to_vec();
     argv.push(
         mount
@@ -736,7 +793,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         .map(|argument| redact_secret_values_text(&argv_redactor().apply_str(argument), &secrets))
         .collect();
 
-    let mut env = script_env(request, asset.digest.as_str(), grant);
+    let mut env = script_env(request, asset.digest.as_str(), grant, &mount);
     env.extend(passed.vars);
     let mut readable: Vec<PathBuf> = grant
         .interpreter_paths
@@ -889,12 +946,14 @@ const SCRIPT_FIXED_ENV: [&str; 5] = ["PATH", "HOME", "TMPDIR", "LANG", "TZ"];
 
 /// The script's fixed environment (§3): fixed values and the step context.
 /// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
+/// `mount` is where the script sees its scratch directory
+/// ([`orbit_exec::script_scratch_path_in_sandbox`]).
 pub(crate) fn script_env(
     request: &ScriptStepRequest,
     digest: &str,
     grant: &ScriptGrant,
+    mount: &Path,
 ) -> Vec<(String, String)> {
-    let mount = Path::new(SCRIPT_SANDBOX_MOUNT);
     let mut path_dirs: Vec<String> = grant
         .interpreter_paths
         .first()

@@ -90,7 +90,12 @@ fn script_launcher_env_carries_user_bus_locators_but_script_env_does_not() {
         provenance: "fixture".to_string(),
         expires_at: None,
     };
-    let script_env = script_env(&request, "digest", &grant);
+    let script_env = script_env(
+        &request,
+        "digest",
+        &grant,
+        std::path::Path::new(orbit_exec::SCRIPT_SANDBOX_MOUNT),
+    );
     for name in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
         assert_eq!(
             env_value(&script_env, name),

@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Phases 1, 2, 4 and 5 landed ([ORB-19983], [ORB-19985], [ORB-21299], [ORB-21301]); phase 3 landed on Linux (declared output files [ORB-20866], files.inputs and the attach_script_files action [ORB-21297]); the macOS profile is a separate task; an explicit raise surface for script_grant requests is not yet filed"
+next: "Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6)"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,16 +15,20 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1, 2, 4 and 5 (Phasing) have landed, and phase 3 has landed on Linux. Phase 1 ([ORB-19983]) added the `Script`
+Status: proposed; phases 1 to 5 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
 `linux-bwrap-script-v1` (no network, `env_pass` or `files.inputs` yet), with the
-`script.execution` audit, `orbit run show` and `orbit script history`; other hosts
-refuse with `script_sandbox_unavailable`. [ORB-20866] added declared output files
-(`files.outputs`, §4 Files out) from phase 3, and [ORB-21297] added the rest of
-phase 3 on Linux: declared input files (`files.inputs`, §4 Files in) and the
-`attach_script_files` action that attaches a step's output files to a task. Phase 4
+`script.execution` audit, `orbit run show` and `orbit script history`. [ORB-20866]
+added declared output files (`files.outputs`, §4 Files out) from phase 3, and
+[ORB-21297] added phase 3's Linux part: declared input files (`files.inputs`, §4
+Files in) and the `attach_script_files` action that attaches a step's output files
+to a task. [ORB-21298] completed phase 3: the `macos-sandbox-script-v1` profile, so
+macOS runs script steps (with no network), `RLIMIT_CPU` and `RLIMIT_NOFILE` on both
+platforms, the grant-time and pre-spawn root probes with TCC reporting, and the
+nested-sandbox refusal on macOS. Platforms other than Linux and macOS refuse with
+`script_sandbox_unavailable`. Phase 4
 ([ORB-21299]) raises a `script_grant` decision request when a step is refused for a
 missing, stale or insufficient grant, applies a human or registered-channel answer as a
 digest-bound grant, and adds the dashboard Scripts view with its operator-only grant
@@ -461,7 +465,7 @@ is no unsandboxed fallback and no `unsandboxed` grant in v1.
 | `.git` of the cwd tree | read only | So `git describe` and `git archive` work |
 | `.orbit/` of the workspace | none | Masked: no store, no config, no task bundles |
 | Step scratch: `home/`, `tmp/`, `in/`, `out/` | `in/` read, the rest read-write | `$HOME` and `$TMPDIR` point here; size-bounded |
-| Grant `read_roots` / `write_roots` | as granted | Absolute paths, canonicalized at grant, created before spawn as plugin write roots are |
+| Grant `read_roots` / `write_roots` | as granted | Absolute paths that must exist; probed at grant and again before every spawn (§9 item 5), and never created by Orbit |
 | Credential paths (`~/.ssh`, `~/.config/gh`, …) and the global root | none | The credential denies win over every grant |
 
 **Network.** `none` by default. On Linux the network namespace is unshared. On macOS
@@ -523,21 +527,44 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   manager delegates the CPU controller; elsewhere it may be accepted but not enforced.
   Bubblewrap's `--unshare-pid` and `--die-with-parent` mean that killing the
   namespace's init kills every descendant, so on Linux nothing outlives the step.
+- **Process limits (both platforms).** The sandbox wrapper sets `RLIMIT_CPU` to the
+  step's timeout in CPU seconds per process (`SIGXCPU`, then `SIGKILL` 10 s later)
+  and `RLIMIT_NOFILE` to 1024 before it execs, each as both the soft and the hard
+  limit (never above the hard limit the job's process holds), so the script and its
+  descendants inherit them and cannot raise them. A script killed by `SIGXCPU` is a
+  signal exit, `Ok(success = false)`. `RLIMIT_NPROC` is per user and isn't used.
 - **Scratch size.** The scratch directory is size-bounded (`scratch_max_bytes`,
-  default 1 GiB), polled as the build directory is. A breach kills the step.
+  default 1 GiB), polled as the build directory is. A breach kills the step. On
+  macOS the copied inputs (§4 Files in) count against it.
+
+**macOS profile.** `macos-sandbox-script-v1` starts from the build profile's
+deny-default SBPL preamble and allows the paths of the table above: the runtime
+table, the recorded interpreters and read roots, the cwd tree (writable only for a
+run worktree) and its Git directories, the granted write roots and the scratch
+directory. SBPL's last match wins, so the order is the policy: the allows, then the
+masked trees (`.orbit/` and the global root) denied, then the scratch directory
+allowed again (it lives under the workspace state), then `snapshot/`, `in/` and the
+Git metadata made read-only, and the credential denies last. Seatbelt filters paths
+but cannot remount them, so the script sees the scratch directory at its host path
+(`$HOME`, `$TMPDIR`, `$ORBIT_SCRIPT_IN`, `$ORBIT_SCRIPT_OUT` and the entry argument
+name it), and declared inputs are copied into `in/` before spawn. `orbit doctor`
+reports the profile and these gaps in its `script-sandbox` row.
 
 **macOS gaps, stated.**
 
 - **No memory or task limits.** There is no cgroup. A script inherits whatever the
-  worker has, which today is nothing; [ORB-19251]'s tracked-tree watchdog would cover
-  the script's tree too. `RLIMIT_CPU` and `RLIMIT_NOFILE` are set, but `RLIMIT_NPROC`
-  is per user and isn't used. `strict` containment refuses a script step on macOS
-  until ORB-19251 decides whether the watchdog counts as containment.
+  worker has; [ORB-19251]'s tracked-tree watchdog would cover the script's tree too.
+  Only `RLIMIT_CPU` and `RLIMIT_NOFILE` apply. `strict` containment refuses every
+  script step on macOS (before the profile is probed) until ORB-19251 decides whether
+  the watchdog counts as containment.
 - **Timeout escape.** Without a pid namespace, a descendant that calls `setsid`
   escapes the process-group kill. It stays under the Seatbelt profile, confined to the
   granted paths and with no network, but it can keep writing there after the step
   ends.
 - **No network** (above).
+- **Metadata stays visible.** As in the build profile, `stat` works on any path, so a
+  script can learn that a path outside its grant exists (a masked `.orbit/` file, a
+  credential file), though it can't list a directory or read a file there.
 - **Privacy permissions (TCC).** These apply on top of the profile (§9.5).
 
 **Why.** Starting from the build profile means the script inherits a boundary that
@@ -589,8 +616,8 @@ unless the operator listed it.
   `from` is templated against the step input like `args`, a relative path
   resolves against the cwd, and the result must resolve physically (symlinks
   followed) to a regular file or directory inside the cwd tree or a granted
-  `read_root`. Each one is bind-mounted (Linux) or copied (macOS, not yet built)
-  read-only at `in/<as>`. `as` is a plain name, unique in the manifest. A missing
+  `read_root`. Each one is bind-mounted (Linux) or copied ([ORB-21298], macOS)
+  read-only at `in/<as>`; a copy keeps symlinks as symlinks. `as` is a plain name, unique in the manifest. A missing
   input, one that resolves anywhere else, one that is, contains or lies within a
   masked tree (`.orbit/`, the global root) or a credential path, and a directory
   holding an entry that is not a file, directory or symlink all refuse the step
@@ -787,9 +814,11 @@ there. A host without a grant refuses with `grant_missing`.
   reports a `script sandbox` row (available, or the reason), and `orbit script grant`
   warns on such a host.
 - **Nested sandboxes.** Orbit probes the profile once before spawn. Seatbelt can't
-  nest (exit 71, `sandbox_apply: Operation not permitted`, as in [ORB-19224]), and
-  Bubblewrap inside another user namespace may be refused. Either way the step refuses
-  with `script_sandbox_unavailable`. It never runs under the outer profile instead.
+  nest (exit 71, `sandbox_apply: Operation not permitted`, as in [ORB-19224]): on
+  macOS the probe applies a permissive profile to `/usr/bin/true` once per process
+  and refuses on that exit. On Linux a process whose PID 1 is `bwrap`, or a Flatpak
+  sandbox, is refused. Either way the step refuses with `script_sandbox_unavailable`
+  and nothing runs. It never runs under the outer profile instead.
 
 **Why.** A grant is consent on a host, for that host's files and network. Carrying it
 to another machine would run code where nobody approved it.
@@ -920,13 +949,20 @@ The orbit-office orchestration ([ORB-19206]) asked for five decisions so that
 5. **File operations outside the workspace, on macOS.** *Decided.*
    - **Extra roots.** A grant lists them in `write_roots`, for example `~/Downloads`.
    - **Checked at grant.** The grant command checks each root: it must exist,
-     canonicalize, sit outside the credential denies, and pass a read and write probe
-     by the granting process. A failed root refuses the grant and names the path.
+     canonicalize, sit outside the credential denies, and pass a read probe (list the
+     directory, or open a file root) and, for a write root, a write probe (create and
+     remove a file) by the granting process. A failed root refuses the grant and names
+     the path. Built in [ORB-21298]; the dashboard and decision-channel grant routes
+     probe in the process that answers.
    - **Checked again at run.** Before spawn, the job's process repeats the probe. TCC
      attributes access to the responsible process, which is the clock's launchd agent
      or the binary it runs, not the terminal that granted. A denied or missing root
      refuses the step with `script_root_unavailable`, naming the path and, on macOS,
-     the privacy pane to grant it in. Nothing runs, so there is no partial run.
+     the privacy pane to grant it in (Files and Folders for `~/Desktop`,
+     `~/Documents` and `~/Downloads`, the volume panes under `/Volumes`, otherwise
+     Full Disk Access). Nothing runs, so there is no partial run. The probe runs
+     after the grant checks and before input admission and the profile probe, so the
+     refusal names the root on any host.
    - **Later denials.** A denial the script meets after the probe is the script's
      error, a nonzero exit.
    - **Inside a worker sandbox.** The step refuses with `script_sandbox_unavailable`
@@ -1117,14 +1153,15 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
    It covers use cases A (without network) and C, and lands the decision record that
    supersedes ORB-00374's removal.
-3. **Files and macOS.** The Linux part has landed: declared output files
-   (`files.outputs` with `steps.<id>.files`) in [ORB-20866], and declared input
-   files (`files.inputs`, read-only at `in/<as>` with their digests recorded) and
-   the `attach_script_files` action that attaches a step's output files to a task
-   as artifacts in [ORB-21297]. The macOS part is a separate task: the
-   `macos-sandbox-script-v1` profile (inputs copied rather than bound), `RLIMIT_*`
-   limits, the root probes and TCC reporting, and nested-sandbox refusal. With
-   them it covers use case B, and orbit-office items 4 and 5.
+3. **Files and macOS.** Landed. Declared output files (`files.outputs` with
+   `steps.<id>.files`) in [ORB-20866]; declared input files (`files.inputs`,
+   read-only at `in/<as>` with their digests recorded) and the `attach_script_files`
+   action that attaches a step's output files to a task as artifacts in
+   [ORB-21297]; and in [ORB-21298] the `macos-sandbox-script-v1` profile (inputs
+   copied rather than bound, network refused), `RLIMIT_CPU` and `RLIMIT_NOFILE` on
+   both platforms, the root probes and TCC reporting, the nested-sandbox refusal on
+   macOS, `strict` refusing on macOS, and the `orbit doctor` `script-sandbox` row. It
+   covers use case B, and orbit-office items 4 and 5.
 4. **Grant requests.** Landed in [ORB-21299]. This phase adds the `script_grant`
    decision request, raised automatically by a step refused for a missing, stale or
    insufficient grant; answers from the CLI, the dashboard and registered channels
@@ -1211,6 +1248,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-21299] — phase 4: `script_grant` decision requests raised by refused steps, human and channel answers that write digest-bound grants, and the dashboard Scripts view.
 - [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
+- [ORB-21298] — phase 3 part (macOS): the `macos-sandbox-script-v1` profile, `RLIMIT_CPU` and `RLIMIT_NOFILE` on both platforms, grant-time and pre-spawn root probes with TCC reporting, nested-sandbox refusal, `strict` refusing on macOS, and the doctor `script-sandbox` row.
 - [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
 - [ORB-21178] — filed the remaining phases of this doc.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.

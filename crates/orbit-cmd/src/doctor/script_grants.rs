@@ -3,6 +3,11 @@
 //! manifest is gone), or refused by its witness. A stale granted script
 //! is a warning, per the script-steps design: nothing will run it until
 //! an operator re-grants after seeing the change.
+//!
+//! A workspace that declares scripts also gets a `script-sandbox` row: the
+//! profile its steps run under here (or why none can be applied), the
+//! macOS profile's documented gaps, and whether `strict` worker containment
+//! refuses every step on this host.
 
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::scripts::ScriptGrantState;
@@ -82,7 +87,8 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
             remediation,
         });
     }
-    if rows.is_empty() {
+    rows.push(script_sandbox_row(runtime));
+    if rows.len() == 1 {
         rows.push(WorkspaceDoctorResult {
             duration_ms: 0,
             check_name: "script-grants".into(),
@@ -95,4 +101,49 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
         });
     }
     rows
+}
+
+fn script_sandbox_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let report = runtime.script_sandbox_report();
+    let (status, message, remediation) = match report.profile {
+        Err(reason) => (
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "script steps cannot run on this host and refuse with \
+                 script_sandbox_unavailable: {reason}"
+            ),
+            None,
+        ),
+        Ok(profile) if report.strict_refuses => (
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "script steps would run under {profile}, but machine.worker_containment is \
+                 strict, which refuses every script step on macOS (no kernel containment)"
+            ),
+            Some(
+                "Set machine.worker_containment to warn with `orbit config set --global` to \
+                 run script steps under the profile alone."
+                    .to_string(),
+            ),
+        ),
+        Ok(profile) => match report.gaps {
+            Some(gaps) => (
+                WorkspaceDoctorStatus::Info,
+                format!("script steps run under {profile}; its gaps against Linux: {gaps}"),
+                None,
+            ),
+            None => (
+                WorkspaceDoctorStatus::Ok,
+                format!("script steps run under {profile}"),
+                None,
+            ),
+        },
+    };
+    WorkspaceDoctorResult {
+        duration_ms: 0,
+        check_name: "script-sandbox".into(),
+        status,
+        message,
+        remediation,
+    }
 }

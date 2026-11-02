@@ -18,9 +18,13 @@
 //! alone.
 //!
 //! Supervision is the build phase's: one capped log for stdout and stderr,
-//! a wall-clock bound and a scratch-size bound that kill the process group.
+//! a wall-clock bound and a scratch-size bound that kill the process group,
+//! and `RLIMIT_CPU` and `RLIMIT_NOFILE` set on the wrapper before it execs.
 //! Bubblewrap's PID namespace and `--die-with-parent` mean that killing it
 //! kills every descendant, so nothing outlives the step.
+//!
+//! macOS runs the same request under `macos-sandbox-script-v1`
+//! (`script_macos`), with the same probes, supervision and limits.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -146,7 +150,7 @@ pub fn script_input_conflict(
         .find(|path| overlaps(path))
 }
 
-fn valid_input_name(name: &str) -> bool {
+pub(super) fn valid_input_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
@@ -202,68 +206,7 @@ pub fn compile_linux_script_argv(
     env: &[(String, String)],
     argv: &[String],
 ) -> Result<Vec<String>, OrbitError> {
-    // An enclosing mask cannot be mounted without hiding the cwd. Reject a
-    // grant that would expose that otherwise-unmounted tree, including aliases.
-    // Read roots are bound wholesale too, so they get the same refusal; only a
-    // root inside the cwd tree, which is mounted anyway, stays allowed.
-    let cwd_physical = spec.cwd.canonicalize().ok();
-    for root in spec.readable {
-        let Ok(root) = root.canonicalize() else {
-            // A path that does not resolve is not bound either.
-            continue;
-        };
-        if cwd_physical
-            .as_deref()
-            .is_some_and(|cwd| root.starts_with(cwd))
-        {
-            continue;
-        }
-        if overlaps_enclosing_mask(spec, &root) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "script read root {} overlaps protected state",
-                root.display()
-            )));
-        }
-    }
-    let mut writable = Vec::with_capacity(spec.writable.len());
-    for root in spec.writable {
-        let root = root.canonicalize().map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "cannot resolve script write root {}: {error}",
-                root.display()
-            ))
-        })?;
-        if overlaps_enclosing_mask(spec, &root) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "script write root {} overlaps protected state",
-                root.display()
-            )));
-        }
-        writable.push(root);
-    }
-    for input in spec.inputs {
-        if !valid_input_name(&input.name) || !input.source.is_absolute() {
-            return Err(OrbitError::InvalidInput(format!(
-                "script input `{}` needs a plain name and an absolute source",
-                input.name
-            )));
-        }
-        let source = input.source.canonicalize().map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "cannot resolve script input `{}` at {}: {error}",
-                input.name,
-                input.source.display()
-            ))
-        })?;
-        let cwd = cwd_physical.as_deref().unwrap_or(spec.cwd);
-        if let Some(protected) = script_input_conflict(&source, cwd, spec.masked, spec.home) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "script input `{}` overlaps protected state at {}",
-                input.name,
-                protected.display()
-            )));
-        }
-    }
+    let writable = admitted_profile_roots(spec)?;
     // `--unshare-all` includes the network namespace: with no
     // `--share-net`, the only interface is the namespace's own loopback. A
     // networked grant shares the host's; `TcpPort` is confined by the
@@ -361,6 +304,80 @@ pub fn compile_linux_script_argv(
     Ok(args)
 }
 
+/// The checks both platforms' profiles make before compiling, and the
+/// granted write roots resolved to their physical paths. A read or write
+/// root that is, contains or lies within a masked tree enclosing the cwd
+/// is refused (that tree is not mounted on Linux, and is not allowed on
+/// macOS, so it cannot be masked), as is an input that is not a plain name
+/// over an absolute source or that overlaps protected state.
+pub(super) fn admitted_profile_roots(
+    spec: &ScriptSandboxSpec<'_>,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    // An enclosing mask cannot be mounted without hiding the cwd. Reject a
+    // grant that would expose that otherwise-unmounted tree, including aliases.
+    // Read roots are bound wholesale too, so they get the same refusal; only a
+    // root inside the cwd tree, which is mounted anyway, stays allowed.
+    let cwd_physical = spec.cwd.canonicalize().ok();
+    for root in spec.readable {
+        let Ok(root) = root.canonicalize() else {
+            // A path that does not resolve is not bound either.
+            continue;
+        };
+        if cwd_physical
+            .as_deref()
+            .is_some_and(|cwd| root.starts_with(cwd))
+        {
+            continue;
+        }
+        if overlaps_enclosing_mask(spec, &root) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script read root {} overlaps protected state",
+                root.display()
+            )));
+        }
+    }
+    let mut writable = Vec::with_capacity(spec.writable.len());
+    for root in spec.writable {
+        let root = root.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "cannot resolve script write root {}: {error}",
+                root.display()
+            ))
+        })?;
+        if overlaps_enclosing_mask(spec, &root) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script write root {} overlaps protected state",
+                root.display()
+            )));
+        }
+        writable.push(root);
+    }
+    for input in spec.inputs {
+        if !valid_input_name(&input.name) || !input.source.is_absolute() {
+            return Err(OrbitError::InvalidInput(format!(
+                "script input `{}` needs a plain name and an absolute source",
+                input.name
+            )));
+        }
+        let source = input.source.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "cannot resolve script input `{}` at {}: {error}",
+                input.name,
+                input.source.display()
+            ))
+        })?;
+        let cwd = cwd_physical.as_deref().unwrap_or(spec.cwd);
+        if let Some(protected) = script_input_conflict(&source, cwd, spec.masked, spec.home) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script input `{}` overlaps protected state at {}",
+                input.name,
+                protected.display()
+            )));
+        }
+    }
+    Ok(writable)
+}
+
 /// Whether a canonical grant root is, contains or lies within a masked tree
 /// that encloses the cwd. Such a tree is not mounted, so it cannot be masked.
 fn overlaps_enclosing_mask(spec: &ScriptSandboxSpec<'_>, root: &Path) -> bool {
@@ -375,7 +392,7 @@ fn overlaps_enclosing_mask(spec: &ScriptSandboxSpec<'_>, root: &Path) -> bool {
 /// linked worktree the `gitdir:` its `.git` file names and that gitdir's
 /// common directory. Anything that does not resolve is left out; a script
 /// that needs Git then fails on its own terms.
-fn cwd_git_dirs(cwd: &Path) -> Vec<PathBuf> {
+pub(super) fn cwd_git_dirs(cwd: &Path) -> Vec<PathBuf> {
     let dot_git = cwd.join(".git");
     let Ok(metadata) = std::fs::metadata(&dot_git) else {
         return Vec::new();
@@ -450,10 +467,10 @@ fn create_input_mountpoints(spec: &ScriptSandboxSpec<'_>) -> Result<(), OrbitErr
     Ok(())
 }
 
-/// Whether this host can apply the script profile now. The error is the
-/// `script_sandbox_unavailable` reason: a platform without the profile, a
-/// start nested inside another sandbox, or Bubblewrap without the
-/// namespaces it needs. There is no weaker fallback.
+/// Whether this host can apply the script profile now, and which profile it
+/// is. The error is the `script_sandbox_unavailable` reason: a platform
+/// without the profile, a start nested inside another sandbox, or a host
+/// without the sandbox's prerequisites. There is no weaker fallback.
 pub fn probe_script_sandbox() -> Result<&'static str, String> {
     #[cfg(target_os = "linux")]
     {
@@ -470,10 +487,14 @@ pub fn probe_script_sandbox() -> Result<&'static str, String> {
         }
         Ok(orbit_types::workflow::activity_job::SCRIPT_PROFILE_LINUX)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        super::script_macos::probe()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(
-            "script steps run only on Linux in this build; this platform has no script profile"
+            "script steps run only on Linux and macOS; this platform has no script profile"
                 .to_string(),
         )
     }
@@ -505,8 +526,10 @@ fn nested_sandbox_reason() -> Option<String> {
 
 /// Whether this host can give a script `network`. A port-confined network
 /// needs Landlock ABI [`crate::NETWORK_LANDLOCK_ABI`]; only Linux shares a
-/// network with a script at all (macOS refuses it until descendants are
-/// contained). The error is the reason, for `script_sandbox_unavailable`.
+/// network with a script at all. macOS refuses every network grant: without
+/// a PID namespace, a descendant that calls `setsid` escapes the timeout
+/// kill and would keep its network after the step ends. The error is the
+/// reason, for `script_sandbox_unavailable`.
 pub fn probe_script_sandbox_network(network: ScriptSandboxNetwork) -> Result<(), String> {
     if network == ScriptSandboxNetwork::None {
         return Ok(());
@@ -530,15 +553,50 @@ pub fn probe_script_sandbox_network(network: ScriptSandboxNetwork) -> Result<(),
         }
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("a script step gets network access only on Linux in this build".to_string())
+        Err(super::script_macos::NETWORK_REFUSED.to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err("a script step gets network access only on Linux".to_string())
+    }
+}
+
+/// The most file descriptors one script process may hold open
+/// (`RLIMIT_NOFILE`, script steps §3 Resources).
+pub const SCRIPT_OPEN_FILES_LIMIT: u64 = 1024;
+
+/// The `RLIMIT_*` limits a script run gets: `RLIMIT_CPU` at its timeout in
+/// CPU seconds per process (`SIGXCPU`, then `SIGKILL` after the termination
+/// grace), and `RLIMIT_NOFILE` at [`SCRIPT_OPEN_FILES_LIMIT`].
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn script_process_limits(timeout: Duration) -> super::supervise::ProcessLimits {
+    super::supervise::ProcessLimits {
+        cpu_seconds: timeout
+            .as_secs()
+            .saturating_add(u64::from(timeout.subsec_nanos() > 0)),
+        cpu_grace_seconds: SCRIPT_TERMINATION_GRACE.as_secs(),
+        open_files: SCRIPT_OPEN_FILES_LIMIT,
+    }
+}
+
+/// Where the script sees its scratch directory: [`SCRIPT_SANDBOX_MOUNT`]
+/// under Bubblewrap, and the host path itself under Seatbelt, which
+/// filters paths but cannot remount them. Argv and environment entries
+/// that name the scratch directory (the entry snapshot, `HOME`, `TMPDIR`,
+/// `ORBIT_SCRIPT_IN`, `ORBIT_SCRIPT_OUT`) are built from it.
+pub fn script_scratch_path_in_sandbox(scratch: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        scratch.to_path_buf()
+    } else {
+        PathBuf::from(SCRIPT_SANDBOX_MOUNT)
     }
 }
 
 /// Run one script under the profile. The caller probes first
-/// ([`probe_script_sandbox`], [`probe_script_sandbox_network`]); a profile that cannot be applied here is an
-/// error, never a weaker run.
+/// ([`probe_script_sandbox`], [`probe_script_sandbox_network`]); a profile
+/// that cannot be applied here is an error, never a weaker run.
 pub fn run_script_sandboxed(
     request: ScriptSandboxRequest<'_>,
 ) -> Result<ScriptSandboxRun, OrbitError> {
@@ -594,37 +652,67 @@ pub fn run_script_sandboxed(
             ),
             ScriptSandboxNetwork::None | ScriptSandboxNetwork::Any => None,
         };
-        let phase = super::supervise::Phase {
-            env: request.launcher_env,
-            cwd: spec.cwd,
-            timeout: request.timeout,
-            size_root: spec.scratch,
-            size_cap: request.scratch_cap_bytes,
-            stdin: Some(request.stdin),
-            stdout_cap: Some(SCRIPT_STDOUT_CAP_BYTES),
-            grace: SCRIPT_TERMINATION_GRACE,
-        };
-        let mut log = super::supervise::BuildLog::with_cap(SCRIPT_LOG_CAP_BYTES);
-        let started = std::time::Instant::now();
-        let run = super::supervise::run_phase(command, ruleset, &phase, &mut log)?;
-        Ok(ScriptSandboxRun {
-            end: match run.end {
-                super::BuildPhaseEnd::Exited(code) => ScriptRunEnd::Exited(code),
-                super::BuildPhaseEnd::Signaled(signal) => ScriptRunEnd::Signaled(signal),
-                super::BuildPhaseEnd::TimedOut => ScriptRunEnd::TimedOut,
-                super::BuildPhaseEnd::BuildDirCapExceeded => ScriptRunEnd::ScratchCapExceeded,
-            },
-            stdout: run.stdout,
-            stdout_over_cap: run.stdout_over_cap,
-            log: log.render(),
-            duration: started.elapsed(),
-        })
+        supervise_script(command, ruleset, &request, request.launcher_env)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        // Seatbelt cannot nest: a start inside another sandbox is refused
+        // here too, so it never reaches `sandbox-exec` and runs nothing.
+        super::script_macos::probe().map_err(OrbitError::PolicyDenied)?;
+        if !request.launcher.is_empty() {
+            return Err(OrbitError::PolicyDenied(
+                "a macOS script run takes no launcher; macOS has no per-script scope".to_string(),
+            ));
+        }
+        let command = super::script_macos::command(spec, request.argv)?;
+        // `sandbox-exec` passes its environment to the script unchanged, so
+        // the wrapper's environment is the script's own.
+        supervise_script(command, (), &request, request.env)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = request;
         Err(OrbitError::PolicyDenied(
-            "script steps run only on Linux in this build".to_string(),
+            "script steps run only on Linux and macOS".to_string(),
         ))
     }
+}
+
+/// Supervise one started sandbox wrapper: the step's stdin, its capped
+/// stdout and log, its timeout and scratch bound, and its `RLIMIT_*`
+/// limits. `wrapper_env` is the environment the wrapper process starts
+/// with.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn supervise_script<G>(
+    command: std::process::Command,
+    guard: G,
+    request: &ScriptSandboxRequest<'_>,
+    wrapper_env: &[(String, String)],
+) -> Result<ScriptSandboxRun, OrbitError> {
+    let phase = super::supervise::Phase {
+        env: wrapper_env,
+        cwd: request.sandbox.cwd,
+        timeout: request.timeout,
+        size_root: request.sandbox.scratch,
+        size_cap: request.scratch_cap_bytes,
+        stdin: Some(request.stdin.clone()),
+        stdout_cap: Some(SCRIPT_STDOUT_CAP_BYTES),
+        grace: SCRIPT_TERMINATION_GRACE,
+        limits: Some(script_process_limits(request.timeout)),
+    };
+    let mut log = super::supervise::BuildLog::with_cap(SCRIPT_LOG_CAP_BYTES);
+    let started = std::time::Instant::now();
+    let run = super::supervise::run_phase(command, guard, &phase, &mut log)?;
+    Ok(ScriptSandboxRun {
+        end: match run.end {
+            super::BuildPhaseEnd::Exited(code) => ScriptRunEnd::Exited(code),
+            super::BuildPhaseEnd::Signaled(signal) => ScriptRunEnd::Signaled(signal),
+            super::BuildPhaseEnd::TimedOut => ScriptRunEnd::TimedOut,
+            super::BuildPhaseEnd::BuildDirCapExceeded => ScriptRunEnd::ScratchCapExceeded,
+        },
+        stdout: run.stdout,
+        stdout_over_cap: run.stdout_over_cap,
+        log: log.render(),
+        duration: started.elapsed(),
+    })
 }
