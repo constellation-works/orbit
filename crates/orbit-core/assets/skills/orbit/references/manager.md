@@ -43,9 +43,10 @@ session cannot write, or hand the filing to a session with that surface.
    registered crew), `cadence` (`floor_minutes` at least 5, `heartbeat_minutes`
    at least the floor) and `continuity` (`prefer` or `off`).
 3. Submit the authority grant with the human's words verbatim (next section).
-4. The mandate becomes active when it has a valid mandate artifact and a
-   non-empty granted authority. Without granted authority it can still run
-   observe-only cycles if the human enables them.
+4. The mandate becomes active when it has a valid mandate artifact and its
+   assignment is open (tagged `resident`, control active): a grant is not an
+   activation prerequisite. Without granted rights it still runs observe-only
+   cycles; granted rights authorize action, not activation.
 
 Editing the mandate is an ordinary task write (`orbit.task.update`) and needs
 the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
@@ -102,7 +103,9 @@ Residents report only through Orbit; there is no inbox to check.
 
 - `orbit.resident.list` — every mandate in the workspace: state, goal,
   deadline, effective rights and workspaces, authority revision and open
-  grant request count. Ended mandates appear only with `include_ended`.
+  grant request count. Assignments that are done, archived, or rejected are
+  hidden unless `include_ended` is set; a stopped mandate (state `ended`)
+  whose assignment moved to `review` is still listed without it.
 - `orbit.resident.show` with `task_id` — the mandate, the effective authority
   with its grant and narrowing history, open grant requests, the live cycle,
   and the latest checkpoint: its outcome, actions, decisions, open requests

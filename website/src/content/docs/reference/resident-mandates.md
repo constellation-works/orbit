@@ -73,7 +73,7 @@ orbit resident list --all
 orbit resident show <task id>
 ```
 
-`list` prints one row per mandate with its task ID, state (marked `(stalled)` when it is [stalled](#stalled-residents)), effective rights, effective workspaces, number of open grant requests and goal. `--json` adds each mandate's deadline, authority revision and `stalled` flag. Ended mandates appear only with `--all`.
+`list` prints one row per mandate with its task ID, state (marked `(stalled)` when it is [stalled](#stalled-residents)), effective rights, effective workspaces, number of open grant requests and goal. `--json` adds each mandate's deadline, authority revision and `stalled` flag. Assignments that are done, archived, or rejected appear only with `--all`; a stopped mandate (state `ended`) whose assignment moved to review is still listed without it.
 
 `show` reports one mandate in full. Its `state` is one of:
 
