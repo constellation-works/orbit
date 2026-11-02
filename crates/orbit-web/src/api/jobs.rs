@@ -285,14 +285,16 @@ fn job_runs_page(
     if include_running {
         // Keep the same bounded running projection as the separate dashboard
         // poll, but return it with the active total so one refresh needs one
-        // HTTP read. Both queries run after the active page's reconciliation.
+        // HTTP read. The active page above already reconciled stale runs once;
+        // read the already-reconciled running projection observed so this
+        // request performs no second stale-run scan.
         const RUNNING_RUN_LIMIT: usize = 100;
         let running_params = job_run_list_params(
             scope,
             JobRunListState::Concrete(JobRunState::Running),
             Some(RUNNING_RUN_LIMIT),
         );
-        let running = runtime.list_job_runs(running_params)?;
+        let running = runtime.list_job_runs_observed(running_params)?;
         let running_titles = super::runs::task_titles(runtime, &running)?;
         page["running_items"] = Value::Array(super::runs::run_list_rows(
             runtime,

@@ -341,8 +341,17 @@ fn active_job_run_page_can_include_the_bounded_running_projection() {
             seed_live_run(&fixture, "jrun-running-two", JobRunState::Running);
             seed_live_run(&fixture, "jrun-pending-one", JobRunState::Pending);
 
+            let before = fixture.job_run_query_trace().len();
             let page =
                 json_ok(server.get("/api/job-runs?state=active&limit=1&include_running=true"));
+            let trace = fixture.job_run_query_trace();
+            let scans = &trace[before..];
+            assert_eq!(
+                scans.len(),
+                1,
+                "combined active/running request reconciles stale runs exactly once: {scans:?}"
+            );
+            assert_eq!(scans[0]["span"]["name"], "stale_job_run_scan");
             assert_eq!(page["total"], 3, "the rail keeps the active total");
             assert_eq!(
                 page["items"].as_array().unwrap().len(),
