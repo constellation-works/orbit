@@ -883,7 +883,11 @@ diagnostics without persisting state or dispatching work.
   pilot debt. Later pilots require `orbit task repilot <id>` (also available as
   `orbit.task.repilot`, task update `repilot: true`, or decision action `re_pilot`).
   Shared admission withholds edited requirements until an explicit assessment
-  completes; held warnings retain one pending decision across routine windows.
+  completes, unless an operator adds `no-pilot` to skip reassessment for an
+  assessed or preparing task. The skip bypasses pilot holds, but other holds,
+  including an unverified-finding hold, still apply. If the assessment remains
+  stale, removing the tag restores its hold. Held warnings retain one pending
+  decision across routine windows.
   Exhausted members remain withheld at that fingerprint; other members can proceed.
   Timing edits affect pending work while active budgets stay captured. Kind, owner,
   target or branch edits report `definition_changed`; restore the original
