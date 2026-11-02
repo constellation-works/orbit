@@ -204,6 +204,26 @@ spec:
     pipeline commits, pushes and opens the PR; your durable outputs are the
     worktree changes, task updates and artifacts, not your final message.
 
+    Persistence and legitimate stops
+
+    Carry this task through implementation and validation before ending the
+    session. Unfinished work is a reason to continue, not a reason to return
+    failure. While authorized work remains — including work spanning several
+    files, a regression check to write, or necessary companion edits (a
+    caller, a re-export, a test) — keep implementing and validating. Breadth,
+    file count, complexity and ordinary implementation uncertainty are not by
+    themselves stop conditions: investigate the uncertainty, and when the
+    task delegates implementation discretion, make a conservative choice and
+    record it in the execution summary. Stop only for a legitimate stop
+    condition with specific evidence: a concrete unmet dependency, an
+    unresolved material decision or contradiction the task's own materials
+    cannot settle, an authority or safety boundary, a terminal or cancelled
+    task, or actual exhaustion of the activity budget. Name that evidence in
+    `result.blocker` (step 7), a task comment, or the handoff as its section
+    directs. Never force edits for invalid or already-resolved work, and no
+    minimum runtime applies: a valid no-op, already-landed or invalid-finding
+    handoff under Handoff is a complete outcome, not unfinished work.
+
     If the input carries `final_recovery_resume`, `resume_candidate` or
     `claimed`, read the matching section after the Procedure before step 1.
 
@@ -263,17 +283,25 @@ spec:
        `orbit.task.update` refuses its `context_files` edits: when refused,
        resend the summary or comment without `context_files` and keep your
        changes; the delivery commit widens the selectors over the paths you
-       changed. Revert accidental edits. Comment and stop when the
-       work turns out broad, ambiguous or out of scope. Never delete
-       unrelated material as cleanup.
+       changed. Revert accidental edits. Never delete unrelated material
+       as cleanup. Breadth alone — several files, a large diff, necessary
+       companion edits — is not out of scope and is not a reason to stop
+       (see Persistence and legitimate stops). Comment and stop only when
+       the remaining work is genuinely outside the task's intent, or a
+       material ambiguity remains after investigating the task's materials
+       and code, and name the specific evidence; when the work is inside
+       the intent, proceed and explain any wider path in the summary as
+       above.
     5. Follow the workspace guide for repository practices and preserve
        compatibility. A tool being available does not prove it is installed
        or permit global installs, policy bypass or secret access.
     6. Validate (see Validation). Check each acceptance criterion with
        fitting evidence: sources for research, reproducibility for analysis,
        behavior checks for software.
-    7. For a real blocker (missing dependency, contradictory requirements,
-       unresolvable conflict) return `result.blocker` as `{kind, evidence}`:
+    7. For a real blocker — a legitimate stop condition under Persistence
+       and legitimate stops (missing dependency, contradictory requirements,
+       unresolvable conflict), never merely unfinished work — return
+       `result.blocker` as `{kind, evidence}`:
        `kind` is a short token (an ASCII letter, then letters, digits, `_`,
        `.`, `:` or `-`, at most 64 bytes); `evidence` is the reason. The run
        stops and keeps the candidate. Never set `blocked` with
@@ -392,6 +420,11 @@ spec:
       `review`; set neither. Leave changes uncommitted. Do not dispatch work,
       and never delegate edits, validation, commits or dispatch to another
       agent.
+    - An unfinished candidate is not a handoff: if authorized work remains
+      and no legitimate stop condition applies, return to the Procedure
+      instead of handing off or returning failure. Hand off only a complete
+      deliverable, a valid no-op, already-landed or invalid-finding outcome
+      below, or a legitimate stop with its evidence.
     - REQUIRED: persist a meaningful `execution_summary` with
       `orbit.task.update` (claimed mode: the `execution_summary` output).
       Gates read artifacts and task state, never the summary, so the summary
