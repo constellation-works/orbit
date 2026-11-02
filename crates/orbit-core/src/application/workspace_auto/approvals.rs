@@ -23,7 +23,10 @@
 //! task when the drain that ran it records its approvals, so no later drain
 //! pilots the task again until it changes either. The same recording covers
 //! an applied assessment whose approval did not complete: it stays
-//! `pilot_unresolved` until the task changes or an operator approves it. A pilot that failed on a
+//! `pilot_unresolved` until the task changes or an operator approves it. A
+//! fresh explicit or routine assessment is not that failure. This drain
+//! promotes it, and a finished child that stood down after the explicit
+//! apply does not hold or record the task as unresolved. A pilot that failed on a
 //! provider outage or missing inspection-capable crew is not recorded, so the
 //! next drain retries it. Creation-grant rows are not changes here: every write
 //! to a task holding a grant appends one after its own entry to re-seal it.
@@ -309,13 +312,17 @@ fn approval_snapshot(
         // was promoted on paper but its approval did not complete (for
         // example a deterministic apply failure after the pilot write).
         // Hold it for the operator instead of piloting it again on every
-        // drain pass [ORB-21172].
+        // drain pass [ORB-21172]. A fresh explicit or routine assessment
+        // is this drain's to promote: a finished child that stood down
+        // after that apply must not hide the reuse [ORB-21206]. A drain
+        // child's own unapproved apply is not reusable, so it stays held.
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
             && let Some(pilot) = pilots.iter().find(|pilot| {
                 !pilot.is_live()
                     && pilot.task_ids.contains(&task.id)
                     && entry.at >= pilot.submitted_at
             })
+            && !reusable_explicit_promotion(runtime, &task)?
         {
             snapshot.held.push(held(
                 "pilot_unresolved",
@@ -472,6 +479,15 @@ fn pilot_children(runtime: &OrbitRuntime, run_id: &str) -> Result<Vec<PilotChild
     Ok(pilots)
 }
 
+/// Whether `task`'s latest certified assessment is a fresh explicit or
+/// routine receipt this drain should approve without another pilot.
+fn reusable_explicit_promotion(runtime: &OrbitRuntime, task: &Task) -> Result<bool, OrbitError> {
+    Ok(matches!(
+        classify_explicit_assessment_reuse(runtime, task)?,
+        ExplicitAssessmentReuse::Promote { .. }
+    ))
+}
+
 /// Whether `entry` leaves the question "what did the task's last change
 /// decide?" unanswered: a context grant, the triage of a warning hold, or an
 /// undecided-pilot record. None of these is a change to the task.
@@ -571,11 +587,14 @@ fn record_unresolved_pilot(
         // the pilot decided. The exception is an applied assessment with
         // no hold on a task still proposed: its approval did not complete,
         // so recording it unresolved is what stops the next pass piloting
-        // it again [ORB-21172].
+        // it again [ORB-21172]. A fresh explicit or routine assessment is
+        // still proposed until this drain promotes it. Recording that
+        // apply unresolved would hold the next pass before promotion
+        // [ORB-21206].
         let unapproved_apply = latest.is_some_and(|entry| {
             entry.event == "task_pilot_applied" && held_classification(runtime, entry).is_none()
         });
-        if !unapproved_apply {
+        if !unapproved_apply || reusable_explicit_promotion(runtime, &task)? {
             return Ok(());
         }
     }
