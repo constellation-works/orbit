@@ -161,6 +161,7 @@ fn script_grant_request_scenarios() {
     an_answer_after_the_script_changed_is_refused_and_grants_nothing();
     an_insufficient_grant_raises_a_request_naming_requested_and_granted();
     a_requested_timeout_above_the_default_ceiling_is_granted_by_answer_and_dashboard();
+    an_unrepresentable_timeout_is_refused_by_answer_and_dashboard_and_grants_nothing();
     a_registered_channel_answer_writes_the_grant_with_channel_provenance();
     agents_and_plugin_callbacks_cannot_answer_or_grant();
 }
@@ -407,6 +408,70 @@ fn a_requested_timeout_above_the_default_ceiling_is_granted_by_answer_and_dashbo
             && !rerun.contains("grant_insufficient"),
         "the dashboard-granted timeout passes the grant gate: {rerun}"
     );
+}
+
+fn an_unrepresentable_timeout_is_refused_by_answer_and_dashboard_and_grants_nothing() {
+    // ORB-21454: a timeout no deadline can hold must be refused at grant time.
+    // Recording it lets the step start a deadline that panics on overflow.
+    let unrepresentable = u64::MAX;
+    let manifest = format!("  requests:\n    timeout_seconds: {unrepresentable}\n");
+
+    // Answer path: the default 3600s grant refuses the request as insufficient.
+    // The human answer must be refused and leave that grant in place.
+    let fx = fixture();
+    fx.write_manifest(&manifest);
+    fx.runtime
+        .grant_script(SCRIPT, &ScriptGrantOptions::default())
+        .unwrap();
+    let before = fx.runtime.verified_script_grant(SCRIPT).unwrap().unwrap();
+    let refused = fx.run();
+    assert!(refused.contains("grant_insufficient"), "{refused}");
+    let (request, payload) = fx.only_open();
+    assert_eq!(payload.requested.timeout_seconds, Some(unrepresentable));
+    let error = fx
+        .answer(&request, "grant")
+        .expect_err("an unrepresentable timeout must not be granted by answer");
+    assert!(error.contains("nothing was granted"), "{error}");
+    let after = fx.runtime.verified_script_grant(SCRIPT).unwrap().unwrap();
+    assert_eq!(
+        after.grant_id, before.grant_id,
+        "the refused answer keeps the existing grant"
+    );
+    assert_eq!(after.limits.timeout_max_seconds, 3600);
+
+    // Dashboard path with no grant yet: the refusal records nothing.
+    let fx = fixture();
+    fx.write_manifest(&manifest);
+    let digest = fx.current_digest();
+    let error = fx
+        .runtime
+        .grant_script_from_dashboard(SCRIPT, &digest, HUMAN.to_string())
+        .expect_err("the dashboard must refuse an unrepresentable timeout");
+    assert!(error.to_string().contains("nothing was granted"), "{error}");
+    assert!(
+        fx.runtime.verified_script_grant(SCRIPT).unwrap().is_none(),
+        "the refused dashboard grant records no grant"
+    );
+
+    // Dashboard path over an existing grant: the refusal keeps that grant.
+    let fx = fixture();
+    fx.write_manifest(&manifest);
+    fx.runtime
+        .grant_script(SCRIPT, &ScriptGrantOptions::default())
+        .unwrap();
+    let before = fx.runtime.verified_script_grant(SCRIPT).unwrap().unwrap();
+    let digest = fx.current_digest();
+    let error = fx
+        .runtime
+        .grant_script_from_dashboard(SCRIPT, &digest, HUMAN.to_string())
+        .expect_err("the dashboard must refuse an unrepresentable timeout");
+    assert!(error.to_string().contains("nothing was granted"), "{error}");
+    let after = fx.runtime.verified_script_grant(SCRIPT).unwrap().unwrap();
+    assert_eq!(
+        after.grant_id, before.grant_id,
+        "the refused dashboard grant keeps the existing grant"
+    );
+    assert_eq!(after.limits.timeout_max_seconds, 3600);
 }
 
 fn a_registered_channel_answer_writes_the_grant_with_channel_provenance() {

@@ -283,6 +283,13 @@ pub struct ScriptGrantOptions {
     pub expected_digest: Option<String>,
 }
 
+/// The longest timeout a grant may record, in seconds. A step's deadline is
+/// `Instant::now() + timeout` when it starts, and that sum panics once it
+/// leaves the host's `Instant` range (ORB-21454). 2^32 seconds, about 136
+/// years, sits far inside that range on Linux, where the overflow was
+/// reproduced, so no realistic request is refused.
+const SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS: u64 = u32::MAX as u64;
+
 /// The limits one grant records: the defaults, with each acknowledged
 /// override checked against the hard ceilings.
 fn grant_output_limits(
@@ -294,6 +301,12 @@ fn grant_output_limits(
         if seconds == 0 {
             return Err(OrbitError::InvalidInput(format!(
                 "script `{name}` timeout must be at least 1 second; nothing was granted"
+            )));
+        }
+        if seconds > SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout {seconds} is outside \
+                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; nothing was granted"
             )));
         }
         limits.timeout_max_seconds = seconds;
