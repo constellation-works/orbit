@@ -99,9 +99,11 @@ not a rewrite of failed history.
 | `task_review_reconciliation_pipeline` | Validates and reviews one already-merged foreign delivery head. Admitted by `orbit task reconcile-review submit`; the job refuses a run that lacks that admission. |
 
 Claimed workers reach the owner's `orbit.task.show`, `orbit.search`,
-`orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
-`orbit.task.artifact.get` / `orbit.task.artifact.put` through their run's
-coordinator. Search and task listing read only the claimed workspace's owner
+`orbit.task.list`, `orbit.task.add`, `orbit.friction.add`,
+`orbit.task.artifact.get` / `orbit.task.artifact.put`, and `orbit.notice.post` /
+`orbit.notice.show` / `orbit.notice.close` through their run's coordinator.
+Notices are stored only on the owner, and the claim binding supplies the
+posting task and run. Search and task listing read only the claimed workspace's owner
 records; federated search scope (`workspaces`, `all_workspaces` and aliases)
 is refused. Task show and artifacts retain their claimed-task scope, and
 finding creation retains its `spawned_from` requirement. Use search/list for

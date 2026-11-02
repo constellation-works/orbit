@@ -993,7 +993,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   with `full-code-review` or `qa-full-sweep`. The owner checks that the culprit
   belongs to the claimed workspace and the claim is active),
   `orbit.friction.add` (during the claimed task, if it names
-  one), and `orbit.task.artifact.put` on the claimed task. Its nested
+  one), `orbit.task.artifact.put` on the claimed task, and `orbit.notice.post`,
+  `orbit.notice.show` and `orbit.notice.close`. Notices are stored only on the
+  owner, and the claim binding supplies the posting task and run. Its nested
   `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
   the task and claim from its own records, applies the activity's tool
   policy, and carries them to the owner over this follower's SSH route, where
