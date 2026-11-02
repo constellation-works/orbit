@@ -485,6 +485,9 @@ impl ServerMcpHost {
         mut input: Value,
         mut context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if name == "orbit.attention" {
+            return self.call_attention_tool(input, context);
+        }
         if let Some(binding) = &context.worker_invocation
             && binding.execution.machine_id == self.process_machine_id
             && binding.owner_machine_id != self.process_machine_id
@@ -587,5 +590,57 @@ impl ServerMcpHost {
             name: selected.workspace.name.clone(),
         };
         execute_core_tool(&runtime, name, input, context, Some(&owner))
+    }
+}
+
+impl ServerMcpHost {
+    // Attention owns a list-valued scope, unlike the ordinary single-selector route.
+    // Validate the original binding before opening any other workspace.
+    fn call_attention_tool(
+        &self,
+        mut input: Value,
+        mut context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let bound = Self::workspace_selector(None, &context).map(str::to_owned);
+        let selectors =
+            orbit_common::protocol::tool_input::optional_string_list_alias(&input, &["workspace"])?
+                .unwrap_or_default();
+        let selected = if let Some(bound) = bound {
+            let selected =
+                RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, &bound)?;
+            let refused = || orbit_common::governance::attention::attention_scope_refusal();
+            if input["all"] == true || input.get("host").is_some() {
+                return Err(refused());
+            }
+            for selector in &selectors {
+                let other = RegisteredRuntimeFactory::resolve_workspace_selector(
+                    &self.global_root,
+                    selector,
+                )
+                .map_err(|_| refused())?;
+                if other.workspace.id != selected.workspace.id {
+                    return Err(refused());
+                }
+            }
+            if !selectors.is_empty() {
+                input["workspace"] = serde_json::json!([selected.workspace.id]);
+            }
+            context.workspace_id = Some(selected.workspace.id.clone());
+            context.workspace = Some(selected.checkout.repo_root.to_string_lossy().into_owned());
+            selected
+        } else {
+            context.workspace_id = None;
+            context.workspace = None;
+            if let Some(selector) = selectors.first() {
+                RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, selector)?
+            } else {
+                input["all"] = Value::Bool(true);
+                self.owner_local_selection("orbit.attention")?
+            }
+        };
+        let runtime = self.open_observation_runtime(&selected)?;
+        context.process_machine_id = Some(self.process_machine_id.clone());
+        context.process_machine_name = Some(self.process_machine_name.clone());
+        execute_core_tool(&runtime, "orbit.attention", input, context, None)
     }
 }

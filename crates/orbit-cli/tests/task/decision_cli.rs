@@ -1130,3 +1130,84 @@ fn decision_assist_cli_refuses_agents_and_the_tool_surface() {
     let status = fixture.json(&["decision", "assist", "status", "--json"]);
     assert_eq!(status, serde_json::json!([]), "{status}");
 }
+
+/// An envelope has no description/criteria. Checking a review request against
+/// that envelope incorrectly supersedes its full-spec revision binding.
+#[test]
+fn attention_preserves_review_decisions_bound_to_nonempty_requirements() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::attention_preserves_review_decisions_bound_to_nonempty_requirements",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let (task_id, request_id) = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Review with requirements".into(),
+                description: "The completed candidate still needs a human decision.".into(),
+                acceptance_criteria: vec!["Keep the recorded requirements in the binding".into()],
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            })
+            .unwrap();
+        let request = DecisionRequest::new(
+            task.id.clone(),
+            DecisionGate::ReviewApproval,
+            DecisionGate::ReviewApproval.approval_answers(),
+            DecisionBinding::for_task(&task, None),
+            "digest".into(),
+            chrono::Utc::now(),
+        );
+        runtime
+            .apply_task_automation_update(
+                &task.id,
+                TaskAutomationUpdate {
+                    append_history: vec![request.history_entry("system")],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (task.id, request.id)
+    };
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    assert!(
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["id"] == request_id)
+    );
+    let output = fixture
+        .command(&[
+            "attention",
+            "--kind",
+            "decision_open",
+            "--task",
+            &task_id,
+            "--json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let attention: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        attention["counts"]["returned"], 1,
+        "attention must check effective review decisions against the full requirements, as decision list does: {attention}"
+    );
+    assert_eq!(attention["items"][0]["refs"]["decision_id"], request_id);
+    assert_eq!(attention["items"][0]["next"]["tool"], "orbit.decision.show");
+}

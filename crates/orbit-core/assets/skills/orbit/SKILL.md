@@ -9,6 +9,10 @@ Work through the authoritative task record and leave verifiable results.
 Read only the reference needed for the current action; this is not a reading
 checklist. An injected task snapshot is your starting context.
 
+## Operator attention
+
+Start an orchestrator or on-call inspection with `orbit attention --json` or the read-only `orbit.attention` tool. Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews. Read `degraded` before interpreting an empty result. See [Attention](references/attention.md) for filters, local scopes, suggested actions and the delta cursor.
+
 ## Connect and act
 
 - With MCP, discover its tools. In a managed activity, use the injected task

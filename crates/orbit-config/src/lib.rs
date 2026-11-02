@@ -344,3 +344,6 @@ pub fn resolved_audit_db_path(roots: &ConfigRoots) -> Result<PathBuf, OrbitError
 
 #[cfg(test)]
 mod tests;
+
+mod attention;
+pub use attention::AttentionSettings;

@@ -876,6 +876,14 @@ established, never as a pass.
 | `notice.brief_read_timeout_ms` | **Advanced.** integer · **Default:** `2000`<br>Milliseconds a prompt build may wait reading notices before the brief says unavailable (1-60000, default 2000). |
 | `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | **Advanced.** integer · **Default:** `3`<br>Experiments that may run at once in this workspace (`1`–`20`). Starting or resuming one beyond it is refused; a paused experiment does not count. |
+| `attention.cursor_ttl_hours` | integer · **Default:** `24`<br>Cursor validity in hours. Valid range: 1–8760. Read back with `orbit config get attention.cursor_ttl_hours --json`. |
+| `attention.age_bump_hours` | integer array · **Default:** `[24, 72]`<br>Severity age thresholds. Valid range: strictly increasing positive hours up to 87600; empty disables aging. Read back with `orbit config get attention.age_bump_hours --json`. |
+| `attention.run_window_hours` | integer · **Default:** `48`<br>Failed-run lookback in hours; consumed by runtime sources. Valid range: 1–87600. Read back with `orbit config get attention.run_window_hours --json`. |
+| `attention.run_stuck_after_minutes` | integer · **Default:** `120`<br>Stuck-run wall-clock bound in minutes; consumed by runtime sources. Valid range: 1–525600. Read back with `orbit config get attention.run_stuck_after_minutes --json`. |
+| `attention.ci_cache_seconds` | integer · **Default:** `60`<br>Provider cache lifetime in seconds; consumed by provider sources. Valid range: 1–86400. Read back with `orbit config get attention.ci_cache_seconds --json`. |
+| `attention.source_timeout_seconds` | integer · **Default:** `10`<br>Per-source read budget in seconds. Valid range: 1–3600. Read back with `orbit config get attention.source_timeout_seconds --json`. |
+| `attention.fanout_budget_seconds` | integer · **Default:** `20`<br>Cross-host read budget in seconds; consumed by federation. Valid range: 1–3600. Read back with `orbit config get attention.fanout_budget_seconds --json`. |
+| `attention.per_workspace_item_cap` | integer · **Default:** `200`<br>Maximum attention candidates per workspace, highest severity first. Valid range: 1–10000. Read back with `orbit config get attention.per_workspace_item_cap --json`. |
 | `resident.evolution.window_days` | integer · **Default:** `14`<br>Days of cost occurrences used by the pass and default manager digest (1–3650). |
 | `resident.evolution.min_occurrences` | integer · **Default:** `3`<br>Minimum occurrences in the window; every threshold must be met (1–1,000,000). |
 | `resident.evolution.min_distinct_cycles` | integer · **Default:** `3`<br>Minimum distinct resident cycles in the window (1–1,000,000). |

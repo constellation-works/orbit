@@ -36,7 +36,7 @@ Everything here is speculation labelled as such; the committed scope is in
 3. **Notifications.** Pushing an item to a person (email, chat, desktop) is the decision
    channel's job for decisions ([human-decision-channel](../human-decision-channel/1_scope.md))
    and could consume the delta feed for the rest. Open: whether a notifier polls the
-   cursor like any other consumer (the likely answer) or earns a core hook.
+   cursor like any other consumer (the likely answer) without adding a session hook.
 4. **A resolved feed.** The cursor cannot name resolved items. A consumer that wants "this
    was handled" must diff full lists. A short-lived resolved ledger would be state, so it is
    deferred with question 1.

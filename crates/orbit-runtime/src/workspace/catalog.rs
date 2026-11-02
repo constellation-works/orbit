@@ -77,11 +77,28 @@ pub struct FederatedWorkspaceTarget {
 /// worktree — degrades to a note on that workspace instead of failing the
 /// whole query.
 pub trait WorkspaceCatalog: Send + Sync {
+    /// Registered remote identities used to validate a local attention host filter.
+    /// The local host is supplied by the runtime; no network probe is performed.
+    fn attention_registered_hosts(
+        &self,
+    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+        Ok(Vec::new())
+    }
+
     /// Checkouts covered by `scope`, in a stable order.
     fn resolve_scope(
         &self,
         scope: &WorkspaceScope,
     ) -> Result<Vec<FederatedWorkspaceTarget>, OrbitError>;
+
+    /// Open for a derived read, without stale-run reconciliation or task repair.
+    /// In-memory catalogs may retain their ordinary no-maintenance open.
+    fn open_observational(
+        &self,
+        target: &FederatedWorkspaceTarget,
+    ) -> Result<RuntimeKernel, OrbitError> {
+        self.open(target)
+    }
 
     /// Open a runtime bound to one resolved target.
     fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError>;

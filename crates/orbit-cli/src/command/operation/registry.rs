@@ -553,6 +553,12 @@ impl Commands {
                 registry_operation(&command.command, runtime_dispatch!(Experiment))
             }
             // Codebase analytics is registry-driven like friction.
+            Commands::Attention(command) => {
+                let mut operation =
+                    registry_operation(&command.query, runtime_dispatch!(Attention));
+                operation.runtime_need = RuntimeNeed::HostReadOnly;
+                operation
+            }
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }

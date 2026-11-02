@@ -569,6 +569,11 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             Ok(super::super::tool::ToolRunBootstrap::TaskOwner(task_id)) => {
                 RuntimeNeed::TaskOwner { task_id }
             }
+            Ok(super::super::tool::ToolRunBootstrap::CwdWorkspace)
+                if args.name == "orbit.attention" =>
+            {
+                RuntimeNeed::HostReadOnly
+            }
             Ok(super::super::tool::ToolRunBootstrap::CwdWorkspace) => RuntimeNeed::Required,
             Err(error) => RuntimeNeed::UnusableToolInput {
                 message: unusable_tool_input_message(error),

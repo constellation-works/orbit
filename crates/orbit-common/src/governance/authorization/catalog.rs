@@ -644,6 +644,12 @@ pub fn governed_plugin_tool(mutating: bool, agent_callable: bool) -> &'static Go
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.attention",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "attention reads task-level operator waits",
+    },
+    GovernedOperation {
         id: "application consent",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],

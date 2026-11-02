@@ -575,6 +575,8 @@ run orbit.agent.invoke`, `orbit run agent`, or `--toolset agent-invoke`.
   explore-first experiment's verdict (due around 2026-11-18). Until then the
   tool stays registered for MCP.
 
+**Operator attention.** `orbit.attention` is advertised in the default `tasks-read` toolset, annotated read-only, and governed for Agent and Operator. It derives task-level waits without widening source rights. A bound MCP session refuses `all`, `host` and another workspace with `scope_not_permitted`; local CLI callers may select the local registry. Reading the feed changes no state or configuration.
+
 **Fleet notices ([ORB-21211]).** `orbit.notice.post` and `orbit.notice.close`
 are governed for the `agent`, `operator` and `runner` capabilities and
 `Advertised` in `GOVERNED_TOOL_PLACEMENT`, but registered in the opt-in

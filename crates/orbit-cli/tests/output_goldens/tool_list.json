@@ -357,6 +357,101 @@
     "mcp_toolset": "analytics"
   },
   {
+    "name": "orbit.attention",
+    "description": "List current operator waits, read-only: pilot_warning, pilot_hold, blocked, decision_open and review_waiting. Open decisions fold into the condition they decide. Filters combine AND across fields and OR within repeated fields. Kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or materially changed items; expired, invalid or unsupported cursors restart the full list. No session hook or background activity is created. Bound MCP sessions cannot widen scope with all, host or another workspace. Runtime and cross-host sources are not yet implemented.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Registered workspace names or ids; accepts one string or an array. Conflicts with all.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "all",
+        "description": "Read every active workspace on this host.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "host",
+        "description": "Host name or machine id (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "kind",
+        "description": "Include kinds (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "exclude_kind",
+        "description": "Exclude kinds (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "severity",
+        "description": "Minimum severity: low, medium, high or critical.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "status",
+        "description": "Task lifecycle states (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "tag",
+        "description": "Task tags (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "task",
+        "description": "Task ids (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "crew",
+        "description": "Assigned crews (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "orchestrator",
+        "description": "Attributed orchestrators (repeatable).",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "older_than",
+        "description": "Minimum age, such as 90m, 36h or 3d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "since",
+        "description": "Opaque cursor from a prior response; unusable tokens restart the list.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "description": "Public response limit, 1–500 (default 100).",
+        "param_type": "integer",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "tasks-read"
+  },
+  {
     "name": "orbit.auto_task.add",
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "enabled": true,
@@ -3263,6 +3358,12 @@
         "name": "runs_on",
         "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "pilot_warnings",
+        "description": "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings.",
+        "param_type": "boolean",
         "required": false
       },
       {

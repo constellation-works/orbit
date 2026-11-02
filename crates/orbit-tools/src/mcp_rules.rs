@@ -195,8 +195,8 @@ pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
     McpToolRules {
         workspace_echo,
         id_route,
-        declared_workspace_selector: name == "orbit.task.show",
-        workspace_optional: name == "orbit.notice.list",
+        declared_workspace_selector: matches!(name, "orbit.task.show" | "orbit.attention"),
+        workspace_optional: matches!(name, "orbit.notice.list" | "orbit.attention"),
         presentation_read,
         input_decoration,
         ..McpToolRules::default()

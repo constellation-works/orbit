@@ -102,6 +102,8 @@ description. `required` fields are always present; others are omitted, not `null
 | `next` | object, required | The action that resolves the item; below. |
 | `fingerprint` | string, required | `fp_` plus 16 hex; see [attention-cursor](./attention-cursor.md#fingerprint). |
 
+The task-level implementation returns at most 32 warning findings in `detail.findings`, each with a 240-character one-line text. `detail.findings_truncated` reports omitted findings; the fingerprint still covers the complete sorted source material.
+
 ### `next`
 
 `next` is `{summary, tool, input, command, needs?, also?}`:
@@ -153,7 +155,7 @@ and are not waiting on a single task.
 | `pilot_warning` | medium | high | high when a finding is a contract conflict |
 | `pilot_hold` | medium | high | high when another task lists this one in `blocked_by` |
 | `blocked` | high | high | none |
-| `decision_open` | medium | high | request `risk_tier` high; and one level when `expires_at` is within 6 hours |
+| `decision_open` | medium | high | request `risk_tier` `irreversible`, `authority` or `spend`; and one level when `expires_at` is within 6 hours |
 | `review_waiting` | low | high | `review_budget` waits start at medium |
 | `run_failed` | medium | high | high when the run held a claim |
 | `run_stuck` | medium | high | high when the run holds a claim |
