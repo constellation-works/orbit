@@ -541,8 +541,109 @@ fn resident_stale_comment_is_refused_without_writes() {
     assert_eq!(show(&runtime, &id)["latest_checkpoint"], record);
 }
 
+fn resident_sensitive_checkpoint_is_refused_without_writes() {
+    use chrono::{Duration, Utc};
+    use orbit_types::workflow::ResidentLiveCycle;
+
+    let _env = orbit_common::test_env::scoped([(
+        "RESIDENT_FIXTURE_API_TOKEN",
+        Some("resident-fixture-sensitive-value"),
+    )]);
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, _) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    let live = ResidentLiveCycle {
+        cycle: "rcy-live".into(),
+        run_id: "jrun-live".into(),
+        expires_at: Utc::now() + Duration::hours(1),
+    };
+    runtime
+        .set_resident_live_cycle(&id, None, Some(&live))
+        .unwrap();
+    let mut record = json!({"kind": "resident.checkpoint", "schema": 1, "mandate": id,
+        "cycle": live.cycle, "run_id": live.run_id, "crew": "sol", "recovery_of": null,
+        "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
+        "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
+        "actions": [], "decisions": [], "requests": [], "costs": [], "notes": "",
+        "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
+        "continuity": "off", "outcome": "idle", "probe": false});
+    let snapshot = || {
+        (
+            runtime.get_task(&id).unwrap(),
+            runtime.get_task_comments(&id).unwrap(),
+            runtime.get_task_history(&id).unwrap(),
+        )
+    };
+    let home = std::env::var("HOME").unwrap();
+    for notes in [
+        format!("Read {home}/private/checkpoint"),
+        home,
+        format!("credential glpat-{}", "c".repeat(20)),
+        "resident-fixture-sensitive-value".into(),
+    ] {
+        record["notes"] = json!(notes);
+        for surface in ["checkpoint", "comment", "core-comment", "core-checkpoint"] {
+            let before = snapshot();
+            let result = match surface {
+                "checkpoint" => call(
+                    &runtime,
+                    "orbit.resident.checkpoint",
+                    json!({"task_id": id, "record": record, "model": "codex"}),
+                    &orchestrator(),
+                )
+                .map(|_| ()),
+                "comment" => call(
+                    &runtime,
+                    "orbit.task.update",
+                    json!({"id": id, "comment": record.to_string(), "model": "codex"}),
+                    &orchestrator(),
+                )
+                .map(|_| ()),
+                "core-comment" => runtime
+                    .update_task_with_identity(
+                        &id,
+                        TaskUpdateParams {
+                            comment: Some(record.to_string()),
+                            ..Default::default()
+                        },
+                        None,
+                        Some("codex".into()),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string()),
+                "core-checkpoint" => runtime
+                    .append_resident_checkpoint(&id, record.clone(), None, Some("codex".into()))
+                    .map(|_| ())
+                    .map_err(|error| error.to_string()),
+                _ => unreachable!(),
+            };
+            let error = result.expect_err("sensitive resident record must be refused");
+            assert!(
+                error.contains(
+                    "resident records must be supplied without sensitive text requiring redaction"
+                ),
+                "{surface}: {error}"
+            );
+            assert_eq!(snapshot(), before, "{surface}: refusal must write nothing");
+        }
+    }
+    record["notes"] = json!("  Recheck the schema.\nWait until Monday.  ");
+    let written = call(
+        &runtime,
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        &orchestrator(),
+    )
+    .unwrap();
+    assert_eq!(written["checkpoint"], record);
+    let comments = runtime.get_task_comments(&id).unwrap();
+    let stored: Value = serde_json::from_str(&comments.last().unwrap().message).unwrap();
+    assert_eq!(stored, record, "safe checkpoint text stays verbatim");
+}
+
 crate::scenario_table!(
     resident_authority,
+    resident_sensitive_checkpoint_is_refused_without_writes,
     resident_stale_comment_is_refused_without_writes,
     agent_widening_is_a_request_the_human_answers,
     rejected_or_superseded_requests_change_nothing,

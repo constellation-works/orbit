@@ -15,6 +15,7 @@ use super::artifacts::validate_pr_status;
 use super::entry::{TaskFieldWriter, ValidatedTaskFieldEdits};
 use crate::OrbitRuntime;
 use crate::application::contracts::CreationCrewAssignment;
+use crate::application::resident;
 use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
@@ -66,11 +67,8 @@ impl OrbitRuntime {
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.
-        if let Some(comment) = &params.comment
-            && orbit_types::workflow::ResidentComment::is_resident_comment(comment)
-            && redact_all(comment) != *comment
-        {
-            return Err(OrbitError::InvalidInput("resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim".into()));
+        if let Some(comment) = &params.comment {
+            resident::ensure_resident_comment_redaction_safe(comment)?;
         }
         for value in [
             &mut params.title,

@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
 
+pub(crate) use comments::ensure_resident_comment_redaction_safe;
 pub use grant::{ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams};
 
 /// Where a mandate stands, as `orbit resident show` reports it.
