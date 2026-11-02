@@ -954,8 +954,9 @@ attempts first. Inspect with:
 ```
 
 Inspection requires a conclusively stopped owner-local single-task publisher
-with settled final recovery and a kept-publication receipt naming that run,
-task and unchanged task specification. The receipt is scope and preservation
+with settled final recovery (or the in-place `resume` shape below) and a
+kept-publication receipt naming that run, task and unchanged task
+specification. The receipt is scope and preservation
 evidence, not a publication or validation certificate. Original successful host
 commit, preparation, synchronization, review corrections, push and PR
 checkpoints must authenticate the exact candidate. The retained branch,
@@ -963,6 +964,24 @@ origin repository, remote lease and current open, unmerged PR must agree on
 branch and head, with automatic merge disabled. Missing, contradictory or
 ambiguous evidence refuses before any source effect; no replacement PR is
 created. A dirty retained checkout also needs explicit reconciliation.
+
+**Final recovery resumed the run in place, then it failed again.** A final-recovery
+`resume` continues the same run, so a later completion failure leaves the run
+`failed` with an applied `resume` receipt, not an escalated or requeued one, and
+final recovery does not run a second time. The task stays in `review` with the
+PR open, often red, after Orbit's own auto-fix attempts. Inspect that same
+publishing run. The host's receipt on the run's checkpoints must be an applied
+`resume` for this task, keyed to this run, that carried no host repair commit,
+beside the kept-publication receipt. The binding's head is the PR's current head,
+reached only through the `pr_auto_fix_pushed` entries the run recorded from the
+originally pushed head; a move another run, actor or nothing recorded refuses.
+Submit with the usual explicit `unmet_acceptance` and inspected `policy_digest`.
+The repair is review-only: `completion: "review"`, `auto_fix: false`, no merge or
+completion authority, no historical deadline renewed and no auto-fix ledger entry
+rewritten. The attempt counts against the PR's repair budget of three, so a PR
+whose auto-fix spent its attempts still gets this one explicit generation.
+Retry it with the identical key to replay; never edit the receipt, ledger or
+binding by hand.
 
 The returned `binding.superseded` names the task binding being acknowledged
 and digests the complete stopped delivery lineage within the 64-run inspection

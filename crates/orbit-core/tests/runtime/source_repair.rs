@@ -46,6 +46,8 @@ mod published_owner;
 mod reconciliation;
 #[path = "source_repair/replay.rs"]
 mod replay;
+#[path = "source_repair/resumed_in_place.rs"]
+mod resumed_in_place;
 #[path = "source_repair/resumed_recovery.rs"]
 mod resumed_recovery;
 #[path = "source_repair/review_requeue.rs"]

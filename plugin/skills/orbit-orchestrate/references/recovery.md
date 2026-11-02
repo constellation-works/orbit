@@ -332,6 +332,15 @@ after final recovery escalated:
   effects. Dirty worktrees, active or ambiguous lineage and changed heads or
   specifications refuse. Green requeue remains the route for carrying the
   unchanged candidate without authorizing implementation.
+- **Final recovery resumed the publishing run in place and it failed again.**
+  Select that same run. Its checkpoints must hold the host's applied `resume`
+  receipt for this task and run, with no host repair commit, beside the
+  kept-publication receipt above, so final recovery cannot run again. The
+  binding's head is the PR's current head, reached only through the
+  `pr_auto_fix_pushed` ledger entries that run recorded from its original push.
+  Submit with the same `unmet_acceptance` and `policy_digest`. The attempt is
+  review-only, counts against the PR's repair budget, renews no deadline and
+  leaves the receipt, deadlines and auto-fix ledger untouched.
 - **An admitted source repair pushed before `pr_open` failed.** Its original
   system reservation and unique run link, successful branch adoption, host
   commit, prepare, synchronization, review/publication chain and push must
