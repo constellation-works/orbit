@@ -984,6 +984,10 @@ fn decision_cli_shows_and_answers_a_script_grant_request() {
         return;
     }
     let fixture = Fixture::new();
+    // Run the script job hermetically: `orbit init` seeds `default_crew`
+    // from the host's detected CLIs (opus here), which CI runners leave
+    // disabled, so `run_job_v2` would refuse before reaching the grant gate.
+    crate::fixture_crew::configure_sol(&fixture.root);
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap()).to_path_buf();
     let repo = fixture.repo.clone();
