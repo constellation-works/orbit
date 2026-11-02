@@ -137,6 +137,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/file_dependabot_alert_tasks.yaml"),
     ),
     (
+        "prepare_rule_findings",
+        include_str!("../../orbit-core/assets/activities/prepare_rule_findings.yaml"),
+    ),
+    (
         "file_rule_findings",
         include_str!("../../orbit-core/assets/activities/file_rule_findings.yaml"),
     ),

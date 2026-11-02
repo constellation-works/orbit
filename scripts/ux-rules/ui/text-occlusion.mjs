@@ -215,7 +215,7 @@ export async function check(ctx) {
       candidates.push(el);
       if (candidates.length >= 150) break;
     }
-    const failures = [];
+    const failures = []; const rows = [];
     let samples = 0;
     // Paint order is stacking order, but elementsFromPoint only returns
     // hit-testable elements: an opaque `pointer-events: none` overlay
@@ -227,6 +227,7 @@ export async function check(ctx) {
     (document.head ?? document.documentElement).appendChild(hitStyle);
     try {
       for (const el of candidates) {
+        let evaluated = false;
         const boxes = textBoxes(el).slice(0, 3);
         const points = [];
         for (const box of boxes) {
@@ -247,6 +248,7 @@ export async function check(ctx) {
               : [document.elementFromPoint(x, y)].filter(Boolean);
           const at = stack.indexOf(el);
           if (at === -1) continue;
+          evaluated = true;
           let covered = null;
           for (const above of stack.slice(0, at)) {
             if (above === el || el.contains(above) || above.contains(el)) continue;
@@ -256,7 +258,7 @@ export async function check(ctx) {
           }
           if (covered && !scrollReveals(el, covered, x, y)) {
             failures.push({
-              selector: H.selectorOf(el),
+              ...H.elementFacts(el),
               covered_by: H.selectorOf(covered),
               point_x_px: Math.round(x),
               point_y_px: Math.round(y),
@@ -265,12 +267,13 @@ export async function check(ctx) {
             break;
           }
         }
+        if (evaluated && (samples < 400 || failures.some((failure) => failure.element?.key === H.elementFacts(el).element?.key))) rows.push(H.elementFacts(el));
         if (failures.length >= 20 || samples >= 400) break;
       }
     } finally {
       hitStyle.remove();
     }
-    return { matched: candidates.length, failures };
+    return { matched: candidates.length, rows, failures };
   });
-  return verdict(ctx, rule, found.matched, found.failures);
+  return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
 }

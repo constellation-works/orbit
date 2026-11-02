@@ -5,6 +5,10 @@
 // ctx.currentRule around each check; a non-GET request attempted in that
 // window is blocked and returned as that rule's error.
 
+import { captureNetworkDiagnostics, recordDiagnostic } from "./ui-console.mjs";
+import { elementObservations } from "./ui-observations.mjs";
+import { createHash } from "node:crypto";
+
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -263,14 +267,16 @@ async function openTarget(ctx, browser, target, baseUrl, placeholders) {
     consoleErrors: [],
     pageErrors: [],
     failedRequests: [],
+    responses: [],
+    requestContexts: [],
     offLoopback: [],
     blockedNonGetOnLoad: [],
   };
   page.on("console", (message) => {
-    if (message.type() === "error") diagnostics.consoleErrors.push(message.text().slice(0, 500));
+    if (message.type() === "error") recordDiagnostic(diagnostics.consoleErrors, { message: message.text().slice(0, 500), location: message.location() });
   });
   page.on("pageerror", (error) => {
-    diagnostics.pageErrors.push(String(error?.message ?? error).slice(0, 500));
+    recordDiagnostic(diagnostics.pageErrors, { name: error?.name ?? "Error", message: String(error?.message ?? error).slice(0, 500), stack: String(error?.stack ?? "").slice(0, 2000) });
   });
   page.on("requestfailed", (request) => {
     const url = request.url();
@@ -281,17 +287,20 @@ async function openTarget(ctx, browser, target, baseUrl, placeholders) {
       sameOrigin = false;
     }
     if (sameOrigin) {
-      diagnostics.failedRequests.push({
+      recordDiagnostic(diagnostics.failedRequests, {
         url,
+        method: request.method(),
+        resource_type: request.resourceType(),
         failure: request.failure()?.errorText ?? "failed",
       });
     }
   });
+  await captureNetworkDiagnostics(context, page, diagnostics);
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = request.url();
     if (!isLoopback(url)) {
-      diagnostics.offLoopback.push(url);
+      recordDiagnostic(diagnostics.offLoopback, { url, method: request.method(), resource_type: request.resourceType() });
       await route.abort("blockedbyclient").catch(() => {});
       return;
     }
@@ -299,7 +308,7 @@ async function openTarget(ctx, browser, target, baseUrl, placeholders) {
     if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
       const record = { method, url, rule: ctx.currentRule || "page-load" };
       ctx.blocked.push(record);
-      if (!ctx.currentRule) diagnostics.blockedNonGetOnLoad.push(record);
+      if (!ctx.currentRule) recordDiagnostic(diagnostics.blockedNonGetOnLoad, record);
       await route.abort("blockedbyclient").catch(() => {});
       return;
     }
@@ -566,7 +575,8 @@ async function screenshotFor(ctx, rule, target, result) {
   if (!ctx.page) return "";
   const directory = path.join(ctx.outDir, "evidence", rule.id);
   await mkdir(directory, { recursive: true });
-  const name = `${safeName(target.view)}-${target.theme}-${target.width}-${target.state}.png`;
+  const member = result.original_fingerprint ? `-${createHash("sha256").update(result.fingerprint).digest("hex").slice(0, 16)}` : "";
+  const name = `${safeName(target.view)}-${target.theme}-${target.width}-${target.state}${member}.png`;
   const destination = path.join(directory, name);
   const view = target.viewDef;
   // When the result identifies the measured element, frame that element
@@ -657,7 +667,10 @@ export async function attachFailureScreenshot(ctx, rule, target, result) {
         `action: ${diagnostic.action}`,
         "",
       ].join("\n");
-      const diagPath = await write("evidence-capture-failed", text);
+      const diagnosticLabel = result.original_fingerprint
+        ? `evidence-capture-failed-${createHash("sha256").update(result.fingerprint).digest("hex").slice(0, 16)}`
+        : "evidence-capture-failed";
+      const diagPath = await write(diagnosticLabel, text);
       if (diagPath && !result.evidence.includes(diagPath)) result.evidence.push(diagPath);
     } catch {
       result.measurements = {
@@ -697,6 +710,46 @@ const H = {
       : [];
     return element.tagName.toLowerCase() + (classes.length ? "." + classes.join(".") : "");
   },
+  elementFacts(element) {
+    const unique = (selector) => {
+      try { return document.querySelectorAll(selector).length === 1; } catch { return false; }
+    };
+    const anchorOf = (node) => {
+      if (node.id) {
+        const selector = "#" + CSS.escape(node.id);
+        if (unique(selector)) return selector;
+      }
+      for (const attribute of ["data-key", "data-testid"]) {
+        const value = node.getAttribute(attribute);
+        if (!value) continue;
+        const selector = "[" + attribute + "=" + JSON.stringify(value) + "]";
+        if (unique(selector)) return selector;
+      }
+      return "";
+    };
+    let component = element.closest("[data-ux-component]");
+    if (component && !unique("[data-ux-component=" + JSON.stringify(component.getAttribute("data-ux-component")) + "]")) component = null;
+    const parts = [];
+    let node = element;
+    let anchor = "";
+    while (node && node instanceof Element) {
+      if (node === component) {
+        anchor = "[data-ux-component=" + JSON.stringify(node.getAttribute("data-ux-component")) + "]";
+        break;
+      }
+      // A shared component's local DOM path must not pick up page-specific ids.
+      if (!component && (anchor = anchorOf(node))) break;
+      const tag = node.tagName.toLowerCase();
+      const siblings = node.parentElement ? [...node.parentElement.children].filter((sibling) => sibling.tagName === node.tagName) : [node];
+      parts.unshift(tag + ":nth-of-type(" + (siblings.indexOf(node) + 1) + ")");
+      node = node.parentElement;
+    }
+    const selector = [anchor, ...parts].filter(Boolean).join(" > ");
+    return {
+      selector: H.selectorOf(element),
+      element: anchor && unique(selector) ? { key: selector, scope: component ? "shared" : "view", evidence_selector: selector } : null,
+    };
+  },
   activeRoot() {
     const panes = [...document.querySelectorAll(".tab-pane")].filter((pane) => H.visible(pane));
     return panes[panes.length - 1] ?? document.body;
@@ -711,21 +764,23 @@ export async function measureInPage(ctx, body) {
   return ctx.page.evaluate(`(() => { ${MEASURE_PREAMBLE}\n return (${body.toString()})(H); })()`);
 }
 
-export function verdict(ctx, rule, matched, failures, extra = {}) {
+// `observedFailures` is the complete failure set behind `rows` when a rule
+// reports only the first twenty in `failures`.
+export function verdict(ctx, rule, matched, failures, extra = {}, rows = [], discriminators = ["constraint"], observedFailures = failures) {
   const target = ctx.target;
   if (matched === 0) {
-    return uiResultOf(rule, target, "skipped", {
+    return elementObservations(uiResultOf(rule, target, "skipped", {
       measurements: { matched: 0, reason: "no element matched on this target", ...extra },
-    });
+    }), rows, observedFailures, discriminators);
   }
   if (failures.length > 0) {
-    return uiResultOf(rule, target, "fail", {
+    return elementObservations(uiResultOf(rule, target, "fail", {
       measurements: { matched, failures: failures.slice(0, 20), ...extra },
-    });
+    }), rows, observedFailures, discriminators);
   }
-  return uiResultOf(rule, target, "pass", {
+  return elementObservations(uiResultOf(rule, target, "pass", {
     measurements: { matched, ...extra },
-  });
+  }), rows, observedFailures, discriminators);
 }
 
 async function writeEvidence(ctx, ruleId, targetId, label, text) {

@@ -96,12 +96,12 @@ export async function check(ctx) {
       const short = words.length >= 2 && words.length <= 5 && own.length <= 60;
       const prose = words.length > 5;
       if (!short && !prose) continue;
-      const key = `${H.selectorOf(el)}|${own}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const key = H.elementFacts(el).element?.key;
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
       const lines = lineCount(el);
       rows.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         words: words.length,
         short,
         chars: own.length,
@@ -120,7 +120,7 @@ export async function check(ctx) {
     const failures = rows.filter(
       (row) => row.collapsed || (row.short && row.lines >= 3 && row.words / row.lines <= 1.5) ||
         (!row.short && row.lines >= 9 && row.chars / row.lines < 25),
-    ).slice(0, 20).map((row, index) => {
+    ).map((row, index) => {
       // `selector` alone is not unique (it is a tag plus two classes), so
       // stamp the measured node with a handle the evidence capture can
       // resolve to exactly this element. Only rows the result keeps are
@@ -131,7 +131,7 @@ export async function check(ctx) {
       rowElements[rows.indexOf(row)]?.setAttribute("data-ux-evidence-target", handle);
       return { ...row, evidence_selector: `[data-ux-evidence-target="${handle}"]` };
     });
-    return { matched: rows.length, failures };
+    return { matched: rows.length, rows, failures };
   });
-  return verdict(ctx, rule, found.matched, found.failures);
+  return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
 }

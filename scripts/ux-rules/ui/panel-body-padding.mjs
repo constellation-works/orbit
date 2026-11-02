@@ -59,6 +59,7 @@ export async function check(ctx) {
       const style = getComputedStyle(body);
       const { inset, element } = contentInset(body);
       measured.push({
+        ...H.elementFacts(body),
         selector:
           H.selectorOf(body) === H.selectorOf(panel)
             ? H.selectorOf(panel)
@@ -108,5 +109,5 @@ export async function check(ctx) {
       }
     }
   }
-  return verdict(ctx, rule, rows.length, failures, { panels: rows.slice(0, 20) });
+  return verdict(ctx, rule, rows.length, failures, { panels: rows.slice(0, 20) }, rows);
 }

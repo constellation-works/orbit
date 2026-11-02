@@ -65,7 +65,7 @@ export async function check(ctx) {
           ? gapBelow + Math.max(H.px(myStyle.marginBottom), H.px(nextStyle.marginTop))
           : gapBelow;
       rows.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         above_px: Math.round(above * 10) / 10,
         below_px: Math.round(below * 10) / 10,
         text: (el.textContent ?? "").trim().slice(0, 60),
@@ -74,8 +74,9 @@ export async function check(ctx) {
     }
     return {
       matched: rows.length,
-      failures: rows.filter((row) => row.above_px + 1 < row.below_px).slice(0, 20),
+      rows,
+      failures: rows.filter((row) => row.above_px + 1 < row.below_px),
     };
   });
-  return verdict(ctx, rule, found.matched, found.failures);
+  return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
 }

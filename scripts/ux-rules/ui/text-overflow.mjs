@@ -45,7 +45,7 @@ export async function check(ctx) {
       return false;
     };
     const SKIP_TAGS = new Set(["HTML", "BODY", "INPUT", "TEXTAREA", "SELECT", "svg"]);
-    const candidates = [];
+    const candidates = []; const rows = [];
     for (const el of H.all("*")) {
       if (SKIP_TAGS.has(el.tagName) || el.closest("svg")) continue;
       if (el.closest("details:not([open]), [hidden]")) continue;
@@ -54,10 +54,10 @@ export async function check(ctx) {
       // not visible overflow.
       if (box.width < 2 || box.height < 2 || el.clientWidth < 2) continue;
       if (scrollableX(getComputedStyle(el))) continue;
-      if (el.scrollWidth <= el.clientWidth + 1) continue;
       if (!(el.textContent ?? "").trim()) continue;
-      candidates.push(el);
-      if (candidates.length >= 400) break;
+      rows.push({ ...H.elementFacts(el), text: (el.textContent ?? "").trim().slice(0, 80) });
+      if (el.scrollWidth > el.clientWidth + 1) candidates.push(el);
+      if (rows.length >= 400) break;
     }
     const failures = [];
     for (const el of candidates) {
@@ -89,7 +89,7 @@ export async function check(ctx) {
       }
       if (!clipped && !hitsSibling) continue;
       failures.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         tag: el.tagName.toLowerCase(),
         scroll_width_px: el.scrollWidth,
         client_width_px: el.clientWidth,
@@ -98,9 +98,8 @@ export async function check(ctx) {
         sibling: siblingSelector,
         text: (el.textContent ?? "").trim().slice(0, 80),
       });
-      if (failures.length >= 20) break;
     }
-    return { matched: candidates.length, failures };
+    return { matched: candidates.length, rows, failures };
   });
-  return verdict(ctx, rule, found.matched, found.failures);
+  return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
 }

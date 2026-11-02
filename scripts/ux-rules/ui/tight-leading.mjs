@@ -54,7 +54,7 @@ export async function check(ctx) {
       const lineHeight = H.px(style.lineHeight);
       if (!(lineHeight > 0)) continue;
       rows.push({
-        selector: H.selectorOf(el),
+        ...H.elementFacts(el),
         lines,
         line_height_px: Math.round(lineHeight * 10) / 10,
         font_size_px: Math.round(fontSize * 10) / 10,
@@ -65,12 +65,13 @@ export async function check(ctx) {
     }
     return {
       matched: rows.length,
+      rows,
       normal_multiline: normalMultiline,
-      failures: rows.filter((row) => row.ratio < 1.3).slice(0, 20),
+      failures: rows.filter((row) => row.ratio < 1.3),
     };
   });
   return verdict(ctx, rule, found.matched, found.failures, {
     min_leading: MIN_LEADING,
     normal_multiline: found.normal_multiline,
-  });
+  }, found.rows);
 }

@@ -141,6 +141,41 @@ async function readSurfaceFile(root, relative, limit) {
   }
 }
 
+const MAX_OUTPUT_FILES = 64;
+const MAX_FILE_BYTES = 1024 * 1024;
+// The host refuses a larger merged stdout document; say so before it does.
+const MAX_STDOUT_BYTES = 1024 * 1024;
+
+async function exportFile(bytes, suffix, exported) {
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  let name = exported.get(digest);
+  if (name && path.extname(name) !== suffix) throw new Error(`identical evidence has conflicting file types: ${name} and ${suffix}; use one consistent evidence type`);
+  if (!name) {
+    name = `${digest}${suffix}`;
+    if (exported.size >= MAX_OUTPUT_FILES) throw new Error(`evidence and observation archive exceed ${MAX_OUTPUT_FILES} unique output files; reduce captures or split the run; the adapter limit is ${MAX_OUTPUT_FILES}`);
+    if (!process.env.ORBIT_SCRIPT_OUT) throw new Error("evidence requires declared ORBIT_SCRIPT_OUT outputs");
+    await writeFile(path.join(process.env.ORBIT_SCRIPT_OUT, name), bytes, { flag: "wx" });
+    exported.set(digest, name);
+  }
+  return { name, digest };
+}
+
+// The archive is exported byte for byte and never inflated here: each part
+// is read through the same confinement as evidence and checked against the
+// runner's descriptor, then named by its digest like any other output.
+async function exportArchive(archive, root, exported) {
+  if (archive === undefined) return undefined;
+  if (!archive || !Array.isArray(archive.parts) || archive.parts.length === 0) throw new Error("runner archive descriptor has no parts");
+  const parts = [];
+  for (const part of archive.parts) {
+    const bytes = await readSurfaceFile(root, part.path, MAX_FILE_BYTES);
+    const { name, digest } = await exportFile(bytes, ".gz", exported);
+    if (bytes.length !== part.bytes || digest !== part.sha256) throw new Error(`observation archive part ${part.path} does not match its descriptor; rerun the surface`);
+    parts.push({ name, bytes: bytes.length, sha256: digest });
+  }
+  return { ...archive, parts };
+}
+
 // Content names deduplicate repeated captures across surfaces and results.
 async function exportEvidence(results, root, exported) {
   for (const result of results) {
@@ -148,21 +183,11 @@ async function exportEvidence(results, root, exported) {
     if (!Array.isArray(result.evidence)) throw new Error("evidence must be an array of relative paths");
     const names = [];
     for (const relative of result.evidence) {
-      const bytes = await readSurfaceFile(root, relative, 1024 * 1024);
+      const bytes = await readSurfaceFile(root, relative, MAX_FILE_BYTES);
       let suffix = path.extname(relative).toLowerCase();
       if (!/^\.[a-z0-9]{1,10}$/.test(suffix)) throw new Error(`evidence needs a simple ASCII file extension of at most 10 characters: ${relative}`);
       if (suffix === ".jpeg") suffix = ".jpg";
-      const digest = createHash("sha256").update(bytes).digest("hex");
-      let name = exported.get(digest);
-      if (name && path.extname(name) !== suffix) throw new Error(`identical evidence has conflicting file types: ${name} and ${relative}; use one consistent evidence type`);
-      if (!name) {
-        name = `${digest}${suffix}`;
-        if (exported.size >= 64) throw new Error("evidence exceeds 64 unique output files; reduce captures or split the run; the adapter limit is 64");
-        if (!process.env.ORBIT_SCRIPT_OUT) throw new Error("evidence requires declared ORBIT_SCRIPT_OUT outputs");
-        await writeFile(path.join(process.env.ORBIT_SCRIPT_OUT, name), bytes, { flag: "wx" });
-        exported.set(digest, name);
-      }
-      names.push(name);
+      names.push((await exportFile(bytes, suffix, exported)).name);
     }
     result.evidence = names;
   }
@@ -175,13 +200,24 @@ async function main() {
   if (!Array.isArray(input.surfaces) || input.surfaces.some((s) => typeof s !== "string")) {
     throw new Error("surfaces must be an array of strings");
   }
+  if (input.owner_context != null && (typeof input.owner_context !== "object" || Array.isArray(input.owner_context))) {
+    throw new Error("owner_context must be the prepare_rule_findings output object");
+  }
   const locations = stepLocations(process.argv.slice(2), input);
   const kit = await browserKit(locations);
   const scratch = await mkdtemp(path.join(os.tmpdir(), "ux-rules-"));
   const results = [];
   let commit = "";
   const exported = new Map();
+  const archives = [];
+  let observations = 0;
+  let defectGroups = 0;
   try {
+    let ownerContextPath = "";
+    if (input.owner_context) {
+      ownerContextPath = path.join(scratch, "owner-context.json");
+      await writeFile(ownerContextPath, JSON.stringify(input.owner_context));
+    }
     for (const [index, surface] of input.surfaces.entries()) {
       const out = path.join(scratch, String(index));
       await mkdir(out);
@@ -191,6 +227,7 @@ async function main() {
         const orbit = await orbitBinary(locations);
         if (surface === "cli") args.push("--orbit", orbit);
         if (surface === "ui") args.push("--fixture");
+        if (ownerContextPath) args.push("--owner-context", ownerContextPath);
         const env = { ...process.env, ORBIT_SCRATCH_DIR: out, ORBIT_VISUAL_ORBIT: orbit };
         if (kit.playwrightModule) env.PLAYWRIGHT_MODULE = kit.playwrightModule;
         if (kit.playwrightBrowsersPath) env.PLAYWRIGHT_BROWSERS_PATH = kit.playwrightBrowsersPath;
@@ -206,16 +243,31 @@ async function main() {
         if (!Array.isArray(report.results)) throw new Error("runner report has no results array");
         commit ||= report.commit || "";
         await exportEvidence(report.results, root, exported).catch((error) => { error.evidenceFailure = true; throw error; });
+        const archive = await exportArchive(report.archive, root, exported).catch((error) => { error.evidenceFailure = true; throw error; });
+        if (archive) archives.push({ surface, ...archive, summary: report.summary ?? null });
+        observations += report.summary?.observations ?? report.results.length;
+        defectGroups += report.summary?.defect_groups ?? 0;
         results.push(...report.results.map((result) => ({ ...result, surface })));
       } catch (error) {
         if (error.evidenceFailure) throw error;
         const detail = (error.stderr || error.message || String(error)).trim();
+        observations += 1;
         results.push({ surface, rule: `${surface}.runner`, target: { id: surface, argv: [] }, status: "error", severity: "medium", measurements: { reason: detail }, evidence: [], fingerprint: `${surface}.runner|${surface}` });
       } finally { await root.close(); }
     }
+    // `summary` counts the reported results the filer reads; each archive's
+    // summary counts every raw observation of its surface.
     const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
     for (const result of results) if (Object.hasOwn(summary, result.status)) summary[result.status]++;
-    process.stdout.write(`${JSON.stringify({ schema_version: 1, surface: "mixed", commit, results, summary })}\n`);
+    summary.observations = observations;
+    summary.defect_groups = defectGroups;
+    summary.reported = results.length;
+    const document = `${JSON.stringify({ schema_version: 1, surface: "mixed", commit, results, summary, archives })}\n`;
+    const bytes = Buffer.byteLength(document);
+    if (bytes > MAX_STDOUT_BYTES) {
+      throw new Error(`filing document is ${bytes} bytes, over the ${MAX_STDOUT_BYTES}-byte script stdout limit; no results were truncated; split the surfaces or reduce reported observations`);
+    }
+    process.stdout.write(document);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

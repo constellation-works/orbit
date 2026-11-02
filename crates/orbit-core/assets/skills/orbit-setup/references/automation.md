@@ -121,8 +121,7 @@ on this host.
 
 The seeded `ux-rules` routine runs `ux_rules_pipeline` daily and is disabled by
 default. It runs `ux_rules.runner` once for each surface in `ux_rules.surfaces`.
-The `file_rule_findings` activity keeps one open task per `rule_fingerprint`; new
-failures become proposed bug tasks. The runner script manifest must be granted
+The `file_rule_findings` activity groups producer-declared defects across target variants before the task cap, retaining every member and screenshot. Unannotated results keep one open task per `rule_fingerprint`. New failures become proposed bug tasks; existing open owners receive new evidence. Every known group member must appear and pass before a repair comment, without changing status. Terminal tasks remain historical and never suppress a new active finding. The pipeline's first step, `prepare_rule_findings`, reads the groups open owners track so the runner reports them in full while it only counts untracked passing observations; raw observations travel as gzip archive parts among the script's 64 declared outputs. The runner script manifest must be granted
 with `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` before the routine can do work. With
 no grant or an empty `surfaces` list, the run does no work. Enable the routine
 deliberately after configuration; see [Turning the scheduler on](#turning-the-scheduler-on).

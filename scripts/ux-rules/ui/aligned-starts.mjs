@@ -210,7 +210,7 @@ export async function check(ctx) {
     function anchorOf(start, column) {
       return {
         node: start.element,
-        selector: H.selectorOf(start.element),
+        ...H.elementFacts(start.element),
         column: H.selectorOf(column),
         top_px: Math.round(start.top),
         width_px: Math.round(start.width),
@@ -222,6 +222,7 @@ export async function check(ctx) {
     const comparisons = [];
     const incomparable = [];
     const failures = [];
+    const rows = [];
     for (const parent of H.all("*")) {
       if (comparisons.length >= 30) break;
       const style = getComputedStyle(parent);
@@ -294,9 +295,11 @@ export async function check(ctx) {
             peer_text: peer.text,
             width_px: item.width_px,
             kind: item.kind,
+            element: item.element,
             node: item.node,
           };
           rowAnchors.push(recorded);
+          rows.push(recorded);
           if (delta > START_TOLERANCE_PX) failures.push(recorded);
         }
       }
@@ -330,12 +333,15 @@ export async function check(ctx) {
       return { ...serial, evidence_selector: `[data-ux-evidence-target="${handle}"]` };
     });
     const matched = comparisons.reduce((sum, row) => sum + row.anchors.length, 0);
-    return { matched, failures: reported, comparisons, incomparable };
+    // Every compared anchor is an observation; failures past the reported
+    // twenty keep their identity so they never read as passing members.
+    const strip = ({ node, ...serial }) => serial;
+    return { matched, failures: reported, all_failures: failures.map(strip), rows: rows.map(strip), comparisons, incomparable };
   });
 
   const extra = { comparisons: found.comparisons, incomparable: found.incomparable };
   if (found.matched === 0) {
     extra.reason = found.incomparable.length > 0 ? "no comparable content starts" : "no element matched on this target";
   }
-  return verdict(ctx, rule, found.matched, found.failures, extra);
+  return verdict(ctx, rule, found.matched, found.failures, extra, found.rows, ["start"], found.all_failures);
 }
