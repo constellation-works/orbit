@@ -390,12 +390,11 @@ impl OrbitRuntime {
         }
         let control = super::control::resident_control_from_history(history)
             .map_err(OrbitError::Execution)?;
-        let pending_wake = control
-            .pending_wake(last_cycle.as_ref().map(|cycle| cycle.at))
-            .cloned();
-        if let Some((entry, _)) = &pending_wake {
+        let last_cycle_at = last_cycle.as_ref().map(|cycle| cycle.at);
+        let pending_wake = control.pending_wake(last_cycle_at).cloned();
+        if pending_wake.is_some() {
             reasons.push("wake".into());
-            if entry.status_request {
+            if control.pending_status_request(last_cycle_at) {
                 reasons.push("status_request".into());
             }
         }
