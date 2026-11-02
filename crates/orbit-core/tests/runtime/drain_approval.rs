@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod advisory;
+#[cfg(unix)]
+mod explicit_pilot_reuse;
 mod landed_creation;
 mod pilot_mutations;
 #[cfg(unix)]
@@ -1846,9 +1848,11 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
 
 /// One explicit pilot, one assessment, then the drain approves it.
 ///
-/// The concurrent drain child stands down while that pilot is preparing, and
-/// again after the assessment is applied. The next pass approves the task
-/// without a second provider call. A never-piloted sibling is still selected.
+/// A pass that sees the explicit pilot holds the task as `pilot_running`. A
+/// child the drain dispatched before that pilot was submitted stands down
+/// while it is preparing, and again after the assessment is applied. The
+/// next pass approves the task without a second provider call. A
+/// never-piloted sibling is still selected.
 fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     let workspace = Workspace::new();
     let drain = workspace.running(
@@ -1869,8 +1873,15 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     workspace.checkpoint_prepare(&explicit, &prepared);
 
     let selection = workspace.select(&drain);
-    assert_eq!(selection["task_ids"], json!([assessed.id]), "{selection}");
-    let child = workspace.pilot_child(&drain, &selection["task_ids"]);
+    assert_eq!(selection["task_ids"], json!([]), "{selection}");
+    assert_eq!(
+        held_reason(&selection, &assessed),
+        Some("pilot_running"),
+        "{selection}"
+    );
+    // The child an earlier pass dispatched, as the race between that pass's
+    // selection and the explicit submission leaves it.
+    let child = workspace.pilot_child(&drain, &json!([assessed.id]));
     workspace.set_trigger(&child, JobRunTrigger::child());
     let stood_down = workspace.prepare_named(&child, std::slice::from_ref(&assessed.id));
     assert_eq!(stood_down["task_count"], 0, "{stood_down}");
@@ -1897,9 +1908,13 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     assert_eq!(workspace.pilot_applications(&assessed), 1);
     workspace.finish(&child, JobRunState::Success);
 
-    // An unrelated drain cannot acquire promotion authority from action input.
+    // An unrelated drain cannot acquire promotion authority from action
+    // input. Its selection reaches the reusable assessment, and the write
+    // boundary refuses it because the stored drain never asked to approve.
     let unauthorized = workspace.running("workspace_auto_pipeline", json!({}));
-    workspace.select(&unauthorized);
+    let forged = workspace.select(&unauthorized);
+    assert_eq!(forged["reused"], json!([]), "{forged}");
+    assert_eq!(forged["awaiting_reuse"], json!([assessed.id]), "{forged}");
     assert_eq!(workspace.status(&assessed), TaskStatus::Proposed);
 
     let fresh = workspace.task("fresh", &[], &["file:README.md"], TaskComplexity::Low);

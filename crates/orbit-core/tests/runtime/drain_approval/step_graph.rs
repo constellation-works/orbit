@@ -10,13 +10,18 @@ use orbit_core::DrainAdmissionsStopRequest;
 
 use super::*;
 
-const PILOT_JOB: &str = "task_pilot_pipeline";
-const LEAF_JOB: &str = "task_auto_pipeline";
+pub(super) const PILOT_JOB: &str = "task_pilot_pipeline";
+pub(super) const LEAF_JOB: &str = "task_auto_pipeline";
 
 impl Workspace {
     /// Poll `probe` until it yields, failing after a generous deadline with
     /// what the drain `drain` last did.
-    fn wait_for<T>(&self, drain: &str, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+    pub(super) fn wait_for<T>(
+        &self,
+        drain: &str,
+        what: &str,
+        mut probe: impl FnMut() -> Option<T>,
+    ) -> T {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             if let Some(found) = probe() {
@@ -44,7 +49,7 @@ impl Workspace {
 
     /// The `index`th pilot `drain` started, claimed by this process so it
     /// runs until the test ends it, whatever its substitute worker does.
-    fn claimed_pilot(&self, drain: &str, index: usize) -> String {
+    pub(super) fn claimed_pilot(&self, drain: &str, index: usize) -> String {
         let pilot = self.wait_for(drain, "an approval pilot", || {
             self.children(drain, PILOT_JOB).into_iter().nth(index)
         });
@@ -61,7 +66,7 @@ impl Workspace {
 impl Workspace {
     /// The same fixture with every shipped job and activity deployed, as
     /// `orbit init` leaves a host.
-    fn with_shipped_jobs() -> Self {
+    pub(super) fn with_shipped_jobs() -> Self {
         let mut workspace = Self::new();
         let global = workspace._root.path().join("home/.orbit");
         orbit_core::bootstrap::init::init_workspace_at_root(
@@ -81,7 +86,7 @@ impl Workspace {
     }
 
     /// A backlog task scoped to its own new file, so two never conflict.
-    fn backlog_task(&self, title: &str) -> Task {
+    pub(super) fn backlog_task(&self, title: &str) -> Task {
         let file = format!("{title}.md");
         self.commit_file(&file, "fixture\n", title);
         self.runtime
@@ -99,7 +104,7 @@ impl Workspace {
     }
 
     /// The children of `drain` running `job`, oldest first.
-    fn children(&self, drain: &str, job: &str) -> Vec<String> {
+    pub(super) fn children(&self, drain: &str, job: &str) -> Vec<String> {
         self.runtime
             .read_run_state(drain)
             .unwrap()
@@ -115,7 +120,7 @@ impl Workspace {
     }
 
     /// The leaf `drain` started for `task`, once it has.
-    fn leaf_for(&self, drain: &str, task: &Task) -> Option<String> {
+    pub(super) fn leaf_for(&self, drain: &str, task: &Task) -> Option<String> {
         self.children(drain, LEAF_JOB).into_iter().find(|leaf| {
             self.run(leaf).input.is_some_and(|input| {
                 input["task_ids"]
@@ -125,11 +130,11 @@ impl Workspace {
         })
     }
 
-    fn run(&self, run_id: &str) -> orbit_types::workflow::JobRun {
+    pub(super) fn run(&self, run_id: &str) -> orbit_types::workflow::JobRun {
         self.runtime.show_job_run(run_id).unwrap()
     }
 
-    fn live(&self, run_id: &str) -> bool {
+    pub(super) fn live(&self, run_id: &str) -> bool {
         !self.run(run_id).state.is_terminal()
     }
 
@@ -138,7 +143,7 @@ impl Workspace {
     /// writes sees a free slot and the task still in the backlog, and admits
     /// it again: that duplicate never runs, so it holds the drain's only slot
     /// until its substitute worker gives up.
-    fn settle_leaf(&self, leaf: &str, task: &Task) {
+    pub(super) fn settle_leaf(&self, leaf: &str, task: &Task) {
         self.runtime
             .apply_task_automation_update(
                 &task.id,

@@ -38,7 +38,8 @@
 #   piloted twice.
 # - A fresh assessment from an explicit or routine pilot is approved on the
 #   selecting pass without another provider call. A stale one, or one with a
-#   holding warning, stays proposed and is not selected again. The drain's own
+#   holding warning, stays proposed and is not selected again. A task another
+#   pilot is assessing is held as `pilot_running` until it ends. The drain's own
 #   child still pilots a task again when that child's assessment found the
 #   task had changed. Targeted task ids and promotion authority are not a new
 #   pilot request.

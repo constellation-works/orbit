@@ -35,12 +35,13 @@
 //! `unverified_review_finding` before it costs a pilot: approval would refuse
 //! it anyway, and the detail names the verification job.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskHistoryEntry,
     TaskStatus, TaskType,
@@ -55,7 +56,8 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::INSPECTION_CREW_UNAVAILABLE;
 use crate::application::task::{
     NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PILOT_WARNING_TRIAGED_EVENT, SYSTEM_ACTOR_LABEL,
-    TaskListFilter, TaskRecordUpdateParams, TaskRecords, UNVERIFIED_REVIEW_FINDING, metadata_task,
+    TaskAutomationPort, TaskListFilter, TaskRecordUpdateParams, TaskRecords,
+    UNVERIFIED_REVIEW_FINDING, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
@@ -148,6 +150,7 @@ fn approval_snapshot(
         closed: Vec::new(),
         reusable: Vec::new(),
     };
+    let holders = runtime.pilot_preparation_holders()?;
     for task in proposed {
         let held = |reason: &str, detail: Option<String>, findings: Vec<DrainHoldFinding>| {
             DrainWaitingTask {
@@ -260,6 +263,16 @@ fn approval_snapshot(
             ));
             continue;
         }
+        // Nor is one an explicit or routine pilot is running: the child this
+        // pass would dispatch could only stand down.
+        if let Some(run_id) = live_pilot_run(runtime, &holders, &task.id)? {
+            snapshot.held.push(held(
+                "pilot_running",
+                Some(format!("task-pilot run {run_id} is assessing it")),
+                Vec::new(),
+            ));
+            continue;
+        }
         let changed_at = latest.map(|entry| entry.at);
         // An undecided pilot an earlier drain recorded holds the task until a
         // real change, even though no pilot of this drain ran it.
@@ -322,6 +335,38 @@ fn approval_snapshot(
         }
     }
     Ok(snapshot)
+}
+
+/// A live task-pilot run that names `task_id` in its input, or whose
+/// reservation or prepare checkpoint is among `holders`.
+///
+/// Stored rows only: the reconciling job list resolves the job's catalog
+/// entry and can finalize another run, and selection must do neither.
+fn live_pilot_run(
+    runtime: &OrbitRuntime,
+    holders: &BTreeMap<String, BTreeSet<String>>,
+    task_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    let named = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(PILOT_JOB.to_string()),
+            task_id: Some(task_id.to_string()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+    Ok(named
+        .into_iter()
+        .next()
+        .map(|run| run.run_id)
+        .or_else(|| holders.get(task_id)?.iter().next().cloned()))
 }
 
 /// One task-pilot child this drain dispatched.
@@ -581,8 +626,11 @@ fn record_report(
                         );
                     }
                 }
+                // A reused assessment is approved once, by the pass whose
+                // promotion moved it, so only this pass's approvals can
+                // repeat it.
                 for task_id in reused {
-                    if !approved.iter().any(|existing| existing == task_id) {
+                    if !approved.contains(task_id) {
                         approved.push(task_id.clone());
                     }
                 }
@@ -591,12 +639,8 @@ fn record_report(
                     .drain_approvals
                     .get_or_insert_with(DrainApprovalReport::default);
                 report.recorded_at = Some(Utc::now());
-                let fresh = approved
-                    .into_iter()
-                    .filter(|task_id| !report.approved.iter().any(|existing| existing == task_id))
-                    .collect::<Vec<_>>();
-                report.approved_total += fresh.len() as u64;
-                report.approved.extend(fresh);
+                report.approved_total += approved.len() as u64;
+                report.approved.extend(approved);
                 let excess = report.approved.len().saturating_sub(REPORTED_TASKS);
                 report.approved.drain(..excess);
                 report.closed_total += closed.len() as u64;
@@ -624,6 +668,8 @@ fn held_json(snapshot: &ApprovalSnapshot) -> Value {
         "held": snapshot.held.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
         "held_total": snapshot.held.len(),
         "held_by_reason": snapshot.held_by_reason(),
+        "awaiting_reuse": snapshot.reusable.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
+        "awaiting_reuse_total": snapshot.reusable.len(),
     })
 }
 
@@ -693,15 +739,6 @@ pub(crate) fn select_proposed_approvals(
             .map_err(|error| {
                 DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
             })?;
-    }
-    for task_id in std::mem::take(&mut snapshot.reusable) {
-        snapshot.held.push(DrainWaitingTask {
-            task_id,
-            reason: Some("assessment_reuse".to_string()),
-            blocked_by: Vec::new(),
-            detail: None,
-            findings: Vec::new(),
-        });
     }
     record_report(runtime, run_id, &snapshot, &[], &reused);
     let task_ids = if admissions_stopped || pilot_live {
@@ -867,18 +904,7 @@ pub(super) fn readiness_approvals(
     } else {
         Vec::new()
     };
-    let mut snapshot =
-        approval_snapshot(runtime, proposed, &pilot_children(runtime, run_id)?, false)?;
-    let awaiting = snapshot.candidates.len();
-    for task_id in std::mem::take(&mut snapshot.reusable) {
-        snapshot.held.push(DrainWaitingTask {
-            task_id,
-            reason: Some("assessment_reuse".to_string()),
-            blocked_by: Vec::new(),
-            detail: None,
-            findings: Vec::new(),
-        });
-    }
+    let snapshot = approval_snapshot(runtime, proposed, &pilot_children(runtime, run_id)?, false)?;
     let mut value = held_json(&snapshot);
     value["closed"] = json!(report.closed);
     value["closed_total"] = json!(report.closed_total);
@@ -886,6 +912,6 @@ pub(super) fn readiness_approvals(
     value["drain_run_id"] = json!(run_id);
     value["approved_total"] = json!(report.approved_total);
     value["approved"] = json!(report.approved);
-    value["awaiting_pilot"] = json!(awaiting);
+    value["awaiting_pilot"] = json!(snapshot.candidates.len());
     Ok(value)
 }

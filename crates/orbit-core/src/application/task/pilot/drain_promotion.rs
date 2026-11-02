@@ -22,13 +22,12 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
     TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
+use orbit_types::workflow::JobRunTriggerKind;
 use orbit_types::workflow::automation::members::PreparationPolicy;
-use orbit_types::workflow::{JobRunState, JobRunTriggerKind};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -440,11 +439,12 @@ pub(crate) enum ExplicitAssessmentReuse {
     NotReusable,
 }
 
-/// Whether `pilot_run_id` is a child an approve-proposed drain dispatched.
+/// Whether `pilot_run_id` is a child another run dispatched.
 ///
-/// The trigger and the parent dispatch record are host writes. `task_ids`
-/// and `promotion_authorized` on the run input are not authority.
-pub(crate) fn drain_dispatched_pilot(
+/// The trigger is a host write at admission. `task_ids` and
+/// `promotion_authorized` on the run input are not authority. A child is
+/// never an operator request, whether or not its parent is still live.
+pub(crate) fn dispatched_child_pilot(
     runtime: &OrbitRuntime,
     pilot_run_id: Option<&str>,
 ) -> Result<bool, OrbitError> {
@@ -454,68 +454,27 @@ pub(crate) fn drain_dispatched_pilot(
     else {
         return Ok(false);
     };
-    let Some(state) = runtime.stored_run_state(pilot_run_id)? else {
-        return Ok(false);
-    };
-    if state.trigger.as_ref().map(|trigger| trigger.kind) != Some(JobRunTriggerKind::Child) {
-        return Ok(false);
-    }
-    // Stored rows only. The reconciling job list can finalize another run,
-    // and this check must not.
-    let drains = runtime
-        .stores()
-        .jobs()
-        .list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DRAIN_JOB.to_string()),
-            states: vec![
-                JobRunState::Pending,
-                JobRunState::Running,
-                JobRunState::Retrying,
-            ],
-            limit: Some(100),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
-    for drain in drains {
-        if drain.state.is_terminal() {
-            continue;
-        }
-        let approve_proposed = drain
-            .input
-            .as_ref()
-            .and_then(|input| input.get("approve_proposed"))
-            .and_then(Value::as_bool)
-            == Some(true);
-        if !approve_proposed {
-            continue;
-        }
-        let Some(parent) = runtime.stored_run_state(&drain.run_id)? else {
-            continue;
-        };
-        if parent
-            .child_dispatches
-            .iter()
-            .any(|child| child.child_run_id == pilot_run_id && child.job_name == PILOT_JOB)
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(runtime
+        .stored_run_state(pilot_run_id)?
+        .and_then(|state| state.trigger)
+        .is_some_and(|trigger| trigger.kind == JobRunTriggerKind::Child))
 }
 
-/// Whether a drain child must not call the provider for `task`.
+/// Why a child pilot must not call the provider for `task`, if it must not.
 ///
-/// True when an explicit or routine pilot already certified an assessment.
-/// A drain-owned receipt stays on the ordinary prepare path, so a material
-/// change found at that child's own approval can still be piloted again.
-pub(crate) fn certified_explicit_assessment(
+/// An explicit or routine pilot already certified an assessment: a fresh one
+/// is `assessment_already_applied`, a held one names its hold. A drain-owned
+/// receipt stays on the ordinary prepare path, so a material change found at
+/// that child's own approval can still be piloted again.
+pub(crate) fn reused_assessment_exclusion(
     runtime: &OrbitRuntime,
     task: &Task,
-) -> Result<bool, OrbitError> {
-    Ok(matches!(
-        classify_explicit_assessment_reuse(runtime, task)?,
-        ExplicitAssessmentReuse::Promote { .. } | ExplicitAssessmentReuse::Hold { .. }
-    ))
+) -> Result<Option<&'static str>, OrbitError> {
+    Ok(match classify_reuse(runtime, task, false)? {
+        ExplicitAssessmentReuse::Promote { .. } => Some("assessment_already_applied"),
+        ExplicitAssessmentReuse::Hold { reason, .. } => Some(reason),
+        ExplicitAssessmentReuse::NotReusable => None,
+    })
 }
 
 /// Approve one fresh explicit or routine assessment under the task lock.
@@ -573,6 +532,17 @@ pub(crate) fn classify_explicit_assessment_reuse(
     runtime: &OrbitRuntime,
     task: &Task,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
+    classify_reuse(runtime, task, true)
+}
+
+/// [`classify_explicit_assessment_reuse`], optionally without the live-pilot
+/// hold. A child's own prepare is itself a live pilot of the task, and has
+/// already excluded every other run preparing it.
+fn classify_reuse(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    hold_live_pilot: bool,
+) -> Result<ExplicitAssessmentReuse, OrbitError> {
     let comments = runtime.get_task_comments(&task.id)?;
     let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
@@ -603,7 +573,22 @@ pub(crate) fn classify_explicit_assessment_reuse(
     {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     }
-    if let Some(run_id) = runtime.live_task_pilot_run(&task.id)? {
+    // A receipt written before the audit certified its material and
+    // complexity (#4841) cannot be checked for drift, so it is not this
+    // identity: the drain pilots the task as usual.
+    let Some(written) = audit
+        .get("applied_material")
+        .and_then(|value| serde_json::from_value::<AppliedTaskMaterial>(value.clone()).ok())
+    else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    let Some(complexity) = audit
+        .get("complexity_after")
+        .and_then(|value| serde_json::from_value::<TaskComplexity>(value.clone()).ok())
+    else {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    };
+    if hold_live_pilot && let Some(run_id) = runtime.live_task_pilot_run(&task.id)? {
         return Ok(ExplicitAssessmentReuse::Hold {
             reason: "pilot_running",
             detail: Some(format!("task-pilot run {run_id} is assessing it")),
@@ -622,24 +607,6 @@ pub(crate) fn classify_explicit_assessment_reuse(
             detail: Some("description or acceptance criteria changed after the assessment".into()),
         });
     }
-    let Some(written) = audit
-        .get("applied_material")
-        .and_then(|value| serde_json::from_value::<AppliedTaskMaterial>(value.clone()).ok())
-    else {
-        return Ok(ExplicitAssessmentReuse::Hold {
-            reason: "pilot_output_malformed",
-            detail: Some("the pilot audit does not certify its written material".into()),
-        });
-    };
-    let Some(complexity) = audit
-        .get("complexity_after")
-        .and_then(|value| serde_json::from_value::<TaskComplexity>(value.clone()).ok())
-    else {
-        return Ok(ExplicitAssessmentReuse::Hold {
-            reason: "pilot_output_malformed",
-            detail: Some("the pilot audit does not certify its complexity".into()),
-        });
-    };
     let policy = runtime.claim_preparation_policy(None)?;
     let validated = certified_validated_task(
         task,
