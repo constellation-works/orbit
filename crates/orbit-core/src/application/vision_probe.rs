@@ -7,7 +7,8 @@
 //! images at all (no CLI runtime, no `spec.image_input`, `vision = false`).
 //! A finished probe that did not return the code is `image_not_seen` for
 //! that crew only. The probe run stays successful, so one crew's miss does
-//! not fail the batch. A delivery miss still fails its own step.
+//! not fail the batch. A delivery miss still fails its own step. A settled
+//! probe without its own canary check is reported as failed.
 //!
 //! The visual hold is read from the `image_canary_checked` audit events every
 //! canary check emits, probe or delivery: a crew whose newest
@@ -57,7 +58,7 @@ pub enum VisionProbeResult {
     NoImageInput,
     /// The crew sets `vision = false`.
     VisionOff,
-    /// The run failed before the canary was checked.
+    /// The run failed or its canary check could not be found.
     Failed,
     /// The run had not settled when the probe stopped waiting.
     Timeout,
@@ -210,19 +211,11 @@ impl OrbitRuntime {
                 };
                 let row = &mut rows[index];
                 let history = checks.get(&row.crew);
-                // This run's check only. A successful probe must not inherit a
+                // This run's check only. A probe must not inherit a
                 // newer miss or pass from another run of the same crew.
                 let own = history
                     .and_then(|history| history.iter().find(|check| check.run_id == entry.run_id));
-                let seen = if let Some(check) = own {
-                    Some(check.seen)
-                } else if !entry.status.is_success() {
-                    history
-                        .and_then(|history| history.first())
-                        .map(|check| check.seen)
-                } else {
-                    None
-                };
+                let seen = own.map(|check| check.seen);
                 (row.result, row.detail) = classify(&entry.status, entry.error.as_deref(), seen);
             }
         }
@@ -322,7 +315,7 @@ struct CanaryCheck {
 /// `seen` is the check for this run. A finished run whose check missed is
 /// `image_not_seen` even when the probe run itself succeeded, so the report
 /// records the miss without the run failing the batch. `None` means this run
-/// has no check; a successful run is then `seen`, and a failure still matches
+/// has no check; a settled run is then `failed`, while a failure still matches
 /// the canary marker in its error.
 pub(super) fn classify(
     status: &PipelineWaitStatus,
@@ -335,6 +328,13 @@ pub(super) fn classify(
             (seen == Some(false)).then(|| "finished without returning the canary code".to_string())
         });
         return (VisionProbeResult::ImageNotSeen, detail);
+    }
+    if seen.is_none() && status.is_settled() {
+        let detail = match error {
+            Some(error) => bounded(&format!("this run's canary check was not found; {error}")),
+            None => "this run's canary check was not found".to_string(),
+        };
+        return (VisionProbeResult::Failed, Some(detail));
     }
     if status.is_success() {
         return (VisionProbeResult::Seen, None);
