@@ -7,14 +7,13 @@ use std::path::Path;
 use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
 use orbit_types::task::{TaskArtifact, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::ResidentLiveCycle;
 use serde_json::{Value, json};
 
-const CONFIG: &str =
-    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
+const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
 
 fn runtime_at(root: &Path) -> OrbitRuntime {
     let global = root.join("home/.orbit");
@@ -239,8 +238,168 @@ fn baseline_marks_underivable_measures_not_derivable() {
     assert_eq!(baseline_report["escalations"]["count"], 0, "{report}");
 }
 
+fn mandate_with_human_watched(runtime: &OrbitRuntime, leaf_title: &str) -> (String, String) {
+    let workspace = runtime.workspace_id().unwrap();
+    let watched = runtime
+        .add_task(TaskAddParams {
+            title: leaf_title.into(),
+            crew: Some("dk".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let id = runtime
+        .add_task(TaskAddParams {
+            title: format!("[orchestration]: scribe v2 - {leaf_title}"),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let body = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Deliver the remaining scribe v2 slices",
+        "exit_criteria": ["Every scribe-v2 task is done or rejected"],
+        "workspaces": [workspace],
+        "watch": {"tasks": [watched]},
+        "crew": "sol",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    runtime
+        .update_task_as_human(
+            &id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    body.to_string(),
+                )],
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+    (id, watched)
+}
+
+fn totals_divide_per_mandate_day_by_summed_active_days() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (_id_a, watched_a) = mandate_with_human_watched(&runtime, "leaf alpha");
+    let (_id_b, watched_b) = mandate_with_human_watched(&runtime, "leaf beta");
+
+    // One human intervention per mandate: a steering comment on its watched task.
+    for (watched, note) in [
+        (watched_a.clone(), "steering: hold the alpha slice"),
+        (watched_b.clone(), "steering: hold the beta slice"),
+    ] {
+        runtime
+            .update_task_as_human(
+                &watched,
+                TaskUpdateParams {
+                    comment: Some(note.into()),
+                    ..Default::default()
+                },
+                "human:daniel".into(),
+            )
+            .unwrap();
+    }
+
+    // One resident escalation per mandate: an agent-raised decision on its
+    // human-crew watched task, which the mandate's watch covers.
+    for (index, watched) in [watched_a.clone(), watched_b.clone()].iter().enumerate() {
+        runtime
+            .raise_agent_decision_request(AgentDecisionRaise {
+                task_id: watched.clone(),
+                question: format!("Which slice ships next for totals {index}?"),
+                options: vec![
+                    orbit_types::task::AgentDecisionOptionInput {
+                        label: "Keep the slice".into(),
+                        consequence: "No change.".into(),
+                        risk_tier: None,
+                        recommended: false,
+                    },
+                    orbit_types::task::AgentDecisionOptionInput {
+                        label: "Ship the slice".into(),
+                        consequence: "The slice ships.".into(),
+                        risk_tier: None,
+                        recommended: true,
+                    },
+                ],
+                topic: Some("totals/check".into()),
+                filer: "codex".into(),
+            })
+            .unwrap();
+    }
+
+    let report = metrics(&runtime, json!({}));
+    let mandates = report["mandates"].as_array().unwrap();
+    assert_eq!(mandates.len(), 2, "{report}");
+    for mandate in mandates {
+        assert_eq!(mandate["escalations"]["count"], 1, "{report}");
+        assert!(
+            mandate["interventions"]["count"].as_u64().unwrap_or(0) >= 1,
+            "each mandate records its steering comment: {report}"
+        );
+    }
+    let summed_active_days: f64 = mandates
+        .iter()
+        .map(|mandate| mandate["active_days"].as_f64().unwrap())
+        .sum();
+    assert!(
+        summed_active_days > 0.0,
+        "mandates carry active days: {report}"
+    );
+    let window_days = report["window"]["days"].as_f64().unwrap();
+    assert!(window_days > 0.0, "{report}");
+    // The calendar window spans all mandates at once, so with two active
+    // mandates it exceeds the summed mandate-days and separates the two
+    // denominators.
+    assert!(
+        (window_days - summed_active_days).abs() > 1e-9,
+        "window days ({window_days}) and summed mandate-days ({summed_active_days}) must differ to separate the rates: {report}"
+    );
+    let totals = &report["totals"];
+    let total_interventions = totals["interventions"]["count"].as_u64().unwrap();
+    let total_escalations = totals["escalations"]["count"].as_u64().unwrap();
+    let summed_interventions: u64 = mandates
+        .iter()
+        .map(|mandate| mandate["interventions"]["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total_interventions, summed_interventions, "{report}");
+    assert_eq!(total_escalations, 2, "{report}");
+    let expected_interventions_per_mandate_day = total_interventions as f64 / summed_active_days;
+    let expected_escalations_per_mandate_day = total_escalations as f64 / summed_active_days;
+    let expected_per_human_day = total_escalations as f64 / window_days;
+    for (pointer, value, expected) in [
+        (
+            "totals interventions per_mandate_day",
+            &totals["interventions"]["per_mandate_day"],
+            expected_interventions_per_mandate_day,
+        ),
+        (
+            "totals escalations per_mandate_day",
+            &totals["escalations"]["per_mandate_day"],
+            expected_escalations_per_mandate_day,
+        ),
+    ] {
+        let actual = value.as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "{pointer} is total count over summed mandate active days ({summed_active_days}): got {actual}, want {expected}: {report}"
+        );
+    }
+    let actual_per_human_day = totals["escalations"]["per_human_day"].as_f64().unwrap();
+    assert!(
+        (actual_per_human_day - expected_per_human_day).abs() < 1e-9,
+        "totals escalations per_human_day stays total count over window days ({window_days}): got {actual_per_human_day}, want {expected_per_human_day}: {report}"
+    );
+}
+
 crate::scenario_table!(
     resident_metrics,
     human_write_undoes_checkpoint_action_once,
     baseline_marks_underivable_measures_not_derivable,
+    totals_divide_per_mandate_day_by_summed_active_days,
 );
