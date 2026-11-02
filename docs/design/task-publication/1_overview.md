@@ -2,7 +2,7 @@
 title: Task Publication — Overview
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-10-30
+last_validated: 2026-11-02
 status: Accepted
 stage: shipped
 next: "—"
@@ -73,8 +73,10 @@ Machine-local registry state that binds a workspace, source-repository
 fingerprint, publication repository, branch, publication lineage, and declared
 authority. The selected runtime keeps the logical workspace identity used for
 publication metadata distinct from the task-registry partition used to
-enumerate bundles. Credentials remain in the operator's Git configuration or
-credential helper.
+enumerate bundles. Publication does not read the operator's system or global Git
+configuration, so credential helpers configured there are not used. Authentication
+comes from an inherited `GIT_ASKPASS` bridge or SSH (`SSH_AUTH_SOCK`, `GIT_SSH`,
+`GIT_SSH_COMMAND`), and no credential is stored in the binding or passed in Git argv.
 
 ### Publication authority
 
