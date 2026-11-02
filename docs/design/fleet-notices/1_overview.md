@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 stage: building
-next: "Slice 3, ORB-21213: managed-agent posting"
+next: "Land slices 3-4 (ORB-21213, ORB-21214, in flight); then slice 5, ORB-21215"
 feature: fleet-notices
 doc_role: overview
 type: design
@@ -98,7 +98,10 @@ slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placemen
 - [ORB-21207] — designed fleet notices and filed the implementation slices
 - [ORB-21208] — orbit-office scribe routes `#board` markers to the notice tools (client of the API)
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
-- [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset
-- [ORB-21212] — slice 2: brief delivery as untrusted data
+- [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset (done)
+- [ORB-21212] — slice 2: brief delivery as untrusted data (done)
+- [ORB-21213] — slice 3: managed-agent posting (in progress)
+- [ORB-21214] — slice 4: federation and global aggregation (in progress)
+- [ORB-21215] — slice 5: dashboard banner and view, attention kind (backlog)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

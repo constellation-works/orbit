@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
-stage: designing
-next: "Approve and build slice 1, ORB-21242 (mandate record and operator-only authority grant)"
+stage: building
+next: "Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243"
 feature: resident-orchestrator
 doc_role: overview
 type: design
@@ -98,7 +98,7 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Nothing is built. Locations are placement proposals that the slices confirm
+Slice 1 ([ORB-21242]) is in review and not yet landed; slices 2–10 are approved (`backlog`). Locations are placement proposals that the slices confirm
 ([2_design.md §12](./2_design.md#12-placement-in-the-code)).
 
 | Concern | File | Task |
