@@ -395,6 +395,8 @@ fn mark_precedent(runtime: &OrbitRuntime, request: &DecisionRequest) -> FixtureR
         note: None,
         answered_at: Utc::now(),
         precedent: None,
+        model: None,
+        confirmation: None,
     };
     let entry = TaskHistoryEntry {
         at: Utc::now(),

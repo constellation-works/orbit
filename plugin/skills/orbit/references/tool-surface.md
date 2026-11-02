@@ -500,8 +500,16 @@ or revoked channel is refused with `channel_not_registered` or `channel_revoked`
 - `review_approval` also binds to the candidate under review.
 - Either request reads `superseded` once its binding stops matching.
 
-The result carries `requests` (the digest), `raised` (what this call raised) and
-`expiring` (every still-open request expiring within 24 hours). Repeated calls
+The result carries `requests` (the digest), `raised` (what this call raised),
+`expiring` (every still-open request expiring within 24 hours) and
+`model_answered`: one `{review, request}` pair per model answer still awaiting a
+human, where `request` is the request the `model` actor answered (its
+`resolution.model` holds the probability, threshold and cited precedents) and
+`review` is the open `model_answer_review` request with answers `confirm` and
+`veto`. Only a human answers a review, through `orbit decision answer`, the
+dashboard or a channel submission: `confirm` makes the model answer precedent with
+the confirming human as decider; `veto` re-opens the original request and restores
+the task's previous status. Review requests are listed only there. Repeated calls
 reuse requests for unchanged task bindings, while newly eligible tasks can add
 requests. With the decision channel disabled in this workspace, the call raises
 nothing, writes nothing and returns no requests.

@@ -15,7 +15,8 @@ impl OrbitRuntime {
     /// raise the approval request every `proposed` task is missing (and
     /// every `review` task's, bound to its candidate), then return those
     /// requests beside every still-open request expiring within
-    /// [`DECISION_DIGEST_EXPIRY_WINDOW_HOURS`].
+    /// [`DECISION_DIGEST_EXPIRY_WINDOW_HOURS`], and, in `model_answered`,
+    /// every model answer whose review request is still open.
     ///
     /// Raising is idempotent per (task, gate, binding): a task whose
     /// current binding already has an open request raises nothing and
@@ -45,6 +46,7 @@ impl OrbitRuntime {
                 requests: Vec::new(),
                 raised: Vec::new(),
                 expiring: Vec::new(),
+                model_answered: Vec::new(),
                 warnings: Vec::new(),
             });
         }
@@ -89,10 +91,13 @@ impl OrbitRuntime {
                 warnings.push(warning);
             }
         }
+        let model_answered = self.model_answered_digest(&listing.requests)?;
         let expiring: Vec<DecisionRequest> = listing
             .requests
             .into_iter()
-            .filter(|request| request.expires_at <= horizon)
+            .filter(|request| {
+                request.expires_at <= horizon && request.gate != DecisionGate::ModelAnswerReview
+            })
             .collect();
         let mut requests = approvals;
         for request in &expiring {
@@ -105,6 +110,7 @@ impl OrbitRuntime {
             requests,
             raised,
             expiring,
+            model_answered,
             warnings,
         })
     }
@@ -129,7 +135,8 @@ impl OrbitRuntime {
                     DecisionGate::ReviewApproval => TaskStatus::Review,
                     DecisionGate::BlockTriage
                     | DecisionGate::PilotAdmission
-                    | DecisionGate::AgentRequest => {
+                    | DecisionGate::AgentRequest
+                    | DecisionGate::ModelAnswerReview => {
                         return Ok(());
                     }
                 };

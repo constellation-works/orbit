@@ -305,9 +305,12 @@ impl<'de> Deserialize<'de> for ActorIdentity {
 /// Whether a persisted writer label belongs to Orbit automation rather than
 /// an operator. Other labels include `human:<user>`, `operator`, an
 /// `ORBIT_ACTOR` or dashboard author. Shared by recovery and pilot admission.
+/// The decision `model` actor is automation, so no guard that needs a human
+/// resolution accepts a model answer.
 pub fn is_automation_actor(label: &str) -> bool {
     let label = label.trim();
     label == "system"
+        || label == crate::task::MODEL_ANSWER_ACTOR
         || label == "task-pilot"
         || label == "finding-verification"
         || label.starts_with(MACHINE_ID_PREFIX)

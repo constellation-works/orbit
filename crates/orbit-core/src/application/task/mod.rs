@@ -15,6 +15,7 @@ mod context_repair;
 mod context_widening;
 mod decision;
 mod decision_channel;
+mod decision_model;
 mod decision_precedent;
 mod decision_raise;
 pub(crate) mod decision_rules;
@@ -105,6 +106,7 @@ pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
     DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
+pub use decision_model::{ModelAnswerApplied, ModelAnsweredDigestEntry};
 #[cfg(feature = "test-support")]
 pub use decision_raise::raise_checkpoint::with_decision_raise_checkpoint;
 pub use decision_raise::{AgentDecisionRaise, AgentDecisionRaised};

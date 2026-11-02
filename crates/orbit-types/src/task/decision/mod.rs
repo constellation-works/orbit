@@ -38,11 +38,13 @@ pub use record::{
 };
 pub use recovery::{PilotAdmissionVerdict, RecordedFinalRecovery};
 pub use request::{
-    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_REOPENED_EVENT,
-    DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
-    DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
-    DecisionOptionError, DecisionOptionInput, DecisionRequest, DecisionRequestState,
-    DecisionResolution, DecisionRewrite, DecisionRiskTier, PRECEDENT_ACTOR,
+    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_MODEL_CONFIRMED_EVENT,
+    DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT,
+    DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction, DecisionAnswer, DecisionBinding,
+    DecisionGate, DecisionOption, DecisionOptionError, DecisionOptionInput, DecisionRequest,
+    DecisionRequestState, DecisionResolution, DecisionRewrite, DecisionRiskTier,
+    MODEL_ANSWER_ACTOR, MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO, ModelAnswerCitation,
+    ModelAnswerConfirmation, ModelAnswerEnablement, ModelCitedPrecedent, PRECEDENT_ACTOR,
     PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, current_candidate_identity,
     decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
     open_decision_requests,

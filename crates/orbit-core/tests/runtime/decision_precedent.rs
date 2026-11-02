@@ -735,7 +735,7 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
 
     let agent_reverse = fx
         .runtime
-        .reverse_precedent_answer(request_id, "claude")
+        .reverse_decision_answer(request_id, "claude")
         .expect_err("an agent cannot reverse");
     assert!(
         agent_reverse.to_string().contains("operator"),
@@ -755,7 +755,7 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
 
     let reopened = fx
         .operator()
-        .reverse_precedent_answer(request_id, "human:operator")
+        .reverse_decision_answer(request_id, "human:operator")
         .unwrap();
     assert_eq!(reopened.state, DecisionRequestState::Open);
     assert!(reopened.resolution.is_none());

@@ -39,7 +39,7 @@ operation_registry! {
         Raise => RAISE,
         /// Answer one open decision request (operator CLI only).
         Answer => ANSWER,
-        /// Re-open a precedent answer (operator CLI only).
+        /// Re-open a precedent or model answer (operator CLI only).
         Reverse => REVERSE,
         /// Set auto on one current corpus rule (operator CLI only).
         RuleAuto => RULE_AUTO,
@@ -79,6 +79,7 @@ pub const DECISION: NounSpec<DecisionVerb> = NounSpec {
 const GATES: &[EnumValue] = &[
     EnumValue::plain("agent_request"),
     EnumValue::plain("block_triage"),
+    EnumValue::plain("model_answer_review"),
     EnumValue::plain("pilot_admission"),
     EnumValue::plain("proposed_approval"),
     EnumValue::plain("review_approval"),
@@ -94,7 +95,7 @@ const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
         ParamType::Enum(GATES),
-        "Only requests waiting on this gate: agent_request, block_triage, pilot_admission, proposed_approval or review_approval.",
+        "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval or review_approval.",
         CliArgKind::flag("gate"),
         "Only requests waiting on this gate",
     ),
@@ -241,8 +242,8 @@ const REVERSE: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::Reverse,
     cli_path: &["reverse"],
     tool_name: "orbit.decision.reverse",
-    tool_description: "Re-open a precedent answer as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool. The request becomes open again and the task returns to the status it had before the precedent answer. A human answer is refused and nothing changes.",
-    cli_about: "Re-open a precedent answer",
+    tool_description: "Re-open a precedent or model answer as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool. The request becomes open again and the task returns to the status it had before the automation answer; a model answer's open review request is retired. A human answer is refused and nothing changes.",
+    cli_about: "Re-open a precedent or model answer",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[REQUEST_ID],

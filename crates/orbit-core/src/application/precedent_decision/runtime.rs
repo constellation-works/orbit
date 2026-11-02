@@ -32,7 +32,10 @@ impl OrbitRuntime {
     /// Best-effort enqueue for a request this raise left open. A consumer
     /// failure does not fail the human-visible raise.
     pub(crate) fn note_open_precedent_decision(&self, request: &DecisionRequest) {
-        if request.state != DecisionRequestState::Open {
+        // The model never answers a review of its own answer.
+        if request.state != DecisionRequestState::Open
+            || request.gate == orbit_types::task::DecisionGate::ModelAnswerReview
+        {
             return;
         }
         if let Err(error) = self.consider_precedent_decision(request) {

@@ -25,7 +25,7 @@ pub(super) fn dispatch(
                 .map(|name| {
                     DecisionGate::from_name(&name).ok_or_else(|| {
                         OrbitError::InvalidInput(format!(
-                            "unknown decision gate `{name}`; expected agent_request, block_triage, pilot_admission, proposed_approval or review_approval"
+                            "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval or review_approval"
                         ))
                     })
                 })
@@ -90,6 +90,10 @@ pub(super) fn dispatch(
                 "requests": digest.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
                 "raised": digest.raised.iter().map(decision_request_json).collect::<Vec<_>>(),
                 "expiring": digest.expiring.iter().map(decision_request_json).collect::<Vec<_>>(),
+                "model_answered": digest.model_answered.iter().map(|entry| json!({
+                    "review": decision_request_json(&entry.review),
+                    "request": decision_request_json(&entry.request),
+                })).collect::<Vec<_>>(),
                 "count": digest.requests.len(),
             });
             if !digest.warnings.is_empty() {
@@ -118,7 +122,7 @@ pub(super) fn dispatch(
             "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
         )),
         DecisionVerb::Reverse => Err(OrbitError::PolicyDenied(
-            "reversing a precedent answer is the operator's: use `orbit decision reverse`".into(),
+            "reversing a precedent or model answer is the operator's: use `orbit decision reverse`".into(),
         )),
         DecisionVerb::RuleAuto => Err(OrbitError::PolicyDenied(
             "setting auto on a decision rule is the operator's: use `orbit decision rule-auto`".into(),

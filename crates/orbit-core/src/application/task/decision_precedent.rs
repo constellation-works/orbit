@@ -3,7 +3,8 @@
 //! Auto-answer runs from an agent raise when one current rule the operator
 //! marked `auto` matches the request's topic exactly. The answer is a
 //! precedent record, not a human answer, and it does not append a corpus
-//! outbox entry. Reversal re-opens that request. Consolidation returns
+//! outbox entry. Reversal re-opens that request, and re-opens a model answer
+//! the same way (see `decision_model`). Consolidation returns
 //! proposed markdown and writes no rule file.
 
 use std::fs;
@@ -15,8 +16,8 @@ use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DECISION_REOPENED_EVENT, DecisionGate, DecisionRequest,
-    DecisionRequestState, DecisionResolution, PRECEDENT_ACTOR, PrecedentCitation, PrecedentSource,
-    TaskHistoryEntry, TaskStatus,
+    DecisionRequestState, DecisionResolution, MODEL_ANSWER_ACTOR, PRECEDENT_ACTOR,
+    PrecedentCitation, PrecedentSource, TaskHistoryEntry, TaskStatus,
 };
 use serde_json::{Value, json};
 
@@ -118,6 +119,8 @@ impl OrbitRuntime {
                 operator_approved: true,
                 previous_status: Some(task_status),
             }),
+            model: None,
+            confirmation: None,
         };
         let entry = TaskHistoryEntry {
             at: now,
@@ -148,14 +151,16 @@ impl OrbitRuntime {
             })
     }
 
-    /// Re-open a precedent answer and restore the task status it recorded.
-    /// Only an operator label may call this. Automation and `precedent` are refused.
-    pub fn reverse_precedent_answer(
+    /// Re-open an automation answer (a `precedent` rule answer or a `model`
+    /// answer) and restore the task status it recorded. Only an operator
+    /// label may call this. Automation, `precedent` and `model` are refused,
+    /// and a human answer is not reversible here.
+    pub fn reverse_decision_answer(
         &self,
         request_id: &str,
         actor_label: &str,
     ) -> Result<DecisionRequest, OrbitError> {
-        self.ensure_operator_precedent_actor(actor_label, "reverse a precedent answer")?;
+        self.ensure_operator_precedent_actor(actor_label, "reverse an automation answer")?;
         let not_found = || {
             OrbitError::decision_refused(
                 DecisionRefusalCode::RequestNotFound,
@@ -175,78 +180,7 @@ impl OrbitRuntime {
                     .into_iter()
                     .find(|candidate| candidate.id == request_id)
                     .ok_or_else(not_found)?;
-                let resolution = request.resolution.as_ref().filter(|_| {
-                    request.state == DecisionRequestState::Answered
-                        && request
-                            .resolution
-                            .as_ref()
-                            .is_some_and(|resolution| resolution.answered_by == PRECEDENT_ACTOR)
-                });
-                let Some(resolution) = resolution else {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
-                        format!(
-                            "decision request `{request_id}` is not an openable precedent answer; nothing was changed"
-                        ),
-                    ));
-                };
-                let Some(precedent) = resolution.precedent.as_ref() else {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
-                        format!(
-                            "decision request `{request_id}` has no precedent record to reverse; nothing was changed"
-                        ),
-                    ));
-                };
-                if !precedent.operator_approved {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
-                        format!(
-                            "decision request `{request_id}` was not approved by the operator; nothing was changed"
-                        ),
-                    ));
-                }
-                let Some(previous) = precedent.previous_status else {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
-                        format!(
-                            "decision request `{request_id}` does not record the status to restore; nothing was changed"
-                        ),
-                    ));
-                };
-                let task = self.get_task(&task_id)?;
-                let comment = format!(
-                    "Precedent reversed by {actor_label}: request {request_id} is open again."
-                );
-                if task.status != previous {
-                    self.update_task_as_precedent(
-                        &task_id,
-                        TaskUpdateParams {
-                            comment: Some(comment),
-                            status: Some(previous),
-                            ..Default::default()
-                        },
-                    )?;
-                }
-                let now = chrono::Utc::now();
-                let entry = TaskHistoryEntry {
-                    at: now,
-                    by: actor_label.trim().to_string(),
-                    event: DECISION_REOPENED_EVENT.to_string(),
-                    note: Some(json!({"request_id": request_id}).to_string()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: Some(request_id.to_string()),
-                    decision: None,
-                };
-                self.stores().task_records().update(
-                    &task_id,
-                    TaskRecordUpdateParams {
-                        actor: actor_label.trim().to_string(),
-                        append_history: vec![entry],
-                        ..Default::default()
-                    },
-                )?;
+                self.reopen_automation_answer(&request, actor_label.trim())?;
                 reopened = self
                     .get_task_decision_requests(&task_id)?
                     .into_iter()
@@ -258,6 +192,86 @@ impl OrbitRuntime {
                 "decision request `{request_id}` vanished after it was re-opened"
             ))
         })
+    }
+
+    /// The reversal step shared by `orbit decision reverse` and a model
+    /// answer's veto: check `request` holds a reversible automation answer,
+    /// restore the status it recorded and append the re-open event as
+    /// `actor_label`. The caller holds the task write lock.
+    pub(super) fn reopen_automation_answer(
+        &self,
+        request: &DecisionRequest,
+        actor_label: &str,
+    ) -> Result<(), OrbitError> {
+        let request_id = request.id.as_str();
+        let task_id = request.task_id.as_str();
+        let refuse = |why: &str| {
+            OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!("decision request `{request_id}` {why}; nothing was changed"),
+            )
+        };
+        let Some(resolution) = request
+            .resolution
+            .as_ref()
+            .filter(|_| request.state == DecisionRequestState::Answered)
+        else {
+            return Err(refuse("is not an openable automation answer"));
+        };
+        let (writer, previous, kind) = match resolution.answered_by.as_str() {
+            PRECEDENT_ACTOR => {
+                let Some(precedent) = resolution.precedent.as_ref() else {
+                    return Err(refuse("has no precedent record to reverse"));
+                };
+                if !precedent.operator_approved {
+                    return Err(refuse("was not approved by the operator"));
+                }
+                (PRECEDENT_ACTOR, precedent.previous_status, "Precedent")
+            }
+            MODEL_ANSWER_ACTOR => {
+                let Some(model) = resolution.model.as_ref() else {
+                    return Err(refuse("has no model record to reverse"));
+                };
+                (MODEL_ANSWER_ACTOR, model.previous_status, "Model answer")
+            }
+            _ => return Err(refuse("is not an openable automation answer")),
+        };
+        let Some(previous) = previous else {
+            return Err(refuse("does not record the status to restore"));
+        };
+        let task = self.get_task(task_id)?;
+        if task.status != previous {
+            let comment =
+                format!("{kind} reversed by {actor_label}: request {request_id} is open again.");
+            self.update_task_as_decision_automation(
+                task_id,
+                TaskUpdateParams {
+                    comment: Some(comment),
+                    status: Some(previous),
+                    ..Default::default()
+                },
+                writer,
+            )?;
+        }
+        let entry = TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: actor_label.to_string(),
+            event: DECISION_REOPENED_EVENT.to_string(),
+            note: Some(json!({"request_id": request_id}).to_string()),
+            from_status: None,
+            to_status: None,
+            operation_id: Some(request_id.to_string()),
+            decision: None,
+        };
+        self.stores().task_records().update(
+            task_id,
+            TaskRecordUpdateParams {
+                actor: actor_label.to_string(),
+                append_history: vec![entry],
+                ..Default::default()
+            },
+        )?;
+        Ok(())
     }
 
     /// Set `auto` on one current rule. Only an operator label may call this.
@@ -309,7 +323,7 @@ impl OrbitRuntime {
             let Some(resolution) = request.resolution else {
                 continue;
             };
-            if resolution.answered_by == PRECEDENT_ACTOR {
+            if resolution.is_automation_answer() {
                 continue;
             }
             let answered_on = resolution.answered_at.date_naive();
@@ -353,7 +367,11 @@ impl OrbitRuntime {
         action: &str,
     ) -> Result<(), OrbitError> {
         let actor = actor_label.trim();
-        if actor.is_empty() || is_automation_actor(actor) || actor == PRECEDENT_ACTOR {
+        if actor.is_empty()
+            || is_automation_actor(actor)
+            || actor == PRECEDENT_ACTOR
+            || actor == MODEL_ANSWER_ACTOR
+        {
             return Err(OrbitError::PolicyDenied(format!(
                 "only the operator can {action}; `{actor}` was refused and nothing was changed"
             )));
