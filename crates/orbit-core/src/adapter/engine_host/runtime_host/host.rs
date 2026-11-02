@@ -370,6 +370,18 @@ impl RuntimeHost for OrbitRuntime {
         validation::attach_claim_validation_log(self, path, content)
     }
 
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        super::recovery_evidence::persist_final_recovery_evidence(
+            self, run_id, task_id, workspace, evidence,
+        )
+    }
+
     fn attach_task_validation_log(
         &self,
         task_id: &str,

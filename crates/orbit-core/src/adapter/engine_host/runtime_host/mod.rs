@@ -21,5 +21,6 @@ mod executors;
 mod host;
 mod invocation;
 mod recovery;
+mod recovery_evidence;
 mod task_automation;
 mod validation;

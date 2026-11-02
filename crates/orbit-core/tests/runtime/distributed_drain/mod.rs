@@ -102,6 +102,7 @@ mod provider_limit;
 mod rebased_landing;
 mod receipt_retention;
 mod recovery;
+mod recovery_evidence;
 mod regression_attribution;
 mod requeue;
 mod scheduled;

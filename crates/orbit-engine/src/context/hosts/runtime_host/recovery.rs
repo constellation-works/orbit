@@ -200,6 +200,17 @@ macro_rules! recovery_methods {
             application: &FinalRecoveryApplication,
         ) -> Result<FinalRecoveryApplied, OrbitError>;
 
+        /// Persist bounded scratch evidence for this run's admitted recovery task.
+        /// The host authenticates the task, reads files under the assigned
+        /// worktree's scratch directory and carries claimed evidence to its owner.
+        fn persist_final_recovery_evidence(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            workspace: &std::path::Path,
+            evidence: &Value,
+        ) -> Result<(), OrbitError>;
+
         /// Reserve the host-only identity of one preparation or rebase recovery
         /// of `step_id`, before issuing its certificate (and, for conflicts,
         /// before its provider runs).

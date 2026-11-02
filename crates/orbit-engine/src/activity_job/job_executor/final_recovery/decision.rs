@@ -39,7 +39,32 @@ pub(super) fn dispatch_final_recovery(
     .map_err(|error| error.to_string())?;
     persist_dispatch_invocation(ctx, &activity.name, input, &dispatch);
     if dispatch.success {
-        Ok((dispatch.output, recovery_model))
+        let mut payload = decision_payload(&dispatch.output);
+        if let Some(evidence) = payload
+            .as_object_mut()
+            .and_then(|object| object.remove("repair_evidence"))
+        {
+            // Evidence has no task selector. Only a well-formed decision reaches
+            // the host's writer, using the engine's admitted task and worktree.
+            let decision = serde_json::from_value::<FinalRecoveryDecision>(payload.clone())
+                .map_err(|error| format!("invalid final recovery decision: {error}"))?;
+            if !matches!(decision, FinalRecoveryDecision::Resume { .. }) {
+                return Err("evidence handoff requires a repair resume decision".into());
+            }
+            let task = input["task_id"].as_str().ok_or("missing recovery task")?;
+            let workspace = input["workspace_path"]
+                .as_str()
+                .ok_or("missing recovery worktree")?;
+            ctx.host
+                .persist_final_recovery_evidence(
+                    &ctx.run_id,
+                    task,
+                    std::path::Path::new(workspace),
+                    &evidence,
+                )
+                .map_err(|error| format!("persist final recovery evidence: {error}"))?;
+        }
+        Ok((payload, recovery_model))
     } else {
         Err(dispatch
             .message

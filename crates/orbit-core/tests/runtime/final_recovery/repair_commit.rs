@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 use super::super::review_gate_audit::Fixture;
 
+mod evidence;
+
 fn git(fixture: &Fixture, args: &[&str]) -> String {
     let mut command = crate::git_test_support::command();
     let output = command
@@ -203,6 +205,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     _ => {}
                 }
+                if self.repair == "evidence" {
+                    return Ok(evidence::repair_evidence_output(self.fixture));
+                }
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
@@ -248,6 +253,22 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
             output,
             compound,
             script_outputs,
+        )
+    }
+
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        RuntimeHost::persist_final_recovery_evidence(
+            &self.fixture.runtime,
+            run_id,
+            task_id,
+            workspace,
+            evidence,
         )
     }
 
@@ -533,6 +554,30 @@ fn final_recovery_repair_commit_gets_a_fresh_before_pr_review() {
             && message.contains("Orbit-Recovery-Activity: decide"),
         "host adoption keeps recovery provenance: {message}"
     );
+}
+
+fn final_recovery_persists_repair_evidence_without_task_write_tools() {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (_, outcome) = run_pipeline(&fixture, "evidence");
+    let outcome = outcome.unwrap();
+    assert!(
+        outcome.success,
+        "repair evidence must survive the final-recovery tool denial: {outcome:?}"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task_id)
+            .unwrap()
+            .execution_summary,
+        "Outcome: success\nChanges: repaired candidate with evidence."
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, "recovery/repair.log")
+        .unwrap()
+        .expect("the host attaches recovery evidence without operator action");
+    assert_eq!(artifact.content, b"repair validation passed\n");
 }
 
 fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
@@ -867,5 +912,6 @@ crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
     final_recovery_repair_commit_gets_a_fresh_before_pr_review,
     final_recovery_does_not_authorize_an_unrecorded_head_change,
+    final_recovery_persists_repair_evidence_without_task_write_tools,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
 );
