@@ -522,6 +522,18 @@ pub const DASHBOARD_SCRIPT_GRANT: GovernedOperation = GovernedOperation {
     rationale: "a script grant lets unattended job steps run those exact bytes on this host",
 };
 
+/// Set up and manage resident mandates from the dashboard's Automation ›
+/// Residents view: create a mandate, narrow or widen its authority, answer
+/// its `resident_authority` requests, relay to it and control its firing.
+/// A dashboard widening raises the grant request and answers it as the
+/// operator in one action; it never applies as a native-terminal grant.
+pub const DASHBOARD_RESIDENT_WRITE: GovernedOperation = GovernedOperation {
+    id: "resident.write",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "resident mandates decide what runs unattended and with which rights, so only an operator dashboard session may set them up, widen them or steer them",
+};
+
 /// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
 pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
     id: "claim.recover",
@@ -1268,6 +1280,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_PLUGIN_ENABLE,
     DASHBOARD_PLUGIN_DISABLE,
     DASHBOARD_SCRIPT_GRANT,
+    DASHBOARD_RESIDENT_WRITE,
     PLUGIN_TOOL_READ_ONLY,
     PLUGIN_TOOL_MUTATING,
     PLUGIN_TOOL_AGENT_CALLABLE,

@@ -81,6 +81,29 @@ impl OrbitRuntime {
         )
     }
 
+    /// Run a registered tool for an in-process adapter that speaks for its
+    /// own caller, such as the dashboard server. `session` is the whole
+    /// authority envelope: the tool chokepoint and the use case read its
+    /// capabilities and bindings, never the hosting process's terminal or
+    /// environment, so a server launched from a shell does not become that
+    /// shell's operator.
+    pub fn run_tool_with_session(
+        &self,
+        name: &str,
+        input: Value,
+        session: orbit_types::tool::ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_role(
+            name,
+            input,
+            Role::Admin,
+            ToolContext {
+                session_context: session,
+                ..Default::default()
+            },
+        )
+    }
+
     pub(crate) fn run_tool_with_role(
         &self,
         name: &str,

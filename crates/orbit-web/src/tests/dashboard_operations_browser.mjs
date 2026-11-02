@@ -760,7 +760,7 @@ try {
     work: [...document.querySelector('.rail-group').querySelectorAll('.tab')].map(button => button.dataset.tab),
     automation: [...document.querySelectorAll('#operations-subtabs .subtab')].map(button => button.dataset.subtab),
   }));
-  if (menus.work.join() !== 'tasks,jobs,leases' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
+  if (menus.work.join() !== 'tasks,jobs,leases,notices' || menus.automation.join() !== 'routines,auto-tasks,scripts,residents') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
   const jobsNavigation = [];
   for (const subtab of ['live', 'history', 'catalogue']) {
     await page.click(`.tab[data-tab="jobs"]`);

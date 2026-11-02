@@ -165,6 +165,17 @@ states = ["default", "empty"]
 mask = []
 
 [[view]]
+id = "automation-residents"
+app = "dashboard"
+title = "Automation residents"
+route = "#operations/residents"
+fixture = "residents"
+ready = "#residents-panel"
+responsive = true
+states = ["default", "empty"]
+mask = []
+
+[[view]]
 id = "settings"
 app = "dashboard"
 title = "Settings"

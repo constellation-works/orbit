@@ -10,7 +10,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
+use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_SCRIPT_GRANT};
 use orbit_core::OrbitError;
 use orbit_types::task::DecisionGate;
 use serde::Deserialize;
@@ -96,8 +96,9 @@ pub(super) async fn list_decisions(
 }
 
 /// `POST /api/decisions/:id/answer` — apply one allowed answer as the
-/// human operator. A `script_grant` answer writes a script grant, so it
-/// takes the same operator session as the Scripts view's grant action.
+/// human operator. A `script_grant` answer writes a script grant and a
+/// `resident_authority` answer widens a resident, so each takes the same
+/// operator session as the Scripts or Residents view's own action.
 pub(super) async fn answer_decision(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -121,8 +122,15 @@ pub(super) async fn answer_decision(
         Ok(gate) => gate,
         Err(response) => return *response,
     };
-    if gate == Some(DecisionGate::ScriptGrant)
-        && let Err(denial) = authorized_caller(&DASHBOARD_SCRIPT_GRANT, state.operator_session())
+    // An answer that writes authority takes the operator session of the
+    // view that grants it: a script grant, or a resident's widening.
+    let governed = match gate {
+        Some(DecisionGate::ScriptGrant) => Some(&DASHBOARD_SCRIPT_GRANT),
+        Some(DecisionGate::ResidentAuthority) => Some(&DASHBOARD_RESIDENT_WRITE),
+        _ => None,
+    };
+    if let Some(governed) = governed
+        && let Err(denial) = authorized_caller(governed, state.operator_session())
     {
         return authorization_denied(denial);
     }

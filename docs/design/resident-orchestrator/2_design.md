@@ -99,6 +99,14 @@ not the prompt.
   changes only when the human answers it through the decision channel (dashboard, CLI or a
   registered channel such as email). The manager therefore cannot widen authority on its own, and a
   fabricated or misread relay costs one refused decision, not a merge.
+- **Widening from the dashboard.** The dashboard Residents view ([§6.1](#61-the-dashboard-path)) widens
+  only when its server runs `--operator`, through the governed operation `resident.write`. It does
+  not grant like a native terminal. It raises the `resident_authority` request with the operator's
+  quote, naming the dashboard as the relaying session, and answers it `grant` as the human in the
+  same action. So the change is recorded `via: decision:<id>`, and the request, the answer and a
+  `dashboard.operations` audit row all name it. A dashboard served without `--operator` cannot
+  widen, narrow or answer a `resident_authority` request (403 `authorization_denied`). Agents and
+  MCP sessions are unchanged: they only raise requests.
 - **Who narrows.** Anyone who can write the assignment: the human, the manager, and the resident
   itself. Removing a right, dropping a workspace, shortening the deadline, pausing and stopping are
   all narrowing. Widening is gated and narrowing is free
@@ -120,6 +128,10 @@ not the prompt.
 4. The mandate becomes `active` when it has a valid mandate artifact and its assignment is open
    (tagged `resident`, control active): a grant is not an activation prerequisite. Its
    first fire follows on the next clock tick.
+
+From the dashboard, steps 2 and 3 are the Residents view's form and authority control
+([§6.1](#61-the-dashboard-path)): one action creates the tagged assignment with its
+`resident/mandate.json`, and a widening there is the human's answered request.
 
 Granted rights authorize action, not activation. A mandate without granted rights still runs
 observe-only cycles by default. That is useful for a resident that only watches and reports.
@@ -389,6 +401,29 @@ A relayed direction is steering within authority, weighed like task text, with t
 winning over earlier ones ([mid-run-steering](../mid-run-steering/1_overview.md) is the leaf-level
 precedent). A direction cannot change authority: `orbit.resident.relay` refuses input that names
 rights or workspaces, and a direction the resident reads as a widening goes back as an escalation.
+
+### 6.1 The dashboard path
+
+The dashboard's Automation › Residents view is the human's own surface for the same records, so a
+mandate can be set up and steered without a manager session ([ORB-21649]). Every read and write goes
+through the `orbit.resident.*` tools, and every write also leaves a `dashboard.operations` audit row
+under the governed operation `resident.write` (operator session only):
+
+| View action | Route | Mechanism |
+|---|---|---|
+| List mandates, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents` | `orbit.resident.list`, then `orbit.resident.show` per mandate |
+| Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
+| Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
+| Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
+| Narrow | the same route with rights or workspaces to remove | `orbit.resident.grant` |
+| Answer a `resident_authority` request another caller raised | `POST /api/decisions/{id}/answer` | The decision channel; operator session only for this gate |
+| Pause, resume, wake with a status request, take over, release, stop | `POST /api/residents/{id}/control` | `orbit.resident.control` |
+| Relay a direction | `POST /api/residents/{id}/relay` | `orbit.resident.relay`, source `via: dashboard` |
+| Enable or disable the workspace's resident cycle routine | `POST /api/routines/toggle` | The existing routine toggle, audited like other operator toggles |
+
+The dashboard runs the tools with its own session envelope (Agent, plus Operator when served
+`--operator`), never the terminal it was started from. So the tools' own authority rules apply
+unchanged.
 
 **Takeover.** `takeover` sets the resident to `taken_over`: no fires until `release`. The interactive
 session works in the same assignment task and comments as usual. On `release`, the next cycle reads
@@ -673,6 +708,7 @@ Proposals that the slices confirm:
 | Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/application/resident/` |
 | Cycle job and activities | a new `resident_cycle_pipeline` job under `crates/orbit-core/assets/jobs/` and `resident_*` activities under `crates/orbit-core/assets/activities/` |
 | Seeded routines | `crates/orbit-core/assets/routines/` (disabled) |
+| Dashboard Residents view | `crates/orbit-web/src/api/residents.rs` and `crates/orbit-web/assets/dashboard/js/operations-residents.js`; one-action creation in `crates/orbit-core/src/application/resident/create.rs` |
 | `resident` toolset, `manager` and `resident` MCP roles | `crates/orbit-types/src/tool/mcp_toolset.rs` |
 | `resident_stalled` attention kind | the attention item kinds of [ORB-21168] |
 | Skill references | `crates/orbit-core/assets/skills/orbit/references/` |
@@ -743,5 +779,6 @@ Slices 1 and 2 have landed and slice 3 is implemented ([§5.1](#51-slice-3-as-im
 - [ORB-21250] — slice 9: skill references
 - [ORB-21251] — slice 10: pilot
 - [ORB-21263] — MCP roles: the manager and resident surfaces
+- [ORB-21649] — the dashboard Residents view and how a dashboard widening is authorized
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
