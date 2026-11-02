@@ -646,3 +646,63 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
+
+#[test]
+fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 4");
+    let mandate = fx.mandate(&watched);
+    fx.grant(&mandate, &["merge"]);
+    let run = fx.cycle_run(&mandate, "resident-cycle-1");
+    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+
+    // A run id that does not exist is not a resident cycle: the call
+    // proceeds as an ordinary call, as before.
+    fx.as_cycle_agent("jrun-no-such-run", || {
+        call(
+            &fx.runtime,
+            "orbit.task.update",
+            json!({"id": watched, "comment": "Not a resident run.", "model": "codex"}),
+            McpCapability::Agent,
+        )
+        .unwrap();
+    });
+
+    // Corrupt the stored run so its lookup fails with a store error,
+    // not `NotFound`: the row no longer parses as a job run.
+    let connection = rusqlite::Connection::open(fx.global.join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "UPDATE job_runs SET state = 'not-a-state' WHERE run_id = ?1",
+            rusqlite::params![run],
+        )
+        .unwrap();
+    drop(connection);
+
+    let comments_before = fx.runtime.get_task_comments(&watched).unwrap().len();
+    fx.as_cycle_agent(&run, || {
+        // A write must fail closed rather than bypass the guard.
+        let error = call(
+            &fx.runtime,
+            "orbit.task.update",
+            json!({"id": watched, "comment": "Should not land.", "model": "codex"}),
+            McpCapability::Agent,
+        )
+        .expect_err("a write is refused when the run lookup errors");
+        assert!(error.contains("resident_lookup_refused"), "{error}");
+
+        // Reads still pass: they change nothing.
+        call(
+            &fx.runtime,
+            "orbit.task.show",
+            json!({"id": watched}),
+            McpCapability::Agent,
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments_before,
+        "the refused write did not run"
+    );
+}

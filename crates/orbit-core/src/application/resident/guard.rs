@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Utc;
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
     RESIDENT_ACTION_EVENT, RESIDENT_CYCLE_JOB, ResidentActionPhase, ResidentActionRow,
@@ -185,14 +185,32 @@ impl OrbitRuntime {
         };
         let run = match self.show_job_run_observed(run_id) {
             Ok(run) => run,
-            Err(_) => {
-                if class != ResidentCallClass::Read && self.foreign_resident_cycle_run(run_id) {
-                    return Err(refused(
-                        "resident_scope_refused",
-                        "a resident cycle writes only through its mandate's own workspace",
-                    ));
+            Err(error) => {
+                // Only a run that does not exist is not a resident cycle.
+                // Any other lookup failure leaves the call unverified, so
+                // a write fails closed instead of bypassing the guard.
+                if matches!(
+                    error,
+                    OrbitError::NotFound {
+                        kind: NotFoundKind::JobRun,
+                        ..
+                    }
+                ) {
+                    if class != ResidentCallClass::Read && self.foreign_resident_cycle_run(run_id) {
+                        return Err(refused(
+                            "resident_scope_refused",
+                            "a resident cycle writes only through its mandate's own workspace",
+                        ));
+                    }
+                    return Ok(ResidentCallAdmission::Proceed);
                 }
-                return Ok(ResidentCallAdmission::Proceed);
+                if class == ResidentCallClass::Read {
+                    return Ok(ResidentCallAdmission::Proceed);
+                }
+                return Err(refused(
+                    "resident_lookup_refused",
+                    format!("could not verify the resident cycle run `{run_id}`: {error}"),
+                ));
             }
         };
         if run.job_id != RESIDENT_CYCLE_JOB || class == ResidentCallClass::Read {
