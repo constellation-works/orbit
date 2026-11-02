@@ -390,6 +390,15 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
+/* An operator's skip of a pilot-held task, under the hold it lifts. */
+.readiness-skip-pilot {
+  --attention-fg: var(--warn-fg);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
 /* The pool leads the card, followed by linked blockers or a concise cause. */
 .readiness-drain {
   display: flex;

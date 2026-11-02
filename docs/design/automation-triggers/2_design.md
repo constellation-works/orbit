@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-10-30
+last_updated: 2026-11-02
 last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
@@ -405,8 +405,20 @@ or a decision option action `re_pilot`. The explicit legacy command
 holders and owner authority guard explicit submission.
 
 Description or acceptance-criteria edits invalidate the assessment for delivery.
-Shared admission fails closed (`pilot_assessment_stale`) with the actual remedy
-`orbit task repilot <id>`; it never silently dispatches using old requirements.
+Shared admission fails closed (`pilot_assessment_stale`) and names both remedies:
+`orbit task repilot <id>`, or an operator's skip with the `no-pilot` tag. It
+never silently dispatches using old requirements unless an operator explicitly
+skips with `no-pilot` [ORB-21238]. A task carrying the tag is not held by pilot
+assessment state at drain, `orbit run ship` or pull admission: no stale hold and
+no hold a receipt recorded. Unverified review findings, readiness gaps, context
+locks, dependencies and delivery holds still apply, and an explicit repilot still
+works. Adding the tag to a task with a pilot receipt or a pending pilot is
+operator authority: any other writer is refused, never stripped. The operator's
+write records a `pilot_skipped` history entry naming the actor, the receipt and
+the requirements digest dispatched without assessment. Filing a task with the
+tag keeps its first-pilot meaning, and removing it restores the gate. The
+dashboard Readiness card offers this as "Skip pilot"
+([decision](4_decisions.md#no-pilot-is-an-operator-skip-of-pilot-admission)).
 The atomic receipt seals those requirements independently of configurable
 scheduling fingerprints. A subsequent accepted explicit assessment clears the
 stale hold. Administrative edits and promotion leave it current.

@@ -1,7 +1,8 @@
 // Orbit dashboard task readiness, pilot warnings and operator records.
 
-import { captureWorkspaceVisit, el, postJson, runHref, bindTaskLink } from './common.js';
-import { drainReadinessFor, drainReadinessView } from './drain-waits.js';
+import { captureWorkspaceVisit, el, fetchJson, patchJson, postJson, runHref, bindTaskLink } from './common.js';
+import { drainReason, drainReadinessFor, drainReadinessView, replaceDrainReadinessEntry } from './drain-waits.js';
+import { applyUpdatedTask, forgetTaskDetailLoad } from './task-data.js';
 import * as taskShared from './task-shared.js';
 import * as taskDecision from './task-decision.js';
 
@@ -398,10 +399,98 @@ function readinessTaskLink(taskId, workspace) {
   return bindTaskLink(link, taskId, workspace ? { workspace } : {});
 }
 
+// Drain reasons a task's pilot assessment holds it for, which an operator's
+// `no-pilot` skip lifts [ORB-21238]. An unverified review finding is a review
+// gate, not an assessment, so it is not one.
+const PILOT_HOLD_REASONS = new Set([
+  "pilot_assessment_stale",
+  "pilot_duplicate",
+  "pilot_already_landed",
+  "operator_validation_handoff",
+  "host_operational_handoff",
+  "native_os_required",
+]);
+const NO_PILOT_TAG = "no-pilot";
+
+function taskTags(task) {
+  return Array.isArray(task && task.tags) ? task.tags : [];
+}
+
+// Whether the drain holds `task` on its pilot state, so skipping the pilot
+// would change its admission.
+export function pilotHeld(task, entry) {
+  return Boolean(task && entry) && task.status === "backlog"
+    && PILOT_HOLD_REASONS.has(drainReason(entry)) && !taskTags(task).includes(NO_PILOT_TAG);
+}
+
+// The Readiness card's "Skip pilot" control for a pilot-held task: one click
+// adds `no-pilot` through the ordinary guarded task update, which records the
+// operator and the requirements it dispatches without assessment. The card
+// then re-reads the task's readiness so it names whatever still holds it.
+function buildSkipPilot(task, context) {
+  const label = "Dispatch without a new pilot assessment";
+  const mutable = taskShared.canMutateTask(task);
+  const button = el("button", {
+    type: "button",
+    class: "attention-action skip-pilot",
+    text: "Skip pilot",
+    title: mutable
+      ? `${label}: adds the no-pilot tag, recorded in history with your name. Remove the tag to restore the pilot gate.`
+      : taskShared.aggregateRefusalTitle(label, "skip the pilot"),
+  });
+  button.disabled = !mutable;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    runSkipPilot(task, button, context);
+  });
+  const wrap = el("div", { class: "readiness-skip-pilot" }, [
+    button,
+    el("span", { class: "readiness-fix", text: label }),
+  ]);
+  const refusal = operatorRecordRefusalNode(task);
+  if (refusal) wrap.appendChild(refusal);
+  return wrap;
+}
+
+async function runSkipPilot(task, button, context) {
+  const visit = captureWorkspaceVisit();
+  const key = taskShared.taskDispatchIdentity(task);
+  if (button.disabled || !taskShared.canMutateTask(task)) return;
+  if (typeof window.confirm !== "function" || !window.confirm(
+    `Skip the pilot for ${task.id}? It is dispatched without a new pilot assessment: this adds the no-pilot tag and records the skip in its history with your name. Remove the tag to restore the pilot gate.`,
+  )) return;
+  taskShared.taskState.operatorRecordRefusals.delete(key);
+  button.disabled = true;
+  let updated;
+  try {
+    updated = await patchJson(visit.path(taskShared.taskMutationPath(task)), { tags: [...taskTags(task), NO_PILOT_TAG] });
+  } catch (error) {
+    button.disabled = false;
+    if (!visit.isCurrent()) return;
+    const code = error && error.code ? error.code : "skip_pilot_refused";
+    taskShared.taskState.operatorRecordRefusals.set(key, `[${code}] ${error.message || String(error)}`);
+    taskShared.rerender(context);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  applyUpdatedTask(updated, context);
+  forgetTaskDetailLoad(task.id);
+  try {
+    const payload = await fetchJson(taskShared.taskWorkspacePath(task, `/api/workflows/auto/readiness?task=${encodeURIComponent(task.id)}`));
+    const entry = Array.isArray(payload?.tasks) ? payload.tasks.find((item) => item?.task_id === task.id) : null;
+    if (entry && visit.isCurrent()) replaceDrainReadinessEntry(entry);
+  } catch (error) {
+    console.error(error);
+  }
+  if (!visit.isCurrent()) return;
+  taskShared.taskState.taskActionNotice = `${task.id}: pilot skipped; dispatch proceeds without a new assessment`;
+  await taskShared.refreshTasks(context);
+}
+
 // The Readiness card leads with the pool, then links every reported blocker.
 // Without an entry it says whether a read is pending, failed or found nothing,
 // and never claims a pool.
-function buildDrainReadiness(drain, workspace) {
+function buildDrainReadiness(drain, workspace, task, context) {
   const entry = drain && drain.entry;
   if (!entry) {
     const text = drain && drain.pending
@@ -451,15 +540,31 @@ function buildDrainReadiness(drain, workspace) {
     wrap.appendChild(line("Overlap", [el("span", { class: "mono", text: `${selector.requested}${selector.held ? ` overlaps ${selector.held}` : ""}` })]));
   }
   for (const text of badge.detail.split("\n").filter(Boolean)) wrap.appendChild(el("div", { class: "readiness-message", text }));
+  if (pilotHeld(task, entry)) wrap.appendChild(buildSkipPilot(task, context));
   return wrap;
+}
+
+// A task an operator dispatched without a new assessment says so, and how to
+// restore the gate; the drain line above names whatever still holds it.
+function buildPilotSkipped(task) {
+  if (!taskTags(task).includes(NO_PILOT_TAG)) return null;
+  const history = Array.isArray(task.history) ? task.history : [];
+  const skip = [...history].reverse().find((entry) => entry && entry.event === "pilot_skipped");
+  if (!skip) return null;
+  return el("div", {
+    class: "readiness-note readiness-pilot-skipped",
+    text: `Pilot skipped by ${skip.by}: dispatch proceeds without a new assessment. Remove the no-pilot tag to restore the pilot gate.`,
+  });
 }
 
 // The detail's Readiness card: why the drain is or is not taking the task,
 // then each preparation gap with its severity and its fix. "Ready" is claimed
 // only for a task the drain reports eligible with nothing missing.
-export function buildReadinessBlock(readiness, drain, workspace) {
+export function buildReadinessBlock(readiness, drain, workspace, task = null, context = null) {
   const wrap = el("div", { class: "value readiness-list" });
-  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
+  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace, task, context));
+  const skipped = buildPilotSkipped(task);
+  if (skipped) wrap.appendChild(skipped);
   if (!readiness) return wrap;
   if (readiness.preparing) {
     wrap.appendChild(el("div", {

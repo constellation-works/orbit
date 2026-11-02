@@ -292,6 +292,47 @@ fn owner_pull_holds_edited_requirements_until_an_explicit_new_assessment() {
     assert!(pair.owner_has_claim_for_task(task));
 }
 
+/// [ORB-21238] An operator's `no-pilot` skip releases the stale hold at owner
+/// pull admission without a new assessment.
+fn owner_pull_admits_edited_requirements_an_operator_skipped_the_pilot_for() {
+    let pair = Pair::new(1);
+    let task = &pair.tasks[0];
+    apply_assessment(&pair, "The original repair is observable.", json!({}));
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                acceptance_criteria: Some(vec!["The revised repair is observable.".into()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let drain = pair.start_drain();
+    let held = pair.pass(&drain);
+    assert!(held["error"].is_null(), "{held}");
+    assert!(!pair.owner_has_claim_for_task(task));
+    let (_, detail) = recorded_wait(&pair, &drain, task);
+    assert!(detail.contains("no-pilot"), "{detail}");
+    let mut tags = pair.wire.owner.get_task(task).unwrap().tags;
+    tags.push("no-pilot".into());
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                tags: Some(tags),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .unwrap();
+    let released = pair.pass(&drain);
+    assert!(launch_refused(&released), "{released}");
+    assert!(pair.owner_has_claim_for_task(task));
+}
+
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
 pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
@@ -631,6 +672,7 @@ crate::scenario_table!(
     owner_pull_holds_host_operational_until_a_decision_or_newer_assessment,
     owner_pull_admits_selectors_and_verified_no_diff_dispositions,
     owner_pull_holds_edited_requirements_until_an_explicit_new_assessment,
+    owner_pull_admits_edited_requirements_an_operator_skipped_the_pilot_for,
     owner_pull_holds_operator_validation_until_the_operator_resolves_it,
     a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it,
     a_machine_finding_keeps_the_task_off_every_other_machine

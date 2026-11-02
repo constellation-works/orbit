@@ -480,6 +480,12 @@ impl OrbitRuntime {
         if let Some(hold) = self.unverified_finding_hold_in(task, history)? {
             return Ok(Some(PilotAdmissionHold::UnverifiedFinding(hold)));
         }
+        // [ORB-21238] An operator's `no-pilot` skip: dispatch proceeds without
+        // a new assessment, so no receipt holds the task. The unverified
+        // finding above is a review gate, not an assessment, and still holds.
+        if super::skip::skips_pilot(&task.tags) {
+            return Ok(None);
+        }
         let material = validation_material(task);
         let mut legacy_override = false;
         // Atomic pilot application persists the full assessment in a
@@ -519,8 +525,8 @@ impl OrbitRuntime {
                 history,
             )? {
                 return Ok(Some(PilotAdmissionHold::StaleAssessment(format!(
-                    "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new explicit assessment completes. Run `orbit task repilot {}` on the owner.",
-                    task.id
+                    "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new explicit assessment completes. {}",
+                    super::skip::pilot_hold_remedies(task)
                 ))));
             }
             let operation_id = receipt.operation_id;

@@ -431,6 +431,10 @@ impl OrbitRuntime {
         if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
             append_history.push(edit);
         }
+        // Field validation admitted only an operator's skip [ORB-21238].
+        if let Some(skip) = self.pilot_skip_history(&task, &params, &effective_label)? {
+            append_history.push(skip);
+        }
         if let Some(preserved) = backlog_preservation {
             // The `requeued` decision is written only with its preservation
             // record, exactly as `write_candidate_requeue` writes it.

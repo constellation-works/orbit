@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--pilot-admission|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -9,6 +9,7 @@ import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
 import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear, assertFixPrReadinessRefresh, assertPinnedFixPr } from './dashboard_run_tasks_browser.mjs';
 import { assertPilotAdmission } from './dashboard_pilot_admission_browser.mjs';
+import { assertSkipPilot } from './dashboard_skip_pilot_browser.mjs';
 import { assertClockRepaint } from './dashboard_clock_browser.mjs';
 import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
@@ -1668,8 +1669,10 @@ try {
     await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
   } else if (process.argv[4] === '--pilot-admission') {
     await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+    await assertSkipPilot(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   } else {
   if (!locksOnly && !authExclusionsOnly) await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertSkipPilot(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertClockRepaint(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (clockOnly) console.log('Dashboard clock switch repainted kept task detail and run rows in place.');
   if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertTaskLookupClear(browser, `http://127.0.0.1:${server.address().port}`, evidence);
