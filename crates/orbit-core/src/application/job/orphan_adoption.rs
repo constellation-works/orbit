@@ -11,6 +11,11 @@
 //! blocked-task recovery backstop decides, and a claimed leaf's release keeps
 //! its candidate and pull request for the task's next claim.
 //!
+//! A completion that exhausts its bounded base chase also yields here as a
+//! typed `BaseChaseExhausted` hold [ORB-21441]. Unlike a repeatedly dead
+//! worker, a resumed completion may yield again; every run retains its own
+//! chase bound and inherited certified recovery. Other holds are excluded.
+//!
 //! Each owner drain pass resumes such a run through the ordinary checkpoint
 //! resume (`orbit job resume`): the resumed run skips every step that
 //! succeeded, so landing review, completion and auto-fix continue on the same
@@ -53,7 +58,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -135,7 +140,7 @@ enum Verdict {
 }
 
 impl OrbitRuntime {
-    /// Resume each interrupted owner-local delivery leaf that still owns an
+    /// Resume each interrupted or base-chase-held owner-local delivery leaf with an
     /// open pull request, within `authority`. Returns the adopted and skipped
     /// runs, and the pass's own error when it could not read its candidates.
     /// Never fails: the drain step that calls it must not end the drain.
@@ -160,7 +165,7 @@ impl OrbitRuntime {
         }
         let interrupted = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             job_id: Some(DELIVERY_LEAF_JOB.to_string()),
-            state: Some(JobRunState::Interrupted),
+            states: vec![JobRunState::Interrupted, JobRunState::Held],
             order_by: JobRunOrder::Recency,
             limit: Some(ADOPTION_SCAN_LIMIT),
             include_steps: true,
@@ -185,6 +190,11 @@ impl OrbitRuntime {
         let mut missing_authority = Vec::new();
         let mut reads = PassReads::default();
         for run in interrupted {
+            // Only a typed moving-base hold is an automatic continuation.
+            // Other holds retain their own release/approval contracts.
+            if run.state == JobRunState::Held && !base_chase_held(&run) {
+                continue;
+            }
             if adopted.len() >= authority.budget {
                 break;
             }
@@ -278,7 +288,9 @@ impl OrbitRuntime {
         if run_owner_liveness(run) == RunOwnerLiveness::Alive {
             return Verdict::Ignore;
         }
-        if let Some(source) = run.retry_source_run_id.as_deref() {
+        if let Some(source) = run.retry_source_run_id.as_deref()
+            && !base_chase_held(run)
+        {
             return skip(Skip::decided(
                 "resumed_attempt",
                 format!(
@@ -504,4 +516,12 @@ impl OrbitRuntime {
             ),
         );
     }
+}
+
+/// Typed exhaustion can yield again in a retry; a repeatedly dead worker
+/// remains subject to the one-adoption rule.
+fn base_chase_held(run: &JobRun) -> bool {
+    run.state == JobRunState::Held
+        && run.steps.last().and_then(|step| step.error_code.as_deref())
+            == Some(DeliveryRefusal::BaseChaseExhausted.error_code())
 }

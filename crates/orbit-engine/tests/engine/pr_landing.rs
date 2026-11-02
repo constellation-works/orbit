@@ -3905,12 +3905,82 @@ fn conflicting_base_advances_after_recovery_are_chased_until_the_bound(sandbox: 
         chased += 1;
         recovered = recover_completion(&fx, &host, &conflict, &format!("resolved {chased}\n"));
     };
-    assert!(exhausted.to_string().contains("base_chase_exhausted:"));
-    assert!(chased >= 1, "at least one more bounded recovery ran");
+    assert!(
+        matches!(&exhausted, OrbitError::DeliveryRefused { refusal, .. }
+            if refusal.error_code() == "base_chase_exhausted"),
+        "exhaustion must hold completion for the drain, not fail and strand review: {exhausted}"
+    );
+    assert_eq!(
+        chased, 2,
+        "ORB-21441: one attempt keeps the two-chase bound"
+    );
     assert_eq!(fx.head(), recovered, "the last certified recovery is kept");
     assert_eq!(fx.git(&["status", "--porcelain"]), "");
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "chase");
+
+    // The owner drain resumes the stopped completion with its certified
+    // checkpoint, while the new run owns a fresh, bounded attempt ledger.
+    let retry = "jrun-chase-retry";
+    let mut resumed = completion_retry_input(&host, &input, RUN_ID, retry);
+    for chase in 1..=2 {
+        let conflict = completion_conflict(action(&host, "pr_complete", &resumed));
+        recover_completion_in_run(&fx, &host, &conflict, &format!("retry {chase}\n"), retry);
+        fx.commit_on_base(FEATURE, &format!("base during retry {chase}\n"));
+    }
+    let exhausted_retry = action_err(&host, "pr_complete", &resumed);
+    assert!(
+        matches!(exhausted_retry, OrbitError::DeliveryRefused { refusal, .. }
+        if refusal.error_code() == "base_chase_exhausted"),
+        "ORB-21441: a resumed attempt also stops after two chases"
+    );
+    assert_eq!(
+        host.rebase_recovery_attempts(retry, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        2
+    );
+    let final_retry = "jrun-chase-stable";
+    resumed = completion_retry_input(&host, &input, retry, final_retry);
+    let conflict = completion_conflict(action(&host, "pr_complete", &resumed));
+    recover_completion_in_run(&fx, &host, &conflict, "resolved after yield\n", final_retry);
+    fx.script_checks(&["dirty", "success"]);
+    let completed = action_ok(&host, "pr_complete", &resumed);
+    assert_eq!(completed["merge"]["merged"], true);
+    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+    assert_eq!(
+        host.rebase_recovery_attempts(RUN_ID, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        chased + 1
+    );
+    assert_eq!(
+        host.rebase_recovery_attempts(final_retry, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        1
+    );
 }
+/// Copy the certified source checkpoint and authenticate the same-job retry
+/// ancestry, as the owner's checkpoint resume does.
+fn completion_retry_input(host: &DeliveryHost, input: &Value, source: &str, retry: &str) -> Value {
+    for (run, parent) in [(source, None), (retry, Some(source))] {
+        locked(&host.runs).entry(run.into()).or_insert_with(|| {
+            serde_json::from_value(json!({
+                "run_id": run, "job_id": "task_pr_pipeline", "attempt": 1,
+                "state": "held", "scheduled_at": Utc::now(), "created_at": Utc::now(),
+                "retry_source_run_id": parent,
+            }))
+            .unwrap()
+        });
+    }
+    let mut state = host.read_run_state(source).unwrap().unwrap();
+    state.run_id = retry.into();
+    locked(&host.run_states).insert(retry.into(), state);
+    let mut resumed = input.clone();
+    resumed["run_id"] = json!(retry);
+    resumed
+}
+
 /// [`Fixture::complete_ungated_input`] as the dispatcher hands it to the completion step.
 fn completion_with_step(fx: &Fixture) -> Value {
     let mut input = fx.complete_ungated_input();
@@ -3930,13 +4000,23 @@ fn recover_completion(
     conflict: &RecoverableVcsConflict,
     resolution: &str,
 ) -> String {
+    recover_completion_in_run(fx, host, conflict, resolution, RUN_ID)
+}
+
+fn recover_completion_in_run(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    conflict: &RecoverableVcsConflict,
+    resolution: &str,
+    run_id: &str,
+) -> String {
     fs::write(fx.repo.join(FEATURE), resolution).unwrap();
     fx.git(&["add", FEATURE]);
     fx.git(&["-c", "core.editor=true", "rebase", "--continue"]);
     let head = fx.head();
     let attempt = host
         .begin_rebase_recovery_attempt(
-            RUN_ID,
+            run_id,
             COMPLETE_STEP,
             &RebaseRecoveryAttemptScope {
                 workspace_path: path_str(&fx.repo).to_string(),
@@ -3946,10 +4026,10 @@ fn recover_completion(
         )
         .unwrap();
     host.checkpoint_rebase_recovery(
-        RUN_ID,
+        run_id,
         COMPLETE_STEP,
         &json!({
-            "run_id": RUN_ID,
+            "run_id": run_id,
             "step_id": COMPLETE_STEP,
             "task_ids": [TASK_ID],
             "workspace_path": fx.repo,

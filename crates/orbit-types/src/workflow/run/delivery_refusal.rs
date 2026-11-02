@@ -29,6 +29,10 @@ pub enum DeliveryRefusal {
     /// unmerged. The task stays in review; the PR may have merged since, through
     /// auto-merge or another actor, so the forge is authoritative.
     CompletionBudgetExpired,
+    /// Completion followed a moving base as many times as one run permits.
+    /// Keep its certified recovery and resume on the next authorized owner
+    /// drain pass, with a fresh per-run chase budget.
+    BaseChaseExhausted,
     /// An auto-fix stop whose check evidence could not be read conclusively.
     CheckEvidenceInconclusive,
     /// Completion's read-only forge observations kept failing with a transport
@@ -68,6 +72,7 @@ impl DeliveryRefusal {
             Self::RequirementsUnsatisfied => "delivery_requirements_unsatisfied",
             Self::BaseChecksPending => "delivery_base_checks_pending",
             Self::CompletionBudgetExpired => "delivery_completion_budget_expired",
+            Self::BaseChaseExhausted => "base_chase_exhausted",
             Self::CheckEvidenceInconclusive => "delivery_check_evidence_inconclusive",
             Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
             Self::OriginUnavailable => "delivery_origin_unavailable",
@@ -90,6 +95,7 @@ impl DeliveryRefusal {
             "delivery_requirements_unsatisfied" => Some(Self::RequirementsUnsatisfied),
             "delivery_base_checks_pending" => Some(Self::BaseChecksPending),
             "delivery_completion_budget_expired" => Some(Self::CompletionBudgetExpired),
+            "base_chase_exhausted" => Some(Self::BaseChaseExhausted),
             "delivery_check_evidence_inconclusive" => Some(Self::CheckEvidenceInconclusive),
             "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
             "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
