@@ -5767,6 +5767,28 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
         "a re-sent link keeps its recorded severity"
     );
 
+    // Every recorded source can appear on a read-back link, so both public
+    // schemas must allow it when that link is sent back.
+    let listed = client.listed_tools();
+    for tool_name in ["orbit_task_add", "orbit_task_update"] {
+        let schema = &find_tool(&listed, tool_name)["inputSchema"]["properties"]["relations"]["items"]
+            ["properties"]["regression"]["properties"]["severity_source"]["enum"];
+        for source in ["filer", "operator", "backfill", "verified", "default"] {
+            assert!(
+                schema
+                    .as_array()
+                    .expect("source enum")
+                    .contains(&json!(source)),
+                "{tool_name} must accept recorded source {source}: {schema}"
+            );
+        }
+    }
+    let read_back = relations(&classified, &mut client);
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": classified, "relations": read_back}),
+    );
+
     // An unclassified link — the shape every link stored before the payload
     // existed has — reads back without one; an explicit `unclassified`
     // payload stays distinct from that absent payload.

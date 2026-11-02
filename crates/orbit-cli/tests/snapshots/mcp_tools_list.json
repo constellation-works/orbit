@@ -976,7 +976,9 @@
                     "enum": [
                       "filer",
                       "operator",
-                      "backfill"
+                      "backfill",
+                      "verified",
+                      "default"
                     ],
                     "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                   },
@@ -1651,7 +1653,9 @@
                     "enum": [
                       "filer",
                       "operator",
-                      "backfill"
+                      "backfill",
+                      "verified",
+                      "default"
                     ],
                     "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                   },

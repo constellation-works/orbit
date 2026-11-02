@@ -1,82 +1,18 @@
 {
   "tools": [
     {
-      "name": "orbit_agent_invoke",
-      "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability \u2014 the same test for a session that arrived over SSH as for a local one. Track it with `orbit_workflow_run_show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
-      "inputSchema": {
-        "additionalProperties": true,
-        "properties": {
-          "crew": {
-            "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
-            "type": "string"
-          },
-          "cwd": {
-            "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
-            "type": "string"
-          },
-          "idempotency_key": {
-            "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
-            "type": "string"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
-            "type": "string"
-          },
-          "provider_sandbox": {
-            "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
-            "type": "string"
-          },
-          "timeout_seconds": {
-            "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
-            "type": "integer"
-          },
-          "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "prompt",
-          "cwd",
-          "workspace"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
       "name": "orbit_auto_task_add",
       "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "dedupe": {
-            "description": "Dedupe policy: `skip_if_open` (default) or `always`.",
-            "type": "string"
+          "name": {
+            "type": "string",
+            "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required."
           },
           "description": {
-            "description": "Human description of the recurring chore.",
-            "type": "string"
-          },
-          "name": {
-            "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
-            "type": "string"
+            "type": "string",
+            "description": "Human description of the recurring chore."
           },
           "schedule": {
             "anyOf": [
@@ -84,13 +20,13 @@
                 "type": "object"
               },
               {
+                "type": "array",
                 "items": {
                   "type": "object"
-                },
-                "type": "array"
+                }
               }
             ],
-            "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`). Required."
+            "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`). Required."
           },
           "template": {
             "anyOf": [
@@ -98,17 +34,21 @@
                 "type": "object"
               },
               {
+                "type": "array",
                 "items": {
                   "type": "object"
-                },
-                "type": "array"
+                }
               }
             ],
             "description": "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral \u2014 no turn knobs. Required."
           },
+          "dedupe": {
+            "type": "string",
+            "description": "Dedupe policy: `skip_if_open` (default) or `always`."
+          },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
         "required": [
@@ -117,7 +57,7 @@
           "template",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": false,
@@ -130,21 +70,33 @@
       "name": "orbit_auto_task_list",
       "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
           "include_inactive_plugins": {
-            "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason."
+          },
+          "view": {
+            "type": "string",
+            "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Bounded list offset"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Bounded page size"
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
+        "additionalProperties": true,
         "required": [
           "workspace"
-        ],
-        "type": "object"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -155,22 +107,26 @@
       "name": "orbit_auto_task_mint",
       "description": "Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
           "name": {
-            "description": "Definition name. Required.",
-            "type": "string"
+            "type": "string",
+            "description": "Definition name. Required."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Explicit workspace for acknowledged mint"
+          },
+          "acknowledge_unconditional": {
+            "type": "boolean",
+            "description": "True acknowledges unconditional creation; requires operator authority"
           }
         },
         "required": [
           "name",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": false,
@@ -183,27 +139,29 @@
       "name": "orbit_auto_task_update",
       "description": "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "dedupe": {
-            "description": "New dedupe policy: `skip_if_open` or `always`.",
-            "type": "string"
-          },
-          "description": {
-            "description": "New description.",
-            "type": "string"
-          },
-          "enabled": {
-            "description": "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete.",
-            "type": "boolean"
-          },
-          "expected_enabled": {
-            "description": "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits.",
-            "type": "boolean"
+          "waive_batch": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage."
           },
           "name": {
-            "description": "Definition name. Required.",
-            "type": "string"
+            "type": "string",
+            "description": "Definition name. Required."
+          },
+          "description": {
+            "type": "string",
+            "description": "New description."
           },
           "schedule": {
             "anyOf": [
@@ -211,13 +169,13 @@
                 "type": "object"
               },
               {
+                "type": "array",
                 "items": {
                   "type": "object"
-                },
-                "type": "array"
+                }
               }
             ],
-            "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`)."
+            "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`)."
           },
           "template": {
             "anyOf": [
@@ -225,38 +183,36 @@
                 "type": "object"
               },
               {
+                "type": "array",
                 "items": {
                   "type": "object"
-                },
-                "type": "array"
+                }
               }
             ],
             "description": "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks."
           },
-          "waive_batch": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "items": {
-                  "type": "object"
-                },
-                "type": "array"
-              }
-            ],
-            "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage."
+          "dedupe": {
+            "type": "string",
+            "description": "New dedupe policy: `skip_if_open` or `always`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete."
+          },
+          "expected_enabled": {
+            "type": "boolean",
+            "description": "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Explicit workspace, required with `expected_enabled`"
           }
         },
         "required": [
           "name",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": false,
@@ -266,92 +222,331 @@
       }
     },
     {
-      "name": "orbit_command_exec",
-      "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.",
+      "name": "orbit_automation_explain",
+      "description": "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state without writing. Reports scope, store prefilter and literal cross-reads, ownership, up to 20 matches (arm state and remaining hold), and up to 20 closest misses (subjects failing exactly one top-level clause). For one subject, shows the top-level `&&`/`||` tree with clause and operand values; unreadable values are unknown, never false. `tracking` shows arm states and holds, stalls, last pass/skip, recent fires with their upstream chain, and `self`. Job mode shows steps checked at load: outer expiry, source-revision pinning, each target's resolution/digest/enabled state/condition, `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result`, and earlier-step reads. It evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "argv": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "The command as a JSON array of argv strings, program first (e.g. [\"git\", \"status\"]). Never a shell string: no shell interprets this input, so quoting and operator-precedence bugs cannot occur."
+          "definition": {
+            "type": "string",
+            "description": "The routine or auto-task carrying the condition: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name. `job:<name>` explains that job's auto-task steps instead."
           },
-          "claim_token": {
-            "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-            "type": "string"
+          "subject": {
+            "type": "string",
+            "description": "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated."
           },
           "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "working_directory": {
-            "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
-            "type": "string"
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
         "required": [
-          "argv",
-          "working_directory",
+          "definition",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_codebase_analytics",
+      "description": "Rank repository paths across codebase risk measures. Use `orbit_codebase_show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "window": {
+            "type": "string",
+            "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d."
+          },
+          "min_support": {
+            "type": "integer",
+            "description": "Smallest denominator a ranked row needs, at least 1. Default: 15."
+          },
+          "rollup": {
+            "type": "string",
+            "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file."
+          },
+          "nature": {
+            "type": "string",
+            "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`."
+          },
+          "escape": {
+            "type": "string",
+            "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`."
+          },
+          "layer": {
+            "type": "string",
+            "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither."
+          },
+          "detected_by": {
+            "type": "string",
+            "description": "Count only regressions found this way, read from the regression task's tags, else its filer."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_codebase_related",
+      "description": "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "A repository-relative file path, including a deleted file with landed history."
+          },
+          "window": {
+            "type": "string",
+            "description": "Landed period ending now. Default: 30d."
+          },
+          "min_support": {
+            "type": "integer",
+            "description": "Minimum shared landed tasks, at least 1. Default: 15."
+          },
+          "top": {
+            "type": "integer",
+            "description": "Maximum partners, from 1 to 100. Default: 10."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "path",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "orbit_codebase_show",
+      "description": "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/. A trailing slash is optional."
+          },
+          "window": {
+            "type": "string",
+            "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d."
+          },
+          "min_support": {
+            "type": "integer",
+            "description": "Smallest denominator a ranked row needs, at least 1. Default: 15."
+          },
+          "rollup": {
+            "type": "string",
+            "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file."
+          },
+          "nature": {
+            "type": "string",
+            "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`."
+          },
+          "escape": {
+            "type": "string",
+            "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`."
+          },
+          "layer": {
+            "type": "string",
+            "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither."
+          },
+          "detected_by": {
+            "type": "string",
+            "description": "Count only regressions found this way, read from the regression task's tags, else its filer."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "path",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_decision_list",
+      "description": "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate, task_id or an exact topic. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "gate": {
+            "type": "string",
+            "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval or review_approval."
+          },
+          "task_id": {
+            "type": "string",
+            "description": "Only requests on this task."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Only requests carrying exactly this structured topic."
+          },
+          "include_closed": {
+            "type": "boolean",
+            "description": "Include answered, superseded and expired requests beside the open ones."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "orbit_decision_raise",
+      "description": "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. The operator answers, or a current corpus rule the operator marked auto answers an exact topic match and records that answer as precedent: either way the answer is in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The human-crew task the decision is for. The task must be assigned to a human crew and not be done, archived or rejected."
+          },
+          "question": {
+            "type": "string",
+            "description": "One or two plain-language sentences naming the decision needed, readable without opening the code."
+          },
+          "options": {
+            "type": "array",
+            "description": "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "task_id",
+          "question",
+          "options",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "orbit_decision_show",
+      "description": "Show one human decision request: its task, gate, allowed answers with their consequences, the binding it was raised against, its expiry, its effective state, and its resolution when answered. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The decision request id, as `orbit_decision_list` prints it."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "required": [
+          "id",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
       "name": "orbit_friction_add",
       "description": "Append a friction report",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
           "body": {
-            "description": "Markdown body describing what happened and why it caused friction",
-            "type": "string"
+            "type": "string",
+            "description": "Markdown body describing what happened and why it caused friction"
           },
-          "during_task": {
-            "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
-            "type": "string"
-          },
-          "model": {
-            "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
+          "title": {
+            "type": "string",
+            "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
+            "maxLength": 120
           },
           "tags": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
+                  "type": "string",
                   "enum": [
                     "automation",
                     "build",
@@ -363,25 +558,27 @@
                     "policy",
                     "skill-guidance",
                     "tooling"
-                  ],
-                  "type": "string"
-                },
-                "type": "array"
+                  ]
+                }
               },
               {
                 "type": "string"
               }
             ],
-            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. Accepted aliases: ci \u2192 build, test \u2192 build, tests \u2192 build, testing \u2192 build, cli \u2192 tooling, mcp \u2192 tooling, tool \u2192 tooling, auto-task \u2192 automation, auto-tasks \u2192 automation, scheduler \u2192 automation, routine \u2192 automation, skill \u2192 skill-guidance, prompt \u2192 skill-guidance. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
+            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
           },
-          "title": {
-            "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
-            "maxLength": 120,
-            "type": "string"
+          "during_task": {
+            "type": "string",
+            "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)"
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
         "required": [
@@ -389,7 +586,7 @@
           "model",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": false,
@@ -402,32 +599,22 @@
       "name": "orbit_friction_update",
       "description": "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "body": {
-            "description": "Optional replacement markdown body",
-            "type": "string"
-          },
           "id": {
-            "description": "Friction record ID, e.g. FYYYY-MM-NNN",
-            "type": "string"
-          },
-          "move": {
-            "description": "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
-            "type": "boolean"
-          },
-          "rehome_to": {
-            "description": "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
-            "type": "string"
+            "type": "string",
+            "description": "Friction record ID, e.g. FYYYY-MM-NNN"
           },
           "status": {
-            "description": "Optional status: open, triaged, or resolved",
-            "type": "string"
+            "type": "string",
+            "description": "Optional status: open, triaged, or resolved"
           },
           "tags": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
+                  "type": "string",
                   "enum": [
                     "automation",
                     "build",
@@ -439,32 +626,42 @@
                     "policy",
                     "skill-guidance",
                     "tooling"
-                  ],
-                  "type": "string"
-                },
-                "type": "array"
+                  ]
+                }
               },
               {
                 "type": "string"
               }
             ],
-            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. Accepted aliases: ci \u2192 build, test \u2192 build, tests \u2192 build, testing \u2192 build, cli \u2192 tooling, mcp \u2192 tooling, tool \u2192 tooling, auto-task \u2192 automation, auto-tasks \u2192 automation, scheduler \u2192 automation, routine \u2192 automation, skill \u2192 skill-guidance, prompt \u2192 skill-guidance. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
+            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional replacement markdown body"
+          },
+          "rehome_to": {
+            "type": "string",
+            "description": "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition"
+          },
+          "move": {
+            "type": "boolean",
+            "description": "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true"
           },
           "title": {
+            "type": "string",
             "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
-            "maxLength": 120,
-            "type": "string"
+            "maxLength": 120
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
         "required": [
           "id",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": false,
@@ -477,6 +674,83 @@
       "name": "orbit_search",
       "description": "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
       "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions.",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "description": "Corpus kind: task, friction, or all. Default: all."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing."
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              }
+            ],
+            "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind."
+          },
+          "workspaces": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace."
+          },
+          "all_workspaces": {
+            "type": "boolean",
+            "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
         "additionalProperties": true,
         "allOf": [
           {
@@ -490,96 +764,23 @@
                 "required": [
                   "tag"
                 ]
+              },
+              {
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "friction"
+                  }
+                }
               }
             ]
           }
         ],
-        "properties": {
-          "all": {
-            "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
-            "type": "boolean"
-          },
-          "all_workspaces": {
-            "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
-            "type": "boolean"
-          },
-          "kind": {
-            "description": "Corpus kind: task, friction, or all. Default: all.",
-            "type": "string"
-          },
-          "limit": {
-            "description": "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.",
-            "type": "integer"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "query": {
-            "description": "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
-          },
-          "tag": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "minLength": 1,
-                "type": "string"
-              }
-            ],
-            "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
-          },
-          "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
-          },
-          "workspaces": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace."
-          }
-        },
         "required": [
           "workspace"
-        ],
-        "type": "object"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -590,15 +791,27 @@
       "name": "orbit_task_add",
       "description": "Create an Orbit task and return the created task JSON",
       "inputSchema": {
-        "additionalProperties": false,
+        "type": "object",
         "properties": {
+          "title": {
+            "type": "string",
+            "description": "Task title"
+          },
+          "description": {
+            "type": "string",
+            "description": "Task description markdown"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd."
+          },
           "acceptance_criteria": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -606,27 +819,73 @@
             ],
             "description": "Optional acceptance criteria as a string or array of strings"
           },
-          "allow_missing_context": {
-            "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
-            "type": "boolean"
-          },
-          "complexity": {
-            "description": "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial \u2192 low; large or big \u2192 hard",
-            "enum": [
-              "low",
-              "medium",
-              "hard",
-              "xhard"
+          "tags": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
             ],
-            "type": "string"
+            "description": "Optional tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task (several: any one of them); any other `os:` value is rejected"
+          },
+          "required_tools": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings"
+          },
+          "granted_tools": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied"
+          },
+          "requires_labels": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags"
+          },
+          "not_before": {
+            "type": "string",
+            "description": "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused"
           },
           "context_files": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -634,50 +893,33 @@
             ],
             "description": "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up."
           },
-          "crew": {
-            "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
-            "type": "string"
-          },
-          "description": {
-            "description": "Task description markdown",
-            "type": "string"
-          },
-          "field": {
-            "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
-            "type": "string"
-          },
-          "fields": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "orchestrator": {
-            "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
-            "type": "string"
+          "allow_missing_context": {
+            "type": "boolean",
+            "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default."
           },
           "priority": {
-            "description": "Optional priority level",
-            "type": "string"
+            "type": "string",
+            "description": "Optional priority level"
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "hard",
+              "xhard"
+            ],
+            "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial \u2192 low; large or big \u2192 hard"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bug",
+              "refactor",
+              "chore"
+            ],
+            "description": "Optional task type (defaults to chore)"
           },
           "relations": {
             "type": "array",
@@ -757,7 +999,9 @@
                       "enum": [
                         "filer",
                         "operator",
-                        "backfill"
+                        "backfill",
+                        "verified",
+                        "default"
                       ],
                       "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                     },
@@ -775,60 +1019,106 @@
               }
             }
           },
-          "required_tools": {
+          "crew": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default"
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted"
+          },
+          "orchestrator_model": {
+            "type": "string",
+            "description": "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`."
+          },
+          "fields": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
               }
             ],
-            "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings"
+            "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
           },
-          "tags": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Optional tags as a string or array of strings"
+          "field": {
+            "type": "string",
+            "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`."
           },
-          "title": {
-            "description": "Task title",
-            "type": "string"
+          "request_id": {
+            "type": "string",
+            "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."
           },
-          "type": {
-            "description": "Optional task type (defaults to chore)",
-            "enum": [
-              "feature",
-              "bug",
-              "refactor",
-              "chore"
-            ],
-            "type": "string"
-          },
-          "workspace": {
-            "description": "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd.",
-            "type": "string"
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field: the agent family (codex, claude, gemini, grok, or muse) or a full model string such as `claude-opus-5-5`. `created_by` records the family; a full model string is also recorded once as `created_by_model`. A value that names no known family is refused."
           }
         },
         "required": [
           "title",
-          "description",
-          "complexity",
           "workspace"
         ],
-        "type": "object"
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "request_id"
+              ]
+            },
+            "then": {
+              "required": [
+                "workspace",
+                "description",
+                "acceptance_criteria"
+              ],
+              "propertyNames": {
+                "enum": [
+                  "workspace",
+                  "request_id",
+                  "model",
+                  "title",
+                  "description",
+                  "acceptance_criteria",
+                  "priority",
+                  "crew"
+                ]
+              },
+              "properties": {
+                "acceptance_criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "crew": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "else": {
+              "required": [
+                "description",
+                "complexity"
+              ]
+            }
+          }
+        ]
       },
       "annotations": {
         "readOnlyHint": false,
@@ -841,42 +1131,35 @@
       "name": "orbit_task_artifact_get",
       "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit_task_show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "agent": {
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-            "type": "string"
-          },
           "id": {
-            "description": "Globally unique task ID that owns the artifact.",
-            "type": "string"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
+            "type": "string",
+            "description": "Globally unique task ID that owns the artifact."
           },
           "path": {
-            "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
-            "type": "string"
+            "type": "string",
+            "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed \u2014 a valid workspace that does not own the task returns not-found.",
-            "type": "string"
+            "type": "string",
+            "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed \u2014 a valid workspace that does not own the task returns not-found."
           }
         },
         "required": [
           "id",
-          "path",
-          "workspace"
+          "path"
         ],
-        "type": "object"
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
@@ -885,44 +1168,37 @@
     },
     {
       "name": "orbit_task_artifact_put",
-      "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. See the assigned task's evidence template for automation coverage and review report contracts.",
+      "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. Artifact paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Name ordinary supporting evidence with a nonreserved name (for example `examination-checks.json`). See the assigned task's evidence template for automation coverage and review report contracts.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
           "id": {
-            "description": "task ID",
-            "type": "string"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "path": {
-            "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name.",
-            "type": "string"
+            "type": "string",
+            "description": "task ID"
           },
           "source_path": {
-            "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
-            "type": "string"
+            "type": "string",
+            "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused."
+          },
+          "path": {
+            "type": "string",
+            "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`)."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Optional workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Omitted, this session, which is bound to no workspace, resolves the task id through this server's task registry. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
           }
         },
         "required": [
           "id",
-          "source_path",
-          "workspace"
+          "source_path"
         ],
-        "type": "object"
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": false,
@@ -932,81 +1208,189 @@
       }
     },
     {
-      "name": "orbit_task_list",
-      "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
+      "name": "orbit_task_block_triage",
+      "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists those awaiting triage; `propose` opens a decision request with a short summary, two or three options (each a one-sentence summary, a one-line consequence, an optional field rewrite and an optional action: requeue, re_pilot, change_crew, split, reject or archive) and a recommendation, which the operator answers with one click; `report` records the exact human action when only something outside Orbit resolves the hold. Prefer `propose` whenever the operator resolves the hold by choosing. Never approves, rejects or archives a task itself. Blocked tasks are no longer triaged here: final recovery decides them. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
+          },
+          "action": {
+            "type": "string",
+            "description": "candidates, propose, or report"
+          },
+          "subject": {
+            "type": "string",
+            "description": "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold"
+          },
+          "id": {
+            "type": "string",
+            "description": "propose and report: the pilot-held task"
+          },
+          "summary": {
+            "type": "string",
+            "description": "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code"
+          },
+          "reason": {
+            "type": "string",
+            "description": "report: the exact action only a human outside Orbit can take"
+          },
+          "options": {
+            "type": "array",
+            "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both"
+          },
+          "recommended": {
+            "type": "integer",
+            "description": "propose: 1-based index of the recommended option"
+          },
+          "source_revision": {
+            "type": "string",
+            "description": "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree"
+          },
+          "observed_revision": {
+            "type": "string",
+            "description": "inspection proof: `git rev-parse HEAD` in the inspection checkout"
+          },
+          "observed_tree": {
+            "type": "string",
+            "description": "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout"
+          },
           "agent": {
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-            "type": "string"
-          },
-          "fields": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit_task_show`."
-          },
-          "job_run_id": {
-            "description": "Filter by job run ID",
-            "type": "string"
-          },
-          "limit": {
-            "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
-            "type": "integer"
+            "type": "string",
+            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
           },
           "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "parent_id": {
-            "description": "Optional parent task ID to list subtasks for",
-            "type": "string"
-          },
-          "path": {
-            "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
-            "type": "string"
-          },
-          "ready": {
-            "description": "When true, keep only tasks whose dependencies are satisfied",
-            "type": "boolean"
-          },
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          }
+        },
+        "required": [
+          "action",
+          "workspace"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_task_eligible",
+      "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
           "status": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
               }
             ],
-            "description": "Optional task status filter. Pass a comma-separated string or an array of status names."
+            "description": "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array."
+          },
+          "path": {
+            "type": "string",
+            "description": "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit_task_list` matches `path`."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum eligible tasks to return (default 50). Must be at least 1."
+          },
+          "explain": {
+            "type": "boolean",
+            "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_task_list",
+      "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday."
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Optional parent task ID to list subtasks for"
+          },
+          "type": {
+            "type": "string",
+            "description": "Optional task type filter"
+          },
+          "scheduled": {
+            "type": "boolean",
+            "description": "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply."
+          },
+          "not_before_from": {
+            "type": "string",
+            "description": "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
+          },
+          "not_before_until": {
+            "type": "string",
+            "description": "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match."
+          },
+          "job_run_id": {
+            "type": "string",
+            "description": "Filter by job run ID"
           },
           "tag": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -1014,19 +1398,78 @@
             ],
             "description": "Filter by tag. Repeat or pass an array for AND semantics."
           },
-          "type": {
-            "description": "Optional task type filter",
-            "type": "string"
+          "runs_on": {
+            "type": "string",
+            "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "When true, keep only tasks whose dependencies are satisfied"
+          },
+          "path": {
+            "type": "string",
+            "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1."
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
+          },
+          "view": {
+            "type": "string",
+            "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Bounded view list offset"
+          },
+          "search": {
+            "type": "string",
+            "description": "Bounded view key/title substring"
+          },
+          "priority": {
+            "type": "string",
+            "description": "Optional task priority filter"
+          },
+          "external_ref": {
+            "type": "string",
+            "description": "Optional exact external reference filter in `system:id` form"
+          },
+          "has_ref": {
+            "type": "string",
+            "description": "Optional external reference system filter: keep tasks with any reference in this system"
+          },
+          "agent": {
+            "type": "string",
+            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd."
           }
         },
+        "additionalProperties": false,
         "required": [
           "workspace"
-        ],
-        "type": "object"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1037,23 +1480,32 @@
       "name": "orbit_task_show",
       "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
-          "agent": {
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-            "type": "string"
+          "id": {
+            "type": "string",
+            "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required."
           },
-          "field": {
-            "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
-            "type": "string"
+          "snapshot": {
+            "type": "boolean",
+            "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
           },
           "fields": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -1061,34 +1513,43 @@
             ],
             "description": "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`."
           },
-          "id": {
-            "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
-            "type": "string"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
+          "field": {
+            "type": "string",
+            "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`."
           },
           "run_id": {
-            "description": "With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used.",
-            "type": "string"
+            "type": "string",
+            "description": "With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used."
           },
           "workspace": {
-            "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
-            "type": "string"
+            "type": "string",
+            "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name."
+          },
+          "view": {
+            "type": "string",
+            "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Bounded detail page size"
+          },
+          "comments_offset": {
+            "type": "integer",
+            "description": "Comment offset"
+          },
+          "history_offset": {
+            "type": "integer",
+            "description": "History offset"
+          },
+          "artifacts_offset": {
+            "type": "integer",
+            "description": "Artifact metadata offset"
           }
         },
         "required": [
           "id"
         ],
-        "type": "object"
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1099,15 +1560,31 @@
       "name": "orbit_task_update",
       "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
       "inputSchema": {
-        "additionalProperties": false,
+        "type": "object",
         "properties": {
+          "repilot": {
+            "type": "boolean",
+            "description": "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot."
+          },
+          "id": {
+            "type": "string",
+            "description": "task ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "New task title"
+          },
+          "description": {
+            "type": "string",
+            "description": "New task description (empty string clears)"
+          },
           "acceptance_criteria": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -1115,132 +1592,19 @@
             ],
             "description": "New acceptance criteria as an array of strings or a single string"
           },
-          "allow_missing_context": {
-            "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
-            "type": "boolean"
-          },
-          "comment": {
-            "description": "Task comment to append",
-            "type": "string"
-          },
-          "complexity": {
-            "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial \u2192 low; large or big \u2192 hard",
-            "enum": [
-              "low",
-              "medium",
-              "hard",
-              "xhard"
-            ],
-            "type": "string"
-          },
-          "context": {
-            "description": "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`.",
-            "type": "string"
-          },
-          "context_files": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
-          },
-          "crew": {
-            "description": "Named crew to use when running this task (empty string draws a fresh one)",
-            "type": "string"
-          },
           "dependencies": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
               }
             ],
             "description": "Replacement dependency task IDs as a string or array of strings"
-          },
-          "description": {
-            "description": "New task description (empty string clears)",
-            "type": "string"
-          },
-          "execution_summary": {
-            "description": "Replacement execution summary text",
-            "type": "string"
-          },
-          "field": {
-            "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
-            "type": "string"
-          },
-          "fields": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
-          },
-          "id": {
-            "description": "task ID",
-            "type": "string"
-          },
-          "implemented_by": {
-            "description": "Explicit implementation attribution label (empty string clears)",
-            "type": "string"
-          },
-          "job_run_id": {
-            "description": "Job run ID to associate with the task (empty string clears)",
-            "type": "string"
-          },
-          "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "note": {
-            "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
-            "type": "string"
-          },
-          "orchestrator": {
-            "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)",
-            "type": "string"
-          },
-          "plan": {
-            "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
-            "type": "string"
-          },
-          "planned_by": {
-            "description": "Explicit planning attribution label (empty string clears)",
-            "type": "string"
-          },
-          "pr_status": {
-            "description": "PR review status (e.g. approve, request-changes; empty string clears)",
-            "type": "string"
-          },
-          "priority": {
-            "description": "New dispatch priority (low, medium, high, or critical)",
-            "type": "string"
           },
           "relations": {
             "type": "array",
@@ -1320,7 +1684,9 @@
                       "enum": [
                         "filer",
                         "operator",
-                        "backfill"
+                        "backfill",
+                        "verified",
+                        "default"
                       ],
                       "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
                     },
@@ -1338,12 +1704,62 @@
               }
             }
           },
-          "source_task_id": {
-            "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)",
-            "type": "string"
+          "tags": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected"
+          },
+          "granted_tools": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied"
+          },
+          "requires_labels": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags"
+          },
+          "not_before": {
+            "type": "string",
+            "description": "Replacement scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused"
+          },
+          "allow_drop_system_tags": {
+            "type": "boolean",
+            "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop."
+          },
+          "plan": {
+            "type": "string",
+            "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required."
           },
           "status": {
-            "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
+            "type": "string",
             "enum": [
               "proposed",
               "backlog",
@@ -1354,46 +1770,300 @@
               "blocked",
               "rejected"
             ],
-            "type": "string"
+            "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits."
           },
-          "tags": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
+          "note": {
+            "type": "string",
+            "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion"
+          },
+          "priority": {
+            "type": "string",
+            "description": "New dispatch priority (low, medium, high, or critical)"
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "hard",
+              "xhard"
             ],
-            "description": "Replacement task tags as a string or array of strings"
-          },
-          "title": {
-            "description": "New task title",
-            "type": "string"
+            "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial \u2192 low; large or big \u2192 hard"
           },
           "type": {
-            "description": "New task type",
+            "type": "string",
             "enum": [
               "feature",
               "bug",
               "refactor",
               "chore"
             ],
-            "type": "string"
+            "description": "New task type"
+          },
+          "source_task_id": {
+            "type": "string",
+            "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)"
+          },
+          "planned_by": {
+            "type": "string",
+            "description": "Explicit planning attribution label (empty string clears)"
+          },
+          "implemented_by": {
+            "type": "string",
+            "description": "Explicit implementation attribution label (empty string clears)"
+          },
+          "execution_summary": {
+            "type": "string",
+            "description": "Replacement execution summary text"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Task comment to append"
+          },
+          "pr_status": {
+            "type": "string",
+            "description": "PR review status (e.g. approve, request-changes; empty string clears)"
+          },
+          "job_run_id": {
+            "type": "string",
+            "description": "Job run ID to associate with the task (empty string clears)"
+          },
+          "crew": {
+            "type": "string",
+            "description": "Named crew to use when running this task (empty string draws a fresh one)"
+          },
+          "orchestrator": {
+            "type": "string",
+            "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared."
+          },
+          "context_files": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
+          },
+          "allow_missing_context": {
+            "type": "boolean",
+            "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`."
+          },
+          "context": {
+            "type": "string",
+            "description": "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`."
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
+          },
+          "field": {
+            "type": "string",
+            "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot."
+          },
+          "expected_revision": {
+            "type": "string",
+            "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately."
+          },
+          "verdict": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "rationale",
+              "criteria",
+              "evidence"
+            ],
+            "properties": {
+              "decision": {
+                "enum": [
+                  "accept",
+                  "changes_requested"
+                ]
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expected_run_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expected_head": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "criteria": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "criterion",
+                    "met",
+                    "evidence"
+                  ],
+                  "properties": {
+                    "criterion": {
+                      "type": "string"
+                    },
+                    "met": {
+                      "type": "boolean"
+                    },
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches."
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Optional workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Omitted, this session, which is bound to no workspace, resolves the task id through this server's task registry. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
           }
         },
         "required": [
-          "id",
-          "workspace"
+          "id"
         ],
-        "type": "object"
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "request_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "expected_revision"
+                  ]
+                },
+                {
+                  "required": [
+                    "verdict"
+                  ]
+                },
+                {
+                  "required": [
+                    "complete"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "required": [
+                "workspace",
+                "request_id",
+                "expected_revision"
+              ],
+              "oneOf": [
+                {
+                  "required": [
+                    "verdict"
+                  ],
+                  "propertyNames": {
+                    "enum": [
+                      "workspace",
+                      "request_id",
+                      "model",
+                      "id",
+                      "expected_revision",
+                      "verdict",
+                      "complete"
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "comment"
+                  ],
+                  "propertyNames": {
+                    "enum": [
+                      "workspace",
+                      "request_id",
+                      "model",
+                      "id",
+                      "expected_revision",
+                      "comment"
+                    ]
+                  }
+                },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "workspace",
+                      "request_id",
+                      "model",
+                      "id",
+                      "expected_revision",
+                      "status",
+                      "title",
+                      "description",
+                      "acceptance_criteria",
+                      "priority",
+                      "crew"
+                    ]
+                  },
+                  "properties": {
+                    "acceptance_criteria": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1403,188 +2073,162 @@
       }
     },
     {
-      "name": "orbit_workflow_run_list",
-      "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
+      "name": "orbit_ui_inspect",
+      "title": "Inspect Orbit task or run",
+      "description": "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "job_id": {
-            "description": "Optional job ID filter.",
-            "type": "string"
-          },
-          "limit": {
-            "description": "Maximum runs to return (default 25; values above 200 are rejected).",
-            "type": "integer"
-          },
-          "since": {
-            "description": "Optional RFC 3339 lower bound for run creation time.",
-            "type": "string"
-          },
-          "state": {
-            "description": "Optional concrete run-state filter, or `terminal`.",
-            "type": "string"
-          },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "workspace"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_workflow_run_resume",
-      "description": "Resume a terminal resumable workflow run as a new linked run. Requires operator capability; agent sessions are refused.",
-      "inputSchema": {
-        "additionalProperties": true,
-        "properties": {
-          "claim_token": {
-            "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd."
           },
           "id": {
-            "description": "Job run ID.",
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Public task key or run ID returned by Orbit."
           },
-          "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_workflow_run_show",
-      "description": "Fetch one durable workflow run by ID. Requires operator capability; agent sessions are refused.",
-      "inputSchema": {
-        "additionalProperties": true,
-        "properties": {
-          "id": {
-            "description": "Job run ID.",
-            "type": "string"
-          },
-          "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_workflow_ship",
-      "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
-      "inputSchema": {
-        "additionalProperties": true,
-        "properties": {
-          "allowed_crews": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
+          "kind": {
+            "type": "string",
+            "enum": [
+              "task",
+              "run"
             ],
-            "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation."
+            "default": "task"
+          }
+        },
+        "required": [
+          "workspace",
+          "id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://orbit/control-center/v1/index.html"
+        },
+        "openai/ui": {
+          "entrypoints": [
+            {
+              "type": "thread"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "orbit_ui_open",
+      "title": "Open Orbit control center",
+      "description": "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd."
           },
-          "base": {
-            "description": "Optional base branch override.",
-            "type": "string"
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Public task key or run ID returned by Orbit."
           },
-          "claim_token": {
-            "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-            "type": "string"
+          "kind": {
+            "type": "string",
+            "enum": [
+              "task",
+              "run"
+            ],
+            "default": "task"
+          }
+        },
+        "dependentRequired": {
+          "id": [
+            "workspace"
+          ],
+          "kind": [
+            "workspace",
+            "id"
+          ]
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://orbit/control-center/v1/index.html"
+        },
+        "openai/ui": {
+          "entrypoints": [
+            {
+              "type": "global"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "orbit_visual_capture",
+      "description": "Render the current working tree (uncommitted changes included) for each of a task's `mocks/` artifacts and write, per mock, `mock.png`, `capture.png` and `side-by-side.png` plus one `rules.json` with the workspace's UI rule results for those captures, under the output directory. Each mock name gives the view, state, theme and width, resolved against the view manifests configured in `visual_review.manifests`, whose fixture serves the app. This is the implementer's self-check: it attaches nothing and records nothing on the task, and its output is not evidence of record. Needs a verified browser kit on the host and a configured manifest; without either it fails naming what is missing. A mock whose view never renders is reported per mock as `render_timeout`, and one whose app's setup fails as `setup_failed`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Task ID whose `mocks/` artifacts name the views to capture."
           },
-          "mode": {
-            "description": "Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
-            "type": "string"
+          "mock": {
+            "type": "string",
+            "description": "Capture only this one mock artifact (its full `mocks/\u2026` path) instead of every mock of the task."
+          },
+          "out": {
+            "type": "string",
+            "description": "Directory the captures are written under, one subdirectory per mock. Defaults to `.orbit/tmp/visual/<task-id>` in the checkout."
           },
           "model": {
-            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-            "enum": [
-              "codex",
-              "claude",
-              "gemini",
-              "grok",
-              "muse"
-            ],
-            "type": "string"
-          },
-          "task_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Explicit task IDs to ship; at least one is required."
+            "type": "string",
+            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+            "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
-            "type": "string"
+            "type": "string",
+            "description": "Optional workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Omitted, this session, which is bound to no workspace, resolves the task id through this server's task registry. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
           }
         },
         "required": [
-          "task_ids",
-          "workspace"
+          "id"
         ],
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
       "name": "orbit_workspace_list",
       "description": "List active workspaces with a checkout registered on this machine, optionally with each one's configured crews.",
       "inputSchema": {
-        "additionalProperties": true,
+        "type": "object",
         "properties": {
           "include": {
             "anyOf": [
               {
+                "type": "array",
                 "items": {
                   "type": "string"
-                },
-                "type": "array"
+                }
               },
               {
                 "type": "string"
@@ -1593,7 +2237,7 @@
             "description": "Optional extra detail per workspace row. `crews` adds the workspace's effective configured crews and default crew as `crews`, read on the machine that holds the checkout, or `crews_error` when its configuration cannot be read."
           }
         },
-        "type": "object"
+        "additionalProperties": true
       },
       "annotations": {
         "readOnlyHint": true,

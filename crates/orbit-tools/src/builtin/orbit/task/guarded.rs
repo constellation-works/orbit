@@ -89,10 +89,8 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
 /// here as enums and per-property descriptions, so the top-level
 /// `relations` field description stays within its byte budget.
 ///
-/// `severity_source` advertises only the filer inputs (`filer`,
-/// `operator`, `backfill`): `verified` is recorded only by finding
-/// verification and `default` only for a link stored without a severity,
-/// so neither is a value a filer should send.
+/// `severity_source` includes recorded values so a read-back link can be
+/// replayed; filers should not assign `verified` or `default` themselves.
 fn extend_relations_schema(value: &mut Value) {
     let Some(relations) = value
         .get_mut("properties")
@@ -110,7 +108,7 @@ fn extend_relations_schema(value: &mut Value) {
                 "nature":{"type":"string","enum":["broke_existing","defect_in_new","incomplete","merge_reintroduced","contract_drift","unclassified"],"description":"Kind of regression the link records"},
                 "escape":{"type":"string","enum":["no_test","test_not_selected","platform_only","review_missed","spec_ambiguous","nondeterministic","unclassified"],"description":"Why the delivery gates missed the defect"},
                 "severity":{"type":"string","enum":["critical","high","medium","low","nit"],"description":"critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"},
-                "severity_source":{"type":"string","enum":["filer","operator","backfill"],"description":"filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"},
+                "severity_source":{"type":"string","enum":["filer","operator","backfill","verified","default"],"description":"filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"},
                 "sites":{"type":"array","items":{"type":"string"},"maxItems":8,"uniqueItems":true,"description":"Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"}
             }}
         }}),
