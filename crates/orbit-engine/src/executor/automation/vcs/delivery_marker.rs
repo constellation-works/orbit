@@ -55,9 +55,14 @@ pub(super) fn marker_reachable(
 /// no letter, embedded whitespace, over-long) is dropped. Each opening bracket
 /// starts a new candidate, so an unmatched bracket in prose or a truncated
 /// title cannot hide a later delivery marker.
+///
+/// A `Fixes:` trailer quotes the subject of the commit a repair fixes, so any
+/// marker inside it names someone else's delivery. Trailer lines after the
+/// subject are skipped; only the commit's own subject and body carry ownership.
 pub(super) fn delivery_markers(message: &str) -> Vec<String> {
+    let owned = owned_text(message);
     let mut markers: Vec<String> = Vec::new();
-    for candidate in message.split('[').skip(1) {
+    for candidate in owned.split('[').skip(1) {
         let Some((token, _)) = candidate.split_once(']') else {
             continue;
         };
@@ -69,6 +74,18 @@ pub(super) fn delivery_markers(message: &str) -> Vec<String> {
         }
     }
     markers
+}
+
+/// `message` without its quoted-attribution trailers (`Fixes: <sha> ("<subject>")`).
+/// The first line is the subject and is always kept.
+fn owned_text(message: &str) -> String {
+    message
+        .split('\n')
+        .enumerate()
+        .filter(|(index, line)| *index == 0 || !line.trim_start().starts_with("Fixes:"))
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_marker(token: &str) -> bool {
