@@ -547,7 +547,7 @@
               "type": "string"
             }
           ],
-          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures. Accepted aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance."
+          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures."
         },
         "during_task": {
           "type": "string",
@@ -614,7 +614,7 @@
               "type": "string"
             }
           ],
-          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures. Accepted aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance."
+          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures."
         },
         "body": {
           "type": "string",

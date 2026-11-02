@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use orbit_common::governance::friction::{
-    DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS, friction_tag_aliases_literal,
-};
+use orbit_common::governance::friction::{DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS};
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
     McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam,
@@ -334,8 +332,7 @@ fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String,
     tags.insert(
         "description".to_string(),
         Value::String(format!(
-            "Friction taxonomy tags as a string or array. Vocabulary: {vocabulary}. Accepted aliases: {}.{fallback_note}",
-            friction_tag_aliases_literal()
+            "Friction taxonomy tags as a string or array. Vocabulary: {vocabulary}.{fallback_note}"
         )),
     );
 }
