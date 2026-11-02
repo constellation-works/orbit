@@ -4959,6 +4959,17 @@ impl Fixture {
             .map(|value| value.parse().unwrap())
             .unwrap_or(0)
     }
+    /// Answers to successive required-checks reads; the last repeats
+    /// (`empty`, `truncated`, `fail` or `success`; see [`FAKE_GH`]).
+    fn script_required_check_outcomes(&self, outcomes: &[&str]) {
+        self.script_lines("required-checks-outcomes", outcomes);
+        fs::write(self.forge.join("required-checks-reads"), "0\n").unwrap();
+    }
+    fn required_check_reads(&self) -> usize {
+        self.forge_state("required-checks-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
+    }
     /// Script PR metadata independently of the real remote PR head ref.
     fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
         self.script_lines("heads", heads);
@@ -6470,6 +6481,19 @@ PYVIEW
             *statusCheckRollup*)
                 observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
                 [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                if [ -f "$forge/required-checks-outcomes" ]; then
+                    rc_reads=$(( $(cat "$forge/required-checks-reads" 2>/dev/null || echo 0) + 1 ))
+                    printf '%s\n' "$rc_reads" > "$forge/required-checks-reads"
+                    rc_outcome=$(sed -n "${rc_reads}p" "$forge/required-checks-outcomes")
+                    [ -n "$rc_outcome" ] || rc_outcome=$(tail -n 1 "$forge/required-checks-outcomes")
+                    case "$rc_outcome" in
+                        empty) exit 0 ;;
+                        truncated) printf '{"data":{"repository":{"pullRequest":{"headR'; exit 0 ;;
+                        fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+                        success) ;;
+                        *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
+                    esac
+                fi
                 if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
                 if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
                 rollup=$(check "$observed")

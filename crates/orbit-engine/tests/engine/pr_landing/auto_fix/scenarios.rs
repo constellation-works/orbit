@@ -3544,6 +3544,89 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 }
 
+/// [ORB-21412] An empty or truncated required-checks answer, or a failed
+/// read reporting `unexpected end of JSON input`, is retried a bounded
+/// number of times: a transient bad answer recovers without stopping
+/// auto-fix, and a persistent one holds the run as inconclusive evidence
+/// (retryable by the next auto-fix pass) with the cause named.
+#[test]
+fn auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persistent() {
+    auto_fix_table(
+        "auto_fix::auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persistent",
+        "empty truncated fail recovered persistent_empty persistent_fail",
+        required_check_evidence_case,
+    );
+}
+
+fn required_check_evidence_case(case: &str, row: &std::path::Path) {
+    let (fx, host) = opened_review(row);
+    fx.script_checks(&["success"]);
+    match case {
+        "empty" | "truncated" | "fail" => {
+            fx.script_required_check_outcomes(&[case, "success"]);
+            let answer = run_private_vcs_operation(
+                "pr.required_checks",
+                &json!({"pr": "42", "workspace_path": fx.repo}),
+            )
+            .unwrap();
+            assert!(answer["pull_request"].is_object(), "{case}: {answer}");
+            assert_eq!(fx.required_check_reads(), 2, "{case}: one bounded retry");
+        }
+        "recovered" => {
+            fx.script_required_check_outcomes(&["empty", "success"]);
+            let completed = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap();
+            assert_eq!(
+                completed["merge"]["reason"], "auto_fix_mergeable",
+                "{case}: {completed}"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_eq!(fx.required_check_reads(), 2, "{case}");
+        }
+        "persistent_empty" | "persistent_fail" => {
+            let outcome = if case == "persistent_empty" {
+                "empty"
+            } else {
+                "fail"
+            };
+            fx.script_required_check_outcomes(&[outcome]);
+            let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("required-check evidence is unavailable"),
+                "{case}: {error}"
+            );
+            if case == "persistent_fail" {
+                assert!(
+                    error.to_string().contains("unexpected end of JSON input"),
+                    "{case}: {error}"
+                );
+            }
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(refusal.error_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal)),
+                "{case}: the run holds for the next auto-fix pass"
+            );
+            assert_eq!(
+                fx.required_check_reads(),
+                3,
+                "{case}: the bounded attempt ceiling"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// The provider's authenticated primary rate-limit answer to a failed-job log
 /// read, as `gh run view --log-failed` renders it [ORB-20178].
 const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit exceeded for \
