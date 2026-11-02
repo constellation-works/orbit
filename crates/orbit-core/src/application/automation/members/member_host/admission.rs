@@ -6,6 +6,7 @@ use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind};
 use super::super::super::preparation;
 use super::super::Host;
 use super::host::{Escalation, already_preparing, already_triaging, already_verifying};
+use crate::application::task::pilot;
 use crate::application::task::{finding_fingerprint, needs_verification};
 
 impl Host<'_> {
@@ -36,6 +37,7 @@ impl Host<'_> {
             let active_preparations = self.cached_preparations("task_pilot", || {
                 preparation::active_task_pilot_preparations(self.runtime)
             })?;
+            let execution_claims = pilot::live_execution_claim_tasks(self.runtime)?;
             for id in &member.task_ids {
                 let task = match self.cached_task(id) {
                     Ok(task) => task,
@@ -60,13 +62,20 @@ impl Host<'_> {
                 if let Some(run_ids) = active_preparations.get(id) {
                     return Ok(MemberAdmission::Withhold(already_preparing(run_ids)));
                 }
+                if execution_claims.contains(id) {
+                    return Ok(MemberAdmission::Withhold("execution_claim_active".into()));
+                }
                 if self.fingerprint(&task, &source.commit)? != member.fingerprint {
                     return Ok(MemberAdmission::Retire("material_changed".into()));
                 }
                 // Pending members can be off the observation page when an
                 // explicit pilot settles. Recheck accepted evidence here too,
                 // after the active-holder guard, before creating any run.
-                if self.runtime.task_pilot_scheduling_assessment(id)?.is_some() {
+                if self
+                    .runtime
+                    .task_pilot_preparation_assessment(id)?
+                    .is_some()
+                {
                     return Ok(MemberAdmission::Retire("assessment_fresh".into()));
                 }
             }

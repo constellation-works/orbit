@@ -335,9 +335,15 @@ long enough to reject replay; missing state is a diagnostic, not a fresh baselin
 
 Observe proposed/backlog tasks authorized for preparation. No-diff tasks retain
 the current exclusion unless an explicitly supported preparation contract needs
-them. Missing selectors are one reason for a first assessment; material edits after
-an assessment never request another automatic pilot through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Tasks in progress, review, terminal, withdrawn, or human-blocked are
-not automatic pilot candidates. Preparing proposed work does not approve it.
+them. Missing selectors are one reason for a first assessment. Description or
+acceptance-criteria edits after an assessment queue a fresh automatic pilot
+when no live execution claim or unresolved failed pilot holds the task. Other
+material or policy changes never request another automatic pilot through the
+routine (an `--approve-proposed` drain or scheduled discovery still repilots a
+stale assessment automatically when its certified description/criteria or other
+material drifted). Tasks in progress, review, terminal, withdrawn, or
+human-blocked are not automatic pilot candidates. Preparing proposed work does
+not approve it.
 
 A material fingerprint (`material_v2`) covers the pilot contract version, the
 eligibility verdict, and the task inputs the consumer's resolved freshness names
@@ -396,9 +402,14 @@ retained for audit. A preparation routine also reuses the latest atomic task
 receipt as evidence that the task has already been piloted, including an
 unready verdict and evidence from an explicit pilot. Routine windows report
 `fresh` or `fresh_unready` without another provider run or consumer-local
-receipt. This scheduling reuse is independent of dispatch freshness: edits
-never renew automatic routine pilot eligibility. An `--approve-proposed` drain (or scheduled discovery) still queues a fresh pilot automatically for a stale assessment whose certified description/criteria or other material drifted and no live execution claim holds it. Active pilots still withhold their
-tasks before reuse. Every later routine pilot needs an explicit operator request:
+receipt. Description/criteria edits renew automatic preparation eligibility for
+proposed and backlog tasks; unrelated material or policy changes never renew
+automatic routine pilot eligibility. An `--approve-proposed` drain (or scheduled
+discovery) also queues a fresh pilot automatically for a stale assessment whose
+certified description/criteria or other material drifted and no live execution
+claim holds it. Active pilots and live execution claims keep their holds, and
+failed attempts retain their retry bounds before reuse. An operator can also
+request another pilot explicitly:
 `orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
 or a decision option action `re_pilot`. The explicit legacy command
 `orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
