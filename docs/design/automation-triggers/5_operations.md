@@ -812,7 +812,7 @@ trigger:
     deadline_minutes: 90
     eligibility:                                # optional; these are the defaults
       statuses: [proposed, backlog]
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []
       task_types: []
     freshness:                                  # optional; overrides config per key
@@ -827,7 +827,8 @@ policy:
 `eligibility` [ORB-12745] is the predicate a `preparation_eligible` consumer
 evaluates. Absent, or with any key absent, it resolves to the rule that was
 previously hard-coded: `proposed` or `backlog` tasks not tagged
-`no-diff-expected` / `no-diff-needed`, of any type, with no required tags.
+`no-diff-expected`, `no-diff-needed`, or `no-pilot`, of any type, with no
+required tags.
 `statuses` must be a non-empty subset of those two; `task_types` empty admits
 every type; unknown keys, blank tags, and a tag both required and excluded fail
 the definition closed, and a non-default block is rejected on any other trigger kind.
