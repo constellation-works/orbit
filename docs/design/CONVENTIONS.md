@@ -271,6 +271,7 @@ Retired features are removed from this table along with their folder.
 | Explore Brief | [docs/design/explore-brief/](./explore-brief/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
+| Fleet Notices | [docs/design/fleet-notices/](./fleet-notices/) | claude |
 | Hidden Acceptance (archived) | [docs/design/_archived/hidden-acceptance/](./_archived/hidden-acceptance/) | claude |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | codex |
