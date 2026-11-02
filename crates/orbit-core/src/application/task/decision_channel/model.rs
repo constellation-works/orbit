@@ -79,6 +79,10 @@ pub struct DecisionDigest {
     /// Model answers awaiting human review: every open
     /// `model_answer_review` request with the request it reviews.
     pub model_answered: Vec<crate::application::task::ModelAnsweredDigestEntry>,
+    /// This workspace's precedent-decision categories the rolling window
+    /// demoted to shadow, with the evidence, until the operator re-enables
+    /// or disables them.
+    pub assist_demoted: Vec<crate::application::precedent_decision::PrecedentAssistEnablement>,
     /// Corrupt task bundles omitted from the digest.
     pub warnings: Vec<String>,
 }

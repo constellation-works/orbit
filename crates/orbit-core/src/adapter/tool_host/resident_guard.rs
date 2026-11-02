@@ -143,7 +143,10 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | DecisionVerb::Submit
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelRevoke
-            | DecisionVerb::ChannelRotateKey => Refused,
+            | DecisionVerb::ChannelRotateKey
+            | DecisionVerb::AssistEnable
+            | DecisionVerb::AssistDisable
+            | DecisionVerb::AssistStatus => Refused,
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,

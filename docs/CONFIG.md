@@ -268,8 +268,20 @@ historical record. Omitting `precedents` keeps that text on the host.
 Credential-pattern redaction still applies to the values that are sent, and
 the serialized request stays within `limits.max_request_bytes`. The contract
 digest is the granted question template `precedent-decision/1`, not a
-per-request expansion. Retrieval uses at most eight precedents. This mode
-does not wait before notifying the human.
+per-request expansion. Retrieval uses at most eight precedents. Shadow
+mode does not wait before notifying the human.
+
+A category can answer on its own only after the operator enables it with
+`orbit decision assist enable <category> --readout <task>/<artifact>`, from a
+`precedent-decision-readout/1` that met every registered target under this
+exact grant. Enablements live in a host-only store beside the decision
+channels (`state/decision-channels/precedent-assist.json` under the global
+root), never in configuration. Changing this policy (its digest or
+`model_revision`) suspends them. In an enabled category only `routine` and
+`reversible` requests are answered; 10% (holdback) still go to the human; the
+notification waits up to 120 seconds for the assessment. The rolling window
+keeps 30 outcomes and demotes the category after 2 vetoes. These consumer
+settings are fixed defaults in this release.
 
 ## `[machine]` — who this machine is
 

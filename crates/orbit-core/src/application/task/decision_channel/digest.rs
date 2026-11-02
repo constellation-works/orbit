@@ -47,6 +47,7 @@ impl OrbitRuntime {
                 raised: Vec::new(),
                 expiring: Vec::new(),
                 model_answered: Vec::new(),
+                assist_demoted: Vec::new(),
                 warnings: Vec::new(),
             });
         }
@@ -111,6 +112,7 @@ impl OrbitRuntime {
             raised,
             expiring,
             model_answered,
+            assist_demoted: self.precedent_assist_demotions(),
             warnings,
         })
     }

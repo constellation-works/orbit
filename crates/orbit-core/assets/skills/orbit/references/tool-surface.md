@@ -514,7 +514,19 @@ the confirming human as decider; `veto` re-opens the original request and restor
 the task's previous status. Review requests are listed only there. Repeated calls
 reuse requests for unchanged task bindings, while newly eligible tasks can add
 requests. With the decision channel disabled in this workspace, the call raises
-nothing, writes nothing and returns no requests.
+nothing, writes nothing and returns no requests. `assist_demoted` lists the
+workspace's precedent-decision categories the rolling window demoted to shadow,
+each with its demotion evidence, until the operator re-enables or disables them.
+
+**Model answers in enabled categories.** A model answers a request only in a
+category the operator enabled from the CLI with
+`orbit decision assist enable <category> --readout <task>/<artifact>`, and only
+when the request's tier is `routine` or `reversible`. `orbit decision assist
+disable` and `status` complete the surface. All three are operator CLI only:
+the tools are inactive, and an agent session or plugin callback is refused.
+Agents raise requests exactly as before; declaring a low `risk_tier` on an
+option that has lasting effects is never a way to skip the human, because the
+tier, the holdback, the veto digest and demotion all bound it.
 
 ### Raising a decision
 

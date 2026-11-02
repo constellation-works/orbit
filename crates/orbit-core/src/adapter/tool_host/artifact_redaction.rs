@@ -452,7 +452,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelList
             | DecisionVerb::ChannelRevoke
-            | DecisionVerb::ChannelRotateKey => ActionPolicy {
+            | DecisionVerb::ChannelRotateKey
+            | DecisionVerb::AssistEnable
+            | DecisionVerb::AssistDisable
+            | DecisionVerb::AssistStatus => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

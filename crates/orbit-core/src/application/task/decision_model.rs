@@ -13,8 +13,10 @@
 //! to the corpus outbox.
 //!
 //! Design: `docs/design/decision-assistance/specs/precedent-decisions.md`
-//! (Recording, veto and feedback). No consumer calls the apply step yet; the
-//! self-answer slice does, after its enablement, holdback and threshold checks.
+//! (Recording, veto and feedback). Its caller is the precedent-decision
+//! self-answer step (`precedent_decision::assist`), after its enablement,
+//! tier, holdback, wait and threshold checks. A confirm or veto enters that
+//! category's rolling demotion window.
 
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::assistance::assistance_probability;
@@ -61,13 +63,6 @@ impl OrbitRuntime {
     /// Only agent requests are applied in this release: their effect (the
     /// task completes) is restored exactly by a veto. Other gates are refused
     /// `answer_not_applicable`.
-    #[cfg_attr(
-        not(feature = "test-support"),
-        allow(
-            dead_code,
-            reason = "the self-answer slice is its first production caller"
-        )
-    )]
     pub(crate) fn apply_model_decision_answer(
         &self,
         request_id: &str,
@@ -350,6 +345,7 @@ impl OrbitRuntime {
                         ..Default::default()
                     },
                 )?;
+                self.note_precedent_assist_review(&original, false);
                 Ok(())
             }
             MODEL_ANSWER_VETO => {
@@ -373,6 +369,7 @@ impl OrbitRuntime {
                     actor_label.to_string(),
                 )?;
                 self.reopen_automation_answer(&original, actor_label)?;
+                self.note_precedent_assist_review(&original, true);
                 Ok(())
             }
             other => Err(OrbitError::decision_refused(
