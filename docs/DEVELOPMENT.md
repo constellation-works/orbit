@@ -484,14 +484,15 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
   from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
-  The `Test extra partition` and `Test partition 2` jobs run the same
-  steps on a fourth and fifth test runner, selecting partitions 5 and 2
-  and uploading `nextest-junit-extra` and `nextest-junit-partition-2`.
-  Both prepare during compilation and start after the final upload.
+  The `Test extra partition`, `Test partition 2` and `Test partition 6` jobs
+  run the same steps on a fourth, fifth and sixth test runner, selecting
+  partitions 5, 2 and 6 and uploading `nextest-junit-extra`,
+  `nextest-junit-partition-2` and `nextest-junit-partition-6`.
+  They prepare during compilation and start after the final upload.
   Partition 2 no longer waits for the build runner's coverage proof,
-  doctests and tool setup. Neither job is a `Test shard k/N` job, so
+  doctests and tool setup. None of them is a `Test shard k/N` job, so
   `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
-  awaits both like shards. Profile `ci`
+  awaits them like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
   (requires nextest 0.9.91 or newer).
   This changes scheduling within each shard, keeping every test identity,
@@ -520,11 +521,11 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   name needs the same ruleset change before merge. Requiring only
   `Check / Clippy / Test`, which awaits every shard, would not depend on the
   shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
-  step and wait (both additional partition jobs' too) and the Check
+  step and wait (every additional partition job's too) and the Check
   job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, each
   shard waits for the upload step ahead of the partition guard, and the Check
-  job's wait names the build, every shard, both additional partition jobs and `CI guardrails`. After a change to this layout, re-measure the budget over
+  job's wait names the build, every shard, every additional partition job and `CI guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 400 s, with skipped and cancelled runs
   reported as gaps).
@@ -542,8 +543,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
   production Clippy, documentation and the supply-chain gate, with no
   workspace test build, guard or nextest. It then
-  waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`
-  and `CI guardrails`, and fails as soon as one of them
+  waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
+  `Test partition 6` and `CI guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   400-second budget measures, and its
@@ -665,17 +666,17 @@ On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci
 
 It runs every test instead (`full`) when any of these holds:
 
-- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json` and `scripts/test-qa-full-sweep.py`, both read only by the guardrail sweep; `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/lib/cli-context.mjs` and `scripts/ux-rules/lib/manifest.mjs`, which no Cargo test reads), so its PR runs the always-run set alone. `scripts/ux-rules/ui/`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/README.md` and `scripts/ux-rules/step.mjs` select `orbit-core`. `scripts/ux-rules/run.mjs` is not declared, so a change to it runs the full suite.
+- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json` and `scripts/test-qa-full-sweep.py`, both read only by the guardrail sweep; `scripts/unit-test-baseline.json`, read only by the always-run `unit-test-inventory.py --check` guard; `plugin/evals/`, the `claude plugin eval` suite no CI job reads; `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/lib/cli-context.mjs` and `scripts/ux-rules/lib/manifest.mjs`, which no Cargo test reads), so its PR runs the always-run set alone. `scripts/ux-rules/ui/`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/README.md` and `scripts/ux-rules/step.mjs` select `orbit-core`. `scripts/ux-rules/run.mjs` is not declared, so a change to it runs the full suite.
 - a member's `Cargo.toml`, which can change the features of every crate in the workspace build;
 - a path under `crates/` that no current member owns, such as a removed crate;
 - every workspace crate is selected anyway (for example, a change to `orbit-types` or `orbit-common`);
 - the PR file listing is incomplete, or the selection fails for any reason, including unreadable Cargo metadata.
 
-Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source, with no reader, the configuration reference page, the QA sweep script and its inventory, and the UX rule files named above); any other such path runs the full suite.
+Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source, with no reader, the configuration reference page, the QA sweep script and its inventory, the unit-test baseline, the plugin evals, and the UX rule files named above); any other such path runs the full suite.
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in every selection, and `orbit-web`'s dev-dependency features on `tokio` and `rusqlite` usually add `orbit-web`. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The archive holds the build set's tests, but every partition (the shards and both additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
+The archive holds the build set's tests, but every partition (the shards and the three additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 

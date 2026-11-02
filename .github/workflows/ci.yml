@@ -45,11 +45,14 @@ env:
   # Check job's wait read this value; the literal "Test shard k/N" jobs must
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
-  # Five count partitions run on five test runners. The build runner
+  # Six count partitions run on six test runners. The build runner
   # publishes the archive, then proves exact-once coverage and runs doctests;
   # it no longer delays a partition behind that post-upload work. Literal
   # "Test shard k/N" names and the agent-main ruleset remain unchanged.
-  NEXTEST_PARTITIONS: "5"
+  # [ORB-21420] Replaying two full runs' logged test durations, a sixth
+  # partition cut the slowest partition's summed test time by 27-30%
+  # (docs/design-patterns/test_strategy.md).
+  NEXTEST_PARTITIONS: "6"
   # The nextest transfer travels as this many artifacts, which each shard
   # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
   # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
@@ -230,8 +233,9 @@ jobs:
   # [ORB-16695] The test gate is split across runners. "Test build" compiles
   # the workspace tests once and archives them (on an `affected:` PR, only the
   # affected crates' build set); NEXTEST_SHARDS "Test shard" jobs run nextest
-  # from that archive, one count partition each, in parallel, as does the "Test
-  # extra partition" and "Test partition 2" jobs. On an `affected:` PR every partition runs only
+  # from that archive, one count partition each, in parallel, as do the "Test
+  # extra partition", "Test partition 2" and "Test partition 6" jobs. On an
+  # `affected:` PR every partition runs only
   # the affected and always-run crates' tests (ALWAYS_RUN in
   # scripts/ci-test-affected.py). [ORB-20394] "CI guardrails" runs the
   # repository guards and self-tests on its own runner beside the build. "Check
@@ -456,7 +460,7 @@ jobs:
               for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
               sys.argv += ["--job", "Test extra partition", "--job", "Test partition 2",
-                           "--job", "CI guardrails"]
+                           "--job", "Test partition 6", "--job", "CI guardrails"]
               exec(compile(producer_bytes, producer, "exec"),
                    {"__name__": "__main__", "__file__": producer,
                     "__package__": "", "__spec__": None, "__cached__": None,
@@ -1063,9 +1067,9 @@ jobs:
   # setting up while the build runs. The jobs share one step list; the
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
   # SHARD names the job (its JUnit report and the shard-1 sandbox gate);
-  # PARTITION is the count partition it runs. "Test partition 2" and
-  # "Test extra partition" run partitions 2 and 5, so the shard jobs run
-  # partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
+  # PARTITION is the count partition it runs. "Test partition 2", "Test
+  # extra partition" and "Test partition 6" run partitions 2, 5 and 6, so the
+  # shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
   # agent-main's ruleset requires these exact names: renaming a shard, or
   # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
   test-1:
@@ -1321,4 +1325,23 @@ jobs:
     env:
       SHARD: "partition-2"
       PARTITION: "2"
+    steps: *test-shard-steps
+
+  # [ORB-21420] A sixth runner with the shard steps. On full runs every
+  # partition kept four cores busy (93-97%), so the slowest partition's nextest
+  # time bound the Check job after the build; a sixth count partition shortens
+  # every partition without adding work to the build runner. Check awaits this
+  # literal job like the other partition jobs.
+  test-partition-6:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 6
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-6"
+      PARTITION: "6"
     steps: *test-shard-steps

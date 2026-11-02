@@ -811,11 +811,12 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the test runners must select every count partition "
                          "of NEXTEST_PARTITIONS")
-        # The literal shard names are the agent-main ruleset's; the two
+        # The literal shard names are the agent-main ruleset's; the three
         # additional partition jobs run the shard steps under names outside it.
         self.assertEqual(sorted(partitions.values()),
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
-                                + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"]]))
+                                + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
+                                   jobs["test-partition-6"]["name"]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
@@ -836,7 +837,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
         jobs = self.document["jobs"]
         for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
                              ("test-3", "Run nextest shard"), ("test-extra", "Run nextest shard"),
-                             ("test-partition-2", "Run nextest shard")):
+                             ("test-partition-2", "Run nextest shard"),
+                             ("test-partition-6", "Run nextest shard")):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -978,6 +980,13 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         # A path no crate reads runs the always-run crates alone.
         self.assertEqual(self.pull_request("scripts/qa-full-sweep-inventory.json"),
                          "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        # The unit-test ratchet's baseline is read only by its always-run
+        # guard, and no CI job reads the plugin's eval cases.
+        for path in ("scripts/unit-test-baseline.json", "plugin/evals/README.md",
+                     "plugin/evals/file-task/graders/add-has-acceptance.md"):
+            self.assertEqual(self.pull_request(path), "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        self.assertEqual(self.pull_request("scripts/unit-test-baseline.json", "crates/orbit-store/src/lib.rs"),
+                         self.pull_request("crates/orbit-store/src/lib.rs"))
         # UX rules select the crate that reads them. The CLI rules, their
         # lib helpers and the Node tests have no Cargo reader; the guardrail
         # runs the QA sweep, so that script selects no crate either. The
@@ -1074,7 +1083,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
                 self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2",
-                                            "test-3", "test-extra", "test-partition-2"})
+                                            "test-3", "test-extra", "test-partition-2",
+                                            "test-partition-6"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -1097,9 +1107,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
-            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
+            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
+            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }
