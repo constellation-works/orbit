@@ -258,6 +258,35 @@ impl Fixture {
             .unwrap();
     }
 
+    /// The agent's checkpoint written exactly as `resident_cycle.yaml`
+    /// instructs: `continuity` and `conversation_ref` are copied verbatim
+    /// from the brief, never a fresh or hand-chosen reference.
+    fn checkpoint_as_instructed(&self, brief: &Value, run_id: &str) -> Value {
+        let mandate = brief["task_id"].as_str().unwrap();
+        self.runtime
+            .append_resident_checkpoint(
+                mandate,
+                json!({
+                    "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                    "cycle": brief["cycle"], "run_id": run_id,
+                    "crew": brief["crew"],
+                    "recovery_of": brief["recovery_of"], "wake": brief["wake"],
+                    "authority": {"rights": brief["authority"]["rights"],
+                                  "observe_only": brief["authority"]["observe_only"],
+                                  "narrowed_by": brief["authority"]["narrowed_by"]},
+                    "actions": [], "decisions": [], "requests": [], "costs": [],
+                    "notes": "Checkpoint written as instructed.",
+                    "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
+                    "continuity": brief["continuity"],
+                    "conversation_ref": brief["conversation_ref"],
+                    "outcome": "idle", "probe": brief["mandate"]["probe"]
+                }),
+                Some("codex".into()),
+                None,
+            )
+            .unwrap()
+    }
+
     /// One complete cycle: observe, the agent's checkpoint, finalize.
     fn complete_cycle(&self, mandate: &str, key: &str) -> Value {
         let run = self.cycle_run(mandate, key);
@@ -1214,6 +1243,75 @@ PY
     );
     assert_eq!(logged[2]["continuity"], "rebuilt");
     assert_eq!(logged[2]["conversation_ref"], Value::Null);
+}
+
+#[test]
+fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 5");
+    let mandate = fx.mandate(&watched);
+    let now = Utc::now();
+
+    // Setup only: establish the live provider conversation a later cycle
+    // can resume. The cycles under test below write no fresh reference.
+    let run1 = fx.cycle_run(&mandate, "resident-instructed-seed");
+    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
+    assert_eq!(brief1["continuity"], "rebuilt");
+    assert_eq!(brief1["conversation_ref"], Value::Null);
+    fx.runtime
+        .append_resident_checkpoint(
+            &mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
+                "recovery_of": null, "wake": brief1["wake"],
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "actions": [], "decisions": [], "requests": [], "costs": [],
+                "notes": "Seeded the live provider conversation.",
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
+                "continuity": "rebuilt", "outcome": "idle", "probe": false,
+                "conversation_ref": "conv-live"
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fx.runtime.finish_resident_cycle(&run1).unwrap();
+    fx.stop_run(&run1, JobRunState::Success);
+
+    // Two consecutive cycles each write only the instructed checkpoint
+    // shape (echoing brief.conversation_ref). Before the template carried
+    // conversation_ref, the first of these dropped it and the next brief
+    // fell back to rebuilt.
+    for (index, key) in ["resident-instructed-1", "resident-instructed-2"]
+        .into_iter()
+        .enumerate()
+    {
+        let run = fx.cycle_run(&mandate, key);
+        let brief = fx
+            .runtime
+            .begin_resident_cycle(&run, now + Duration::minutes(130 * (index as i64 + 1)))
+            .unwrap();
+        assert_eq!(brief["continuity"], "resumed", "cycle {index}: {brief}");
+        assert_eq!(brief["conversation_ref"], "conv-live", "cycle {index}");
+        let written = fx.checkpoint_as_instructed(&brief, &run);
+        assert_eq!(written["checkpoint"]["continuity"], "resumed");
+        assert_eq!(written["checkpoint"]["conversation_ref"], "conv-live");
+        fx.runtime.finish_resident_cycle(&run).unwrap();
+        fx.stop_run(&run, JobRunState::Success);
+    }
+
+    // The second instructed checkpoint still leaves a resumable reference.
+    let run = fx.cycle_run(&mandate, "resident-instructed-3");
+    let brief = fx
+        .runtime
+        .begin_resident_cycle(&run, now + Duration::minutes(390))
+        .unwrap();
+    assert_eq!(brief["continuity"], "resumed", "{brief}");
+    assert_eq!(brief["conversation_ref"], "conv-live");
+    fx.checkpoint_as_instructed(&brief, &run);
+    fx.runtime.finish_resident_cycle(&run).unwrap();
+    fx.stop_run(&run, JobRunState::Success);
 }
 
 /// Seeds a cycle whose checkpoint carries `conversation_ref`, then dispatches

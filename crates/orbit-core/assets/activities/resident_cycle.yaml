@@ -105,8 +105,13 @@ spec:
     "actions":[...],"decisions":[...],"requests":[...],"costs":[...],
     "notes":"<what the next cycle must know, at most 2000 characters>",
     "next_wake":{"reason":"heartbeat","not_before":"<RFC 3339 time>"},
-    "continuity":"<brief.continuity>","outcome":"progress|idle|waiting|handoff|ended",
+    "continuity":"<brief.continuity>","conversation_ref":<brief.conversation_ref>,
+    "outcome":"progress|idle|waiting|handoff|ended",
     "probe":<brief.mandate.probe>}}`.
+    Copy `brief.conversation_ref` verbatim as `conversation_ref` (the JSON
+    value, `null` when the brief carries none): it is the provider
+    conversation the next cycle resumes, and omitting it breaks the
+    continuity chain so the next cycle rebuilds instead of resuming.
     Use `outcome: idle` when you woke and had nothing to do. When the exit
     criteria hold, move your assignment to `review` and checkpoint
     `handoff`.
