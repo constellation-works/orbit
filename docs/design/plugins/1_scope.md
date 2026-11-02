@@ -985,6 +985,11 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   job" below.
 - Activity and job names are unique across active plugins. Loading is deterministic: the first
   valid plugin keeps the name, a later one is refused with a diagnostic naming both.
+- An activity whose tool allowlist names a tool the workspace does not register (say, one
+  from a plugin that is not installed) is withdrawn from the catalog on its own: a job that
+  references it is refused at load with a message naming the activity and the tool, every
+  other job keeps running, `orbit plugin enable` warns, and `orbit doctor` reports the fault.
+  One plugin's unresolvable activity never fails the whole catalog.
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
   `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` — the only addition to the closed
   action enums. Such a step may spawn the plugin's granted `requires.programs` (§4.3), even

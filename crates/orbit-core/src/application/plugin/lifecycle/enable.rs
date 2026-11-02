@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
+use orbit_engine::activity_job::{load_activity_catalog_asset, validate_catalog_activity_tools};
 use orbit_tools::plugin::{LoadedPlugin, load_plugin_dir, resolve_declared_programs};
 use orbit_types::plugin::{parse_stored_grants, resolve_grant_selection};
 
@@ -215,6 +216,7 @@ pub(in crate::application::plugin) fn apply_enabled_contributions(
     )?;
     let (skills, mut warnings) = link_plugin_skills(&runtime.global_root(), &plugin);
     warnings.extend(seeded.iter().filter_map(|outcome| outcome.warning.clone()));
+    warnings.extend(unregistered_activity_tool_warnings(runtime, &plugin));
     Ok(PluginContributions {
         seeded,
         skills,
@@ -250,4 +252,47 @@ pub(in crate::application::plugin) fn unrequested_grant_warnings(
             )
         })
         .collect()
+}
+
+/// A warning for every activity the plugin ships whose tool allowlist does
+/// not validate against the tools this workspace registers, counting the
+/// plugin's own tools, which register at the next runtime build. Such an
+/// activity is withdrawn from the catalog: jobs that reference it are
+/// refused, and every other job keeps running.
+fn unregistered_activity_tool_warnings(
+    runtime: &OrbitRuntime,
+    plugin: &LoadedPlugin,
+) -> Vec<String> {
+    let first_party = plugin.manifest.claims_first_party_namespace();
+    let mut registered = runtime.allowlist_known_tool_names();
+    registered.extend(
+        plugin
+            .tools
+            .iter()
+            .map(|tool| plugin.tool_name(&tool.verb, first_party)),
+    );
+    let mut warnings = Vec::new();
+    for path in &plugin.definitions.activities {
+        // Unreadable or malformed files are refused by
+        // `load_plugin_definitions` before this runs.
+        let Ok(yaml) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(Some(asset)) = load_activity_catalog_asset(path, &yaml, true) else {
+            continue;
+        };
+        if let Err(error) = validate_catalog_activity_tools(
+            &asset.name,
+            &asset.spec,
+            registered.iter().map(String::as_str),
+        ) {
+            warnings.push(format!(
+                "plugin '{}': {error}; jobs that use activity `{}` are refused until the tool is \
+                 registered in this workspace (install and enable the plugin that provides it)",
+                plugin.namespace(),
+                asset.name
+            ));
+        }
+    }
+    warnings
 }
