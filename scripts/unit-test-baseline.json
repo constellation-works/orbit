@@ -452,6 +452,7 @@
     },
     "orbit-exec": {
       "test_function_paths": [
+        "build_sandbox/tests/script_macos_inputs.rs::an_input_growing_during_preparation_cannot_escape_the_scratch_cap",
         "build_sandbox/tests/supervise.rs::a_fast_phase_cannot_exit_with_an_oversized_build_directory",
         "build_sandbox/tests/supervise.rs::a_phase_reports_exit_codes_and_signals",
         "build_sandbox/tests/supervise.rs::a_phase_that_outgrows_the_build_directory_cap_is_killed",

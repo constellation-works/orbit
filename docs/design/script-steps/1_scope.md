@@ -540,7 +540,13 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   `Ok(success = false)`. `RLIMIT_NPROC` is per user and isn't used.
 - **Scratch size.** The scratch directory is size-bounded (`scratch_max_bytes`,
   default 1 GiB), polled as the build directory is. A breach kills the step. On
-  macOS the copied inputs (§4 Files in) count against it.
+  macOS the copied inputs (§4 Files in) count against it: preparation first
+  rejects input sets whose regular-file sizes exceed the remaining cap after
+  existing scratch files, then checks every copied chunk against that budget
+  to catch source growth. Preparation has a separate deadline equal to the
+  step timeout, checked between directory entries and copy chunks; it does not
+  interrupt a filesystem call already in progress. A preparation refusal
+  starts no script; the running script still gets its full timeout.
 
 **macOS profile.** `macos-sandbox-script-v1` starts from the build profile's
 deny-default SBPL preamble and allows the paths of the table above: the runtime

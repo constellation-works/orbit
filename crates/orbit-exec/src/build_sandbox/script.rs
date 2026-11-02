@@ -169,6 +169,9 @@ pub struct ScriptSandboxRequest<'a> {
     pub launcher_env: &'a [(String, String)],
     /// The validated step input, written to stdin and closed.
     pub stdin: Vec<u8>,
+    /// The running script's wall-clock limit. On macOS, input preparation
+    /// also gets this much time, checked between filesystem operations and
+    /// copy chunks, independently of the running script's timer.
     pub timeout: Duration,
     pub scratch_cap_bytes: u64,
 }
@@ -656,15 +659,16 @@ pub fn run_script_sandboxed(
     }
     #[cfg(target_os = "macos")]
     {
-        // Seatbelt cannot nest: a start inside another sandbox is refused
-        // here too, so it never reaches `sandbox-exec` and runs nothing.
-        super::script_macos::probe().map_err(OrbitError::PolicyDenied)?;
         if !request.launcher.is_empty() {
             return Err(OrbitError::PolicyDenied(
                 "a macOS script run takes no launcher; macOS has no per-script scope".to_string(),
             ));
         }
-        let command = super::script_macos::command(spec, request.argv)?;
+        let command = super::script_macos::script_sandbox_command(&request)?;
+        // Admission and bounded preparation run without starting a child.
+        // Seatbelt still cannot nest: probe before spawning the wrapper,
+        // so an unavailable profile never runs the script more weakly.
+        super::script_macos::probe().map_err(OrbitError::PolicyDenied)?;
         // `sandbox-exec` passes its environment to the script unchanged, so
         // the wrapper's environment is the script's own.
         supervise_script(command, (), &request, request.env)

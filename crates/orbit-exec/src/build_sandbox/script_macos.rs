@@ -24,8 +24,6 @@
 //! profile), file metadata stays visible as in the build profile, and
 //! privacy permissions (TCC) apply on top of the profile.
 
-#[cfg(target_os = "macos")]
-use std::path::Path;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -169,81 +167,19 @@ pub(super) fn probe() -> Result<&'static str, String> {
 /// temp root could be rewritten by another confined process before
 /// `sandbox-exec` reads it).
 #[cfg(target_os = "macos")]
-pub(super) fn command(
-    spec: &ScriptSandboxSpec<'_>,
-    argv: &[String],
+pub(super) fn script_sandbox_command(
+    request: &super::script::ScriptSandboxRequest<'_>,
 ) -> Result<std::process::Command, OrbitError> {
+    let spec = &request.sandbox;
     let profile = compile_macos_script_profile(spec)?;
-    copy_script_inputs(spec)?;
+    super::script_macos_inputs::copy_script_inputs(request)?;
     let sandbox_exec = crate::sandbox_exec_path()
         .ok_or_else(|| OrbitError::PolicyDenied(crate::sandbox_exec_unavailable_message()))?;
     let mut command = std::process::Command::new(sandbox_exec);
     command
         .arg("-p")
         .arg(profile)
-        .args(argv)
+        .args(request.argv)
         .current_dir(spec.cwd);
     Ok(command)
-}
-
-/// Copy each declared input into `in/<as>`. Seatbelt cannot bind a path
-/// elsewhere, so the script reads a copy; the profile keeps `in/` read-only.
-/// Symlinks are copied as symlinks: their targets resolve under the profile
-/// like any other path. The copy counts against the scratch cap.
-#[cfg(target_os = "macos")]
-fn copy_script_inputs(spec: &ScriptSandboxSpec<'_>) -> Result<(), OrbitError> {
-    let in_dir = spec.scratch.join("in");
-    for input in spec.inputs {
-        if !super::script::valid_input_name(&input.name) {
-            return Err(OrbitError::InvalidInput(format!(
-                "script input name `{}` is not a plain name",
-                input.name
-            )));
-        }
-        let destination = in_dir.join(&input.name);
-        if std::fs::symlink_metadata(&destination).is_ok() {
-            return Err(OrbitError::InvalidInput(format!(
-                "script input `{}` already has an entry in {}",
-                input.name,
-                in_dir.display()
-            )));
-        }
-        copy_input_tree(&input.source, &destination).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "cannot copy script input `{}` from {}: {error}",
-                input.name,
-                input.source.display()
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn copy_input_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
-    let metadata = std::fs::symlink_metadata(source)?;
-    let kind = metadata.file_type();
-    if kind.is_dir() {
-        orbit_common::fs::io::create_private_dir_all(destination)?;
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(source)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<_>>()?;
-        entries.sort();
-        for entry in entries {
-            let Some(name) = entry.file_name() else {
-                continue;
-            };
-            copy_input_tree(&entry, &destination.join(name))?;
-        }
-        Ok(())
-    } else if kind.is_file() {
-        std::fs::copy(source, destination).map(|_| ())
-    } else if kind.is_symlink() {
-        std::os::unix::fs::symlink(std::fs::read_link(source)?, destination)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{} is not a file, directory or symlink", source.display()),
-        ))
-    }
 }
