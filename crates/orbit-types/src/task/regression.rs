@@ -28,6 +28,20 @@ pub enum RegressionNature {
     Unclassified,
 }
 
+impl RegressionNature {
+    /// The wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BrokeExisting => "broke_existing",
+            Self::DefectInNew => "defect_in_new",
+            Self::Incomplete => "incomplete",
+            Self::MergeReintroduced => "merge_reintroduced",
+            Self::ContractDrift => "contract_drift",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
 /// Why the delivery gates did not catch a `regression_from` defect.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +60,21 @@ pub enum RegressionEscape {
     Nondeterministic,
     /// The filer could not tell how the defect escaped.
     Unclassified,
+}
+
+impl RegressionEscape {
+    /// The wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoTest => "no_test",
+            Self::TestNotSelected => "test_not_selected",
+            Self::PlatformOnly => "platform_only",
+            Self::ReviewMissed => "review_missed",
+            Self::SpecAmbiguous => "spec_ambiguous",
+            Self::Nondeterministic => "nondeterministic",
+            Self::Unclassified => "unclassified",
+        }
+    }
 }
 
 /// Most defect sites one `regression_from` link may name.

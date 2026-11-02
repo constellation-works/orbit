@@ -1,4 +1,6 @@
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task};
+use std::collections::BTreeMap;
+
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskRelationType};
 use orbit_types::workflow::{COMMIT_SUBJECT_BUDGET, SUBJECT_ELLIPSIS};
 
 use crate::context::PrConfig;
@@ -50,6 +52,56 @@ fn templated_parts(
     (subject, sections)
 }
 
+/// A `regression_from` target's landed commit, resolved by the caller from
+/// the target's recorded delivery or landing evidence. `sha` is the full
+/// commit id; composition abbreviates it. Absent from the map when no landed
+/// commit could be resolved, which omits only the `Fixes:` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RegressionLandedCommit {
+    pub sha: String,
+    pub subject: String,
+}
+
+/// Landed commits by `regression_from` target task id.
+pub(super) type RegressionLandedCommits = BTreeMap<String, RegressionLandedCommit>;
+
+/// One `Fixes:` / `Regression-From:` / `Regression:` group per
+/// `regression_from` relation, in relation order, across `tasks` in order.
+fn regression_trailers(
+    tasks: &[Task],
+    pr_config: &PrConfig,
+    landed: &RegressionLandedCommits,
+) -> Vec<String> {
+    if !pr_config.conventions.regression_trailers {
+        return Vec::new();
+    }
+    let mut trailers = Vec::new();
+    for task in tasks {
+        for relation in &task.relations {
+            if relation.relation_type != TaskRelationType::RegressionFrom {
+                continue;
+            }
+            if let Some(commit) = landed.get(relation.target.as_str()) {
+                let sha: String = commit.sha.trim().chars().take(12).collect();
+                let subject = commit.subject.trim();
+                if !sha.is_empty() && !subject.is_empty() {
+                    trailers.push(format!("Fixes: {sha} (\"{subject}\")"));
+                }
+            }
+            trailers.push(format!("Regression-From: {}", relation.target));
+            if let Some(regression) = &relation.regression {
+                trailers.push(format!(
+                    "Regression: {}; escape={}; severity={}",
+                    regression.nature.as_str(),
+                    regression.escape.as_str(),
+                    regression.severity.as_str()
+                ));
+            }
+        }
+    }
+    trailers
+}
+
 fn orchestration_trailers(tasks: &[Task], pr_config: &PrConfig) -> Vec<String> {
     orchestration_trailer(tasks)
         .filter(|_| pr_config.conventions.orchestrated_by_trailer)
@@ -57,21 +109,30 @@ fn orchestration_trailers(tasks: &[Task], pr_config: &PrConfig) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn task_commit_message(task: &Task, pr_config: &PrConfig) -> String {
+pub(super) fn task_commit_message(
+    task: &Task,
+    pr_config: &PrConfig,
+    landed: &RegressionLandedCommits,
+) -> String {
     let (subject, sections) = templated_parts(
         task,
         pr_config,
         || (format!("[{}] {}", task.id, task.title.trim()), Vec::new()),
         || execution_summary_paragraph(task).into_iter().collect(),
     );
-    compose(
-        subject,
-        sections,
-        orchestration_trailers(std::slice::from_ref(task), pr_config),
-    )
+    let mut trailers = regression_trailers(std::slice::from_ref(task), pr_config, landed);
+    trailers.extend(orchestration_trailers(
+        std::slice::from_ref(task),
+        pr_config,
+    ));
+    compose(subject, sections, trailers)
 }
 
-pub(super) fn finalize_commit_message(tasks: &[Task], pr_config: &PrConfig) -> String {
+pub(super) fn finalize_commit_message(
+    tasks: &[Task],
+    pr_config: &PrConfig,
+    landed: &RegressionLandedCommits,
+) -> String {
     if let [task] = tasks {
         let summary =
             execution_summary_paragraph(task).unwrap_or_else(|| task.title.trim().to_string());
@@ -87,7 +148,9 @@ pub(super) fn finalize_commit_message(tasks: &[Task], pr_config: &PrConfig) -> S
                     .collect()
             },
         );
-        return compose(subject, sections, orchestration_trailers(tasks, pr_config));
+        let mut trailers = regression_trailers(tasks, pr_config, landed);
+        trailers.extend(orchestration_trailers(tasks, pr_config));
+        return compose(subject, sections, trailers);
     }
 
     let ids_joined = tasks
@@ -105,21 +168,31 @@ pub(super) fn finalize_commit_message(tasks: &[Task], pr_config: &PrConfig) -> S
         .collect::<Vec<_>>()
         .join("\n");
 
+    let mut trailers = regression_trailers(tasks, pr_config, landed);
+    trailers.extend(orchestration_trailers(tasks, pr_config));
     compose(
         format!("fix: finalize ship batch [{ids_joined}]"),
         vec![summaries],
-        orchestration_trailers(tasks, pr_config),
+        trailers,
     )
 }
 
-pub(super) fn batch_commit_message(task: &Task, pr_config: &PrConfig) -> String {
+pub(super) fn batch_commit_message(
+    task: &Task,
+    pr_config: &PrConfig,
+    landed: &RegressionLandedCommits,
+) -> String {
     let (subject, sections) = templated_parts(
         task,
         pr_config,
         || batch_default_subject(task),
         || execution_summary_paragraph(task).into_iter().collect(),
     );
-    compose(subject, sections, batch_commit_trailers(task, pr_config))
+    compose(
+        subject,
+        sections,
+        batch_commit_trailers(task, pr_config, landed),
+    )
 }
 
 /// `<type>: <title> [<id>] [<SYSTEM>-<ref>]…`, with the title shortened to
@@ -164,7 +237,11 @@ fn truncate_title_for_subject(commit_type: &str, title: &str) -> (String, bool) 
     (truncated, true)
 }
 
-fn batch_commit_trailers(task: &Task, pr_config: &PrConfig) -> Vec<String> {
+fn batch_commit_trailers(
+    task: &Task,
+    pr_config: &PrConfig,
+    landed: &RegressionLandedCommits,
+) -> Vec<String> {
     let conventions = &pr_config.conventions;
     let mut trailers = Vec::new();
     if let Some(planned_by) = task
@@ -181,6 +258,11 @@ fn batch_commit_trailers(task: &Task, pr_config: &PrConfig) -> Vec<String> {
     {
         trailers.push(format!("Implemented-By: {implemented_by}"));
     }
+    trailers.extend(regression_trailers(
+        std::slice::from_ref(task),
+        pr_config,
+        landed,
+    ));
     trailers.extend(orchestration_trailers(
         std::slice::from_ref(task),
         pr_config,

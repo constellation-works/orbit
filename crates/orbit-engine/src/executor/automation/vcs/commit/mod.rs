@@ -12,6 +12,7 @@ mod message;
 mod no_diff;
 mod published_replay;
 mod recovery;
+mod regression;
 mod repair;
 mod scope;
 mod summary;

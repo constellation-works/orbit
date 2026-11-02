@@ -350,10 +350,17 @@ macro_rules! assemble_config_settings {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
+    commit_regression_trailers: bool => bool {
+        key: "commit.regression_trailers", value_type: "bool",
+        description: "Add Fixes, Regression-From and Regression trailers for regression_from relations to commit messages.",
+        section: ConfigSection::Delivery, order: 186,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
     branch_name_template: Option<String> => String {
         key: "branch.name_template", value_type: "string",
         description: "Template for single-task delivery branch names; must contain {{task_id}} and {{hash}}.",
-        section: ConfigSection::Delivery, order: 186,
+        section: ConfigSection::Delivery, order: 187,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_branch_template(raw, "branch.name_template"),
     },

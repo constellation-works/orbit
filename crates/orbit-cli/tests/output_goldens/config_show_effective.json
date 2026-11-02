@@ -63,6 +63,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "commit.regression_trailers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "commit.subject_template": {
       "scope": "built-in",
       "state": "unset",
