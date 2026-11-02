@@ -13,7 +13,7 @@ const curveBucket = (bucket, tasks, regressed, low, high) => ({
   rate: regressed / tasks, low, high, drawn: tasks >= 10, sparse: regressed < 5,
 });
 const sizeCurves = url => ({
-  window: '30d', requested_window: url.searchParams.get('window'), role: 'implementers', complexity: null,
+  window: '30d', requested_window: url.searchParams.get('window'), role: 'implementers', complexity: url.searchParams.get('complexity'),
   complexities: [{ tier: 'medium', tasks: 44 }], follow_up_days: 7, min_bucket_tasks: 10, min_series_tasks: 30, sparse_outcomes: 5,
   excluded: { immature: 3, no_size: 1 },
   series: [
@@ -79,6 +79,76 @@ click(selectButton('small-sample'));
 await settle();
 assert.equal(part('detail').querySelector('.agents-cost-note'), null, 'a valid zero cost is displayed, not explained as unavailable');
 assert.match(part('detail').textContent, /Cost per landed task \(USD\)0/);
+
+// Hold real dashboard reads without timing races. Retired reads must never
+// replace the latest curves, even when the complexity returns to the same URL.
+const holdRefreshCurves = () => {
+  const loading = agents.fetchAndRenderAgents();
+  const requests = takeAll();
+  const curve = requests.find(request => request.url.pathname.endsWith('/size-curves'));
+  assert.ok(curve, 'refresh reads size curves beside the scorecard');
+  answer(requests.filter(request => request !== curve), url => {
+    if (url.pathname.endsWith('/by-type')) return response(implementerMatrix());
+    if (url.pathname.endsWith('/attribution')) return response(attribution);
+    return response(url.pathname.includes('/implementers/') ? implementerCard() : notComputed(url.pathname.split('/')[3]));
+  });
+  return { curve, loading };
+};
+const holdComplexityCurves = tier => {
+  const select = part('panel').querySelector('select');
+  select.value = tier;
+  for (const listener of select.listeners.change) listener();
+  const requests = takeAll();
+  assert.equal(requests.length, 1, 'the complexity filter reads only size curves');
+  assert.equal(requests[0].url.searchParams.get('complexity') || '', tier);
+  return { curve: requests[0], loading: Promise.resolve() };
+};
+const assertLatestCurves = label => {
+  const cohort = part('panel').querySelector('.agents-curves-cohort');
+  assert.ok(cohort, `${label}: the curves remain available`);
+  assert.match(cohort.textContent, /56 landed tasks/, label);
+  const bucket = part('panel').querySelector('.agents-curves-table tbody tr');
+  assert.equal(bucket.querySelectorAll('td')[1].textContent, '50', 'the bucket table retains the latest 50-task bucket');
+  const markers = part('panel').querySelectorAll('circle');
+  assert.equal(markers.length, 1, 'the chart retains only the latest bucket');
+  assert.match(markers[0].textContent, /10 of 50 regressed/, 'the chart retains the latest outcomes');
+};
+for (const source of ['refresh', 'complexity']) {
+  for (const olderFails of [false, true]) {
+    const older = source === 'refresh' ? holdRefreshCurves() : holdComplexityCurves('medium');
+    const middle = source === 'complexity' ? holdComplexityCurves('hard') : null;
+    const newer = source === 'refresh' ? holdRefreshCurves() : holdComplexityCurves('medium');
+    assert.equal(older.curve.url.href, newer.curve.url.href, 'the retired and latest reads have identical URLs');
+    const latest = sizeCurves(newer.curve.url);
+    latest.series[0].tasks = 50;
+    latest.series[0].regressed = 10;
+    latest.complexities[0].tasks = 56;
+    latest.series[0].buckets = [curveBucket(5, 50, 10, 0.1, 0.3)];
+    newer.curve.resolve(response(latest));
+    await newer.loading;
+    await settle();
+    assertLatestCurves('the last-started read is visible before the older read settles');
+    older.curve.resolve(olderFails ? response({ error: 'retired read failed' }, 500) : response(sizeCurves(older.curve.url)));
+    if (middle) middle.curve.resolve(response(sizeCurves(middle.curve.url)));
+    await older.loading;
+    await settle();
+    // Scorecard requestPanel already discards the older render. Force local
+    // row and picker redraws too, which consume the panel-global curve cache.
+    const label = `${source}: older ${olderFails ? 'failure' : 'success'} cannot replace the newer curves`;
+    click(selectButton(olderFails ? 'costly' : 'sol'));
+    await settle();
+    assertLatestCurves(`${label} after a row redraw`);
+    const picker = part('panel').querySelector('input');
+    picker.checked = true;
+    for (const listener of picker.listeners.change) listener();
+    await settle();
+    assertLatestCurves(`${label} after a picker redraw`);
+  }
+}
+// Restore all complexities for the existing profile checks below.
+const resetCurves = holdComplexityCurves('');
+resetCurves.curve.resolve(response(sizeCurves(resetCurves.curve.url)));
+await settle();
 
 // --- Agent profile radar: percentile scale, reviewed gaps, contributions ---
 const radarVertex = (term) => part('detail').querySelectorAll('g').find(node => node.dataset.term === term);
