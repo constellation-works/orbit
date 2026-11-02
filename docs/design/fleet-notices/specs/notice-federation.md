@@ -50,6 +50,10 @@ owner resolves the poster class from that binding ([notice-authority](./notice-a
 A post that times out after dispatch is `outcome_unknown`, as for any routed write. Re-sending the
 same input is safe: the dedupe key makes it `updated` or `corroborated`, never a duplicate, and a
 repeat of the notice's latest write is not counted twice ([notice-record](./notice-record.md#retries)).
+A repeat is idempotent: it changes no `expires_at` or `updated_at` (for an editor or a corroborator)
+and, because the repeat check runs before expiry validation, it is not refused with
+`notice_expiry_invalid` when the original absolute `expires_at` is now less than 5 minutes ahead —
+it still returns `updated` or `corroborated` with the stored expiry untouched.
 
 ## Reads
 
