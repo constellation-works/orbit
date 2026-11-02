@@ -555,10 +555,14 @@ spec:
     2. For each prior field the diff invalidates — footprint
        (`context_files_after`), complexity, crew, `required_os`,
        `duplicate_of` or `already_landed` — return the re-derived field.
-       Omit every field the diff leaves valid: apply keeps the prior value,
-       dropping `resolved` findings from kept finding fields and replacing
-       `changed` ones with `current`. A field you return replaces the prior
-       one entirely.
+       Always return `operator_tool_classifications` with one entry per
+       `partition.operator_tool_candidates` mention for this task,
+       re-classified against the current criteria: apply never keeps the
+       prior classifications, so a mention you omit holds as `invoke`.
+       Omit every other field the diff leaves valid: apply keeps the prior
+       value, dropping `resolved` findings from kept finding fields and
+       replacing `changed` ones with `current`. A field you return
+       replaces the prior one entirely.
     3. Return any new finding the diff introduces in its usual field.
 
     When the evidence shows the re-check cannot be bounded (the prior
