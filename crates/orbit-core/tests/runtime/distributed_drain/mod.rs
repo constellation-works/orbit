@@ -76,6 +76,7 @@ mod claimed_review;
 mod claimed_steering;
 mod claimed_tag_instructions;
 mod desktop_completion;
+mod experiment_admission;
 mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]

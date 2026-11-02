@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskStatus};
 
 use super::super::TaskCommitBoundary;
 use super::super::lifecycle::fresh_offer_history;
@@ -106,12 +106,10 @@ impl TaskCommitBoundary {
         )
     }
 
-    /// Admission with the owner's task-guidance callback, before the
-    /// receipt is written. The callback must not acquire task admission locks.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "admission borrows identity, ordering, holds and guidance together so the receipt records one snapshot"
-    )]
+    /// Admission with guidance and the task's stored crew identity.
+    /// Existing callers retain their policy; owners that resolve a fresh
+    /// crew use [`Self::admit_task_with_crew_guidance`].
+    #[allow(clippy::too_many_arguments)]
     pub fn admit_task_with_guidance(
         &self,
         identity: &AdmissionIdentity,
@@ -123,6 +121,44 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
+        guidance_capture: &AdmissionGuidanceCapture<'_>,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.admit_task_with_crew_guidance(
+            identity,
+            request,
+            ordering,
+            owner_version,
+            repo_root,
+            orbit_dir,
+            admission_holds,
+            held,
+            validation_hold,
+            &|task| Ok(task.clone()),
+            guidance_capture,
+        )
+    }
+
+    /// Admission with the owner's task-guidance callback, before the
+    /// receipt is written. The callbacks must not acquire task admission locks.
+    /// `effective_task` supplies the owner's fresh crew policy for screening
+    /// and the captured summary, without changing the stored task. It runs
+    /// again on the locked candidate; repair receipts retain their contract.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "admission borrows identity, ordering, holds and guidance together so the receipt records one snapshot"
+    )]
+    pub fn admit_task_with_crew_guidance(
+        &self,
+        identity: &AdmissionIdentity,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+        owner_version: &str,
+        repo_root: &Path,
+        orbit_dir: &Path,
+        admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
+        validation_hold: &ValidationHold<'_>,
+        effective_task: &dyn Fn(&Task) -> Result<Task, OrbitError>,
         guidance_capture: &AdmissionGuidanceCapture<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
@@ -148,6 +184,7 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
+                effective_task,
                 guidance_capture,
                 ordering,
                 census.as_ref(),
@@ -172,6 +209,7 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
+        effective_task: &dyn Fn(&Task) -> Result<Task, OrbitError>,
         guidance_capture: &AdmissionGuidanceCapture<'_>,
         ordering: &AdmissionOrdering,
         census: Option<&ExecutorCensusEntry>,
@@ -259,8 +297,9 @@ impl TaskCommitBoundary {
         for selected in &snapshot.backlog {
             // A task the selection already rules out is reported from it; a
             // stale reason only defers the task to the next request.
+            let effective_selected = effective_task(selected)?;
             if screen
-                .footprint(selected, &snapshot.statuses, &mut receipt)
+                .footprint(&effective_selected, &snapshot.statuses, &mut receipt)
                 .is_none()
             {
                 continue;
@@ -278,7 +317,7 @@ impl TaskCommitBoundary {
                 .map(task_comment_from_row)
                 .collect::<Vec<_>>();
             let history = task_history_from_events(bundle.events.clone());
-            let task = translator.task_from_bundle(bundle)?;
+            let task = effective_task(&translator.task_from_bundle(bundle)?)?;
             // A dependency another partition holds is out of a
             // partition-scoped section's reach. Nothing has been written yet,
             // so the caller takes this decision again host-wide.

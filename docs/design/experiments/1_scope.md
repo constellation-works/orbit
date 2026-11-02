@@ -191,15 +191,26 @@ implementer's treatment stops being an independent check of it.
    walked over the arms' cumulative weights in the current segment. The draw is deterministic,
    so any readout can recompute it, and no one can choose a task's arm by timing. (The run
    admission crew draw itself uses unseeded `random_crew_ticket`; that stays as is.)
-3. **Sticky.** The assignment row is written before the run starts and is read, never
-   redrawn, for every later run of the task: retries, step and final recovery, review repair,
-   resume, re-admission after a block. A task keeps its arm until it is terminal, even if the
-   experiment concludes meanwhile.
+3. **Historical enrollment and admission authority.** The assignment row is immutable:
+   arm, segment, digest, assignment time and forced flag remain available to analysis. Fresh
+   admission evaluates whether that historical treatment still has execution authority.
+   Concluded and abandoned experiments apply no overlay to a fresh delivery and enroll no
+   new tasks. Paused experiments and retired arms retain their existing-assignment behavior.
+   Already admitted owner runs, same-task children and owner-issued follower receipts retain
+   their captured treatment on resume, even after conclusion. This replaces the earlier rule
+   that kept terminal experiment treatment active until the task itself became terminal.
 4. **One experiment per surface per task.** A task can be in several experiments only when
    their overlays touch disjoint surfaces. A later experiment that conflicts records the task
    as excluded (`surface_conflict`) rather than assigning it.
-5. **Forced assignment.** An operator can assign an arm by hand. The row records
-   `forced = true` and the analysis leaves it out.
+5. **Operator authority.** An explicit run crew wins for that fresh run. A later explicit
+   task crew supersedes historical crew enrollment, including a forced assignment. A force
+   made after a task pin wins until another audited task crew change; assignment and
+   `crew_assigned` timestamps determine ordering, with force winning an exact tie. An explicit
+   pin with no recoverable timestamp supersedes ordinary enrollment but does not displace
+   a timestamped force. The row still records `forced = true` and analysis leaves it out.
+   A crew override suppresses the entire crew-bearing arm for that admission, avoiding a
+   partial treatment; the frozen capture records `live: false`, and `crew_selection` records
+   the intended overlay digest, actual crew and suppression. Historical rows are untouched.
 6. **Claims.** The owner resolves the overlay (reads instruction files and skill bundles at
    the claim base, computes digests) and captures arm, segment and resolved overlay into the
    admission claim as a new `AdmissionReceipt` field, next to the captured tag instructions,
@@ -286,12 +297,17 @@ segment:
   on control's work ([ORB-20597]: every explorer call in exp-2b6d910d's treatment arm failed,
   yet its primary interval excluded zero). Each treatment arm's overlay names its dispatch
   roles: the roles of its instructions, skills and tools. Crew and config surfaces act at
-  admission or through settings, not on one dispatch, so an arm with only those (or an empty
-  overlay) has no delivery check (`delivery: null`). A task's treatment is **delivered** when,
+  admission or through settings. A crew overlay additionally requires positive evidence from
+  the latest delivery's frozen admission selection: the experiment source and overlay digest,
+  with no crew deviation or suppression. Choosing the same crew explicitly is not treatment.
+  Legacy or remote crew delivery without that evidence is unconfirmed, not counted as delivered.
+  Config-only and empty overlays have no delivery check (`delivery: null`). A task's treatment
+  is **delivered** when,
   for every dispatch role, a run of the task has an `experiment_overlay_applied` audit row for
   this experiment's arm in that role whose step's last `step_finished` outcome in the same run
   is `success`. The evidence is the durable run audit trail, never agent output, and the rule is
-  read from the overlay definition with no per-experiment or per-activity branch. A task not
+  read from the overlay definition with no per-experiment or per-activity branch. A later
+  admission that suppresses the arm cannot borrow an earlier run's dispatch evidence. A task not
   delivered and still in flight is `pending`. Each arm reports `delivery` (`roles`, `assigned`,
   `delivered`, `pending`, `rate` = delivered / (assigned − pending)). When any arm's rate is
   below `experiments.min_delivered_rate` (default 0.9), or the horizon is reached with none of

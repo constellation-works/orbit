@@ -10,7 +10,7 @@
 //! provider's invocation-local discovery root. A shadow experiment applies nothing.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionShipContract, ExperimentStoreBackend as _};
+use orbit_store::contracts::AdmissionShipContract;
 use orbit_types::task::Task;
 use orbit_types::tool::{AGENT_CONTRACT_TOOLS, is_exact_canonical_tool_name};
 use orbit_types::workflow::{
@@ -42,7 +42,7 @@ impl OrbitRuntime {
     /// The live arms `activity_name` of `run_id` applies for the task `input`
     /// names, in assignment order. A claimed leaf answers only from its
     /// receipt's capture and refuses without one; every other run reads the
-    /// task's sticky assignments and reads arm files at the run's base.
+    /// admitted capture and reads arm files at the run's base.
     pub(crate) fn experiment_overlays_for_activity(
         &self,
         run_id: &str,
@@ -58,38 +58,35 @@ impl OrbitRuntime {
         if self.worker_invocation().is_some() {
             return self.claimed_experiment_overlays(task_id, role);
         }
-        let store = self.sqlite_store().map_err(TagInstructionFailure::Store)?;
-        let workspace = self.workspace_id().map_err(TagInstructionFailure::Store)?;
+        // A run's admitted capture remains authoritative after lifecycle or
+        // operator changes. Legacy invocations without a run capture use the
+        // current effective policy, never terminal treatment.
+        let run = self
+            .get_job_run_backend(run_id)
+            .map_err(TagInstructionFailure::Store)?;
+        let capture = run
+            .as_ref()
+            .and_then(|run| run.input.as_ref())
+            .and_then(|input| input.get(super::capture::EXPERIMENT_CAPTURE_KEY))
+            .cloned()
+            .map(serde_json::from_value::<CapturedExperiments>)
+            .transpose()
+            .map_err(|error| {
+                TagInstructionFailure::Store(OrbitError::Store(format!(
+                    "invalid experiment capture: {error}"
+                )))
+            })?
+            .map(Ok)
+            .unwrap_or_else(|| self.existing_task_experiment_capture(task_id))
+            .map_err(TagInstructionFailure::Store)?;
+        validate_experiment_capture(Some(&capture), task_id)
+            .map_err(TagInstructionFailure::Store)?;
         let mut revision = LazyRevision::new(|| self.run_base_revision(run_id));
         let mut overlays = Vec::new();
-        for assignment in self
-            .task_experiments(task_id)
-            .map_err(TagInstructionFailure::Store)?
-        {
-            let (Some(arm), Some(segment)) = (assignment.arm, assignment.segment) else {
-                continue;
-            };
-            let record = store
-                .experiment_record(&workspace, &assignment.experiment)
-                .map_err(TagInstructionFailure::Store)?
-                .ok_or_else(|| {
-                    TagInstructionFailure::Store(OrbitError::Store(
-                        "assigned experiment is missing".into(),
-                    ))
-                })?;
-            if record.experiment.mode != LIVE {
-                continue;
-            }
-            let row = record
-                .arms
-                .iter()
-                .find(|row| row.name == arm)
-                .ok_or_else(|| {
-                    TagInstructionFailure::Store(OrbitError::Store(
-                        "assigned experiment arm is missing".into(),
-                    ))
-                })?;
-            let overlay = parse_overlay(&arm, &row.overlay_json)?;
+        for assignment in capture.assignments.into_iter().filter(|entry| entry.live) {
+            let arm = assignment.arm;
+            let segment = assignment.segment;
+            let overlay = parse_overlay(&arm, &assignment.overlay_json)?;
             let instruction = match overlay.instructions.get(&overlay_role(role)) {
                 None => ArmInstruction::None,
                 Some(InstructionOverlay::Suppress(_)) => ArmInstruction::Suppress,

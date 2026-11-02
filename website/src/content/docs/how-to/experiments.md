@@ -237,8 +237,22 @@ experiment's salt, its ID, and the task ID, taken against the arms'
 current weights, so the same task always lands in the same arm while the
 weights stand. The assignment records the arm, the current segment, and
 the arm's overlay digest, and it never changes afterwards: pausing,
-concluding, or abandoning stops new enrollment, and tasks already assigned
-keep their arm. Terminal tasks are never enrolled.
+concluding, or abandoning stops new enrollment. Terminal tasks are never enrolled.
+
+Historical enrollment does not authorize every future delivery. Once an experiment
+is concluded or abandoned, a fresh admission uses the task's current crew choice
+or normal routing and applies none of that experiment's overlays. Existing owner
+runs and follower claims keep the treatment they captured, including on resume.
+Pausing or retiring an arm keeps the existing treatment for already assigned tasks.
+
+For a fresh admission, an explicit run crew wins. A later explicit task crew also
+wins over its historical crew assignment. An operator force made after the task
+pin wins until another audited task crew change; assignment and crew-change times
+decide the order, with force winning a tie. Without a recoverable crew-change time,
+a pin supersedes ordinary enrollment but does not displace a force. When a crew
+choice overrides an arm, Orbit suppresses the whole crew-bearing treatment for
+that admission. The run records its intended overlay digest, actual crew and
+suppression; it does not rewrite enrollment or count the override as delivered.
 
 Experiments reserve the surfaces their arms touch — `instructions`,
 `skills`, `tools`, `crew`, `config` — counting retired arms too. A task a
@@ -354,7 +368,12 @@ Read the warnings before the verdict:
   `experiments.min_delivered_rate` (default `0.9`, set it under
   `[experiments]` in `.orbit/config.toml`), the readout adds an
   `undelivered` warning and withholds the verdict, from the first settled
-  task on. Crew-only, config-only and empty arms have no delivery check.
+  task on. Crew overlays also need the latest delivery's captured experiment
+  crew selection and overlay digest, without a deviation or suppression. An
+  explicit choice of the same crew does not count as treatment. Missing historical
+  or remote admission evidence leaves crew delivery unconfirmed. A later admission
+  that suppresses an arm cannot count an older run's dispatch as its treatment.
+  Config-only and empty arms have no delivery check.
   Delivery shows the overlaid step ran and succeeded, not that the agent
   followed the instruction; read the explorer uptake for that.
 - **Per-protocol view.** `per_protocol` (CLI: `per-protocol (delivered runs
@@ -428,8 +447,10 @@ orbit experiment abandon brief-v2 --reason "Population was wrong; superseded by 
 Both take a running or paused experiment; `abandon` also takes a draft.
 Concluding records the chosen arm (or none), your reason, and the readout
 JSON at that moment on the conclusion event, which
-`orbit experiment show` returns. Assignment stops either way, and tasks
-already assigned keep their arm.
+`orbit experiment show` returns. Enrollment stops either way. Historical
+assignments and recorded results remain available, but fresh admissions apply
+none of the ended experiment's overlays. Runs and follower claims already
+admitted keep their captured treatment, including on resume.
 
 Concluding with an arm files one proposed task naming the experiment, the
 arm, the readout verdict, and the arm's overlay, asking an operator to

@@ -27,12 +27,17 @@ use super::{metrics, stats, verdict};
 /// The label of the per-protocol view.
 const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
 
+struct TreatmentRequirements {
+    roles: BTreeSet<TagInstructionRole>,
+    crew: bool,
+}
+
 /// Each non-control arm's dispatch roles, from its overlay definition: the
 /// roles whose steps must receive the overlay and succeed for a task to
-/// count as treated. Arms whose overlay changes no dispatch are absent.
+/// count as treated. Crew overlays additionally require admission evidence.
 fn arm_dispatch_roles(
     record: &ExperimentRecord,
-) -> Result<BTreeMap<String, BTreeSet<TagInstructionRole>>, OrbitError> {
+) -> Result<BTreeMap<String, TreatmentRequirements>, OrbitError> {
     let mut roles = BTreeMap::new();
     for arm in record.arms.iter().filter(|arm| !arm.control) {
         let overlay = ExperimentOverlay::parse(
@@ -46,16 +51,24 @@ fn arm_dispatch_roles(
             .into_iter()
             .map(instruction_role)
             .collect();
-        if !targeted.is_empty() {
-            roles.insert(arm.name.clone(), targeted);
+        if !targeted.is_empty() || overlay.crew.is_some() {
+            roles.insert(
+                arm.name.clone(),
+                TreatmentRequirements {
+                    roles: targeted,
+                    crew: overlay.crew.is_some(),
+                },
+            );
         }
     }
     Ok(roles)
 }
 
 /// The task received its arm's treatment in every role the overlay targets.
-fn delivered(task: &TaskOutcome, roles: &BTreeSet<TagInstructionRole>) -> bool {
-    roles.is_subset(&task.delivered_roles)
+fn delivered(task: &TaskOutcome, treatment: &TreatmentRequirements) -> bool {
+    task.admitted_treatment != Some(false)
+        && (!treatment.crew || task.admitted_treatment == Some(true))
+        && treatment.roles.is_subset(&task.delivered_roles)
 }
 
 fn build_readout(
@@ -311,7 +324,7 @@ fn arm_readout(
     arm: &orbit_store::contracts::ExperimentArmRow,
     tasks: &[TaskOutcome],
     run_digests: Option<&BTreeSet<String>>,
-    dispatch_roles: Option<&BTreeSet<TagInstructionRole>>,
+    dispatch_roles: Option<&TreatmentRequirements>,
 ) -> ReadoutArm {
     let mine: Vec<&TaskOutcome> = tasks.iter().filter(|task| task.arm == arm.name).collect();
     let mut segments: BTreeMap<u32, usize> = BTreeMap::new();
@@ -354,7 +367,11 @@ fn arm_readout(
             .count();
         let settled = mine.len() - pending;
         ArmDelivery {
-            roles: roles.iter().map(|role| role.as_str().to_string()).collect(),
+            roles: roles
+                .roles
+                .iter()
+                .map(|role| role.as_str().to_string())
+                .collect(),
             assigned: mine.len(),
             delivered: delivered_count,
             pending,

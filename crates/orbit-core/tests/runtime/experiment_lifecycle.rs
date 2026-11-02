@@ -9,6 +9,8 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 use serde_json::json;
 
+mod admission;
+
 #[test]
 fn disabled_and_stale_admissions_enroll_once_experiments_run() {
     if !super::dispatch_admission::isolated(
