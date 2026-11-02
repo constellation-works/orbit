@@ -21,6 +21,9 @@ use super::*;
 /// The candidate branch and head the claimed leaves below commit.
 const BRANCH: &str = "orbit/claimed-candidate";
 const HEAD: &str = "c0ffee0000000000000000000000000000000001";
+/// The error a `claude` leaf fails with when its provider refuses the login.
+const UNAUTHORIZED: &str =
+    "[provider_unavailable] claude provider authentication failure (HTTP 401)";
 
 /// Record `outputs` as the steps `leaf` completed, the way its pipeline
 /// state holds them when it stops.
@@ -43,6 +46,20 @@ fn prepared() -> Value {
         "commit": {"commit_sha": HEAD},
         "prepare_branch": {"head": BRANCH, "head_sha": HEAD, "base": "main", "base_sha": "b0"},
     })
+}
+
+/// [`prepared`] and what a leaf leaves once it has pushed its branch and
+/// opened pull request 42, with its before-landing review admitted.
+fn pushed() -> Value {
+    let mut outputs = prepared();
+    outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
+    outputs["review_gate_admit"] = json!({"applies": false});
+    outputs["review_gate_settle"] = json!({"applies": false});
+    outputs["validate"] = json!({"decision": "passed"});
+    outputs["push"] = json!({"branch": BRANCH, "local_sha": HEAD});
+    outputs["pr_open"] = json!({"pr_number": "42"});
+    outputs["landing_review_gate_admit"] = json!({"applies": true});
+    outputs
 }
 
 /// The drain's crew window, as `orbit run show <drain>` reports it.
@@ -73,6 +90,135 @@ fn settlement_of(pair: &Pair, leaf: &str) -> Value {
 /// A pass that only settles: its window is over, so it requests no claim.
 fn settle_only(pair: &Pair, drain: &str) -> Value {
     pair.pass_over(drain, json!({"window_expired": true}))
+}
+
+/// `leaf` fails with `error` and one settle-only pass settles it.
+fn fail_and_settle(pair: &Pair, drain: &str, leaf: &str, error: &str) -> Value {
+    pair.leaf_fails_with(leaf, error);
+    settle_only(pair, drain)
+}
+
+/// An owner with one backlog task per entry of `crews`, and a fresh drain
+/// whose launched leaf claimed the first: the pair, drain, leaf and task.
+fn claimed_on(crews: &[Option<&str>]) -> (Pair, String, String, String) {
+    let pair = Pair::with_crews(crews);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    (pair, drain, leaf, task)
+}
+
+/// [`claimed_on`] for one task on the `sol` crew.
+fn claimed_sol() -> (Pair, String, String, String) {
+    claimed_on(&[Some("sol")])
+}
+
+/// The branch and head the claim of `leaf` carries to resume, if it carries one.
+fn kept_candidate(pair: &Pair, leaf: &str) -> Option<(String, String)> {
+    pair.admission(leaf)
+        .receipt
+        .and_then(|receipt| receipt.task)
+        .and_then(|task| task.resume_candidate)
+        .map(|candidate| (candidate.branch, candidate.head_sha))
+}
+
+/// `leaf`'s claim resumes the candidate [`prepared`] committed.
+fn assert_resumes_candidate(pair: &Pair, leaf: &str, context: &str) {
+    assert_eq!(
+        kept_candidate(pair, leaf),
+        Some((BRANCH.into(), HEAD.into())),
+        "{context}: the claim carries the kept candidate"
+    );
+}
+
+/// The first pull request of `pair`'s drain, replayed under `id`, as a drain
+/// built it before an earlier release reached the owner. `another_drain`
+/// sends it as a different drain's request.
+fn replay_pull(pair: &Pair, id: &str, another_drain: bool) -> Value {
+    let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
+    request["request_id"] = json!(id);
+    if another_drain {
+        request["run_context"]["run_id"] = json!(format!("jrun-{id}"));
+    }
+    pair.wire.call("", "orbit.task.pull", request).unwrap()
+}
+
+/// The entry of a pull's receipt `list` (say `crew_unavailable`) holding `task`.
+fn held_entry<'a>(pull: &'a Value, list: &str, task: &str) -> Option<&'a Value> {
+    pull["receipt"][list]
+        .as_array()?
+        .iter()
+        .find(|held| held["task_id"] == task)
+}
+
+/// Cancel `leaf` as an operator does with `orbit run cancel`.
+fn cancel_leaf(pair: &Pair, leaf: &str, reason: &str, block: bool) {
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options_and_policy(leaf, "operator", "cli", Some(reason), false, block)
+        .expect("cancel the leaf");
+    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
+}
+
+/// End `leaf` at its `step_index`th step, activity `target`, in `state`.
+fn end_leaf_at(
+    pair: &Pair,
+    leaf: &str,
+    (step_index, target): (usize, &str),
+    state: JobRunState,
+    error_code: Option<&str>,
+    message: String,
+) {
+    let now = Utc::now();
+    pair.follower_jobs
+        .complete_job_run_step(
+            leaf,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index,
+                target_type: JobTargetType::Activity,
+                target_id: target.into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: (state == JobRunState::Failed).then_some(1),
+                agent_response_json: None,
+                state,
+                error_code: error_code.map(Into::into),
+                error_message: Some(message),
+            },
+        )
+        .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(leaf, state, now, None)
+        .unwrap();
+}
+
+/// `runtime` bound to `leaf`'s claim, as the leaf's worker is, calling the
+/// owner through `route`.
+fn bound_to(
+    runtime: &OrbitRuntime,
+    pair: &Pair,
+    leaf: &str,
+    route: Arc<dyn OwnerCoordinator>,
+) -> OrbitRuntime {
+    let record = pair.admission(leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+    runtime
+        .clone()
+        .with_worker_invocation(
+            orbit_types::tool::WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                owner_destination: record.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf.into(),
+            },
+            route,
+        )
+        .unwrap()
 }
 
 /// ORB-14717: settle the actual handoff fetch error as the last failed
@@ -160,29 +306,14 @@ fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
             .iter()
             .position(|step| step.id == "handoff")
             .unwrap();
-        let now = Utc::now();
-        pair.follower_jobs
-            .complete_job_run_step(
-                &leaf.leaf,
-                &JobRunStepParams {
-                    lock_wait_ms: None,
-                    step_index,
-                    target_type: JobTargetType::Activity,
-                    target_id: "claim_handoff".into(),
-                    started_at: now,
-                    finished_at: now,
-                    duration_ms: None,
-                    exit_code: Some(1),
-                    agent_response_json: None,
-                    state: JobRunState::Failed,
-                    error_code: None,
-                    error_message: Some(error),
-                },
-            )
-            .unwrap();
-        pair.follower_jobs
-            .finalize_job_run(&leaf.leaf, JobRunState::Failed, now, None)
-            .unwrap();
+        end_leaf_at(
+            pair,
+            &leaf.leaf,
+            (step_index, "claim_handoff"),
+            JobRunState::Failed,
+            None,
+            error,
+        );
         let pass = settle_only(pair, &leaf.drain);
         let settlement = settlement_of(pair, &leaf.leaf);
         let (kind, class, status) = if timeout {
@@ -211,48 +342,20 @@ fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
     }
 }
 
-/// A claimed `sol` leaf that fails on `error`, settled by one pass: the
-/// owner's task returns to the backlog, and the release names `class`.
-/// Returns that settle-only pass and the drain, for the caller's window
-/// assertions.
-fn a_released_failure(error: &str, class: &str) -> (Pair, String, Value) {
-    a_released_failure_after(error, class, |_, _| {})
-}
-
-/// [`a_released_failure`] with the owner's tasks naming `crews`; the first
-/// task, on `sol`, is the one claimed.
-fn a_released_failure_on(
+/// A claimed leaf on the first of the owner's `crews` that fails on `error`
+/// after `progress` recorded what it did, settled by one pass: the owner's
+/// task returns to the backlog, and the release names `class`. Returns that
+/// settle-only pass and the drain, for the caller's window assertions.
+fn released(
     crews: &[Option<&str>],
     error: &str,
     class: &str,
-) -> (Pair, String, Value) {
-    released(Pair::with_crews(crews), error, class, |_, _| {})
-}
-
-/// [`a_released_failure`] with `progress` recording what the leaf did
-/// before it failed.
-fn a_released_failure_after(
-    error: &str,
-    class: &str,
     progress: impl Fn(&Pair, &str),
 ) -> (Pair, String, Value) {
-    released(Pair::with_crews(&[Some("sol")]), error, class, progress)
-}
-
-fn released(
-    pair: Pair,
-    error: &str,
-    class: &str,
-    progress: impl Fn(&Pair, &str),
-) -> (Pair, String, Value) {
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let task = pair.claimed_task(&leaf);
+    let (pair, drain, leaf, task) = claimed_on(crews);
     assert_eq!(task, pair.tasks[0], "the `sol` task is claimed first");
     progress(&pair, &leaf);
-    pair.leaf_fails_with(&leaf, error);
-
-    let pass = settle_only(&pair, &drain);
+    let pass = fail_and_settle(&pair, &drain, &leaf, error);
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
     assert_eq!(
         pass["consecutive_failures"], 0,
@@ -289,6 +392,11 @@ fn released(
     (pair, drain, pass)
 }
 
+/// [`released`] for one `sol` task and a leaf that did nothing before it failed.
+fn a_released_failure(error: &str, class: &str) -> (Pair, String, Value) {
+    released(&[Some("sol")], error, class, |_, _| {})
+}
+
 /// Whether the drain's window still runs `crew`, and the exclusion naming it.
 fn sol_exclusion(pair: &Pair, drain: &str) -> Option<CrewExclusion> {
     window(pair, drain)
@@ -307,21 +415,12 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
             "[transient_failure] action pin check could not connect (status 000)",
             "transient",
         ),
-        (
-            "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-            "provider",
-        ),
+        (UNAUTHORIZED, "provider"),
     ] {
-        let pushed = class == "transient";
-        let (pair, drain, _) = a_released_failure_after(error, class, |pair, leaf| {
-            if pushed {
-                let mut outputs = prepared();
-                outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
-                outputs["review_gate_admit"] = json!({"applies": false});
-                outputs["review_gate_settle"] = json!({"applies": false});
-                outputs["validate"] = json!({"decision": "passed"});
-                outputs["push"] = json!({"branch": BRANCH, "local_sha": HEAD});
-                outputs["pr_open"] = json!({"pr_number": "42"});
+        let after_push = class == "transient";
+        let (pair, drain, _) = released(&[Some("sol")], error, class, |pair, leaf| {
+            if after_push {
+                let mut outputs = pushed();
                 outputs["landing_review_gate_admit"] = json!({"applies": false});
                 outputs["landing_review_gate_settle"] = json!({"applies": false});
                 outputs["landing_review_validate"] = json!({"decision": "passed"});
@@ -357,7 +456,7 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
 
         let leaf = pair.leaf_runs()[0].clone();
         let candidate = &settlement_of(&pair, &leaf)["Release"]["failure"]["candidate"];
-        if pushed {
+        if after_push {
             assert_eq!(candidate["branch"], BRANCH, "{candidate}");
             assert_eq!(candidate["head_sha"], HEAD, "{candidate}");
             assert_eq!(candidate["published"], true, "{candidate}");
@@ -391,18 +490,9 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
             "{}\noriginal error before recovery: the review report was never recorded",
             blocker.step_failure_message()
         );
-        let (pair, _, _) = a_released_failure_after(&error, "transient", |pair, leaf| {
-            let mut outputs = prepared();
-            outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
-            outputs["review_gate_admit"] = json!({"applies": false});
-            outputs["review_gate_settle"] = json!({"applies": false});
-            outputs["validate"] = json!({"decision": "passed"});
-            outputs["push"] = json!({"branch": BRANCH, "local_sha": HEAD});
-            outputs["pr_open"] = json!({"pr_number": "42"});
-            outputs["landing_review_gate_admit"] = json!({"applies": true});
-            leaf_completed(pair, leaf, outputs);
+        let (pair, _, _) = released(&[Some("sol")], &error, "transient", |pair, leaf| {
+            leaf_completed(pair, leaf, pushed());
         });
-        let task = pair.tasks[0].clone();
         let leaf = pair.leaf_runs()[0].clone();
         let candidate = &settlement_of(&pair, &leaf)["Release"]["failure"]["candidate"];
         assert_eq!(candidate["branch"], BRANCH, "{kind}: {candidate}");
@@ -413,18 +503,12 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
         // release ran on.
         let drain = pair.run_drain();
         let next = pair.running_leaf(&drain, 1);
-        assert_eq!(pair.claimed_task(&next), task, "{kind}: pulled again");
-        let resumed = pair
-            .admission(&next)
-            .receipt
-            .and_then(|receipt| receipt.task)
-            .and_then(|task| task.resume_candidate)
-            .unwrap_or_else(|| panic!("{kind}: the claim carries the kept candidate"));
         assert_eq!(
-            (resumed.branch.as_str(), resumed.head_sha.as_str()),
-            (BRANCH, HEAD),
-            "{kind}"
+            pair.claimed_task(&next),
+            pair.tasks[0],
+            "{kind}: pulled again"
         );
+        assert_resumes_candidate(&pair, &next, kind);
     }
 }
 
@@ -432,10 +516,7 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
 fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
-    let (pair, _, _) = a_released_failure(
-        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-        "provider",
-    );
+    let (pair, _, _) = a_released_failure(UNAUTHORIZED, "provider");
     let leaf = pair.leaf_runs()[0].clone();
     let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
     let [settlement] = settlements.as_slice() else {
@@ -519,6 +600,17 @@ impl<'a> FollowerShow<'a> {
             asked: Default::default(),
         }
     }
+
+    /// A follower that answers as it does, except `edit` rewrites the answer
+    /// about its drain run (`of_drain`) or about a leaf run (otherwise).
+    fn edited(pair: &'a Pair, of_drain: bool, edit: fn(&mut Value)) -> Self {
+        Self::altered(pair, move |_, mut answer| {
+            if (answer["job_id"] == "workspace_pull_pipeline") == of_drain {
+                edit(&mut answer);
+            }
+            Ok(answer)
+        })
+    }
 }
 
 impl FollowerRunObserver for FollowerShow<'_> {
@@ -548,6 +640,15 @@ impl FollowerRunObserver for FollowerShow<'_> {
     }
 }
 
+/// What a follower that holds no run `run` answers.
+fn no_such_run(run: &str) -> OrbitError {
+    OrbitError::NotFound {
+        kind: orbit_common::NotFoundKind::JobRun,
+        id: run.to_string(),
+        guidance: None,
+    }
+}
+
 /// The settled claim's evidence as the owner lists it.
 fn run_evidence_of(pair: &Pair) -> orbit_core::application::distributed::LeafRunEvidenceView {
     let [settlement] = &pair.wire.owner.leaf_settlements(None, false).unwrap()[..] else {
@@ -556,9 +657,9 @@ fn run_evidence_of(pair: &Pair) -> orbit_core::application::distributed::LeafRun
     settlement.run_evidence.clone()
 }
 
-/// Settle one claim as a build that predates the evidence: the owner holds
-/// the settlement and none of the leaf's run record.
-fn forget_leaf_evidence(pair: &Pair) {
+/// Settle `claims` claims as a build that predates the evidence: the owner
+/// holds the settlements and none of the leaves' run records.
+fn forget_leaf_evidence(pair: &Pair, claims: usize) {
     let connection = pair.wire.owner.sqlite_store().unwrap().connection();
     let removed = connection
         .lock()
@@ -568,7 +669,7 @@ fn forget_leaf_evidence(pair: &Pair) {
             (),
         )
         .unwrap();
-    assert_eq!(removed, 1, "the settlement recorded the evidence");
+    assert_eq!(removed, claims, "each settlement recorded the evidence");
 }
 
 fn hydrate(
@@ -600,12 +701,10 @@ fn hydrate(
 /// from the settlement's text. An operator keeps what the follower's run
 /// record says, once, as evidence distinct from the settlement; a replay
 /// confirms it, a different observation never overwrites it, and a record
-/// that is not this claim's leaf is refused.
+/// that is not this claim's leaf is refused. A worker bound to a claim is
+/// refused hydration, which reads run records with an operator's own route.
 fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
-    let (pair, _, _) = a_released_failure(
-        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-        "provider",
-    );
+    let (pair, _, _) = a_released_failure(UNAUTHORIZED, "provider");
     let leaf = pair.leaf_runs()[0].clone();
     let sent = run_evidence_of(&pair);
     assert_eq!(sent.provenance, Some("settlement"));
@@ -613,7 +712,7 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
     let task = pair.owner_task(&pair.tasks[0]);
 
     // The reproduced gap: nothing on the owner says what the leaf ran.
-    forget_leaf_evidence(&pair);
+    forget_leaf_evidence(&pair, 1);
     let legacy = run_evidence_of(&pair);
     assert_eq!(legacy.provenance, None);
     assert_eq!(
@@ -631,79 +730,60 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
         "no current build is substituted"
     );
 
+    // A bound worker is refused.
+    let worker = bound_to(&pair.wire.owner, &pair, &leaf, Arc::new(NoWorkerRoute));
+    let observer = FollowerShow::new(&pair);
+    let error = worker
+        .hydrate_leaf_run_evidence(&LeafHydrationRequest::default(), &observer)
+        .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::CapabilityRefused(_)),
+        "{error:?}"
+    );
+    assert!(observer.asked.borrow().is_empty());
+    assert_eq!(run_evidence_of(&pair).provenance, None);
+
     // Refusals leave the claim without evidence.
     let machine = pair.wire.caller.clone();
+    let leaf_edit = |edit: fn(&mut Value)| FollowerShow::edited(&pair, false, edit);
+    let drain_edit = |edit: fn(&mut Value)| FollowerShow::edited(&pair, true, edit);
     let cases: Vec<(&str, LeafHydrationOutcome, FollowerShow<'_>)> = vec![
         (
             "another machine's run",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] != "workspace_pull_pipeline" {
-                    answer["executed_on"]["machine_id"] = json!("hm_other");
-                }
-                Ok(answer)
-            }),
+            leaf_edit(|answer| answer["executed_on"]["machine_id"] = json!("hm_other")),
         ),
         (
             "another task's run",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] != "workspace_pull_pipeline" {
-                    answer["task_ids"] = json!(["ORB-9"]);
-                }
-                Ok(answer)
-            }),
+            leaf_edit(|answer| answer["task_ids"] = json!(["ORB-9"])),
         ),
         (
             "not a claimed leaf job",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] != "workspace_pull_pipeline" {
-                    answer["job_id"] = json!("some_other_job");
-                }
-                Ok(answer)
-            }),
+            leaf_edit(|answer| answer["job_id"] = json!("some_other_job")),
         ),
         (
             "a run still going",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] != "workspace_pull_pipeline" {
-                    answer["state"] = json!("running");
-                }
-                Ok(answer)
-            }),
+            leaf_edit(|answer| answer["state"] = json!("running")),
         ),
         (
             "a drain that pulls from another owner",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] == "workspace_pull_pipeline" {
-                    answer["input"]["destination"]["owner_workspace_id"] = json!("ws_other");
-                }
-                Ok(answer)
+            drain_edit(|answer| {
+                answer["input"]["destination"]["owner_workspace_id"] = json!("ws_other")
             }),
         ),
         (
             "a drain of another machine",
             LeafHydrationOutcome::Mismatch,
-            FollowerShow::altered(&pair, |_, mut answer| {
-                if answer["job_id"] == "workspace_pull_pipeline" {
-                    answer["executed_on"]["machine_id"] = json!("hm_other");
-                }
-                Ok(answer)
-            }),
+            drain_edit(|answer| answer["executed_on"]["machine_id"] = json!("hm_other")),
         ),
         (
             "a follower that holds no such run",
             LeafHydrationOutcome::Absent,
-            FollowerShow::altered(&pair, |run, _| {
-                Err(OrbitError::NotFound {
-                    kind: orbit_common::NotFoundKind::JobRun,
-                    id: run.to_string(),
-                    guidance: None,
-                })
-            }),
+            FollowerShow::altered(&pair, |run, _| Err(no_such_run(run))),
         ),
         (
             "a follower that cannot be reached",
@@ -768,11 +848,8 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
         vec![(LeafHydrationOutcome::Replayed, None)],
         "an identical replay is confirmed"
     );
-    let changed = FollowerShow::altered(&pair, |_, mut answer| {
-        if answer["job_id"] != "workspace_pull_pipeline" {
-            answer["error_message"] = json!("a different failure");
-        }
-        Ok(answer)
+    let changed = FollowerShow::edited(&pair, false, |answer| {
+        answer["error_message"] = json!("a different failure")
     });
     let rows = hydrate(&pair, &changed, true);
     assert_eq!(rows[0].0, LeafHydrationOutcome::Conflict, "{rows:?}");
@@ -786,40 +863,31 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
 /// Hydration must not reconcile either follower record while gathering evidence.
 fn hydration_observes_stored_runs_without_reconciliation() {
     for orphan in [true, false] {
-        let (pair, drain, _) = a_released_failure(
-            "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-            "provider",
-        );
+        let (pair, drain, _) = a_released_failure(UNAUTHORIZED, "provider");
         let leaf = pair.leaf_runs()[0].clone();
-        forget_leaf_evidence(&pair);
+        forget_leaf_evidence(&pair, 1);
         let store = pair.follower.sqlite_store().unwrap();
         let workspace = pair.follower.workspace_id().unwrap();
-        let mut run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
-        run.finished_at = None;
-        run.duration_ms = None;
-        if orphan {
-            run.state = JobRunState::Running;
-            run.started_at = Some(Utc::now() - chrono::Duration::minutes(5));
-            run.pid = Some(u32::MAX);
-            run.pid_start_time = None;
-        }
-        store
-            .upsert_job_run_for_workspace(&workspace, &run, None)
-            .unwrap();
-        let mut drain_run = pair.follower_jobs.get_job_run(&drain).unwrap().unwrap();
-        drain_run.state = JobRunState::Running;
-        drain_run.started_at = Some(Utc::now() - chrono::Duration::minutes(5));
-        drain_run.finished_at = None;
-        drain_run.duration_ms = None;
-        drain_run.pid = Some(u32::MAX);
-        drain_run.pid_start_time = None;
-        store
-            .upsert_job_run_for_workspace(&workspace, &drain_run, None)
-            .unwrap();
-        let before_leaf =
-            serde_json::to_value(pair.follower_jobs.get_job_run(&leaf).unwrap()).unwrap();
-        let before_drain =
-            serde_json::to_value(pair.follower_jobs.get_job_run(&drain).unwrap()).unwrap();
+        // Leave a run unfinished, and, when `orphaned`, running under a dead process.
+        let unfinish = |id: &str, orphaned: bool| {
+            let mut run = pair.follower_jobs.get_job_run(id).unwrap().unwrap();
+            run.finished_at = None;
+            run.duration_ms = None;
+            if orphaned {
+                run.state = JobRunState::Running;
+                run.started_at = Some(Utc::now() - chrono::Duration::minutes(5));
+                run.pid = Some(u32::MAX);
+                run.pid_start_time = None;
+            }
+            store
+                .upsert_job_run_for_workspace(&workspace, &run, None)
+                .unwrap();
+        };
+        unfinish(&leaf, orphan);
+        unfinish(&drain, true);
+        let run_json =
+            |id: &str| serde_json::to_value(pair.follower_jobs.get_job_run(id).unwrap()).unwrap();
+        let (before_leaf, before_drain) = (run_json(&leaf), run_json(&drain));
         let task = pair.owner_task(&pair.tasks[0]);
         let reservations = || {
             let conn = store.connection();
@@ -864,14 +932,8 @@ fn hydration_observes_stored_runs_without_reconciliation() {
                 LeafHydrationOutcome::Hydrated
             }
         );
-        assert_eq!(
-            serde_json::to_value(pair.follower_jobs.get_job_run(&leaf).unwrap()).unwrap(),
-            before_leaf
-        );
-        assert_eq!(
-            serde_json::to_value(pair.follower_jobs.get_job_run(&drain).unwrap()).unwrap(),
-            before_drain
-        );
+        assert_eq!(run_json(&leaf), before_leaf);
+        assert_eq!(run_json(&drain), before_drain);
         assert_eq!(pair.owner_task(&pair.tasks[0]), task);
         assert_eq!(reservations(), before_reservations);
     }
@@ -883,59 +945,40 @@ fn hydration_observes_stored_runs_without_reconciliation() {
 /// only the first page forever.
 fn hydration_continuation_visits_every_selected_claim_at_limit_one() {
     let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
-    let drain = pair.run_drain();
-    let first = pair.running_leaf(&drain, 1);
-    pair.leaf_fails_with(
-        &first,
-        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-    );
-    settle_only(&pair, &drain);
-    // A fresh drain: the first release excluded `sol` from the old window.
-    let drain = pair.run_drain();
-    let second = pair.running_leaf(&drain, 1);
+    let mut leaves = vec![];
+    for _ in 0..2 {
+        // A fresh drain: the previous release excluded `sol` from the old window.
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        fail_and_settle(&pair, &drain, &leaf, UNAUTHORIZED);
+        leaves.push(leaf);
+    }
+    let [first, second] = &leaves[..] else {
+        unreachable!()
+    };
     assert_ne!(second, first);
-    pair.leaf_fails_with(
-        &second,
-        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-    );
-    settle_only(&pair, &drain);
 
     let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
     assert_eq!(settlements.len(), 2, "{settlements:?}");
-    let selected: std::collections::BTreeSet<String> =
-        settlements.iter().map(|s| s.claim_id.clone()).collect();
-    let connection = pair.wire.owner.sqlite_store().unwrap().connection();
-    let removed = connection
-        .lock()
-        .unwrap()
-        .execute(
-            "DELETE FROM task_coordination_rows WHERE kind = 'distributed-leaf-run-evidence-v1'",
-            (),
-        )
-        .unwrap();
-    assert_eq!(removed, 2, "both settlements recorded evidence");
+    let selected: BTreeSet<String> = settlements.iter().map(|s| s.claim_id.clone()).collect();
+    forget_leaf_evidence(&pair, 2);
 
-    let claims_before: Vec<Value> = pair
-        .owner_claims()
-        .iter()
-        .map(|entry| entry["claim"].clone())
-        .collect();
-    let statuses_before: Vec<String> = pair
-        .tasks
-        .iter()
-        .map(|task| pair.owner_status(task))
-        .collect();
+    let claims = || -> Vec<Value> {
+        pair.owner_claims()
+            .iter()
+            .map(|entry| entry["claim"].clone())
+            .collect()
+    };
+    let statuses =
+        || -> Vec<String> { pair.tasks.iter().map(|id| pair.owner_status(id)).collect() };
+    let (claims_before, statuses_before) = (claims(), statuses());
 
     // One leaf's run is gone from its follower; the other's is available,
     // whichever order the newest-first selection visits them in.
     let absent_leaf = first.clone();
     let observer = FollowerShow::altered(&pair, move |run, answer| {
         if run == absent_leaf {
-            Err(OrbitError::NotFound {
-                kind: orbit_common::NotFoundKind::JobRun,
-                id: run.to_string(),
-                guidance: None,
-            })
+            Err(no_such_run(run))
         } else {
             Ok(answer)
         }
@@ -955,63 +998,38 @@ fn hydration_continuation_visits_every_selected_claim_at_limit_one() {
             .unwrap()
     };
 
-    // First traversal: two bounded pages visit both claims exactly once.
-    let page1 = page(None, false);
-    assert_eq!(page1.rows.len(), 1, "{page1:?}");
-    assert_eq!(page1.remaining, 1, "{page1:?}");
-    let cursor = page1
-        .next_after_claim_id
-        .clone()
-        .expect("a continuation while claims remain");
-    assert_eq!(cursor, page1.rows[0].claim_id);
-    let page2 = page(Some(cursor), false);
-    assert_eq!(page2.rows.len(), 1, "{page2:?}");
-    assert_eq!(page2.remaining, 0, "{page2:?}");
-    assert_eq!(page2.next_after_claim_id, None, "{page2:?}");
-    assert_ne!(page1.rows[0].claim_id, page2.rows[0].claim_id);
-    let visited: std::collections::BTreeSet<String> = [&page1, &page2]
-        .iter()
-        .flat_map(|page| page.rows.iter().map(|row| row.claim_id.clone()))
-        .collect();
-    assert_eq!(visited, selected, "every selected claim is visited");
-    let outcomes: std::collections::BTreeSet<String> = [&page1, &page2]
-        .iter()
-        .flat_map(|page| page.rows.iter().map(|row| format!("{:?}", row.outcome)))
-        .collect();
-    assert_eq!(
-        outcomes,
-        std::collections::BTreeSet::from(["Absent".to_string(), "Hydrated".to_string()]),
-        "the unsuccessful outcome stays visible and the later claim hydrates"
-    );
-    assert!(
-        [&page1, &page2]
-            .iter()
-            .flat_map(|page| &page.rows)
-            .filter(|row| row.outcome == LeafHydrationOutcome::Absent)
-            .all(|row| row.detail.is_some()),
-        "the absent row says why"
-    );
-
-    // Recheck paging also visits the whole selection, not only page one.
-    let recheck1 = page(None, true);
-    assert_eq!(recheck1.remaining, 1, "{recheck1:?}");
-    let recheck2 = page(recheck1.next_after_claim_id.clone(), true);
-    assert_eq!(recheck2.remaining, 0, "{recheck2:?}");
-    assert_eq!(recheck2.next_after_claim_id, None);
-    let rechecked: std::collections::BTreeSet<String> = [&recheck1, &recheck2]
-        .iter()
-        .flat_map(|page| page.rows.iter().map(|row| row.claim_id.clone()))
-        .collect();
-    assert_eq!(rechecked, selected, "recheck visits every selected claim");
-    let recheck_outcomes: std::collections::BTreeSet<String> = [&recheck1, &recheck2]
-        .iter()
-        .flat_map(|page| page.rows.iter().map(|row| format!("{:?}", row.outcome)))
-        .collect();
-    assert_eq!(
-        recheck_outcomes,
-        std::collections::BTreeSet::from(["Absent".to_string(), "Replayed".to_string()]),
-        "{recheck1:?} {recheck2:?}"
-    );
+    // Two bounded pages visit both claims exactly once, whether they hydrate
+    // (`recheck` false) or, once hydrated, replay (`recheck`).
+    for (recheck, kept) in [(false, "Hydrated"), (true, "Replayed")] {
+        let page1 = page(None, recheck);
+        assert_eq!(page1.rows.len(), 1, "{page1:?}");
+        assert_eq!(page1.remaining, 1, "{page1:?}");
+        let cursor = page1
+            .next_after_claim_id
+            .clone()
+            .expect("a continuation while claims remain");
+        assert_eq!(cursor, page1.rows[0].claim_id);
+        let page2 = page(Some(cursor), recheck);
+        assert_eq!(page2.rows.len(), 1, "{page2:?}");
+        assert_eq!(page2.remaining, 0, "{page2:?}");
+        assert_eq!(page2.next_after_claim_id, None, "{page2:?}");
+        assert_ne!(page1.rows[0].claim_id, page2.rows[0].claim_id);
+        let rows = || [&page1, &page2].into_iter().flat_map(|page| &page.rows);
+        let visited: BTreeSet<String> = rows().map(|row| row.claim_id.clone()).collect();
+        assert_eq!(visited, selected, "every selected claim is visited");
+        let outcomes: BTreeSet<String> = rows().map(|row| format!("{:?}", row.outcome)).collect();
+        assert_eq!(
+            outcomes,
+            BTreeSet::from(["Absent".to_string(), kept.to_string()]),
+            "the unsuccessful outcome stays visible and the later claim is {kept}"
+        );
+        assert!(
+            rows()
+                .filter(|row| row.outcome == LeafHydrationOutcome::Absent)
+                .all(|row| row.detail.is_some()),
+            "the absent row says why"
+        );
+    }
 
     // A continuation outside the selection is refused, not silently restarted.
     let error = pair
@@ -1028,22 +1046,8 @@ fn hydration_continuation_visits_every_selected_claim_at_limit_one() {
         .unwrap_err();
     assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
 
-    assert_eq!(
-        pair.owner_claims()
-            .iter()
-            .map(|entry| entry["claim"].clone())
-            .collect::<Vec<_>>(),
-        claims_before,
-        "no claim changes"
-    );
-    assert_eq!(
-        pair.tasks
-            .iter()
-            .map(|task| pair.owner_status(task))
-            .collect::<Vec<_>>(),
-        statuses_before,
-        "no task changes"
-    );
+    assert_eq!(claims(), claims_before, "no claim changes");
+    assert_eq!(statuses(), statuses_before, "no task changes");
     assert_eq!(pair.leaf_runs().len(), 2, "no run changes");
 }
 
@@ -1052,24 +1056,21 @@ fn hydration_continuation_visits_every_selected_claim_at_limit_one() {
 /// as always and records no evidence: the owner never binds a report it
 /// cannot tie to the run the claim bound.
 fn a_settlement_naming_another_leaf_run_records_no_evidence() {
-    for report in [
-        json!({"run_id": "someone-elses-leaf", "job_id": "task_claimed_pr_pipeline"}),
-        json!({"run_id": "{leaf}", "job_id": "  "}),
-    ] {
-        let pair = Pair::with_crews(&[Some("sol")]);
-        let drain = pair.run_drain();
-        let leaf = pair.running_leaf(&drain, 1);
-        let mut report = report;
-        if report["run_id"] == "{leaf}" {
-            report["run_id"] = json!(leaf);
-        }
+    for another_run in [true, false] {
+        let (pair, drain, leaf, task) = claimed_sol();
+        let report = if another_run {
+            json!({"run_id": "someone-elses-leaf", "job_id": "task_claimed_pr_pipeline"})
+        } else {
+            json!({"run_id": leaf, "job_id": "  "})
+        };
         *pair.wire.leaf_run_override.lock().unwrap() = Some(report.clone());
-        pair.leaf_fails_with(
+        fail_and_settle(
+            &pair,
+            &drain,
             &leaf,
             "[provider_unavailable] claude provider outage (HTTP 401)",
         );
-        settle_only(&pair, &drain);
-        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+        assert_eq!(pair.owner_status(&task), "backlog");
         assert_eq!(
             pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
             "revoked",
@@ -1082,51 +1083,12 @@ fn a_settlement_naming_another_leaf_run_records_no_evidence() {
     }
 }
 
-/// [ORB-20906] Hydration reads a follower's run records with an operator's
-/// own route, so a worker bound to a claim is refused.
-fn a_bound_worker_cannot_hydrate_leaf_evidence() {
-    let (pair, _, _) = a_released_failure(
-        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
-        "provider",
-    );
-    forget_leaf_evidence(&pair);
-    let leaf = pair.leaf_runs()[0].clone();
-    let record = pair.admission(&leaf);
-    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
-    let worker = pair
-        .wire
-        .owner
-        .clone()
-        .with_worker_invocation(
-            orbit_types::tool::WorkerInvocation {
-                owner_machine_id: OWNER.into(),
-                owner_workspace_id: record.destination.owner_workspace_id.clone(),
-                owner_destination: record.destination.selector.clone(),
-                task_id: claim.task_id.clone(),
-                claim_id: claim.claim_id.clone(),
-                execution: claim.executed_on.clone(),
-                bound_run_id: leaf,
-            },
-            Arc::new(NoWorkerRoute),
-        )
-        .unwrap();
-    let observer = FollowerShow::new(&pair);
-    let error = worker
-        .hydrate_leaf_run_evidence(&LeafHydrationRequest::default(), &observer)
-        .unwrap_err();
-    assert!(
-        matches!(error, OrbitError::CapabilityRefused(_)),
-        "{error:?}"
-    );
-    assert!(observer.asked.borrow().is_empty());
-    assert_eq!(run_evidence_of(&pair).provenance, None);
-}
-
 /// A failure of the host itself — its validation environment, or its route
 /// to the owner — releases the claim and suppresses the host for the drain's
 /// window, whatever crew a task names: the drain asks the owner for nothing
 /// more, and the owner holds every task from that drain even when its
-/// request was built before the release reached it.
+/// request was built before the release reached it. Another drain may still
+/// take the released task.
 fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
     for (error, class) in [
         (
@@ -1140,7 +1102,7 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
             "owner_route",
         ),
     ] {
-        let (pair, drain, _) = a_released_failure_on(&[Some("sol"), Some("luna")], error, class);
+        let (pair, drain, _) = released(&[Some("sol"), Some("luna")], error, class, |_, _| {});
         let window = window(&pair, &drain);
         let suppressed = window
             .host_suppressed
@@ -1174,32 +1136,28 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
 
         // A request this drain built before the release reached it, which
         // would otherwise claim the other crew's task.
-        let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
-        request["request_id"] = json!(format!("built-before-the-{class}-release"));
-        let same = pair
-            .wire
-            .call("", "orbit.task.pull", request.clone())
-            .unwrap();
+        let first = pair.wire.calls("orbit.task.pull")[0].clone();
+        assert!(first["crews"].get("excluded").is_none(), "{class}: {first}");
+        let same = replay_pull(&pair, &format!("built-before-the-{class}-release"), false);
         assert!(same["receipt"]["claim"].is_null(), "{class}: {same:#}");
-        let held = same["receipt"]["crew_unavailable"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let held_reason = |task: &String| {
+            held_entry(&same, "crew_unavailable", task)
+                .and_then(|held| held["reason"].as_str())
+                .map(str::to_string)
+        };
         assert!(
-            held.iter()
-                .any(|held| held["task_id"] == pair.tasks[1].as_str()
-                    && held["reason"]
-                        .as_str()
-                        .is_some_and(|reason| reason.contains("host is suppressed"))),
+            held_reason(&pair.tasks[1]).is_some_and(|reason| reason.contains("host is suppressed")),
             "{class}: the other crew's task is held from this drain too: {same:#}"
         );
-
-        request["request_id"] = json!(format!("another-drain-{class}"));
-        request["run_context"]["run_id"] = json!(format!("jrun-another-drain-{class}"));
-        let other = pair.wire.call("", "orbit.task.pull", request).unwrap();
         assert!(
-            other["receipt"]["claim"]["task_id"].is_string(),
-            "{class}: another drain may still claim: {other:#}"
+            held_reason(&pair.tasks[0]).is_some_and(|reason| reason.contains(class)),
+            "{class}: the hold names the release's class: {same:#}"
+        );
+
+        let other = replay_pull(&pair, &format!("another-drain-{class}"), true);
+        assert_eq!(
+            other["receipt"]["claim"]["task_id"], pair.tasks[0],
+            "{class}: another drain may still claim the released task: {other:#}"
         );
     }
 }
@@ -1264,14 +1222,14 @@ fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
     leaf_completed(&pair, &leaf, prepared());
-    pair.leaf_fails_with(
+    let pass = fail_and_settle(
+        &pair,
+        &drain,
         &leaf,
         &hold.text(&format!(
             "required validation 'make ci-lint' fails on base {red} exactly as on the candidate"
         )),
     );
-
-    let pass = settle_only(&pair, &drain);
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert!(
@@ -1292,13 +1250,7 @@ fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
 
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
-    let resumed = pair
-        .admission(&next)
-        .receipt
-        .and_then(|receipt| receipt.task)
-        .and_then(|task| task.resume_candidate)
-        .expect("the claim carries the kept candidate");
-    assert_eq!(resumed.head_sha, HEAD);
+    assert_resumes_candidate(&pair, &next, "red base turned green");
 }
 
 /// [ORB-14617] A claimed leaf whose delivery push the forge kept refusing
@@ -1309,10 +1261,7 @@ fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
 /// keeps offering the crew, and the owner hands the task straight back to it
 /// with the kept candidate, which only this host has.
 fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let task = pair.claimed_task(&leaf);
+    let (pair, drain, leaf, task) = claimed_sol();
     let mut outputs = prepared();
     outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
     outputs["review_gate_admit"] = json!({"applies": true});
@@ -1330,28 +1279,14 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
         held_at: now,
         held_since: now - chrono::TimeDelta::hours(2),
     };
-    pair.follower_jobs
-        .complete_job_run_step(
-            &leaf,
-            &JobRunStepParams {
-                lock_wait_ms: None,
-                step_index: 0,
-                target_type: JobTargetType::Activity,
-                target_id: "diagnostic".into(),
-                started_at: now,
-                finished_at: now,
-                duration_ms: None,
-                exit_code: None,
-                agent_response_json: None,
-                state: JobRunState::Held,
-                error_code: Some(FORGE_UNAVAILABLE_ERROR_CODE.into()),
-                error_message: Some(hold.text("step `push` held: the forge refused the push")),
-            },
-        )
-        .unwrap();
-    pair.follower_jobs
-        .finalize_job_run(&leaf, JobRunState::Held, now, None)
-        .unwrap();
+    end_leaf_at(
+        &pair,
+        &leaf,
+        (0, "diagnostic"),
+        JobRunState::Held,
+        Some(FORGE_UNAVAILABLE_ERROR_CODE),
+        hold.text("step `push` held: the forge refused the push"),
+    );
 
     let pass = settle_only(&pair, &drain);
 
@@ -1383,28 +1318,14 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
         task,
         "the owner hands the task back to the same drain"
     );
-    let resumed = pair
-        .admission(&next)
-        .receipt
-        .and_then(|receipt| receipt.task)
-        .and_then(|task| task.resume_candidate)
-        .expect("the claim carries the kept candidate");
-    assert_eq!(
-        (resumed.branch.as_str(), resumed.head_sha.as_str()),
-        (BRANCH, HEAD)
-    );
+    assert_resumes_candidate(&pair, &next, "forge hold");
 }
 
 /// The candidate's own failure, and a task its final recovery judged, still
 /// block the task — typed, so `orbit run show` says which.
 fn a_candidate_failure_still_blocks_the_task() {
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let task = pair.claimed_task(&leaf);
-    pair.leaf_fails_with(&leaf, "cargo test: 3 tests failed");
-
-    let pass = settle_only(&pair, &drain);
+    let (pair, drain, leaf, task) = claimed_sol();
+    let pass = fail_and_settle(&pair, &drain, &leaf, "cargo test: 3 tests failed");
     assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
     let failed = &settlement_of(&pair, &leaf)["Fail"];
     assert_eq!(failed["failure"]["class"], "candidate", "{failed}");
@@ -1452,20 +1373,17 @@ fn a_candidate_failure_still_blocks_the_task() {
 /// the reason redacted, so neither an operator nor the codebase analytics
 /// need the claim settlement to read it.
 fn a_failed_leaf_names_its_cause_in_owner_history() {
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let task = pair.claimed_task(&leaf);
+    let (pair, drain, leaf, task) = claimed_sol();
     let mut synchronized = prepared();
     synchronized["sync_base"] =
         json!({"head": BRANCH, "head_sha": HEAD, "base": "main", "base_sha": "b0"});
     leaf_completed(&pair, &leaf, synchronized);
-    pair.leaf_fails_with(
+    let pass = fail_and_settle(
+        &pair,
+        &drain,
         &leaf,
         "cargo test: 3 tests failed; request sent Bearer fixture-secret-token",
     );
-
-    let pass = settle_only(&pair, &drain);
     assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
     let failure = &settlement_of(&pair, &leaf)["Fail"]["failure"];
     assert_eq!(failure["class"], "candidate", "{failure}");
@@ -1572,18 +1490,7 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     let task = pair.claimed_task(&leaf);
     leaf_completed(&pair, &leaf, prepared());
 
-    let cancel = pair
-        .follower
-        .cancel_job_run_with_options_and_policy(
-            &leaf,
-            "operator",
-            "cli",
-            Some("wrong crew for this task"),
-            false,
-            false,
-        )
-        .expect("cancel the leaf");
-    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
+    cancel_leaf(&pair, &leaf, "wrong crew for this task", false);
     assert!(worker.stopped(), "the leaf's worker is stopped");
     assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
 
@@ -1612,29 +1519,18 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
 
     // Replay a request built before the cancel, bypassing the follower's
     // window projection: the owner itself must suppress the original task.
-    let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
-    request["request_id"] = json!("built-before-the-operator-cancel");
-    let same = pair
-        .wire
-        .call("", "orbit.task.pull", request.clone())
-        .unwrap();
+    let same = replay_pull(&pair, "built-before-the-operator-cancel", false);
     assert!(same["receipt"]["claim"].is_null(), "{same:#}");
     assert!(
-        same["receipt"]["crew_unavailable"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|held| held["task_id"] == task.as_str()
-                && held["reason"].as_str().unwrap().contains("operator_cancel")),
+        held_entry(&same, "crew_unavailable", &task)
+            .is_some_and(|held| held["reason"].as_str().unwrap().contains("operator_cancel")),
         "the original task stays withheld from this window: {same:#}"
     );
     assert_eq!(pair.owner_claims().len(), 2, "no immediate repull");
 
     // A later window can resume the candidate, with the release still in
     // owner history; the budget scenario below verifies the cancel counts.
-    request["request_id"] = json!("after-the-operator-cancel-window");
-    request["run_context"]["run_id"] = json!("jrun-after-the-operator-cancel");
-    let later = pair.wire.call("", "orbit.task.pull", request).unwrap();
+    let later = replay_pull(&pair, "after-the-operator-cancel-window", true);
     assert_eq!(later["receipt"]["claim"]["task_id"], task.as_str());
     let resumed = &later["receipt"]["task"]["resume_candidate"];
     assert_eq!(resumed["branch"], BRANCH, "{later:#}");
@@ -1649,18 +1545,7 @@ fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
     let task = pair.claimed_task(&leaf);
 
-    let cancel = pair
-        .follower
-        .cancel_job_run_with_options_and_policy(
-            &leaf,
-            "operator",
-            "cli",
-            Some("needs a human look"),
-            false,
-            true,
-        )
-        .expect("cancel the leaf");
-    assert_eq!(cancel.outcome, JobRunCancelOutcome::Cancelled, "{cancel:?}");
+    cancel_leaf(&pair, &leaf, "needs a human look", true);
     assert!(worker.stopped(), "the leaf's worker is stopped");
 
     assert_eq!(pair.owner_status(&task), "blocked");
@@ -1690,16 +1575,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
 
     // An operator's cancel first: released to the backlog, and counted.
     let (cancelled, worker) = pair.running_leaf_with_worker(&drain, 1);
-    pair.follower
-        .cancel_job_run_with_options_and_policy(
-            &cancelled,
-            "operator",
-            "cli",
-            Some("rebalancing hosts"),
-            false,
-            false,
-        )
-        .expect("cancel the leaf");
+    cancel_leaf(&pair, &cancelled, "rebalancing hosts", false);
     assert!(worker.stopped());
     assert_eq!(pair.owner_status(&task), "backlog");
 
@@ -1714,8 +1590,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
             "the same task is pulled again"
         );
         leaf_completed(&pair, &leaf, prepared());
-        pair.leaf_fails_with(&leaf, reason);
-        let pass = settle_only(&pair, &drain);
+        let pass = fail_and_settle(&pair, &drain, &leaf, reason);
         let expected = if n == 0 { "backlog" } else { "blocked" };
         assert_eq!(pair.owner_status(&task), expected, "release {n}: {pass}");
     }
@@ -1748,57 +1623,9 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
         .iter()
         .map(|claim| claim["claim"]["phase"].as_str().unwrap().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(
-        phases.iter().filter(|phase| *phase == "revoked").count(),
-        2,
-        "{phases:?}"
-    );
-    assert_eq!(
-        phases.iter().filter(|phase| *phase == "failed").count(),
-        1,
-        "{phases:?}"
-    );
-}
-
-/// The owner keeps a task a drain released for its host's failure from that
-/// drain for the rest of its window, even when the drain's next request was
-/// built before the release reached it and so excludes no crew. Another
-/// drain may still take it.
-fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
-    let (pair, _, _) = a_released_failure(
-        "[validation_environment] required validation could not run: python3 lacks tomllib",
-        "environment",
-    );
-    let task = pair.tasks[0].clone();
-    let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
-    assert!(request["crews"].get("excluded").is_none(), "{request}");
-
-    request["request_id"] = json!("built-before-the-release");
-    let same = pair
-        .wire
-        .call("", "orbit.task.pull", request.clone())
-        .unwrap();
-    let receipt = &same["receipt"];
-    assert!(receipt["claim"].is_null(), "{same:#}");
-    let held = receipt["crew_unavailable"]
-        .as_array()
-        .and_then(|held| held.iter().find(|held| held["task_id"] == task.as_str()))
-        .unwrap_or_else(|| panic!("the task is held from this drain: {same:#}"));
-    assert!(
-        held["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("environment")),
-        "the hold names the release's class: {held}"
-    );
-
-    request["request_id"] = json!("another-drain");
-    request["run_context"]["run_id"] = json!("jrun-another-drain");
-    let other = pair.wire.call("", "orbit.task.pull", request).unwrap();
-    assert_eq!(
-        other["receipt"]["claim"]["task_id"],
-        task.as_str(),
-        "{other:#}"
-    );
+    let count = |wanted: &str| phases.iter().filter(|phase| *phase == wanted).count();
+    assert_eq!(count("revoked"), 2, "{phases:?}");
+    assert_eq!(count("failed"), 1, "{phases:?}");
 }
 
 /// [ORB-14260] A claimed PR leaf whose committed candidate could not be
@@ -1808,18 +1635,15 @@ fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
 /// leaf, whose `resume_candidate` step continues it; a spec change retires
 /// it, and the claim after implements fresh.
 fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
-    let pair = Pair::new(1);
-    let task = pair.tasks[0].clone();
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (pair, drain, leaf, task) = claimed_on(&[None]);
     leaf_completed(&pair, &leaf, prepared());
-    pair.leaf_fails_with(
+    let pass = fail_and_settle(
+        &pair,
+        &drain,
         &leaf,
         "sync_base: rebase onto origin/main conflicted in src/f0.rs; conflict recovery could \
          not resolve it",
     );
-
-    let pass = settle_only(&pair, &drain);
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "base_conflict", "{failure}");
@@ -1842,16 +1666,7 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
 
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
-    let resumed = pair
-        .admission(&next)
-        .receipt
-        .and_then(|receipt| receipt.task)
-        .and_then(|task| task.resume_candidate)
-        .expect("the claim carries the kept candidate");
-    assert_eq!(
-        (resumed.branch.as_str(), resumed.head_sha.as_str()),
-        (BRANCH, HEAD)
-    );
+    assert_resumes_candidate(&pair, &next, "base conflict");
     let input = pair
         .follower_jobs
         .get_job_run(&next)
@@ -1863,8 +1678,12 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
 
     // The task's spec changes while its candidate waits: the candidate no
     // longer answers it.
-    pair.leaf_fails_with(&next, "[transient_failure] the network dropped");
-    settle_only(&pair, &drain);
+    fail_and_settle(
+        &pair,
+        &drain,
+        &next,
+        "[transient_failure] the network dropped",
+    );
     pair.wire
         .owner
         .run_tool(
@@ -1874,15 +1693,11 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
         .expect("change the task's spec");
     // A new drain: this one's window may have excluded the crew the
     // transient release ran on.
-    let fresh_drain = pair.run_drain();
-    let fresh = pair.running_leaf(&fresh_drain, 1);
+    let fresh = pair.running_leaf(&pair.run_drain(), 1);
     assert_eq!(pair.claimed_task(&fresh), task);
-    assert!(
-        pair.admission(&fresh)
-            .receipt
-            .and_then(|receipt| receipt.task)
-            .and_then(|task| task.resume_candidate)
-            .is_none(),
+    assert_eq!(
+        kept_candidate(&pair, &fresh),
+        None,
         "a spec change retires the kept candidate"
     );
 }
@@ -1890,13 +1705,14 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
 /// An operator's `orbit task update --discard-candidate` retires a kept
 /// candidate: the task's next claim implements fresh.
 fn a_discarded_candidate_is_not_resumed() {
-    let pair = Pair::new(1);
-    let task = pair.tasks[0].clone();
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (pair, drain, leaf, task) = claimed_on(&[None]);
     leaf_completed(&pair, &leaf, prepared());
-    pair.leaf_fails_with(&leaf, "rebase onto main conflicted in src/f0.rs");
-    settle_only(&pair, &drain);
+    fail_and_settle(
+        &pair,
+        &drain,
+        &leaf,
+        "rebase onto main conflicted in src/f0.rs",
+    );
     assert_eq!(pair.owner_status(&task), "backlog");
 
     pair.wire
@@ -1913,12 +1729,9 @@ fn a_discarded_candidate_is_not_resumed() {
         .expect("discard the candidate");
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task);
-    assert!(
-        pair.admission(&next)
-            .receipt
-            .and_then(|receipt| receipt.task)
-            .and_then(|task| task.resume_candidate)
-            .is_none(),
+    assert_eq!(
+        kept_candidate(&pair, &next),
+        None,
         "a discarded candidate is not resumed"
     );
 }
@@ -1928,42 +1741,23 @@ fn a_discarded_candidate_is_not_resumed() {
 /// as `owner_route` — not as a failure of its candidate.
 fn a_lost_owner_route_fails_the_step_as_owner_route() {
     struct Unreachable;
-    impl orbit_tools::OwnerCoordinator for Unreachable {
+    impl OwnerCoordinator for Unreachable {
         fn call(
             &self,
             _name: &str,
             _input: Value,
-            _session: orbit_types::tool::ToolSessionContext,
+            _session: ToolSessionContext,
         ) -> Result<Value, OrbitError> {
             Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ))
         }
     }
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let record = pair.admission(&leaf);
-    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
-    let bound = pair
-        .follower
-        .clone()
-        .with_worker_invocation(
-            orbit_types::tool::WorkerInvocation {
-                owner_machine_id: OWNER.into(),
-                owner_workspace_id: record.destination.owner_workspace_id.clone(),
-                owner_destination: record.destination.selector.clone(),
-                task_id: claim.task_id.clone(),
-                claim_id: claim.claim_id.clone(),
-                execution: claim.executed_on.clone(),
-                bound_run_id: leaf.clone(),
-            },
-            Arc::new(Unreachable),
-        )
-        .unwrap();
+    let (pair, drain, leaf, task) = claimed_sol();
+    let bound = bound_to(&pair.follower, &pair, &leaf, Arc::new(Unreachable));
 
     let error = bound
-        .run_tool("orbit.task.show", json!({"id": claim.task_id}))
+        .run_tool("orbit.task.show", json!({"id": task}))
         .expect_err("the owner is unreachable");
     assert!(
         matches!(error, OrbitError::UnreachableDestination(_)),
@@ -1976,11 +1770,10 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
         "{message}"
     );
 
-    pair.leaf_fails_with(&leaf, &message);
-    settle_only(&pair, &drain);
+    fail_and_settle(&pair, &drain, &leaf, &message);
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "owner_route", "{failure}");
-    assert_eq!(pair.owner_status(&claim.task_id), "backlog");
+    assert_eq!(pair.owner_status(&task), "backlog");
 }
 
 /// [ORB-15088] An owner that times out waiting on a task lock answers
@@ -2003,12 +1796,12 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
         busy: AtomicUsize,
         calls: AtomicUsize,
     }
-    impl orbit_tools::OwnerCoordinator for BusyOwner {
+    impl OwnerCoordinator for BusyOwner {
         fn call(
             &self,
             name: &str,
             input: Value,
-            session: orbit_types::tool::ToolSessionContext,
+            session: ToolSessionContext,
         ) -> Result<Value, OrbitError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let busy = self.busy.load(Ordering::SeqCst);
@@ -2027,40 +1820,23 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
         }
     }
 
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
-    let record = pair.admission(&leaf);
-    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+    let (pair, drain, leaf, task) = claimed_sol();
     let owner = Arc::new(BusyOwner {
         owner: super::claimed_review::ToOwner(pair.wire.owner.clone()),
         busy: AtomicUsize::new(2),
         calls: AtomicUsize::new(0),
     });
-    let bound = pair
-        .follower
-        .clone()
-        .with_worker_invocation(
-            orbit_types::tool::WorkerInvocation {
-                owner_machine_id: OWNER.into(),
-                owner_workspace_id: record.destination.owner_workspace_id.clone(),
-                owner_destination: record.destination.selector.clone(),
-                task_id: claim.task_id.clone(),
-                claim_id: claim.claim_id.clone(),
-                execution: claim.executed_on.clone(),
-                bound_run_id: leaf.clone(),
-            },
-            owner.clone(),
+    let bound = bound_to(&pair.follower, &pair, &leaf, owner.clone());
+    let retried_read = || {
+        orbit_core::test_support::with_owner_read_retry_wait(
+            |_| std::thread::sleep(Duration::from_millis(1)),
+            || bound.get_task(&task),
         )
-        .unwrap();
+    };
 
     // Two busy answers are retried through: the envelope's task load succeeds.
-    let task = orbit_core::test_support::with_owner_read_retry_wait(
-        |_| std::thread::sleep(Duration::from_millis(1)),
-        || bound.get_task(&claim.task_id),
-    )
-    .expect("retried past the busy owner");
-    assert_eq!(task.id, claim.task_id);
+    let loaded = retried_read().expect("retried past the busy owner");
+    assert_eq!(loaded.id, task);
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         3,
@@ -2070,11 +1846,7 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
     // A lock that stays held exhausts the bounded retries.
     owner.calls.store(0, Ordering::SeqCst);
     owner.busy.store(usize::MAX, Ordering::SeqCst);
-    let error = orbit_core::test_support::with_owner_read_retry_wait(
-        |_| std::thread::sleep(Duration::from_millis(1)),
-        || bound.get_task(&claim.task_id),
-    )
-    .expect_err("the owner stays busy");
+    let error = retried_read().expect_err("the owner stays busy");
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         3,
@@ -2091,11 +1863,10 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
     // The leaf stopped at synchronizing its committed candidate, where an
     // untyped failure settles as a base conflict.
     leaf_completed(&pair, &leaf, prepared());
-    pair.leaf_fails_with(&leaf, &message);
-    settle_only(&pair, &drain);
+    fail_and_settle(&pair, &drain, &leaf, &message);
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "transient", "{failure}");
-    assert_eq!(pair.owner_status(&claim.task_id), "backlog");
+    assert_eq!(pair.owner_status(&task), "backlog");
 }
 
 /// [ORB-14695] A claimed leaf whose provider account hit its usage limit
@@ -2130,8 +1901,7 @@ model = \"claude-opus\"
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
         assert_eq!(pair.claimed_task(&leaf), task, "release {n}: pulled again");
-        pair.leaf_fails_with(&leaf, limit);
-        let pass = settle_only(&pair, &drain);
+        let pass = fail_and_settle(&pair, &drain, &leaf, limit);
         assert_eq!(pair.owner_status(&task), "backlog", "release {n}: {pass}");
 
         let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
@@ -2204,8 +1974,7 @@ model = \"gpt-luna\"
         let task = pair.tasks[0].clone();
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
-        pair.leaf_fails_with(&leaf, refusal);
-        let pass = settle_only(&pair, &drain);
+        let pass = fail_and_settle(&pair, &drain, &leaf, refusal);
         assert_eq!(pair.owner_status(&task), "backlog", "not blocked: {pass}");
 
         let release = &settlement_of(&pair, &leaf)["Release"];
@@ -2240,14 +2009,9 @@ model = \"gpt-luna\"
         );
 
         // A follower drain that would run the task as `sol` is refused it.
-        let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
-        request["request_id"] = json!("after-the-refusal");
-        request["run_context"]["run_id"] = json!("jrun-another-drain");
-        let pulled = pair.wire.call("", "orbit.task.pull", request).unwrap();
+        let pulled = replay_pull(&pair, "after-the-refusal", true);
         assert!(pulled["receipt"]["claim"].is_null(), "{pulled:#}");
-        let deferred = pulled["receipt"]["deferred_conflicts"]
-            .as_array()
-            .and_then(|held| held.iter().find(|held| held["task_id"] == task.as_str()))
+        let deferred = held_entry(&pulled, "deferred_conflicts", &task)
             .unwrap_or_else(|| panic!("the hold keeps the task from `sol`: {pulled:#}"));
         assert!(
             deferred["reason"]
@@ -2298,7 +2062,6 @@ crate::scenario_table!(
     hydration_observes_stored_runs_without_reconciliation,
     hydration_continuation_visits_every_selected_claim_at_limit_one,
     a_settlement_naming_another_leaf_run_records_no_evidence,
-    a_bound_worker_cannot_hydrate_leaf_evidence,
     host_failures_release_the_claim_and_suppress_the_host_for_the_window,
     a_baseline_red_failure_releases_the_claim_without_excluding_the_crew
 );
@@ -2311,7 +2074,6 @@ crate::scenario_table!(
     cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason,
     cancelling_a_launched_claimed_leaf_with_block_blocks_its_task,
     a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason,
-    the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain,
     a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it,
     a_discarded_candidate_is_not_resumed,
     a_lost_owner_route_fails_the_step_as_owner_route,
