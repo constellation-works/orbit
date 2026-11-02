@@ -34,6 +34,6 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-29 07:41 | ORB-19721 | jrun-20261029-0558-c19 | VCS reader SIGPIPE, base re-check unreadable | merged outside Orbit at 2026-10-29T08:43Z, settled done |
 | 2026-10-29 14:56 | ORB-19845 | jrun-20261029-1333-c3 | GraphQL TLS timeout then source repair refused | merged outside Orbit at 2026-10-29T15:37Z, settled done |
 | 2026-10-30 08:02 | ORB-19981 | jrun-20261030-0653-c5 | GraphQL TLS timeout then source repair refused | merged outside Orbit at 2026-10-30T08:44Z, settled done |
-| 2026-10-29 15:00 | ORB-19845 | not recorded in triage comment | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
-| 2026-10-30 08:06 | ORB-19981 | not recorded in triage comment | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
-| 2026-10-29 07:59 | ORB-19689 | not recorded in triage comment | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
+| 2026-10-29 15:00 | ORB-19845 | jrun-20261029-1333-c3 (final_recovery) | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
+| 2026-10-30 08:06 | ORB-19981 | jrun-20261030-0653-c5 (final_recovery) | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
+| 2026-10-29 07:59 | ORB-19689 | jrun-20261029-0753-c30 (final_recovery) | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
