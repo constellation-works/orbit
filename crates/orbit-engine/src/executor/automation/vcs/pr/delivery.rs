@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailureClass};
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
@@ -495,10 +495,27 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
     let response = host.run_private_vcs_operation(operations::PR_REQUIRED_CHECKS, required_input);
     let required = RequiredChecks::observe_response(response, &mut unreported.required_observation)
-        .map_err(|error| CheckWaitRefusal {
-            reason: format!("required-check evidence is unavailable: {error}"),
-            cause: Some(Box::new(error)),
-            refusal: None,
+        .map_err(|error| {
+            // [ORB-21412] A persistently unavailable required-checks read is
+            // inconclusive evidence, not a verdict on the PR: auto-fix holds
+            // (retryable by the next pass) instead of stopping for good. A
+            // transient transport failure keeps its class so completion's
+            // observation hold (ForgeObservationUnavailable) still applies.
+            let refusal = match wait {
+                BlockedCheckWait::AutoFix
+                    if !error.private_vcs_failure().is_some_and(|failure| {
+                        failure.class == PrivateVcsFailureClass::TransientObservation
+                    }) =>
+                {
+                    Some(DeliveryRefusal::CheckEvidenceInconclusive)
+                }
+                _ => None,
+            };
+            CheckWaitRefusal {
+                reason: format!("required-check evidence is unavailable: {error}"),
+                cause: Some(Box::new(error)),
+                refusal,
+            }
         })?;
     if status.head_sha.as_deref() != Some(required.head_sha.as_str())
         || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
