@@ -170,14 +170,16 @@ orbit doctor
 - **Widening reseeds on the next sync.** Add a name to the list or set a key
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
-  from enabling it: shipped auto-tasks and every routine except
-  `crew-performance-refresh` start disabled; that one starts enabled and no-ops
-  while `workflow.crew_performance` is `off`. Preserve existing enablement choices.
+  from enabling it: shipped auto-tasks start disabled, except `host-health`,
+  which ships enabled. Every routine except `crew-performance-refresh` starts
+  disabled; that one starts enabled and no-ops while
+  `workflow.crew_performance` is `off`. Preserve existing enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use
-  `orbit auto-task restore <name>` to clear the opt-out and restore its shipped,
-  disabled content. Restore refuses an excluded name or an existing definition.
+  `orbit auto-task restore <name>` to clear the opt-out and restore its shipped
+  content with the shipped `enabled` value: disabled for most defaults, enabled
+  for `host-health`. Restore refuses an excluded name or an existing definition.
   See [Deleting a definition](auto-tasks.md#deleting-a-definition). For routines,
   a name-list policy is the durable per-name opt-out.
 
