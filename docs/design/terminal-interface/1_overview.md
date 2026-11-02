@@ -5,7 +5,7 @@ last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Accepted
 stage: building
-next: "Complete filtered styling [ORB-21574], detail recovery [ORB-21575] and trailers [ORB-21576]."
+next: "Complete detail recovery [ORB-21575] and trailers [ORB-21576]."
 feature: terminal-interface
 doc_role: overview
 type: design
@@ -36,7 +36,7 @@ None of these is severe alone. Together they mean output correctness is a proper
 - **Role** — a semantic color token (`ok`, `warn`, `error`, `active`, `muted`, `neutral`). Commands tag values with roles; only the renderer maps roles to color [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 - **Sink** — the resolved stdout target plus its capabilities (is it a TTY, how wide, may it carry ANSI). Every environment question is answered here once.
 
-The main rendering migration is done: borderless tables [ORB-10567], semantic roles [ORB-10568], sink resolution [ORB-10569], gating and stderr errors [ORB-10570], output fixtures [ORB-10571], and command payloads [ORB-10586]. Record-output follow-ups [ORB-11596], doctor repair counts [ORB-11597], and workspace initialization [ORB-11622] are also done. Committed scope remains incomplete: filtered-value neutrality [ORB-21574], full detail recovery for truncated views [ORB-21575], and non-record stdout trailers [ORB-21576] have filed repairs. These keep the stage at `building`; the accepted design contract is unchanged.
+The main rendering migration is done: borderless tables [ORB-10567], semantic roles [ORB-10568], sink resolution [ORB-10569], gating and stderr errors [ORB-10570], output fixtures [ORB-10571], and command payloads [ORB-10586]. Record-output follow-ups [ORB-11596], doctor repair counts [ORB-11597], and workspace initialization [ORB-11622] are also done. Filtered-value neutrality is done [ORB-21574]. Committed scope remains incomplete: full detail recovery for truncated views [ORB-21575] and non-record stdout trailers [ORB-21576] have filed repairs. These keep the stage at `building`; the accepted design contract is unchanged.
 
 ## 3. At a Glance
 
@@ -48,7 +48,7 @@ The main rendering migration is done: borderless tables [ORB-10567], semantic ro
 | Audit list table and JSON payload | [crates/orbit-cli/src/command/audit/support.rs](../../../crates/orbit-cli/src/command/audit/support.rs) | [ORB-10228] |
 | Shared payload construction and rendering | [crates/orbit-cli/src/command/](../../../crates/orbit-cli/src/command/) | Done: [ORB-10586], [ORB-11596] (layout from [ORB-00279]) |
 | Table contract; full-detail gaps remain [ORB-21575] | [./specs/table-rendering.md](./specs/table-rendering.md) | [Borderless Tables With Truncate-to-Width Rows](./4_decisions.md#borderless-tables-with-truncate-to-width-rows) |
-| Color contract; filtered neutrality remains [ORB-21574] | [./specs/color-and-styling.md](./specs/color-and-styling.md) | [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink) |
+| Color contract; filtered neutrality is done [ORB-21574] | [./specs/color-and-styling.md](./specs/color-and-styling.md) | [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink) |
 | Mode contract; stdout trailers remain [ORB-21576] | [./specs/output-modes.md](./specs/output-modes.md) | [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload) |
 
 ## Task References
@@ -65,7 +65,7 @@ The main rendering migration is done: borderless tables [ORB-10567], semantic ro
 - [ORB-11596] — Convert remaining record-output commands onto shared payload rendering.
 - [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
 - [ORB-11622] — Convert workspace initialization to shared payload rendering.
-- [ORB-21574] — Track the filed repair for filtered terminal values retaining color.
+- [ORB-21574] — Make filtered table cells neutral while keeping their columns visible.
 - [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
 - [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
 - [T20260411-0335] — Introduce the earlier dynamic full-width table arrangement.

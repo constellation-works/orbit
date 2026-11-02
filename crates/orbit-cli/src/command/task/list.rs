@@ -42,7 +42,7 @@ pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -
     // A column the caller filtered on stays on screen even when the filter
     // made it uniform.
     let filtered = TaskTableFilters {
-        status: status_filtered || input.get("scheduled").and_then(Value::as_bool) == Some(true),
+        status: status_filtered,
         scheduled: input.get("scheduled").and_then(Value::as_bool) == Some(true),
         priority: input.contains_key("priority"),
         task_type: input.contains_key("type"),

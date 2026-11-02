@@ -129,7 +129,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operator Attention](./design/operator-attention/1_overview.md) | Deliver runtime sources (slice 2), provider sources (slice 3), and cross-host federation (slice 4) | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Land slice 1, ORB-21242 (in review); then slice 2, ORB-21243 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
-| [Terminal Interface](./design/terminal-interface/1_overview.md) | Complete filtered styling [ORB-21574], detail recovery [ORB-21575] and trailers [ORB-21576]. | claude |
+| [Terminal Interface](./design/terminal-interface/1_overview.md) | Complete detail recovery [ORB-21575] and trailers [ORB-21576]. | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
 ### Designing (7)

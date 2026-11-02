@@ -143,25 +143,36 @@ pub(super) fn task_table(
     let mut columns = vec![
         Column::new("ID").fixed(),
         Column::new("TITLE"),
-        Column::new("STATUS").fixed().filtered(filtered.status),
+        Column::new("STATUS")
+            .fixed()
+            .keep_when_uniform(filtered.status || filtered.scheduled)
+            .filtered(filtered.status),
         Column::new("PRIORITY").fixed().filtered(filtered.priority),
         Column::new("TYPE").fixed().filtered(filtered.task_type),
-        Column::new("RUNS ON").filtered(
-            filtered.runs_on
-                || tasks.iter().any(|task| {
-                    task.get("os_requirement").is_some() || task.get("requires_labels").is_some()
-                }),
-        ),
+        Column::new("RUNS ON")
+            .keep_when_uniform(
+                filtered.runs_on
+                    || tasks.iter().any(|task| {
+                        task.get("os_requirement").is_some()
+                            || task.get("requires_labels").is_some()
+                    }),
+            )
+            .filtered(filtered.runs_on),
     ];
     let show_schedule =
         filtered.scheduled || tasks.iter().any(|task| task["not_before"].is_string());
     if show_schedule {
-        columns.push(Column::new("SCHEDULED").fixed().filtered(true));
+        columns.push(
+            Column::new("SCHEDULED")
+                .fixed()
+                .keep_when_uniform(true)
+                .filtered(filtered.scheduled),
+        );
     }
     if show_tools {
         columns.extend([
-            Column::new("REQUIRED TOOLS").filtered(true),
-            Column::new("GRANTED TOOLS").filtered(true),
+            Column::new("REQUIRED TOOLS").keep_when_uniform(true),
+            Column::new("GRANTED TOOLS").keep_when_uniform(true),
         ]);
     }
     if full {

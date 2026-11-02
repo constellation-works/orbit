@@ -21,6 +21,7 @@
 
 use std::process::Output;
 
+use orbit_types::task::TaskStatus;
 use serde_json::Value;
 
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
@@ -177,6 +178,151 @@ fn task_list_plain_escapes_embedded_separators_and_json_keeps_them() {
     );
 }
 
+/// Filtering a semantic value keeps its column visible and removes only that
+/// column's role styling; the other semantic column remains styled. The PTY
+/// makes the built CLI resolve its real terminal color path deterministically.
+#[cfg(unix)]
+#[test]
+fn task_list_filtered_status_and_priority_are_neutral_only_in_terminal_tables() {
+    let workspace = workspace();
+    let proposed_low = workspace.task_seed("Filtered status low priority");
+    let mut done_high = workspace.task_seed("Filtered priority completed task");
+    done_high.status = TaskStatus::Done;
+    let tasks = workspace.seed_tasks(&[
+        proposed_low,
+        workspace.task_seed("Filtered status high priority"),
+        done_high,
+    ]);
+    let low_id = tasks[0]["id"].as_str().expect("low priority task id");
+    let high_id = tasks[1]["id"].as_str().expect("high priority task id");
+    let done_id = tasks[2]["id"].as_str().expect("done task id");
+    workspace.run(
+        &["task", "update", low_id, "--priority", "low", "--json"],
+        "set low priority",
+    );
+    workspace.run(
+        &["task", "update", high_id, "--priority", "high", "--json"],
+        "set high priority",
+    );
+    workspace.run(
+        &["task", "update", done_id, "--priority", "high", "--json"],
+        "set completed task priority",
+    );
+
+    let status_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--status", "proposed", "--format", "table"],
+    );
+    let status_stdout = String::from_utf8(status_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(
+        status_stdout.contains("STATUS"),
+        "filtered status column stays visible: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("proposed"),
+        "filtered status value stays visible: {status_stdout:?}"
+    );
+    assert!(
+        !status_stdout.contains("\x1b[93mproposed") && !status_stdout.contains("\x1b[2mproposed"),
+        "a filtered status has neither severity foreground nor dim styling: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("\x1b[91mhigh"),
+        "unfiltered high priority keeps its role: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("\x1b[2mlow"),
+        "unfiltered low priority keeps its role: {status_stdout:?}"
+    );
+
+    let priority_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--priority", "high", "--format", "table"],
+    );
+    let priority_stdout = String::from_utf8(priority_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(
+        priority_stdout.contains("PRIORITY"),
+        "filtered priority column stays visible: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("high"),
+        "filtered priority value stays visible: {priority_stdout:?}"
+    );
+    assert!(
+        !priority_stdout.contains("\x1b[91mhigh") && !priority_stdout.contains("\x1b[2mhigh"),
+        "a filtered priority has neither severity foreground nor dim styling: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("\x1b[93mproposed"),
+        "unfiltered proposed status keeps its role: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("\x1b[92mdone"),
+        "unfiltered done status keeps its role: {priority_stdout:?}"
+    );
+
+    let dimmed_priority_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--priority", "low", "--format", "table"],
+    );
+    let dimmed_priority_stdout = String::from_utf8(dimmed_priority_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(dimmed_priority_stdout.contains("PRIORITY"));
+    assert!(dimmed_priority_stdout.contains("low"));
+    assert!(
+        !dimmed_priority_stdout.contains("\x1b[2mlow")
+            && !dimmed_priority_stdout.contains("\x1b[91mlow"),
+        "a filtered dim priority has neither dim nor severity styling: {dimmed_priority_stdout:?}"
+    );
+    assert!(
+        dimmed_priority_stdout.contains("\x1b[93mproposed"),
+        "unfiltered status remains styled beside a filtered dim priority: {dimmed_priority_stdout:?}"
+    );
+
+    let plain = workspace.run(
+        &["task", "list", "--status", "proposed", "--format", "plain"],
+        "plain filtered task list",
+    );
+    let plain_stdout = String::from_utf8(plain.stdout).expect("plain task list is UTF-8");
+    assert!(
+        !plain_stdout.contains('\x1b'),
+        "plain output has no styling: {plain_stdout:?}"
+    );
+    let plain_rows = plain_stdout.lines().collect::<Vec<_>>();
+    assert_eq!(
+        plain_rows.len(),
+        2,
+        "plain output retains both filtered records: {plain_stdout:?}"
+    );
+    assert!(
+        plain_rows
+            .iter()
+            .all(|row| row.split('\t').nth(2) == Some("proposed"))
+    );
+
+    let json = workspace.run(
+        &["task", "list", "--status", "proposed", "--format", "json"],
+        "JSON filtered task list",
+    );
+    let records: Value = serde_json::from_slice(&json.stdout).expect("task list JSON");
+    let records = records.as_array().expect("task list remains a JSON array");
+    assert_eq!(
+        records.len(),
+        2,
+        "JSON output retains both filtered records"
+    );
+    assert!(records.iter().all(|record| {
+        record.is_object()
+            && record["status"] == "proposed"
+            && matches!(record["priority"].as_str(), Some("low" | "high"))
+    }));
+}
+
 #[test]
 fn job_show_json_contains_no_human_step_rows() {
     let workspace = workspace();
@@ -266,6 +412,76 @@ fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");
     template.description = "A record whose rendered row must stay on one line.".into();
     TestWorkspace::new("table-rendering-test", template)
+}
+
+#[cfg(unix)]
+fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+
+    use orbit_common::test_env;
+
+    let mut master = -1;
+    let mut slave = -1;
+    // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    // SAFETY: successful openpty returned owned, distinct file descriptors.
+    let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+    // SAFETY: slave is the other owned end of the same openpty pair.
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let mut child = command
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("TERM", "xterm-256color")
+        .env("COLUMNS", "120")
+        .env_remove("NO_COLOR")
+        .env_remove("ORBIT_FORMAT")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run task list on terminal");
+    drop(command);
+    let mut stdout = Vec::new();
+    if let Err(error) = master.read_to_end(&mut stdout) {
+        // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+        assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+    }
+    let status = child.wait().expect("wait for task list");
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .expect("captured stderr")
+        .read_to_end(&mut stderr)
+        .expect("read task list stderr");
+    assert!(
+        status.success(),
+        "task list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[test]
