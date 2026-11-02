@@ -14,7 +14,7 @@ use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: RESIDENT;
@@ -141,6 +141,7 @@ const GRANT: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: OperationSpec<ResidentVerb> = OperationSpec {
@@ -156,6 +157,7 @@ const SHOW: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const LIST_PARAMS: &[ParamSpec] = &[both(
@@ -179,6 +181,7 @@ const LIST: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHECKPOINT_PARAMS: &[ParamSpec] = &[
@@ -229,6 +232,7 @@ const METRICS: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHECKPOINT: OperationSpec<ResidentVerb> = OperationSpec {
@@ -244,6 +248,7 @@ const CHECKPOINT: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const DIGEST: OperationSpec<ResidentVerb> = OperationSpec {
@@ -277,6 +282,7 @@ const DIGEST: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELAY_PARAMS: &[ParamSpec] = &[
@@ -326,6 +332,7 @@ const RELAY: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CONTROL_ACTIONS: &[EnumValue] = &[
@@ -382,4 +389,5 @@ const CONTROL: OperationSpec<ResidentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

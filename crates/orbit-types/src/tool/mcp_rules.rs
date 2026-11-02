@@ -63,6 +63,33 @@ pub enum McpInputCondition {
     True(String),
 }
 
+/// A tool definition's declaration of its [`McpIdRoute`], in `const` form.
+///
+/// Operation specs and other builtin definitions are `const`, so they cannot
+/// carry the owned reason string of [`McpIdRoute::WorkspaceLocal`]; they
+/// declare this form at the definition site and the registry resolves it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum McpIdRouteDeclaration {
+    /// The tool does not declare an id routing contract.
+    #[default]
+    Unspecified,
+    /// The id names one globally addressed task.
+    Task,
+    /// The id is interpreted at the selected workspace, with an explicit reason.
+    WorkspaceLocal(&'static str),
+}
+
+impl McpIdRouteDeclaration {
+    /// Resolve the declaration to the routing classification consumers use.
+    pub fn resolve(self) -> McpIdRoute {
+        match self {
+            Self::Unspecified => McpIdRoute::Unspecified,
+            Self::Task => McpIdRoute::Task,
+            Self::WorkspaceLocal(reason) => McpIdRoute::WorkspaceLocal(reason.to_string()),
+        }
+    }
+}
+
 /// Whether an id-only invocation routes by a task's host prefix.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum McpIdRoute {

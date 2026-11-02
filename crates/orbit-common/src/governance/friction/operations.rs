@@ -13,7 +13,7 @@ use crate::governance::operation::{
     CliArgKind, CliBinding, CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec,
     ParamType, RETIRED_AGENT_FIELD, Redaction, UnknownFields, operation_registry,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::friction_tags_literal;
 use super::title::FRICTION_TITLE_MAX_CHARS;
@@ -170,6 +170,7 @@ const ADD: FrictionOperation = FrictionOperation {
     retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const LIST: FrictionOperation = FrictionOperation {
@@ -231,6 +232,7 @@ const LIST: FrictionOperation = FrictionOperation {
     // Agents list frictions through `orbit.search` with `kind: friction` and
     // no query; this verb backs the CLI listing and the dashboard.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: FrictionOperation = FrictionOperation {
@@ -248,6 +250,9 @@ const SHOW: FrictionOperation = FrictionOperation {
     // `list` already returns the record bodies an agent needs; fetching one by
     // id is a human/dashboard follow-up and stays on the CLI surface.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a friction id is workspace-local and carries no host prefix",
+    ),
 };
 
 const STATS: FrictionOperation = FrictionOperation {
@@ -264,6 +269,7 @@ const STATS: FrictionOperation = FrictionOperation {
     unknown_fields: UnknownFields::Warn,
     // Aggregate administration stays off the MCP surface.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const TAGS: FrictionOperation = FrictionOperation {
@@ -281,6 +287,7 @@ const TAGS: FrictionOperation = FrictionOperation {
     // The taxonomy is already spelled out in the `add`/`update` tag parameter
     // descriptions, so a separate advertised lookup earns nothing.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const UPDATE: FrictionOperation = FrictionOperation {
@@ -397,6 +404,9 @@ const UPDATE: FrictionOperation = FrictionOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a friction id is workspace-local and carries no host prefix",
+    ),
 };
 
 const RESOLVE: FrictionOperation = FrictionOperation {
@@ -413,6 +423,9 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     unknown_fields: UnknownFields::Warn,
     // Resolution is an operator decision taken through the CLI / dashboard.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a friction id is workspace-local and carries no host prefix",
+    ),
 };
 
 const REHOME: FrictionOperation = FrictionOperation {
@@ -461,6 +474,9 @@ const REHOME: FrictionOperation = FrictionOperation {
     // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
     // remains the CLI spelling of the same move.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a friction id is workspace-local and carries no host prefix",
+    ),
 };
 
 const FRICTION_ID_HELP: Description = Description::Static("Friction record ID, e.g. FYYYY-MM-NNN");

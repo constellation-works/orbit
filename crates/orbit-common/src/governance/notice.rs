@@ -12,7 +12,7 @@ use crate::governance::operation::{
     ParamType, ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only,
     operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: NOTICE;
@@ -197,6 +197,7 @@ const POST: OperationSpec<NoticeVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLOSE_PARAMS: &[ParamSpec] = &[
@@ -241,6 +242,7 @@ const CLOSE: OperationSpec<NoticeVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const LIST_PARAMS: &[ParamSpec] = &[
@@ -320,6 +322,7 @@ const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW_PARAMS: &[ParamSpec] = &[required(both(
@@ -343,4 +346,7 @@ const SHOW: OperationSpec<NoticeVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a notice id is workspace-local and carries no host prefix",
+    ),
 };

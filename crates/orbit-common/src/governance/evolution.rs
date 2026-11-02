@@ -3,7 +3,7 @@ use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
     noun: EVOLUTION;
     /// Evolution ledger verbs.
@@ -81,6 +81,7 @@ const ADD: OperationSpec<EvolutionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 const LIST_PARAMS: &[ParamSpec] = &[
     both(
@@ -112,6 +113,7 @@ const LIST: OperationSpec<EvolutionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 const SHOW: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::Show,
@@ -126,6 +128,9 @@ const SHOW: OperationSpec<EvolutionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an evolution record id is workspace-local and carries no host prefix",
+    ),
 };
 const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::Decline,
@@ -150,4 +155,7 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an evolution record id is workspace-local and carries no host prefix",
+    ),
 };

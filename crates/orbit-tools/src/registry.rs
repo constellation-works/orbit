@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{
-    McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, ToolSchema,
+    McpIdRoute, McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, ToolSchema,
     mcp_advertised_tool_name, validate_mcp_tool_definitions,
 };
 use serde_json::Value;
@@ -290,6 +290,19 @@ impl ToolRegistry {
         self.tools.get(name).and_then(|entry| entry.mcp_scope)
     }
 
+    /// Every registered tool's declared id route, resolved, by tool name.
+    /// Includes tools MCP never advertises (CLI-only operations), whose
+    /// name-based routing the CLI still consumes.
+    pub(crate) fn declared_id_routes(&self) -> HashMap<String, McpIdRoute> {
+        self.tools
+            .values()
+            .map(|entry| {
+                let schema = entry.tool.schema();
+                (schema.name, entry.tool.declared_id_route().resolve())
+            })
+            .collect()
+    }
+
     pub fn unregister(&mut self, name: &str) -> bool {
         self.tools.remove(name).is_some()
     }
@@ -322,7 +335,7 @@ impl ToolRegistry {
                 entry.mcp_scope.map(|scope| {
                     let schema = entry.tool.schema();
                     let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
-                    let mut rules = mcp_rules(&schema);
+                    let mut rules = mcp_rules(&schema, entry.tool.declared_id_route());
                     rules.toolset = entry.toolset.unwrap_or_default();
                     McpToolDefinition::new(schema, scope)
                         .with_rules(rules)
@@ -333,6 +346,26 @@ impl ToolRegistry {
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         validate_mcp_tool_definitions(&definitions)?;
+        // Fail closed in this target, where a tool-adding change is tested:
+        // a builtin MCP tool that addresses one id with an optional
+        // workspace must declare its id route at its definition site, and a
+        // declared route must match that parameter shape.
+        for definition in &definitions {
+            if !definition.schema.builtin {
+                continue;
+            }
+            let addresses = addresses_one_id_with_optional_workspace(definition);
+            let name = definition.schema.name.clone();
+            match (addresses, &definition.rules.id_route) {
+                (true, McpIdRoute::Unspecified) => {
+                    return Err(McpToolDefinitionError::UnclassifiedIdRoute(name));
+                }
+                (false, McpIdRoute::Task | McpIdRoute::WorkspaceLocal(_)) => {
+                    return Err(McpToolDefinitionError::MisdeclaredIdRoute(name));
+                }
+                _ => {}
+            }
+        }
         let mut unclassified = self
             .tools
             .iter()
@@ -471,6 +504,25 @@ fn validate_task_arguments(
         }
     }
     Ok(())
+}
+
+/// Whether a definition's tool addresses exactly one id with an optional
+/// workspace: a required `id` parameter, and a workspace that is either an
+/// optional declared parameter or left to the selector the MCP host adds
+/// to a non-global tool.
+fn addresses_one_id_with_optional_workspace(definition: &McpToolDefinition) -> bool {
+    let parameters = &definition.schema.parameters;
+    let id_required = parameters
+        .iter()
+        .any(|parameter| parameter.name == "id" && parameter.required);
+    let declared_workspace = parameters
+        .iter()
+        .find(|parameter| parameter.name == "workspace");
+    let workspace_optional = match declared_workspace {
+        Some(parameter) => !parameter.required,
+        None => definition.scope != McpToolScope::Global,
+    };
+    id_required && workspace_optional
 }
 
 /// Workspace-independent source for every canonical registry-backed MCP definition.

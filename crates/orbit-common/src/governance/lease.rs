@@ -5,7 +5,7 @@ use crate::governance::operation::{
     ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, mcp_only,
     operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: LEASE;
@@ -196,6 +196,7 @@ const REQUEST: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RENEW: OperationSpec<LeaseVerb> = OperationSpec {
@@ -211,6 +212,7 @@ const RENEW: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const EXPAND: OperationSpec<LeaseVerb> = OperationSpec {
@@ -241,6 +243,7 @@ const EXPAND: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELEASE: OperationSpec<LeaseVerb> = OperationSpec {
@@ -256,6 +259,7 @@ const RELEASE: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: OperationSpec<LeaseVerb> = OperationSpec {
@@ -271,6 +275,7 @@ const SHOW: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const LIST: OperationSpec<LeaseVerb> = OperationSpec {
@@ -286,6 +291,7 @@ const LIST: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHECK: OperationSpec<LeaseVerb> = OperationSpec {
@@ -322,6 +328,7 @@ const CHECK: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const NOTICES: OperationSpec<LeaseVerb> = OperationSpec {
@@ -365,4 +372,5 @@ const NOTICES: OperationSpec<LeaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

@@ -5,7 +5,7 @@ use crate::governance::operation::{
     Redaction, ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry,
     required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: CODEBASE;
@@ -183,6 +183,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const PATH: &[ParamSpec] = &[path_param(required(both(
@@ -206,6 +207,7 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const fn path_param(mut param: ParamSpec) -> ParamSpec {
@@ -258,6 +260,7 @@ const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELATED_PATH: &[ParamSpec] = &[path_param(required(both(

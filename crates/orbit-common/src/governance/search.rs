@@ -4,7 +4,7 @@ use crate::governance::operation::{
     ToolOnlyRegistration, UnknownFields, aliased, both, defaulted, mcp_only, operation_registry,
     preserve_empty,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: SEARCH;
@@ -188,6 +188,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
     ],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const fn flag(long: &'static str) -> CliArgKind {

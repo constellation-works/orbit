@@ -5,7 +5,7 @@ use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: ORCHESTRATOR;
@@ -103,6 +103,7 @@ const SCORECARD: OperationSpec<OrchestratorVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const NAME: &[ParamSpec] = &[required(both(
@@ -126,4 +127,5 @@ const SHOW: OperationSpec<OrchestratorVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

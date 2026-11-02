@@ -39,6 +39,4 @@ pub use self::probe::{
     DestinationProbe, DestinationSnapshot, InProcessDestinationProbe, RoutedSession,
     SshDestinationProbe,
 };
-pub use self::task_route::{
-    ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, id_only_task_target, is_id_routed_tool,
-};
+pub use self::task_route::{id_only_task_target, is_id_routed_tool};

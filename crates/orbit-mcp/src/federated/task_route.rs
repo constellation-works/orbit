@@ -1,11 +1,9 @@
-//! Task-id routing consumes the canonical tool definitions' routing metadata.
-//! The classification lists remain exported for callers of the existing API;
-//! their sole declaration lives with the builtin rules in orbit-tools.
+//! Task-id routing consumes the routing metadata each builtin tool
+//! declares at its own definition site, resolved by orbit-tools into
+//! `McpToolRules::id_route`.
 
 use orbit_types::tool::McpIdRoute;
 use serde_json::Value;
-
-pub use orbit_tools::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS};
 
 /// Whether `name` is an id-routed task tool.
 pub fn is_id_routed_tool(name: &str) -> bool {

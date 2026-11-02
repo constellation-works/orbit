@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use orbit_common::OrbitError;
-use orbit_types::tool::ToolSchema;
+use orbit_types::tool::{McpIdRouteDeclaration, ToolSchema};
 
 use super::context::ToolContext;
 
@@ -25,6 +25,13 @@ pub trait Tool: Send + Sync {
     /// than [`ToolSchema::parameters`]; MCP advertises it as written.
     fn input_schema(&self) -> Option<Value> {
         None
+    }
+    /// The id-routing classification this tool declares at its definition
+    /// site. The registry resolves it into the definition's
+    /// `McpToolRules::id_route`; a builtin that addresses one id with an
+    /// optional workspace and leaves this unspecified fails closed.
+    fn declared_id_route(&self) -> McpIdRouteDeclaration {
+        McpIdRouteDeclaration::Unspecified
     }
     /// Whether a successful invocation can have externally visible side effects.
     ///

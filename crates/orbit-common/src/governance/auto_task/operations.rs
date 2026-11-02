@@ -20,7 +20,7 @@ use crate::governance::operation::{
 use crate::governance::task::{
     TASK_COMPLEXITY_VALUES, TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: AUTO_TASK;
@@ -245,6 +245,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
     unknown_fields: UnknownFields::Warn,
     // Managed workers can ask the owning host to edit its live definitions.
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const LIST: AutoTaskOperation = AutoTaskOperation {
@@ -294,6 +295,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: AutoTaskOperation = AutoTaskOperation {
@@ -319,6 +321,7 @@ const SHOW: AutoTaskOperation = AutoTaskOperation {
     unknown_fields: UnknownFields::Warn,
     // `list` already returns full definitions to agents.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const UPDATE: AutoTaskOperation = AutoTaskOperation {
@@ -491,6 +494,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const TOGGLE: AutoTaskOperation = AutoTaskOperation {
@@ -523,6 +527,7 @@ const TOGGLE: AutoTaskOperation = AutoTaskOperation {
     unknown_fields: UnknownFields::Warn,
     // Agents enable or disable through `orbit.auto_task.update`'s `enabled`.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const DELETE: AutoTaskOperation = AutoTaskOperation {
@@ -555,6 +560,7 @@ const DELETE: AutoTaskOperation = AutoTaskOperation {
     unknown_fields: UnknownFields::Warn,
     // Destructive administration stays off MCP.
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RESTORE: AutoTaskOperation = AutoTaskOperation {
@@ -576,6 +582,7 @@ const RESTORE: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const MINT: AutoTaskOperation = AutoTaskOperation {
@@ -603,6 +610,7 @@ const MINT: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RECOVER: AutoTaskOperation = AutoTaskOperation {
@@ -648,6 +656,7 @@ const RECOVER: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RESET: AutoTaskOperation = AutoTaskOperation {
@@ -679,6 +688,7 @@ const RESET: AutoTaskOperation = AutoTaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// The positional definition name most verbs take.

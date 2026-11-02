@@ -7,10 +7,11 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::PluginToolBinding;
 use orbit_tools::{
-    Tool, ToolContext, ToolExecutionKind, ToolRegistry, canonical_builtin_mcp_tool_definitions,
+    Tool, ToolContext, ToolExecutionKind, ToolRegistry, builtin_mcp_rules,
+    canonical_builtin_mcp_tool_definitions,
 };
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
-use orbit_types::tool::{McpToolDefinitionError, McpToolScope, ToolSchema};
+use orbit_types::tool::{McpIdRoute, McpToolDefinitionError, McpToolScope, ToolParam, ToolSchema};
 use serde_json::Value;
 
 struct TestTool(&'static str);
@@ -158,6 +159,138 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             !matches!(definition.schema.name.as_str(), "orbit.workspace.list")
         })
     );
+}
+
+/// A builtin fixture that addresses one id with an optional workspace but
+/// declares no id route at its definition site.
+struct UnclassifiedIdTool;
+
+impl Tool for UnclassifiedIdTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "orbit.lease.unclassified_fixture".to_string(),
+            description: "unclassified id-addressing fixture".to_string(),
+            parameters: vec![
+                ToolParam {
+                    name: "id".to_string(),
+                    description: "one id".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                },
+                ToolParam {
+                    name: "workspace".to_string(),
+                    description: "optional workspace".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                },
+            ],
+            builtin: true,
+        }
+    }
+
+    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
+        Ok(Value::Null)
+    }
+}
+
+#[test]
+fn unclassified_id_addressing_builtin_fails_closed_in_this_target() {
+    let mut registry = ToolRegistry::new();
+    registry.register_mcp(UnclassifiedIdTool, McpToolScope::WorkspaceRequired);
+    assert_eq!(
+        registry.mcp_tool_definitions(),
+        Err(McpToolDefinitionError::UnclassifiedIdRoute(
+            "orbit.lease.unclassified_fixture".to_string()
+        )),
+        "a builtin that takes a required id and an optional workspace but declares no \
+         McpIdRoute at its definition site must fail where the tool is added, not on \
+         agent-main after landing"
+    );
+}
+
+#[test]
+fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
+    // The pre-change hand-kept tables, duplicates removed, are the baseline:
+    // every one of these tools must keep its classification and, for
+    // workspace-local tools, its reason string verbatim.
+    let task_routed = [
+        "orbit.task.show",
+        "orbit.task.update",
+        "orbit.task.repilot",
+        "orbit.task.reject",
+        "orbit.task.delete",
+        "orbit.task.artifact.get",
+        "orbit.task.artifact.put",
+        "orbit.task.review_reset",
+        "orbit.task.reconcile_review",
+        "orbit.task.requeue",
+        "orbit.visual.capture",
+        "orbit.visual.accept_dispute",
+    ];
+    for name in task_routed {
+        assert_eq!(
+            builtin_mcp_rules(name).id_route,
+            McpIdRoute::Task,
+            "{name} must stay task-id-routed"
+        );
+    }
+    let friction = "a friction id is workspace-local and carries no host prefix";
+    let decision = "a decision request id is workspace-local and carries no host prefix";
+    let evolution = "an evolution record id is workspace-local and carries no host prefix";
+    let experiment = "an experiment id is workspace-local and carries no host prefix";
+    let run = "a run id is host-local: a run executes where it was admitted";
+    let notice = "a notice id is workspace-local and carries no host prefix";
+    let workspace_local: [(&str, &str); 26] = [
+        ("orbit.friction.show", friction),
+        ("orbit.friction.update", friction),
+        ("orbit.friction.resolve", friction),
+        ("orbit.friction.rehome", friction),
+        ("orbit.decision.show", decision),
+        ("orbit.decision.answer", decision),
+        ("orbit.decision.reverse", decision),
+        ("orbit.decision.submit", decision),
+        ("orbit.evolution.decline", evolution),
+        ("orbit.evolution.show", evolution),
+        ("orbit.experiment.update", experiment),
+        ("orbit.experiment.clone", experiment),
+        ("orbit.experiment.start", experiment),
+        ("orbit.experiment.pause", experiment),
+        ("orbit.experiment.resume", experiment),
+        ("orbit.experiment.assign", experiment),
+        ("orbit.experiment.reweight", experiment),
+        ("orbit.experiment.conclude", experiment),
+        ("orbit.experiment.abandon", experiment),
+        ("orbit.experiment.delete", experiment),
+        ("orbit.experiment.show", experiment),
+        ("orbit.experiment.readout", experiment),
+        ("orbit.workflow.run.observe", run),
+        ("orbit.workflow.run.show", run),
+        ("orbit.workflow.run.resume", run),
+        ("orbit.notice.show", notice),
+    ];
+    for (name, reason) in workspace_local {
+        assert_eq!(
+            builtin_mcp_rules(name).id_route,
+            McpIdRoute::WorkspaceLocal(reason.to_string()),
+            "{name} must stay workspace-local with its reason verbatim"
+        );
+    }
+
+    // And no other builtin is classified, while every builtin that
+    // addresses one id with an optional workspace is.
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    for schema in registry.all_schemas() {
+        let route = builtin_mcp_rules(&schema.name).id_route;
+        let classified = task_routed.contains(&schema.name.as_str())
+            || workspace_local.iter().any(|(name, _)| *name == schema.name);
+        assert_eq!(
+            route != McpIdRoute::Unspecified,
+            classified,
+            "{}: declared route {route:?} does not match the preserved classification",
+            schema.name
+        );
+    }
 }
 
 #[test]
