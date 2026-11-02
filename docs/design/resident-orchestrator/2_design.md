@@ -562,6 +562,20 @@ time to its checkpoint as slot minutes, and counts a completed dead-cycle action
 `ok` (rather than the ledger's `already_done`) as a repeat. A baseline task with no checkpoints
 reports reversals and recovery as `not_derivable`.
 
+**References outside the assignment's workspace ([ORB-21642]).** Run the report in the
+workspace that owns the mandate or baseline task. Its references (watched and related tasks,
+checkpoint action subjects and request tasks) often live in other workspaces: an orchestration
+baseline sits in `ws_constellation` while its work sits in the owning repositories' workspaces.
+Each reference not in the assignment's workspace is read through its registered owner on the
+same machine, read-only, by the same route that resolves cross-workspace dependencies. Its
+history counts toward interventions and reversals, and its decision requests count toward
+escalations. Its comments are not read: no cross-workspace comment read exists. These
+references are listed under `references.foreign`, with the owning workspace and what was and
+was not read. A reference that no workspace registered on the machine holds is listed under
+`references.unreachable` with a reason (`missing`, `foreign_authority` or `invalid_id`) and
+skipped. The rest of the report is still produced, so one foreign id no longer fails the
+whole report with `task_not_found`.
+
 **The widening bar** (proposed, decided by the human at the pilot's go/no-go):
 
 - interventions per mandate no worse than the baseline, and falling over the pilot;

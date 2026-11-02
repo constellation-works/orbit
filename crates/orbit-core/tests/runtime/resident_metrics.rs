@@ -2,13 +2,15 @@
 //! resident action recorded in a checkpoint is counted once as a reversal
 //! of that action within the reversal window, and an interactive baseline
 //! reports the measures it cannot derive as `not_derivable`, never zero.
+//! A baseline whose references live in another workspace reads them through
+//! their registered owner instead of failing `task_not_found` [ORB-21642].
 use std::path::Path;
 
 use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
-use orbit_types::task::{TaskArtifact, TaskStatus};
+use orbit_types::task::{TaskArtifact, TaskRelation, TaskRelationType, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::ResidentLiveCycle;
 use serde_json::{Value, json};
@@ -420,10 +422,121 @@ fn invalid_and_day_windows_at_tool_boundary() {
     assert_eq!(report["window"]["days"], 7.0);
 }
 
+/// [ORB-21642] An orchestration baseline lives in one workspace while its
+/// work lives in owning workspaces. A related task registered in another
+/// workspace on this machine used to fail the whole report with
+/// `task_not_found`; it is now read through its registered owner, and its
+/// human writes and agent-raised requests count.
+fn baseline_reads_references_in_another_workspace() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let foreign_orbit = root.path().join("foreign/.orbit");
+    std::fs::create_dir_all(&foreign_orbit).unwrap();
+    std::fs::write(foreign_orbit.join("config.toml"), CONFIG).unwrap();
+    let foreign =
+        OrbitRuntime::from_roots(&root.path().join("home/.orbit"), &foreign_orbit).unwrap();
+    let foreign_id = foreign
+        .add_task(TaskAddParams {
+            title: "owning-workspace slice".into(),
+            crew: Some("dk".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    // A human status write and an agent-raised decision request, both in
+    // the owning workspace.
+    foreign
+        .update_task_as_human(
+            &foreign_id.to_string(),
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+    foreign
+        .raise_agent_decision_request(AgentDecisionRaise {
+            task_id: foreign_id.to_string(),
+            question: "Which slice ships next across workspaces?".into(),
+            options: vec![
+                orbit_types::task::AgentDecisionOptionInput {
+                    label: "Keep the slice".into(),
+                    consequence: "No change.".into(),
+                    risk_tier: None,
+                    recommended: false,
+                },
+                orbit_types::task::AgentDecisionOptionInput {
+                    label: "Ship the slice".into(),
+                    consequence: "The slice ships.".into(),
+                    risk_tier: None,
+                    recommended: true,
+                },
+            ],
+            topic: Some("baseline/cross-workspace".into()),
+            filer: "codex".into(),
+        })
+        .unwrap();
+    assert!(
+        runtime.get_task(&foreign_id.to_string()).is_err(),
+        "the fixture task must live outside the baseline's workspace"
+    );
+
+    let baseline = runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: interactive cross-workspace".into(),
+            relations: vec![TaskRelation {
+                relation_type: TaskRelationType::RelatedTo,
+                target: foreign_id.clone(),
+                regression: None,
+            }],
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+
+    let report = call(
+        &runtime,
+        "orbit.resident.metrics",
+        json!({"baseline": baseline}),
+    )
+    .expect("a baseline with a cross-workspace reference reports instead of task_not_found");
+    let baseline_report = &report["baseline"];
+    assert_eq!(baseline_report["task_id"], baseline, "{report}");
+    let foreign_refs = baseline_report["references"]["foreign"].as_array().unwrap();
+    assert_eq!(foreign_refs.len(), 1, "{report}");
+    assert_eq!(
+        foreign_refs[0]["task_id"],
+        foreign_id.to_string(),
+        "{report}"
+    );
+    assert_eq!(
+        baseline_report["references"]["unreachable"],
+        json!([]),
+        "{report}"
+    );
+    let items = baseline_report["interventions"]["items"]
+        .as_array()
+        .unwrap();
+    let foreign_key = foreign_id.to_string();
+    assert!(
+        items
+            .iter()
+            .any(|item| item["task_id"] == foreign_key.as_str() && item["kind"] == "status_change"),
+        "the owning workspace's human status write counts: {report}"
+    );
+    assert_eq!(
+        baseline_report["escalations"]["count"], 1,
+        "the owning workspace's agent-raised request counts: {report}"
+    );
+}
+
 crate::scenario_table!(
     resident_metrics,
     invalid_and_day_windows_at_tool_boundary,
     human_write_undoes_checkpoint_action_once,
     baseline_marks_underivable_measures_not_derivable,
     totals_divide_per_mandate_day_by_summed_active_days,
+    baseline_reads_references_in_another_workspace,
 );
