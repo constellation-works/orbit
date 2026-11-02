@@ -33,7 +33,7 @@ Forward-looking notes for path leases. Everything here is open; the proposal its
    which is synchronization, something [remote-access](../remote-access/4_decisions.md#remote-access-is-live-access-not-synchronization)
    deliberately does not do.
 4. **Is file granularity enough?** The conflict budget's symbol replay
-   ([conflict-budget §5](../conflict-budget/1_scope.md#5-symbol-level-locking-as-an-experiment))
+   ([conflict-budget §5](../conflict-budget/1_scope.md#5-optimistic-symbol-level-admission))
    answers this for tasks; leases should follow whatever it finds rather than add their own
    granularity.
 5. **Can footprints be inferred for leases?** A session could lease what its first edits touch
