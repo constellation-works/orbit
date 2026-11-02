@@ -978,10 +978,13 @@ originally pushed head; a move another run, actor or nothing recorded refuses.
 Submit with the usual explicit `unmet_acceptance` and inspected `policy_digest`.
 The repair is review-only: `completion: "review"`, `auto_fix: false`, no merge or
 completion authority, no historical deadline renewed and no auto-fix ledger entry
-rewritten. The attempt counts against the PR's repair budget of three, so a PR
-whose auto-fix spent its attempts still gets this one explicit generation.
-Retry it with the identical key to replay; never edit the receipt, ledger or
-binding by hand.
+rewritten. The attempt counts against the PR's shared repair budget of three,
+so this route is available only while that budget has a slot remaining. With
+two auto-fixes spent, one slot remains and this explicit generation is the
+third attempt. A PR whose auto-fix spent all three attempts is refused and gets
+no explicit generation. Retry it with the identical key to replay; a replay
+returns the existing admission and spends no further slot. Never edit the
+receipt, ledger or binding by hand.
 
 The returned `binding.superseded` names the task binding being acknowledged
 and digests the complete stopped delivery lineage within the 64-run inspection
