@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 ---
 
 # Spec: Attention item
@@ -45,7 +45,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile has marked it orphaned, or it has run past `run_stuck_after` | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | a live claim has an expired reservation, a bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's completion time |
-| `friction_untriaged` | record | the friction store, status `open` (`orbit friction list` default minus `triaged`) | the record's status is still `open` | `created_at` |
+| `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 
 Notes that bind implementations:
@@ -194,8 +194,11 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   `unsupported`; see [attention-cursor](./attention-cursor.md).
 - `hosts` is present when more than the local host was in scope.
 - `degraded[].code` is one of `capability`, `source_unavailable`, `source_timeout`, `item_cap`
-  (per kind and workspace) or `unreachable_destination`, `tool_not_on_this_host` (per host,
-  the federated routing identities of [attention-federation](./attention-federation.md)).
+  (per kind and workspace), `response_truncated` (a destination body the aggregator could not
+  take as a complete candidate read;
+  [attention-federation](./attention-federation.md#completeness)), or
+  `unreachable_destination`, `tool_not_on_this_host` (per host, the federated routing
+  identities of [attention-federation](./attention-federation.md)).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
   echoed filters. When `degraded` is non-empty the message is instead `No items found; N
   sources could not be read`, so an empty list is never read as all clear while a source was
