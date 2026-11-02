@@ -115,7 +115,9 @@ pub trait NoticeStoreBackend: Send + Sync {
     ) -> Result<NoticeRow, OrbitError>;
 
     /// Store `row` as closed unless the stored notice is already closed or
-    /// no longer at `expected_revision`. Returns whether it was written.
+    /// no longer at `expected_revision`. A corroboration does not move
+    /// `revision`, so the write keeps the stored document's `reports`
+    /// rather than the snapshot's. Returns whether it was written.
     fn close_notice(
         &self,
         row: &NoticeRow,

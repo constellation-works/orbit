@@ -131,11 +131,27 @@ impl NoticeStoreBackend for Store {
         };
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn = tx.connection();
+            // Read inside the write lock. A corroboration that committed after
+            // the caller snapped the row still matches `revision`, and its
+            // `reports` must survive the replacement of `record_json`.
+            let stored_json = conn
+                .query_row(
+                    "SELECT record_json FROM notices \
+                     WHERE id = ?1 AND revision = ?2 AND closed_at IS NULL",
+                    params![row.id, expected_revision],
+                    |stored| stored.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(sqlite_store_error)?;
+            let Some(stored_json) = stored_json else {
+                return Ok(false);
+            };
+            let record_json = closing_record_with_stored_reports(&stored_json, &row.record_json)?;
             let changed = conn
                 .execute(
                     "UPDATE notices SET closed_at = ?3, record_json = ?4 \
                      WHERE id = ?1 AND revision = ?2 AND closed_at IS NULL",
-                    params![row.id, expected_revision, stamp(closed_at), row.record_json],
+                    params![row.id, expected_revision, stamp(closed_at), record_json],
                 )
                 .map_err(sqlite_store_error)?;
             if changed == 0 {
@@ -197,6 +213,31 @@ impl NoticeStoreBackend for Store {
             params![notice_id],
         )
     }
+}
+
+/// The closing document, with `reports` taken from the row locked for the
+/// close. A post can change `reports` without moving `revision`.
+fn closing_record_with_stored_reports(
+    stored_json: &str,
+    closing_json: &str,
+) -> Result<String, OrbitError> {
+    let mut closing: serde_json::Value = serde_json::from_str(closing_json).map_err(|error| {
+        OrbitError::Store(format!("closing notice document is unreadable: {error}"))
+    })?;
+    let stored: serde_json::Value = serde_json::from_str(stored_json).map_err(|error| {
+        OrbitError::Store(format!("stored notice document is unreadable: {error}"))
+    })?;
+    let Some(document) = closing.as_object_mut() else {
+        return Err(OrbitError::Store(
+            "closing notice document is not an object".into(),
+        ));
+    };
+    if let Some(reports) = stored.get("reports").cloned() {
+        document.insert("reports".to_string(), reports);
+    }
+    serde_json::to_string(&closing).map_err(|error| {
+        OrbitError::Store(format!("closing notice document is unreadable: {error}"))
+    })
 }
 
 /// Retention: a notice and its history go once it stopped being in force

@@ -394,14 +394,23 @@ impl OrbitRuntime {
             poster_task_id: poster.task_id.clone(),
             detail_json: serde_json::json!({ "reason": reason }).to_string(),
         };
+        // A corroboration can commit after this snapshot. It does not move
+        // `revision`, so the closing transaction must keep its reports.
+        #[cfg(feature = "test-support")]
+        test_support::after_notice_close_snapshot();
         if !store.close_notice(&notice_row(&notice)?, row.revision, &event)? {
             return Err(OrbitError::Execution(format!(
                 "notice {} changed while closing it; read it again",
                 row.id
             )));
         }
+        // The snapshot above can omit a corroboration that committed before
+        // the write. The stored row is what the close returns.
+        let stored = store.notice_row(&row.id)?.ok_or_else(|| {
+            OrbitError::Store(format!("notice {} was missing after it closed", row.id))
+        })?;
         Ok(NoticeCloseResult {
-            notice,
+            notice: parse_notice_row(&stored)?,
             already_inactive: false,
         })
     }
@@ -547,6 +556,10 @@ impl OrbitRuntime {
                 poster_task_id: None,
                 detail_json: serde_json::json!({ "task": task_id }).to_string(),
             };
+            // Same snapshot window as a manual close: a corroboration committed
+            // after this read shares `revision` and must survive the write.
+            #[cfg(feature = "test-support")]
+            test_support::after_notice_close_snapshot();
             if store.close_notice(&notice_row(&notice)?, row.revision, &event)? {
                 let mut audit = NoticeAudit::new("close", Some(row.id.clone()));
                 audit.poster = Some(AuthorClass::System);

@@ -87,6 +87,10 @@ honest for consumers that read rows. Two writers persist `linked_task_done` clos
   workspace on the same owner).
 
 Neither writer changes what a reader sees, so a missed or late materialization is never visible.
+Both writers, and `orbit.notice.close`, close through one store write. That write keeps
+`reports.count` and `reports.last_at` from the notice as stored when the write begins, so a
+corroboration that committed after the closer first read the notice is not discarded. Close does
+not bump `revision`. A post that changed a content field still makes that write miss.
 
 ## Expiry
 
@@ -179,6 +183,8 @@ records one. An unchanged repeat also skips the posting transaction's retention 
 - At most one effective-open notice per `(home workspace, dedupe_key)`. The store enforces it with
   a uniqueness check inside the posting transaction, not by readers.
 - `id` never changes on update; `revision` never decreases and moves only with a content change.
+- A close keeps `reports` committed at the notice's current `revision`. Corroboration does not bump
+  `revision`, and closing does not either.
 - A notice's `author` never changes. An update records its editor in history (the audit row), not
   in `author`.
 
