@@ -1066,7 +1066,10 @@ function coverageItems() {
   const reviewItems = reportsReviewMode() ? [
     ["review_mode_fallbacks", "Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
     ["review_mode_unknown", "Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
-    ["history_review_mode_unknown", "History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
+    ["history_review_mode_unknown", "History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode. A checkpoint that could not be read is counted separately and is not treated as missing."],
+  ] : [];
+  const unreadableItems = Object.prototype.hasOwnProperty.call(coverage, "review_checkpoint_unreadable") ? [
+    ["review_checkpoint_unreadable", "Unreadable review checkpoint", coverage.review_checkpoint_unreadable, "Historical runs whose review checkpoint could not be read. Their review evidence is Unknown. The forecast keeps the deliveries it could read and does not treat the gap as no review, a verified exemption, a completed review, or zero cost."],
   ] : [];
   const poolsHaveGaps = recordedPoolsContainGaps(lastPayload.forecast);
   const historyAbsent = regressionHistoryIsAbsent(lastPayload.forecast);
@@ -1089,6 +1092,7 @@ function coverageItems() {
     ["unassessed", "Unassessed", coverage.unassessed, unassessedHint],
     ["thin_cell_fallbacks", "Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
     ...reviewItems,
+    ...unreadableItems,
     ["uncovered_model", "Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["uncosted", "Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
     ["no_history", "No history", coverage.no_history, "Nothing to sample at all."],
@@ -1144,6 +1148,29 @@ function gapsClearNote() {
   return "No data gaps: every coverage check is clear.";
 }
 
+function partialHistoryNote() {
+  const coverage = lastPayload.coverage || {};
+  const listed = Array.isArray(lastPayload.inputs?.review_evidence_gaps)
+    ? lastPayload.inputs.review_evidence_gaps
+    : [];
+  const counted = Object.prototype.hasOwnProperty.call(coverage, "review_checkpoint_unreadable")
+    ? num(coverage.review_checkpoint_unreadable)
+    : 0;
+  if (!listed.length && !(counted > 0)) return null;
+  const count = listed.length || counted;
+  const noun = count === 1 ? "checkpoint" : "checkpoints";
+  const lines = [
+    `Partial review history. ${count} historical ${noun} could not be read, so that review evidence is Unknown. The forecast still uses the delivery history that could be read, and does not treat the gap as no review, a verified exemption, a completed review, or zero cost.`,
+  ];
+  for (const gap of listed) {
+    const run = gap && gap.run_id ? gap.run_id : "unknown run";
+    const kind = gap && gap.coverage_gap ? gap.coverage_gap : "review_checkpoint_unreadable";
+    const reason = gap && gap.reason ? gap.reason : "unreadable checkpoint";
+    lines.push(`${run} (${kind}): ${reason}`);
+  }
+  return el("p", { class: "fc-line fc-gap-note fc-partial-history" }, [lines.join(" ")]);
+}
+
 function gapsCard() {
   const items = coverageItems();
   const open = items.filter(([, , value]) => num(value) > 0);
@@ -1155,7 +1182,7 @@ function gapsCard() {
       el("span", { class: "fc-gap-count", text: String(value) }),
     ])))
     : el("div", { class: "mx-empty-note", text: gapsClearNote() });
-  const node = card("Data gaps", meta, [tiles, unavailableNote()], "fc-gaps-card", "fc-gaps");
+  const node = card("Data gaps", meta, [tiles, unavailableNote(), partialHistoryNote()], "fc-gaps-card", "fc-gaps");
   node.tabIndex = -1;
   return node;
 }

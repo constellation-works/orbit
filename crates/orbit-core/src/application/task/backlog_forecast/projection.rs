@@ -74,6 +74,10 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
                 .filter(|delivery| delivery.review_mode == ReviewMode::Unknown)
                 .count() as u64,
         ),
+        (
+            "review_checkpoint_unreadable",
+            context.prepared.review_evidence_gaps.len() as u64,
+        ),
     ]);
     let reasons = if proposed {
         &plan.approved
@@ -217,6 +221,11 @@ pub(super) fn forecast_inputs(context: &ForecastProjection) -> Value {
             *counts.entry(delivery.review_mode.key().into()).or_default() += 1;
             counts
         }),
+        "review_evidence_gaps": context.prepared.review_evidence_gaps.values().map(|gap| json!({
+            "run_id": gap.run_id,
+            "reason": gap.reason,
+            "coverage_gap": gap.coverage_gap,
+        })).collect::<Vec<_>>(),
         "outcomes": {
             "episodes": episodes.iter().fold(BTreeMap::<&str, u64>::new(), |mut counts, episode| {
                 *counts.entry(episode.outcome.key()).or_default() += 1;

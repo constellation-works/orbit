@@ -13,6 +13,7 @@ use super::cohorts::ForecastCohorts;
 use super::history::LoadedForecastHistory;
 use super::model::{Item, Resolved, Spent};
 use super::options::Options;
+use super::review_modes::ReviewEvidenceGap;
 use super::usage::ForecastRun;
 use super::{dependencies, model, outcomes, resource_fit, rework, usage};
 
@@ -32,6 +33,7 @@ pub(super) struct ForecastSimulationInputs {
     pub(super) plan: dependencies::DependencyPlan,
     pub(super) resource_fit_report: Value,
     pub(super) admission: crate::application::admission::forecast::ForecastAdmission,
+    pub(super) review_evidence_gaps: BTreeMap<String, ReviewEvidenceGap>,
 }
 /// Days the arrival rate is measured over.
 pub(super) const ARRIVAL_DAYS: i64 = 7;
@@ -133,7 +135,7 @@ pub(super) fn assemble_forecast_simulation(
     // dispatch order, interleaving proposed work when approved.
     queued.sort_by(|left, right| left.id.cmp(&right.id));
     let mut age_unknown: BTreeSet<String> = BTreeSet::new();
-    let items: Vec<Item> = queued
+    let built: Vec<(Item, Option<ReviewEvidenceGap>)> = queued
         .iter()
         .map(|task| {
             let id = task.id.to_string();
@@ -167,22 +169,35 @@ pub(super) fn assemble_forecast_simulation(
             if (in_progress || blocked) && since.is_none() {
                 age_unknown.insert(id.clone());
             }
-            let (review_mode, review_mode_source) = reviews.assumed_mode(runtime, task)?;
-            Ok(Item {
-                task_id: id,
-                title: task.title.clone(),
-                complexity,
-                crews,
-                review_mode,
-                review_mode_source,
-                in_progress,
-                proposed: task.status == TaskStatus::Proposed,
-                blocked,
-                age_hours: since.map_or(0.0, |since| outcomes::hours_between(since, now)),
-                spent,
-            })
+            let (review_mode, review_mode_source, gap) = reviews.assumed_mode(runtime, task)?;
+            Ok((
+                Item {
+                    task_id: id,
+                    title: task.title.clone(),
+                    complexity,
+                    crews,
+                    review_mode,
+                    review_mode_source,
+                    in_progress,
+                    proposed: task.status == TaskStatus::Proposed,
+                    blocked,
+                    age_hours: since.map_or(0.0, |since| outcomes::hours_between(since, now)),
+                    spent,
+                },
+                gap,
+            ))
         })
         .collect::<Result<_, OrbitError>>()?;
+    let mut review_evidence_gaps = reviews.gaps.clone();
+    let mut items = Vec::with_capacity(built.len());
+    for (item, gap) in built {
+        if let Some(gap) = gap {
+            review_evidence_gaps
+                .entry(gap.run_id.clone())
+                .or_insert(gap);
+        }
+        items.push(item);
+    }
     let resolved: Vec<Resolved> = items
         .iter()
         .map(|item| model::resolve_forecast_item(item, history, episodes, waits))
@@ -313,5 +328,6 @@ pub(super) fn assemble_forecast_simulation(
         plan,
         resource_fit_report: resource_fit.report,
         admission,
+        review_evidence_gaps,
     })
 }
