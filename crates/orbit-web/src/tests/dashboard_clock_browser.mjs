@@ -36,6 +36,10 @@ const LOCAL = {
   comment: '2026-10-06 23:45 PDT',
   run: '2026-10-06 23:50 PDT',
 };
+const currentLocalClockAbbreviation = () => new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  timeZoneName: 'short',
+}).formatToParts(new Date()).find(part => part.type === 'timeZoneName')?.value || '';
 
 export async function assertClockRepaint(browser, origin, evidence) {
   const context = await browser.newContext({ timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 900 } });
@@ -122,7 +126,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
     const before = await detailState();
     check(before.planOpen, `fixture setup must open Plan: ${JSON.stringify(before)}`);
 
-    await switchClock('local', 'PDT');
+    await switchClock('local', currentLocalClockAbbreviation());
     await expectTimes(LOCAL, 'after choosing Local');
     const afterLocal = await detailState();
     check(afterLocal.identity === 'kept', 'Choosing Local must repaint the open task detail in place, not rebuild it');
@@ -145,7 +149,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
     check(afterUtc.draft === 'Draft written before the switch', `The comment draft must survive the switch: ${JSON.stringify(afterUtc)}`);
     check(afterUtc.draftFocused && JSON.stringify(afterUtc.selection) === '[6,13]', `The draft must keep focus and its selection: ${JSON.stringify(afterUtc)}`);
     check(afterUtc.planOpen, 'Choosing UTC must keep the opened Plan section open');
-    await switchClock('local', 'PDT');
+    await switchClock('local', currentLocalClockAbbreviation());
     await expectTimes(LOCAL, 'after choosing Local again with a draft open');
     const again = await detailState();
     check(again.identity === 'kept' && again.draft === 'Draft written before the switch' && JSON.stringify(again.selection) === '[6,13]',
@@ -161,7 +165,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
     check(await runTitle() === LOCAL.run, `Run row must open on the Local clock: ${await runTitle()}`);
     await switchClock('utc', 'UTC');
     check(await runTitle() === UTC.run, `An unchanged run row must read UTC after the switch: ${await runTitle()}`);
-    await switchClock('local', 'PDT');
+    await switchClock('local', currentLocalClockAbbreviation());
     check(await runTitle() === LOCAL.run, `An unchanged run row must read Local after the switch: ${await runTitle()}`);
     check(errors.length === 0, `Clock switching raised page errors: ${errors.join('\n')}`);
   } finally {
