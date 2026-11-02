@@ -43,8 +43,7 @@ pub(crate) use admission::{
     AdmissionTaskWrites, crew_admission_task_id, strip_auto_crew_admission,
 };
 pub(crate) use draw::{
-    INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
-    seeded_crew_ticket,
+    complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
 #[cfg(feature = "test-support")]
 pub use selection_checkpoint::with_crew_selection_checkpoint;

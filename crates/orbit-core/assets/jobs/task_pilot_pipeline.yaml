@@ -6,7 +6,10 @@
 # unassessed complexity, excluding no-diff tasks. A task whose description or
 # acceptance criteria changed after its applied assessment is discovered
 # again for a fresh pilot, unless a live execution claim holds it or a
-# repilot already failed. Explicit mode audits named
+# repilot already failed against unchanged requirements. Apply records failed
+# stale repilots for proposed and backlog tasks even without a drain; a later
+# description/criteria edit or explicit request can retry. Provider outages and
+# missing inspection crews leave the task retryable. Explicit mode audits named
 # proposed/backlog tasks, including non-empty selectors. A child pilot, such
 # as one an approve-proposed drain dispatched, is not that request: when an
 # explicit or routine pilot already certified an assessment, the child does
@@ -32,9 +35,10 @@
 # that applied at least one task while leaving others unresolved still
 # reports `failed` with its applied and unresolved counts, but the guard
 # passes it as held: the applied tasks' receipts stand, and each unresolved
-# task is held for the operator (a drain records it `pilot_unresolved` until
-# the task changes or an operator approves it) instead of being piloted
-# again on the next pass. An apply that applied nothing fails the guard. Targets admitted to
+# task is held for the operator (apply records failed stale repilots, and a
+# drain also records unresolved children as `pilot_unresolved`) instead of
+# being piloted again on the next pass against unchanged requirements. An apply
+# that applied nothing fails the guard. Targets admitted to
 # execution, claimed by a follower, or retired during preparation settle as
 # superseded without pilot writes. Durable material edits by an operator or
 # another writer likewise refuse the stale write and settle as superseded.

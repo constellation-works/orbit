@@ -61,7 +61,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::INSPECTION_CREW_UNAVAILABLE;
+use crate::application::contracts::INSPECTION_CREW_UNAVAILABLE;
 use crate::application::task::{
     NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PILOT_WARNING_TRIAGED_EVENT, SYSTEM_ACTOR_LABEL,
     TaskAutomationPort, TaskListFilter, TaskRecordUpdateParams, TaskRecords,

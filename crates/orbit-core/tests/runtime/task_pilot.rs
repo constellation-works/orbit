@@ -48,6 +48,7 @@ mod recheck;
 mod review_evidence;
 mod settlement;
 mod source_moves;
+mod standalone_repilot;
 
 struct Workspace {
     root: TempDir,
