@@ -2737,8 +2737,6 @@ A task with no recorded PR makes no forge call. A forge error is logged as a war
 |---|---|---|
 | `commit.subject_template` | unset | **Advanced.** Single-task commit subject template; must contain `[{{task_id}}]`. Unset: Orbit's subjects. |
 | `commit.body_template` | unset | **Advanced.** Single-task commit body template, placed before the trailers. Unset: Orbit's bodies. |
-| `commit.planned_by_trailer` | `true` | **Advanced.** Add `Planned-By` where Orbit's message carries it. |
-| `commit.implemented_by_trailer` | `true` | **Advanced.** Add `Implemented-By` where Orbit's message carries it. |
 | `commit.orchestrated_by_trailer` | `true` | **Advanced.** Add `Orchestrated-By` to commit messages. |
 | `commit.regression_trailers` | `true` | **Advanced.** Add `Fixes` (when the target's landed commit is resolvable), `Regression-From` and `Regression` trailers for `regression_from` relations to commit messages. |
 | `branch.name_template` | `{{prefix}}/{{task_id}}-{{hash}}` | **Advanced.** Single-task delivery branch name; must contain `{{task_id}}` and `{{hash}}`. |

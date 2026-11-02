@@ -242,22 +242,7 @@ fn batch_commit_trailers(
     pr_config: &PrConfig,
     landed: &RegressionLandedCommits,
 ) -> Vec<String> {
-    let conventions = &pr_config.conventions;
     let mut trailers = Vec::new();
-    if let Some(planned_by) = task
-        .planned_by
-        .as_deref()
-        .filter(|_| conventions.planned_by_trailer)
-    {
-        trailers.push(format!("Planned-By: {planned_by}"));
-    }
-    if let Some(implemented_by) = task
-        .implemented_by
-        .as_deref()
-        .filter(|_| conventions.implemented_by_trailer)
-    {
-        trailers.push(format!("Implemented-By: {implemented_by}"));
-    }
     trailers.extend(regression_trailers(
         std::slice::from_ref(task),
         pr_config,

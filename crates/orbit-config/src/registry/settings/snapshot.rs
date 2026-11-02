@@ -697,8 +697,6 @@ impl ConfigSnapshot {
                 ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
             }),
             commit_body: text("commit.body_template", &self.commit_body_template),
-            planned_by_trailer: self.commit_planned_by_trailer,
-            implemented_by_trailer: self.commit_implemented_by_trailer,
             orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
             regression_trailers: self.commit_regression_trailers,
             branch_name: self
