@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use std::thread;
@@ -37,6 +37,7 @@ type FixtureResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 struct SyntheticAdapter {
     calls: AtomicUsize,
+    seen: Mutex<Vec<AssistanceRequest>>,
 }
 
 impl AssistanceAdapter for SyntheticAdapter {
@@ -46,10 +47,16 @@ impl AssistanceAdapter for SyntheticAdapter {
     fn prepare_assistance_request(
         &self,
         request: AssistanceRequest,
-        _: &[String],
+        secrets: &[String],
         _: &orbit_config::assistance::AssistancePolicy,
     ) -> Result<AssistanceRequest, AssistanceReason> {
-        Ok(request)
+        serde_json::from_value(
+            orbit_common::security::redaction::redact_secret_values_json(
+                serde_json::to_value(request).map_err(|_| AssistanceReason::InvalidRequest)?,
+                secrets,
+            ),
+        )
+        .map_err(|_| AssistanceReason::InvalidRequest)
     }
     fn evaluate_assistance(
         &self,
@@ -57,6 +64,7 @@ impl AssistanceAdapter for SyntheticAdapter {
         _: &orbit_config::assistance::AssistancePolicy,
     ) -> AssistanceResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push(claim.work.request.clone());
         let mut answers = std::collections::BTreeMap::new();
         for (name, question) in &claim.work.request.contract.questions {
             let answer = match question {
@@ -179,24 +187,38 @@ fn forbidden(value: &Value) -> bool {
 }
 
 fn raise(runtime: &OrbitRuntime, task_id: &str, question: &str) -> FixtureResult<DecisionRequest> {
+    raise_options(
+        runtime,
+        task_id,
+        question,
+        vec![
+            AgentDecisionOptionInput {
+                label: "Ship the change".into(),
+                consequence: "The task is marked done.".into(),
+                risk_tier: Some("reversible".into()),
+                recommended: true,
+            },
+            AgentDecisionOptionInput {
+                label: "Hold the change".into(),
+                consequence: "The task stays with the human.".into(),
+                risk_tier: Some("routine".into()),
+                recommended: false,
+            },
+        ],
+    )
+}
+
+fn raise_options(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    question: &str,
+    options: Vec<AgentDecisionOptionInput>,
+) -> FixtureResult<DecisionRequest> {
     Ok(runtime
         .raise_agent_decision_request(AgentDecisionRaise {
             task_id: task_id.into(),
             question: question.into(),
-            options: vec![
-                AgentDecisionOptionInput {
-                    label: "Ship the change".into(),
-                    consequence: "The task is marked done.".into(),
-                    risk_tier: Some("reversible".into()),
-                    recommended: true,
-                },
-                AgentDecisionOptionInput {
-                    label: "Hold the change".into(),
-                    consequence: "The task stays with the human.".into(),
-                    risk_tier: Some("routine".into()),
-                    recommended: false,
-                },
-            ],
+            options,
             topic: Some("pricing/sign-off".into()),
             filer: "grok".into(),
         })?
@@ -227,6 +249,69 @@ fn policy(workspace_id: &str, mode: AssistanceMode) -> FixtureResult<AssistanceP
 
 fn receipt(runtime: &OrbitRuntime, id: &str) -> FixtureResult<Option<PrecedentDecisionReceipt>> {
     Ok(runtime.precedent_decision_receipt(id)?)
+}
+
+fn opposite_options(
+    first_label: &str,
+    first_consequence: &str,
+    second_label: &str,
+    second_consequence: &str,
+) -> Vec<AgentDecisionOptionInput> {
+    vec![
+        AgentDecisionOptionInput {
+            label: first_label.into(),
+            consequence: first_consequence.into(),
+            risk_tier: Some("reversible".into()),
+            recommended: true,
+        },
+        AgentDecisionOptionInput {
+            label: second_label.into(),
+            consequence: second_consequence.into(),
+            risk_tier: Some("routine".into()),
+            recommended: false,
+        },
+    ]
+}
+
+fn packet_for<'a>(seen: &'a [AssistanceRequest], question: &str) -> &'a AssistanceRequest {
+    seen.iter()
+        .find(|request| {
+            request
+                .evidence_packet
+                .fields
+                .get("request")
+                .and_then(|value| value.get("question"))
+                .and_then(Value::as_str)
+                == Some(question)
+        })
+        .unwrap_or_else(|| panic!("missing shadow packet for {question}"))
+}
+
+fn row_for<'a>(rows: &'a [Value], question: &str) -> &'a Value {
+    rows.iter()
+        .find(|row| row.get("question").and_then(Value::as_str) == Some(question))
+        .unwrap_or_else(|| panic!("missing retained precedent {question}"))
+}
+
+fn option_field<'a>(row: &'a Value, id: &str, field: &str) -> &'a str {
+    row.get("options")
+        .and_then(Value::as_array)
+        .and_then(|options| {
+            options
+                .iter()
+                .find(|option| option.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .and_then(|option| option.get(field))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing option {id} {field}"))
+}
+
+fn assert_request_within_budget(request: &AssistanceRequest, budget: usize) {
+    let size = serde_json::to_vec(request).unwrap().len();
+    assert!(
+        size <= budget,
+        "shadow packet is {size} bytes, above the host request bound of {budget}"
+    );
 }
 
 fn surface(runtime: &OrbitRuntime, request: &DecisionRequest) -> FixtureResult<Value> {
@@ -398,6 +483,7 @@ fn fixture(root: &Path) -> FixtureResult {
 
     let adapter = Arc::new(SyntheticAdapter {
         calls: AtomicUsize::new(0),
+        seen: Mutex::new(Vec::new()),
     });
     let config_root = global.clone();
     let service = AssistanceService::new(
@@ -525,6 +611,154 @@ fn fixture(root: &Path) -> FixtureResult {
     assert!(!scored.contains(&leaked.id));
     assert!(!scored.contains(&curated.id));
     assert!(!scored.contains(&superseded.id));
+
+    let request_budget = settings.limits.max_request_bytes as usize;
+    let approve_question = "Which stored price should stand?";
+    let reject_question = "Which stored price should fall?";
+    let secret = "sk-testfixturesecretvalue01";
+    let long_note = format!("price-note {secret} kept {}", "q".repeat(4_000));
+    assert!(
+        long_note.len() > 2_000 && long_note.len() < 8_192,
+        "the retained note must exceed the context budget and fit a provider record"
+    );
+    let approve_task = runtime.add_task(TaskAddParams {
+        title: "Price the stored approval".into(),
+        description: "Decide the stored approval.".into(),
+        acceptance_criteria: vec!["The approval precedent keeps its meaning.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let approve = raise_options(
+        &runtime,
+        &approve_task.id,
+        approve_question,
+        opposite_options(
+            "Approve the higher price",
+            "Charge the higher price",
+            "Leave the price unchanged",
+            "No price change is applied",
+        ),
+    )?;
+    runtime.answer_decision_request_as_human(
+        &approve.id,
+        "1",
+        Some(long_note.clone()),
+        "human:fixture".into(),
+        Some("cli".into()),
+    )?;
+    let reject_task = runtime.add_task(TaskAddParams {
+        title: "Price the stored rejection".into(),
+        description: "Decide the stored rejection.".into(),
+        acceptance_criteria: vec!["The rejection precedent keeps its meaning.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let reject = raise_options(
+        &runtime,
+        &reject_task.id,
+        reject_question,
+        opposite_options(
+            "Reject the higher price",
+            "Keep the current price",
+            "Apply the higher price",
+            "The higher price replaces the current one",
+        ),
+    )?;
+    runtime.answer_decision_request_as_human(
+        &reject.id,
+        "1",
+        Some("reject-note".into()),
+        "human:fixture".into(),
+        Some("cli".into()),
+    )?;
+    thread::sleep(Duration::from_millis(20));
+    let observe_question = "Which meaning should the packet keep?";
+    let observe_task = runtime.add_task(TaskAddParams {
+        title: "Price the meaning check".into(),
+        description: "Decide which historical meaning applies.".into(),
+        acceptance_criteria: vec!["The packet keeps both historical meanings.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let _observe = raise(&runtime, &observe_task.id, observe_question)?;
+    runtime.run_precedent_decision_with_service(&service)?;
+    let seen = adapter.seen.lock().unwrap().clone();
+    let observed = packet_for(&seen, observe_question);
+    assert_request_within_budget(observed, request_budget);
+    let rows = observed.evidence_packet.fields["precedents"]
+        .as_array()
+        .unwrap();
+    let approved = row_for(rows, approve_question);
+    let rejected = row_for(rows, reject_question);
+    assert_eq!(approved["chosen_option"], "1");
+    assert_eq!(rejected["chosen_option"], "1");
+    assert_eq!(approved["category"], rejected["category"]);
+    assert_eq!(approved["topic"], rejected["topic"]);
+    assert_ne!(
+        option_field(approved, "1", "label"),
+        option_field(rejected, "1", "label")
+    );
+    assert_eq!(
+        option_field(approved, "1", "label"),
+        "Approve the higher price"
+    );
+    assert_eq!(
+        option_field(approved, "1", "consequence"),
+        "Charge the higher price"
+    );
+    assert_eq!(
+        option_field(rejected, "1", "label"),
+        "Reject the higher price"
+    );
+    assert_eq!(
+        option_field(rejected, "1", "consequence"),
+        "Keep the current price"
+    );
+    let context = approved["context"].as_str().unwrap();
+    assert_eq!(approved["context_truncated"], true);
+    assert!(context.len() <= 2_000);
+    assert!(context.len() < long_note.len());
+    assert!(!context.contains(secret));
+    assert!(context.contains("price-note"));
+    assert!(context.contains("[REDACTED_SECRET]"));
+    assert!(context.contains("kept"));
+    assert_eq!(rejected["context"], "reject-note");
+    assert_eq!(rejected["context_truncated"], false);
+    for row in [approved, rejected] {
+        let citation = &row["citation"];
+        assert_eq!(citation["source"], "orbit-decision-history");
+        let reference = citation["ref"].as_str().unwrap();
+        assert!(reference.starts_with("decision:"));
+        let digest = citation["digest"].as_str().unwrap();
+        assert!(
+            assistance::assistance_is_digest(digest),
+            "precedent citation digest must stay a stable sha256 reference"
+        );
+    }
+
+    settings.policies[0]
+        .evidence_fields
+        .retain(|field| field != "precedents");
+    save(&global, &settings)?;
+    let grant_question = "Which grant probe should run?";
+    let grant_task = runtime.add_task(TaskAddParams {
+        title: "Price the grant probe".into(),
+        description: "Decide the grant probe.".into(),
+        acceptance_criteria: vec!["Ungranted precedent text stays on the host.".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    })?;
+    let _grant = raise(&runtime, &grant_task.id, grant_question)?;
+    runtime.run_precedent_decision_with_service(&service)?;
+    let seen = adapter.seen.lock().unwrap().clone();
+    let granted = packet_for(&seen, grant_question);
+    assert!(!granted.evidence_packet.fields.contains_key("precedents"));
+    assert!(granted.evidence_packet.fields.contains_key("option_ids"));
+    assert_request_within_budget(granted, request_budget);
+    let encoded = serde_json::to_string(granted)?;
+    assert!(!encoded.contains("Approve the higher price"));
+    assert!(!encoded.contains(secret));
+    assert!(!encoded.contains("Reject the higher price"));
     std::io::stdout().write_all(
         b"{\"fixture\":\"precedent-decision/1\",\"status\":\"passed\",\"external_network_calls\":0,\"labels\":\"synthetic\"}\n",
     )?;

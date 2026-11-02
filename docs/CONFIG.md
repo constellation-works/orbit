@@ -261,9 +261,15 @@ prediction.
 The grant's `evidence_fields` must include `option_ids` (the packet-bound
 choice). Also grant `request`, `task_context`, `precedents`, and `provenance`
 when that evidence should leave the host, and allow `evidence_ref_prefixes`
-`task:` and `decision:`. The contract digest is the granted question template
-`precedent-decision/1`, not a per-request expansion. Retrieval uses at most
-eight precedents. This mode does not wait before notifying the human.
+`task:` and `decision:`. A granted `precedents` value carries each retained
+record's question, option labels and consequences, bounded context, and
+citation (`source`, `ref`, digest). Those option ids are local to the
+historical record. Omitting `precedents` keeps that text on the host.
+Credential-pattern redaction still applies to the values that are sent, and
+the serialized request stays within `limits.max_request_bytes`. The contract
+digest is the granted question template `precedent-decision/1`, not a
+per-request expansion. Retrieval uses at most eight precedents. This mode
+does not wait before notifying the human.
 
 ## `[machine]` — who this machine is
 
