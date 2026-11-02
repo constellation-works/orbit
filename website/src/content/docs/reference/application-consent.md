@@ -129,7 +129,7 @@ A constrained field takes one of these forms. Each form is a JSON object with on
 | `const` | `{"const": value}` | The call's value must equal the constant structurally. |
 | `one_of` | `{"one_of": [values]}` | 1 to 16 values. |
 | `text` | `{"text": {"max_chars": n}}` | Free text of at most `n` characters, 1 to 4096. Built-in tools accept it only on `comment`, `note`, `plan` and `execution_summary`. |
-| `token` | `{"token": {"max_len": n}}` | An ASCII token over `[A-Za-z0-9._:-]`, up to 128 characters. Plugin tools only. |
+| `token` | `{"token": {"max_len": n}}` | An ASCII token over `[A-Za-z0-9._:-]`, up to 128 characters. Plugin tools, and built-in tools on non-identity fields. |
 | `sha256` | `{"sha256": {}}` | 64 lowercase hex characters. |
 | `workspace` | `{"workspace": {}}` | Resolves to the consent's workspace. Valid only on the field `workspace`. |
 | `task` | `{"task": {...}}` | The task named by the field must match the predicate on its current tags and status. It can also bind an artifact digest. |
@@ -162,7 +162,7 @@ Consent can name only the built-in tools in this table. Any other built-in tool 
 | `orbit.auto_task.add` | None | `name`, `schedule`, `template`, `description`, `dedupe`, `workspace` | Callbacks only. `name`, `schedule` and `template` are required. Every definition field must be an `artifact_json` bound to the approved artifact, so a callback cannot take a caller-supplied value. |
 | `orbit.auto_task.update` | None | `name`, `enabled`, `workspace` | Callbacks only. `name` is required and must be an `artifact_json`. `enabled`, if present, is a boolean `const` or a `one_of` of booleans. |
 
-Approving work for dispatch is never application authority. That is why a move to `backlog` from `proposed`, `someday` or `blocked` is refused.
+The source-status restriction applies only to constrained `transition` scopes: a transition to `backlog` is allowed only from `review` or `in-progress`. An exact scope may name `status: "backlog"` as listed in the table, without this transition-source restriction.
 
 ## Consent, invocation and callbacks
 
