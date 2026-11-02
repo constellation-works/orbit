@@ -135,7 +135,7 @@ Seeded from the two prompts. Each line is one rule.
 |---|---|---|
 | ui | `no-horizontal-overflow` | Document and active pane: `scrollWidth <= clientWidth + 1`; bounded table wrappers exempt. |
 | ui | `panel-body-padding` | Every panel body has non-zero inset from its border and header divider, equal to its siblings'. |
-| ui | `sibling-spacing` | Siblings of one kind in one container share padding, gap, font size and weight. |
+| ui | `sibling-spacing` | Siblings of one documented semantic kind in one container share padding, font size and weight. The measured rule is in `scripts/ux-rules/README.md`. |
 | ui | `control-size` | Buttons in one toolbar or row share height, padding, font size and weight. |
 | ui | `aligned-starts` | Neighbouring columns' first content starts at the same top. |
 | ui | `even-row-panels` | Panels side by side in one row have equal heights. |
