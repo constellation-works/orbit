@@ -213,9 +213,13 @@ decision records and the audit log, never the previous agent's final message. Th
 response envelope ([4_decisions.md](./4_decisions.md#a-cycle-is-correct-from-orbit-state-alone)).
 
 **Idempotence.** Every mutating action in a cycle carries an action key
-`resident:<mandate>:<cycle>:<n>`, recorded in the checkpoint. Run submission already resolves an
-action key to an existing run before submitting, and task creation can reserve a key; a recovery
-cycle that retries an action with the dead cycle's key gets the existing result.
+`resident:<mandate>:<cycle>:<n>`, recorded in the checkpoint. Action-key idempotence is internal
+to automation admission today: run submission resolves an automation attempt's key to an existing
+run before submitting, and task creation reserves the attempt's key. No agent-callable tool accepts
+a caller-supplied key yet, so a recovery cycle retrying with the dead cycle's key gets no existing
+result today. Slice 3 ([ORB-21244]) exposes a caller-supplied key on the cycle's mutating tools
+(dispatch, requeue, promote, `orbit.task.add`) or specifies another dedupe mechanism; once it
+lands, a recovery cycle that retries an action with the dead cycle's key gets the existing result.
 
 **Crash recovery.** A killed cycle leaves a held lease that expires (lease TTL = agent budget + 5
 min) and no checkpoint. The finalize step of the killed cycle never ran, so the next observe treats
@@ -371,7 +375,7 @@ the checkpoints above, by `orbit resident metrics` ([ORB-21247]); none needs a n
 | Manual interventions per mandate | Human writes on the mandate's assignment or watched tasks that are not answers to a resident escalation and not grants: requeues, cancels, manual status changes, operator steering comments, unprompted relays, `stop`/`takeover`. Reported per mandate and per active mandate-day | Task history writer labels, audit rows, `resident.answer` comments without a `request_id` |
 | Escalation load on the human | Resident-raised decision requests per mandate-day and per human-day across all mandates; median answer latency; share answered with the recommended option; expired-unanswered count | Decision requests filed by resident runs |
 | Reversal rate | Share of resident decisions and actions later undone by a human within 7 days: a promoted task sent back to `proposed` or rejected, a reverted merge, a requeue undone, a relay with `reverses: <decision>`, a vetoed digest decision | Checkpoint `decisions[]` and `actions[]` with action keys, joined to later human writes on the same subject |
-| Recovery cost of a crashed cycle | Cycles that ended without an agent checkpoint; time from the dead cycle's start to the next good checkpoint; recovery cycle slot minutes; actions repeated (must be 0); human interventions needed | Cycle leases, `outcome: incomplete` checkpoints, run records, action keys |
+| Recovery cost of a crashed cycle | Cycles that ended without an agent checkpoint; time from the dead cycle's start to the next good checkpoint; recovery cycle slot minutes; actions repeated (must be 0 once slice 3's caller-supplied keys land); human interventions needed | Cycle leases, `outcome: incomplete` checkpoints, run records, action keys (slice 3, [ORB-21244]) |
 
 **Baseline.** `orbit resident metrics --baseline <assignment>` computes the same measures, where
 they are derivable, from an interactive orchestration task's history. The first baseline is
@@ -384,7 +388,7 @@ Measures that cannot be derived report `not_derivable`, never zero.
 - interventions per mandate no worse than the baseline, and falling over the pilot;
 - at most 2 resident escalations per mandate-day and at most 8 per human-day;
 - a reversal rate at or below 10 % over at least 30 resident decisions;
-- every crashed cycle recovered within one heartbeat with zero repeated actions and no human step.
+- every crashed cycle recovered within one heartbeat with zero repeated actions (via the slice 3 keys) and no human step.
 
 ## 10. Migration and pilot
 
