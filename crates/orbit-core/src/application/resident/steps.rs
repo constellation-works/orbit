@@ -87,7 +87,7 @@ impl OrbitRuntime {
             && live.run_id == run_id
             && let Some(grant) = cycle_grant(&history, &live.cycle)
         {
-            return self.resident_brief(&task_id, &mandate, &grant, &history);
+            return self.resident_brief(&task_id, &mandate, &grant, &history, None);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
         if let Some(reason) = &due.withheld {
@@ -147,21 +147,36 @@ impl OrbitRuntime {
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))?,
         )?;
         let history = self.get_task_history(&task_id)?;
-        let mut brief = self.resident_brief(&task_id, &mandate, &grant, &history)?;
-        brief["notices"] = json!(
-            due.notices
-                .iter()
-                .map(|notice| json!({
-                    "id": notice.id,
-                    "kind": notice.kind,
-                    "status": notice.status,
-                    "workspace": notice.workspace.name,
-                    "untrusted_title": notice.title,
-                    "untrusted_body": notice.body,
-                }))
-                .collect::<Vec<_>>()
-        );
-        Ok(brief)
+        self.resident_brief(&task_id, &mandate, &grant, &history, Some(&due.notices))
+    }
+
+    pub(crate) fn crew_supports_continuity(&self, crew_name: &str) -> bool {
+        self.resolve_crew_for_task(Some(crew_name), None)
+            .is_ok_and(|crew| orbit_engine::provider_supports_continuity(&crew.assignment.provider))
+    }
+
+    /// Record that `run_id`'s resident cycle fell back from an expired or
+    /// unresumable conversation reference to `continuity: rebuilt`.
+    pub fn record_resident_continuity_rebuilt_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(), OrbitError> {
+        let Ok(task_id) = self.resident_cycle_mandate_of_run(run_id) else {
+            return Ok(());
+        };
+        let history = self.get_task_history(&task_id)?;
+        let cycle = live_cycle_from_history(&history)?
+            .filter(|live| live.run_id == run_id)
+            .map(|live| live.cycle)
+            .unwrap_or_else(|| resident_cycle_id(run_id));
+        if !super::due::continuity_rebuilt(&history, &cycle) {
+            self.append_resident_history(
+                &task_id,
+                orbit_types::workflow::RESIDENT_CONTINUITY_REBUILT_EVENT,
+                cycle,
+            )?;
+        }
+        Ok(())
     }
 
     /// The brief a cycle's agent reads, in the checkpoint contract's order.
@@ -171,6 +186,7 @@ impl OrbitRuntime {
         mandate: &orbit_types::workflow::ResidentMandate,
         grant: &ResidentCycleGrant,
         history: &[TaskHistoryEntry],
+        notices: Option<&[orbit_types::record::Notice]>,
     ) -> Result<Value, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
         let all = checkpoints(task_id, &comments);
@@ -179,8 +195,43 @@ impl OrbitRuntime {
             .rev()
             .find(|started| started.live.cycle != grant.cycle)
             .map(|started| started.at);
-        let recent: Vec<&ResidentCheckpoint> =
-            all.iter().rev().take(RESIDENT_BRIEF_CHECKPOINTS).collect();
+        let (continuity, conversation_ref) = match mandate.continuity {
+            orbit_types::workflow::ResidentContinuity::Off => ("off", None),
+            orbit_types::workflow::ResidentContinuity::Prefer => {
+                let resumed_ref = (!super::due::continuity_rebuilt(history, &grant.cycle))
+                    .then(|| {
+                        all.last()
+                            .filter(|last| last.crew == mandate.crew)
+                            .and_then(|last| last.conversation_ref.as_deref())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .filter(|_| self.crew_supports_continuity(&mandate.crew))
+                            .map(str::to_string)
+                    })
+                    .flatten();
+                if resumed_ref.is_some() {
+                    ("resumed", resumed_ref)
+                } else {
+                    ("rebuilt", None)
+                }
+            }
+        };
+        let recent: Vec<ResidentCheckpoint> = all
+            .iter()
+            .rev()
+            .take(RESIDENT_BRIEF_CHECKPOINTS)
+            .cloned()
+            .map(|mut checkpoint| {
+                checkpoint.conversation_ref = None;
+                checkpoint
+            })
+            .collect();
+        let older_checkpoint_notes: Vec<Value> = all
+            .iter()
+            .rev()
+            .skip(RESIDENT_BRIEF_CHECKPOINTS)
+            .map(|checkpoint| json!({"cycle": checkpoint.cycle, "notes": checkpoint.notes}))
+            .collect();
         let messages: Vec<Value> = comments
             .iter()
             .filter(|comment| since.is_none_or(|since| comment.at >= since))
@@ -197,27 +248,177 @@ impl OrbitRuntime {
             .as_deref()
             .map(|dead| action_rows(history, dead))
             .unwrap_or_default();
+        let open_requests = self.resident_open_requests(task_id, mandate, all.last(), &comments)?;
+        let resolved_notices;
+        let in_scope_notices = match notices {
+            Some(notices) => notices,
+            None => {
+                resolved_notices = self.resident_notices(mandate).unwrap_or_default();
+                &resolved_notices
+            }
+        };
+        let notice_entries: Vec<Value> = in_scope_notices
+            .iter()
+            .map(|notice| {
+                json!({
+                    "id": notice.id,
+                    "kind": notice.kind,
+                    "status": notice.status,
+                    "workspace": notice.workspace.name,
+                    "untrusted_title": notice.title,
+                    "untrusted_body": notice.body,
+                })
+            })
+            .collect();
         Ok(json!({
             "task_id": task_id,
             "cycle_count": 1,
             "cycle": grant.cycle,
             "crew": mandate.crew,
+            "continuity": continuity,
+            "conversation_ref": conversation_ref,
             "action_key_prefix": format!("resident:{task_id}:{}:", grant.cycle),
             "mandate": mandate,
+            "standing_goals": {
+                "goal": mandate.goal,
+                "exit_criteria": mandate.exit_criteria,
+            },
             "authority": grant,
             "checkpoints": recent,
-            "open_requests": self
-                .get_task_decision_requests(task_id)?
-                .into_iter()
-                .filter(|request| request.state == orbit_types::task::DecisionRequestState::Open)
-                .map(|request| crate::application::task::decision_request_json(&request))
-                .collect::<Vec<_>>(),
+            "older_checkpoint_notes": older_checkpoint_notes,
+            "open_requests": open_requests,
             "comments_since_last_cycle": messages,
             "wake": {"reasons": grant.reasons, "digest": grant.digest},
-            "notices": [],
+            "notices": notice_entries,
             "recovery_of": grant.recovery_of,
             "recovered_actions": recovered,
         }))
+    }
+
+    fn resident_open_requests(
+        &self,
+        task_id: &str,
+        mandate: &orbit_types::workflow::ResidentMandate,
+        last_checkpoint: Option<&ResidentCheckpoint>,
+        comments: &[TaskComment],
+    ) -> Result<Vec<Value>, OrbitError> {
+        let mut resident_requests = Vec::new();
+        let mut resident_answers = Vec::new();
+        for comment in comments {
+            match ResidentComment::parse(&comment.message) {
+                Ok(ResidentComment::Request(request)) if request.mandate == task_id => {
+                    resident_requests.push(request);
+                }
+                Ok(ResidentComment::Answer(answer)) if answer.mandate == task_id => {
+                    resident_answers.push(answer);
+                }
+                _ => {}
+            }
+        }
+        let watched = self.resident_watched_tasks(mandate, last_checkpoint)?;
+        let mut task_ids = Vec::new();
+        let mut seen_tasks = std::collections::BTreeSet::new();
+        for id in std::iter::once(task_id.to_string())
+            .chain(watched.into_iter().map(|task| task.id.to_string()))
+            .chain(
+                resident_requests
+                    .iter()
+                    .map(|request| request.task.clone())
+                    .filter(|task| !task.is_empty()),
+            )
+        {
+            if seen_tasks.insert(id.clone()) {
+                task_ids.push(id);
+            }
+        }
+        let mut entries = Vec::new();
+        let mut matched_decision_ids = std::collections::BTreeSet::new();
+        for id in task_ids {
+            let Ok(requests) = self.get_task_decision_requests(&id) else {
+                continue;
+            };
+            for request in requests {
+                let resident_request = resident_requests
+                    .iter()
+                    .find(|entry| entry.decision_request == request.id);
+                if !matches!(
+                    request.state,
+                    orbit_types::task::DecisionRequestState::Open
+                        | orbit_types::task::DecisionRequestState::Answered
+                ) && resident_request.is_none()
+                {
+                    continue;
+                }
+                matched_decision_ids.insert(request.id.clone());
+                let mut entry = crate::application::task::decision_request_json(&request);
+                if let Some(resolution) = &request.resolution {
+                    let chosen_label = request
+                        .answers
+                        .iter()
+                        .find(|answer| answer.id == resolution.answer_id)
+                        .map(|answer| answer.label.as_str())
+                        .unwrap_or(resolution.answer_id.as_str());
+                    entry["answer_id"] = json!(resolution.answer_id);
+                    entry["answer"] = json!(chosen_label);
+                    entry["answered_by"] = json!(resolution.answered_by);
+                }
+                if let Some(resident_request) = resident_request {
+                    entry["request_id"] = json!(resident_request.id);
+                    entry["decision_request"] = json!(resident_request.decision_request);
+                    entry["class"] = json!(resident_request.class);
+                    entry["question"] = json!(resident_request.question);
+                    entry["blocking"] = json!(resident_request.blocking);
+                    entry["blocks"] = json!(resident_request.blocks);
+                }
+                let matching_answers: Vec<_> = resident_answers
+                    .iter()
+                    .filter(|answer| {
+                        answer.request_id.as_deref() == Some(request.id.as_str())
+                            || resident_request.is_some_and(|req| {
+                                answer.request_id.as_deref() == Some(req.id.as_str())
+                            })
+                    })
+                    .collect();
+                if !matching_answers.is_empty() {
+                    entry["resident_answers"] = json!(matching_answers);
+                    if entry.get("answer").is_none()
+                        && let Some(latest) = matching_answers.last()
+                    {
+                        entry["answer"] = json!(latest.quote);
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        for resident_request in &resident_requests {
+            if matched_decision_ids.contains(&resident_request.decision_request) {
+                continue;
+            }
+            let matching_answers: Vec<_> = resident_answers
+                .iter()
+                .filter(|answer| {
+                    answer.request_id.as_deref() == Some(resident_request.id.as_str())
+                        || answer.request_id.as_deref()
+                            == Some(resident_request.decision_request.as_str())
+                })
+                .collect();
+            entries.push(json!({
+                "id": resident_request.id,
+                "request_id": resident_request.id,
+                "cycle": resident_request.cycle,
+                "decision_request": resident_request.decision_request,
+                "task": resident_request.task,
+                "class": resident_request.class,
+                "question": resident_request.question,
+                "recommended": resident_request.recommended,
+                "blocking": resident_request.blocking,
+                "blocks": resident_request.blocks,
+                "state": if matching_answers.is_empty() { "open" } else { "answered" },
+                "answer": matching_answers.last().map(|answer| answer.quote.as_str()),
+                "answers": matching_answers,
+            }));
+        }
+        Ok(entries)
     }
 
     /// `resident_finalize`: close this run's cycle. A cycle that wrote no

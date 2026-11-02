@@ -12,6 +12,9 @@ pub struct ResidentLiveCycle {
 
 /// History event recording the authority one cycle was granted.
 pub const RESIDENT_CYCLE_GRANTED_EVENT: &str = "resident_cycle_granted";
+/// History event recording that a cycle's conversation reference expired or
+/// could not be resumed, so the cycle fell back to `continuity: rebuilt`.
+pub const RESIDENT_CONTINUITY_REBUILT_EVENT: &str = "resident_continuity_rebuilt";
 /// History event recording one mutating tool call a cycle made.
 pub const RESIDENT_ACTION_EVENT: &str = "resident_action";
 /// The job a resident cycle runs as.

@@ -256,6 +256,13 @@ macro_rules! dispatch_methods {
             false
         }
 
+        /// Record that a resident cycle's provider conversation reference
+        /// expired or could not be resumed, so this cycle fell back to
+        /// rebuilding from the brief alone (`continuity: rebuilt`).
+        fn record_resident_continuity_rebuilt(&self, _run_id: &str) -> Result<(), OrbitError> {
+            Ok(())
+        }
+
         /// Read mid-run steering's promotion gate for `task_id` of `run_id`,
         /// before the step the job's `steering_gate` guards
         /// (`docs/design/mid-run-steering/2_design.md` §3).

@@ -10,6 +10,8 @@ pub struct AgentRequest {
     pub envelope_json: Vec<u8>,
     /// When `true`, the agent CLI should produce verbose/debug output on stderr.
     pub verbose: bool,
+    /// Optional opaque provider conversation handle to resume when supported.
+    pub conversation_ref: Option<String>,
 }
 
 impl AgentRequest {
@@ -20,6 +22,7 @@ impl AgentRequest {
             },
             envelope_json,
             verbose: false,
+            conversation_ref: None,
         }
     }
 
@@ -35,6 +38,14 @@ impl AgentRequest {
             },
             envelope_json,
             verbose: false,
+            conversation_ref: None,
         }
+    }
+
+    pub fn with_conversation_ref(mut self, conversation_ref: Option<String>) -> Self {
+        self.conversation_ref = conversation_ref
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self
     }
 }

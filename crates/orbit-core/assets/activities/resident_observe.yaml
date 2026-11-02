@@ -36,5 +36,9 @@ spec:
         type: string
       crew:
         type: string
+      continuity:
+        type: string
+      conversation_ref:
+        type: [string, "null"]
   action: resident_observe
   config: {}

@@ -111,6 +111,24 @@ fn sandbox_profile_allows_modify(
     Ok(allowed)
 }
 
+fn rebuilt_envelope_input(input: &serde_json::Value) -> serde_json::Value {
+    let mut rebuilt = input.clone();
+    if let Some(root) = rebuilt.as_object_mut() {
+        root.remove("conversation_ref");
+        if let Some(brief) = root
+            .get_mut("brief")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            brief.insert(
+                "continuity".to_string(),
+                serde_json::Value::String("rebuilt".to_string()),
+            );
+            brief.insert("conversation_ref".to_string(), serde_json::Value::Null);
+        }
+    }
+    rebuilt
+}
+
 pub(super) fn dispatch_prepared_provider(
     context: CliDispatchContext<'_>,
     prepared: preparation::PreparedCliDispatch<'_>,
@@ -286,14 +304,6 @@ pub(super) fn dispatch_prepared_provider(
         .as_ref()
         .or(inspection_input.as_ref())
         .unwrap_or(input);
-    let envelope_json = cli_agent_envelope_json(
-        &envelope_spec,
-        run_id,
-        envelope_input,
-        inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
-        &activity_tools.requested_tools,
-        &activity_tools.effective_tools,
-    )?;
 
     let mut provider_config = host.provider_cli_config(&provider);
     if trusted_host.is_some() {
@@ -355,17 +365,59 @@ pub(super) fn dispatch_prepared_provider(
     let agent = Agent::new(&config)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent build: {err}")))?;
 
+    let continuity_off = envelope_input
+        .pointer("/brief/continuity")
+        .and_then(serde_json::Value::as_str)
+        == Some("off")
+        || envelope_input
+            .pointer("/brief/mandate/continuity")
+            .and_then(serde_json::Value::as_str)
+            == Some("off");
+    let requested_conversation_ref = (!continuity_off)
+        .then(|| {
+            envelope_input
+                .get("conversation_ref")
+                .or_else(|| envelope_input.pointer("/brief/conversation_ref"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .flatten();
+    let mut normalized_continuity_input = None;
+    let active_conversation_ref = match requested_conversation_ref {
+        Some(conversation_ref) if agent.supports_continuity() => Some(conversation_ref),
+        Some(_) => {
+            let _ = host.record_resident_continuity_rebuilt(run_id);
+            normalized_continuity_input = Some(rebuilt_envelope_input(envelope_input));
+            None
+        }
+        None => None,
+    };
+    let effective_envelope_input = normalized_continuity_input
+        .as_ref()
+        .unwrap_or(envelope_input);
+    let envelope_json = cli_agent_envelope_json(
+        &envelope_spec,
+        run_id,
+        effective_envelope_input,
+        inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
+        &activity_tools.requested_tools,
+        &activity_tools.effective_tools,
+    )?;
+
     let agent_req = AgentRequest {
         operation: AgentOperation::Activity {
             activity_id: "v2_cli_backend".to_string(),
         },
         envelope_json,
         verbose: false,
+        conversation_ref: active_conversation_ref.clone(),
     };
 
     // `invoke` only renders the argv/stdin for the subprocess (nothing has
     // executed yet) — failures here are deterministic request-shaping errors.
-    let (invocation, _trace) = agent
+    let (mut invocation, _trace) = agent
         .invoke(agent_req)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent invoke: {err}")))?;
     let model = agent.model_name().map(str::to_string);
@@ -389,6 +441,20 @@ pub(super) fn dispatch_prepared_provider(
     );
     let orbit_env = orbit_tool_env(&child_env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    let codex_mcp_args = if provider == "codex" {
+        let orbit_bin = orbit_env
+            .iter()
+            .find(|(name, _)| name == "ORBIT_BIN")
+            .map(|(_, value)| value.as_str())
+            .ok_or_else(|| {
+                DispatchError::CliInvocationPermanent("managed ORBIT_BIN missing".into())
+            })?;
+        Some(codex_mcp_server_launch_args(orbit_bin).map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!("encode codex MCP command: {error}"))
+        })?)
+    } else {
+        None
+    };
 
     let scratch_root = subprocess_cwd
         .clone()
@@ -415,7 +481,7 @@ pub(super) fn dispatch_prepared_provider(
     // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
     // private file in this run's scratch directory instead, so the envelope
     // still never reaches argv. The file is deleted when dispatch returns.
-    let prompt_file = invocation
+    let mut prompt_file = invocation
         .prompt_file_flag
         .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
         .transpose()?;
@@ -432,17 +498,8 @@ pub(super) fn dispatch_prepared_provider(
         subprocess_args.push((*flag).to_string());
         subprocess_args.push(file.argument().to_string());
     }
-    if provider == "codex" {
-        let orbit_bin = orbit_env
-            .iter()
-            .find(|(name, _)| name == "ORBIT_BIN")
-            .map(|(_, value)| value.as_str())
-            .ok_or_else(|| {
-                DispatchError::CliInvocationPermanent("managed ORBIT_BIN missing".into())
-            })?;
-        subprocess_args.extend(codex_mcp_server_launch_args(orbit_bin).map_err(|error| {
-            DispatchError::CliInvocationPermanent(format!("encode codex MCP command: {error}"))
-        })?);
+    if let Some(mcp_args) = &codex_mcp_args {
+        subprocess_args.extend(mcp_args.iter().cloned());
     }
     // Combined executor + transport argv is the only place that can honor a
     // custom `--print-timeout` without duplicating it, and the spawn deadline
@@ -450,7 +507,7 @@ pub(super) fn dispatch_prepared_provider(
     // build-admission credit has been earned yet, so the budget derives from
     // the runtime alone: the provider stops itself before Orbit's wall clock
     // kills it. [ORB-11337] [ORB-15206]
-    let print_timeout =
+    let mut print_timeout =
         apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
     if let Some(budget) = print_timeout {
         tracing::info!(
@@ -461,8 +518,8 @@ pub(super) fn dispatch_prepared_provider(
             "injected provider print timeout"
         );
     }
-    if let Some(tools) = inspection_tools {
-        subprocess_args.extend(tools.args);
+    if let Some(tools) = &inspection_tools {
+        subprocess_args.extend(tools.args.iter().cloned());
     }
     if let Some(staged) = &staged_images {
         subprocess_args.extend(staged.args.iter().cloned());
@@ -480,10 +537,11 @@ pub(super) fn dispatch_prepared_provider(
         subprocess_cwd.as_deref(),
     )
     .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    let argv_redacted: Vec<String> = audit_argv.iter().map(|a| redaction.apply_str(a)).collect();
+    let mut argv_redacted: Vec<String> =
+        audit_argv.iter().map(|a| redaction.apply_str(a)).collect();
 
     // The prompt the provider receives, whether on stdin or in its file.
-    let stdin_blob_ref = audit.write_blob(&invocation.stdin);
+    let mut stdin_blob_ref = audit.write_blob(&invocation.stdin);
 
     // L-0095: Provider cwd is advisory; enforce the linked-worktree postcondition.
     // Inspection owns its temporary checkout separately; retain the original
@@ -807,8 +865,8 @@ pub(super) fn dispatch_prepared_provider(
         .map_err(|error| {
             DispatchError::CliInvocationPermanent(format!("record agent execution: {error}"))
         })?;
-    let started_at = chrono::Utc::now();
-    let process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
+    let mut started_at = chrono::Utc::now();
+    let mut process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
         context,
         provider: &provider,
         resolved_program: &resolved_program,
@@ -828,6 +886,108 @@ pub(super) fn dispatch_prepared_provider(
         worktree_boundary: &mut worktree_boundary,
         task_ids: &task_ids,
     })?;
+    if active_conversation_ref.is_some()
+        && !process_exit.timed_out
+        && !process_exit.stalled
+        && agent.resume_failed(
+            process_exit.exit_code,
+            process_exit.stdout.bytes(),
+            process_exit.stderr.bytes(),
+        )
+    {
+        let _ = host.record_resident_continuity_rebuilt(run_id);
+        let fallback_input = rebuilt_envelope_input(envelope_input);
+        let fallback_envelope_json = cli_agent_envelope_json(
+            &envelope_spec,
+            run_id,
+            &fallback_input,
+            inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
+            &activity_tools.requested_tools,
+            &activity_tools.effective_tools,
+        )?;
+        let (fallback_invocation, _trace) = agent
+            .invoke(AgentRequest {
+                operation: AgentOperation::Activity {
+                    activity_id: "v2_cli_backend".to_string(),
+                },
+                envelope_json: fallback_envelope_json,
+                verbose: false,
+                conversation_ref: None,
+            })
+            .map_err(|err| {
+                DispatchError::CliInvocationPermanent(format!("agent fallback invoke: {err}"))
+            })?;
+        invocation = fallback_invocation;
+        prompt_file = invocation
+            .prompt_file_flag
+            .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
+            .transpose()?;
+        let fallback_stdin_bytes: &[u8] = if prompt_file.is_some() {
+            &[]
+        } else {
+            &invocation.stdin
+        };
+        subprocess_args.clear();
+        subprocess_args.extend(cli_executor.args.iter().cloned());
+        subprocess_args.extend(invocation.args.iter().cloned());
+        if let Some((flag, file)) = &prompt_file {
+            subprocess_args.push((*flag).to_string());
+            subprocess_args.push(file.argument().to_string());
+        }
+        if let Some(mcp_args) = &codex_mcp_args {
+            subprocess_args.extend(mcp_args.iter().cloned());
+        }
+        print_timeout =
+            apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+        if let Some(tools) = &inspection_tools {
+            subprocess_args.extend(tools.args.iter().cloned());
+        }
+        if let Some(staged) = &staged_images {
+            subprocess_args.extend(staged.args.iter().cloned());
+        }
+        let fallback_audit_argv = try_audit_argv_for_dispatch(
+            &resolved_program,
+            &subprocess_args,
+            sandbox,
+            subprocess_cwd.as_deref(),
+        )
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+        argv_redacted = fallback_audit_argv
+            .iter()
+            .map(|a| redaction.apply_str(a))
+            .collect();
+        stdin_blob_ref = audit.write_blob(&invocation.stdin);
+        let fallback_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
+        child_env.retain(|(key, _)| {
+            key != crate::context::PLUGIN_BROKER_ENV && key != "ORBIT_ACTIVITY_RESIDENT_CONTINUITY"
+        });
+        child_env.push((
+            "ORBIT_ACTIVITY_RESIDENT_CONTINUITY".to_string(),
+            "rebuilt".to_string(),
+        ));
+        child_env.extend(fallback_broker.env());
+        started_at = chrono::Utc::now();
+        process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
+            context,
+            provider: &provider,
+            resolved_program: &resolved_program,
+            subprocess_args: &subprocess_args,
+            child_env: &child_env,
+            subprocess_cwd: &subprocess_cwd,
+            subprocess_cwd_string: &subprocess_cwd_string,
+            sandbox,
+            stdin_bytes: fallback_stdin_bytes,
+            wall_clock_timeout,
+            timeout_seconds,
+            stall_window,
+            build_wait_directory: &build_wait_directory,
+            redaction,
+            cli_executor: &cli_executor,
+            plugin_broker: fallback_broker,
+            worktree_boundary: &mut worktree_boundary,
+            task_ids: &task_ids,
+        })?;
+    }
     post_run::finish_cli_dispatch(post_run::CliProviderCompletion {
         context,
         started_at,

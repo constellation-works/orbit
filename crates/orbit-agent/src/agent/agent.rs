@@ -148,4 +148,12 @@ impl Agent {
     pub fn model_name(&self) -> Option<&str> {
         self.runtime.model_name()
     }
+
+    pub fn supports_continuity(&self) -> bool {
+        self.runtime.supports_continuity()
+    }
+
+    pub fn resume_failed(&self, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+        self.runtime.resume_failed(exit_code, stdout, stderr)
+    }
 }
