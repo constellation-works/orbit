@@ -98,8 +98,8 @@ per request:
   pilot-warning triage, where an option approves or re-pilots the held proposed task.
   `re_pilot` explicitly submits one pilot even without a field rewrite; while a pilot is
   pending or running, the answer is refused (`answer_not_applicable`, nothing applied, the
-  request stays open) until that pilot settles. Only the first routine assessment is automatic.
-  Requirements edits alone never queue another routine pilot, but an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it; delivery waits for a new
+  request stays open) until that pilot settles. The first routine assessment is automatic. A certified
+  description or acceptance-criteria edit later queues a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds the task; edits to other material or policy never queue one through the routine, but an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it; delivery waits for a new
   assessment of edited description/criteria (drain repilot, `orbit task repilot <id>`,
   `orbit.task.repilot`, or task update `repilot: true`). A held warning retains
   one decision across routine windows until answered or explicitly reassessed.

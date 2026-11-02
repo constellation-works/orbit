@@ -415,7 +415,7 @@ orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 
 The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
 when the footprint, complexity, testable criteria and deduplication are already
-settled; readiness still applies and an explicit pilot remains available. The routine never queues a later pilot automatically, even after material edits: every later routine assessment requires an explicit
+settled; readiness still applies and an explicit pilot remains available. The routine queues a later pilot automatically only when a certified description or acceptance-criteria edit makes the applied assessment stale on a proposed or backlog task, and no live execution claim or unresolved failed pilot holds the task. Edits to other material (title, plan, selectors) or policy never queue one through the routine; every other later routine assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
 with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
@@ -531,7 +531,7 @@ workspace routine is disabled by default and uses a `preparation_eligible`
 state trigger, not a periodic cron: each tick fingerprints eligible tasks and
 queues only tasks without an applied assessment after the 2-minute debounce or
 the 10-minute maximum wait. Once assessed, a task stays quiet across routine
-windows, including after material edits; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
+windows until a certified description or acceptance-criteria edit makes its assessment stale; it then gets a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds it. Edits to other material or policy never queue one; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 
