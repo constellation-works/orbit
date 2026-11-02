@@ -168,9 +168,11 @@ impl OrbitRuntime {
             recovery_interventions: 0,
             has_checkpoints: false,
         };
+        let mut mandate_days = 0.0f64;
         for task_id in &mandate_ids {
             let task = self.get_task(task_id)?;
             let days = active_days(task.created_at, start, now);
+            mandate_days += days;
             let inputs = self.measure_task(task_id, start, now)?;
             totals.reversed += inputs.reversed;
             totals.reversal_total += inputs.reversal_total;
@@ -194,7 +196,7 @@ impl OrbitRuntime {
             let window_days = ((now - start).num_seconds().max(0) as f64 / 86_400.0)
                 .ceil()
                 .max(1.0);
-            value["totals"] = totals_json(window_days, &totals);
+            value["totals"] = totals_json(window_days, mandate_days, &totals);
         }
         if let Some(baseline_id) = baseline.map(str::trim).filter(|value| !value.is_empty()) {
             let task = self.get_task(baseline_id)?;
@@ -688,8 +690,16 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
     })
 }
 
-fn totals_json(window_days: f64, totals: &MeasureInputs) -> Value {
-    let mut aggregate = mandate_json("totals", window_days, totals, false);
+fn totals_json(window_days: f64, mandate_days: f64, totals: &MeasureInputs) -> Value {
+    // Workspace totals divide per-mandate-day rates by summed mandate active
+    // days (mandate-days), not by the calendar window. Per-human-day rates
+    // stay over the calendar window.
+    let window_days = window_days.max(1.0);
+    let mandate_days = mandate_days.max(1.0);
+    let mut aggregate = mandate_json("totals", mandate_days, totals, false);
+    let per_human_day = totals.escalations.len() as f64 / window_days;
+    aggregate["escalations"]["per_human_day"] = json!(per_human_day);
+    aggregate["escalation_load"]["per_human_day"] = json!(per_human_day);
     aggregate["task_id"] = Value::Null;
     aggregate
 }
