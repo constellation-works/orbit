@@ -45,7 +45,7 @@ array is shown.
 | `--crew <crew>` (repeatable) | `crew: string[]` | `item.task.crew` | The crew assigned to the task. |
 | `--orchestrator <crew>` (repeatable) | `orchestrator: string[]` | `item.task.orchestrator` | The orchestrator attributed to the task. |
 | `--older-than <duration>` | `older_than: string` | `item.age_seconds` at least the duration | `90m`, `36h`, `3d` (the duration syntax of `orbit run auto --for`). Items with `since: null` never match. |
-| `--since <cursor>` | `since: string` | Items new or changed since the cursor | [attention-cursor](./attention-cursor.md). |
+| `--since <cursor>` | `since: string` | Items new or changed since the cursor | [attention-cursor](./attention-cursor.md). An invalid, expired or unsupported value is never an error: it returns the full filtered list as [Validity and expiry](./attention-cursor.md#validity-and-expiry) defines. |
 | `--limit <n>` | `limit: integer` | Caps a public response after ordering and delta | Public responses only. Default 100, maximum 500. Omitted means 100. [Public response limit](#public-response-limit). |
 
 ## Combination semantics
@@ -59,8 +59,11 @@ array is shown.
   decide which workspaces and hosts are read at all. The rest filter the derived items.
 - **Contradictory combinations are empty, not errors.** `--task ORB-1 --host other` where the
   prefix names a different host returns zero items with both filters echoed. Malformed or
-  unresolvable tokens (an unknown workspace, host, kind, status, duration or cursor shape) are
-  errors; a well-formed filter that matches nothing is not.
+  unresolvable tokens (an unknown workspace, host, kind, status or duration) are errors; a
+  well-formed filter that matches nothing is not. `--since` is the exception: an invalid,
+  expired or unsupported cursor is never an error and follows the full-list fallback in
+  [attention-cursor](./attention-cursor.md#validity-and-expiry) (`cursor.status` is `invalid`,
+  `expired` or `unsupported`, the full filtered list is returned and a fresh cursor is minted).
 - **Source pushdown.** `--kind` and `--exclude-kind` decide which kinds are read, so
   `--exclude-kind ci_red` skips the network read entirely and `--kind pilot_warning` reads no
   runs or claims. Other filters cannot be pushed down and apply after derivation.
@@ -101,7 +104,9 @@ candidate set are specified in
 - **Severity, kinds, limit.** No minimum severity, every kind, public `--limit 100`.
   That default is the response page. It is not an aggregator candidate read.
 - **Exit status.** `0` whenever the query ran, with or without items or `degraded` entries.
-  Non-zero only for usage and resolution errors. Automation reads the JSON `counts`; the tool
+  Non-zero only for usage and resolution errors. An invalid, expired or unsupported `--since`
+  value is not a usage or resolution error: the query ran, so the exit status is `0` with the
+  full-list fallback above. Automation reads the JSON `counts`; the tool
   does not encode "items exist" in the exit code.
 
 ## Examples
