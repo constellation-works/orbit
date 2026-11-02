@@ -186,6 +186,7 @@ impl OrbitRuntime {
         }?;
         self.write_back_claimed_leaf_crew(
             &claim.task_id,
+            &claim.claim_id,
             leaf_crew.as_deref(),
             outcome.committed,
             recorded_crew.as_deref(),

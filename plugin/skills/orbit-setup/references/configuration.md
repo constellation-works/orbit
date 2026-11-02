@@ -355,7 +355,13 @@ the task has no assignment for that experiment or has only an
 `explicit_crew` exclusion for it. Existing arm assignments and other exclusions
 for that experiment remain sticky. They finish with `conclude` (recording a
 chosen arm or no choice) or
-`abandon` (without a conclusion). An agent session may only use these
+`abandon` (without a conclusion). Enrollment remains historical, but concluded
+and abandoned experiments apply no treatment to a fresh admission. Existing
+owner runs and claim receipts keep their frozen treatment on resume. For a
+fresh crew admission, an explicit run choice or a later audited task pin wins;
+a force supersedes an older task pin (and wins an exact timestamp tie). A crew
+override suppresses the whole crew-bearing arm and records the intended digest
+and actual crew without rewriting enrollment. An agent session may only use these
 read-only commands:
 
 - `orbit experiment list`

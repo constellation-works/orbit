@@ -246,6 +246,8 @@ pub(super) struct TaskOutcome {
     /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
     pub(super) crew: String,
     pub(super) terminal: bool,
+    /// Latest admission applied this arm; absent for legacy evidence.
+    pub(super) admitted_treatment: Option<bool>,
     /// An implement invocation at or after assignment recorded an
     /// explorer-delegation tool call.
     pub(super) explorer_call: bool,
@@ -511,6 +513,7 @@ impl OrbitRuntime {
         let modes = task_execution_modes(self, since, &executed, now);
         let mut interactive_excluded = 0;
 
+        let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id)?;
         let mut outcomes = Vec::with_capacity(enrolled.len());
         for row in enrolled {
             let (Some(arm), Some(task)) = (row.arm.as_ref(), tasks.get(row.task_id.as_str()))
@@ -678,6 +681,11 @@ impl OrbitRuntime {
                 admitted_pool_label,
                 crew: crew_name,
                 terminal,
+                admitted_treatment: self.admitted_experiment_treatment(
+                    id,
+                    experiment_id,
+                    claimed_treatments.get(id),
+                )?,
                 explorer_call: explorer.found.contains(id),
                 explorer_unobserved: explorer.unobserved.contains(id),
                 first_edit_trace_incomplete: first_edits

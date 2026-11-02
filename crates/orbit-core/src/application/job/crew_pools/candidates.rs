@@ -491,7 +491,8 @@ impl OrbitRuntime {
         let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
             return Ok(None);
         };
-        let (mut crews, draw_source) = self.admissible_crew_candidates(&redraw, &pools)?;
+        let (mut crews, draw_source) =
+            self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
         // The claimed snapshot carries no tags or context files to type the
         // task by, and a follower keeps no performance snapshot of its own,
         // so this re-draw weighs this host's usage pressure only.
@@ -527,7 +528,27 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CapturedCrewPools,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        if let Some(pool) = self.experiment_crew_pool(&task.id)? {
+        self.unheld_task_crew_candidates_for(task, pools, true)
+    }
+
+    /// A claimed leaf's snapshot is owned by another host. Resolve its
+    /// automatic pool against this host's current policy without asking this
+    /// host's experiment store for an owner-side assignment.
+    pub(in crate::application) fn unheld_claimed_leaf_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        self.unheld_task_crew_candidates_for(task, pools, false)
+    }
+
+    fn unheld_task_crew_candidates_for(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        include_experiment: bool,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        if include_experiment && let Some(pool) = self.experiment_crew_pool(&task.id)? {
             return self
                 .pool_member_candidates(&pool.entries, &pool.source, None)?
                 .ok_or_else(|| {

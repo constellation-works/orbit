@@ -45,6 +45,17 @@ impl OrbitRuntime {
         task_id: &str,
         rows: Vec<orbit_store::contracts::ExperimentAssignment>,
     ) -> Result<CapturedExperiments, OrbitError> {
+        let task = self.get_task(task_id)?;
+        let explicit = self.task_crew_source(&task)?.as_deref() == Some("explicit");
+        let explicit_at = if explicit {
+            self.get_task_history(task_id)?
+                .into_iter()
+                .filter(|entry| entry.event == "crew_assigned")
+                .map(|entry| entry.at)
+                .max()
+        } else {
+            None
+        };
         let mut assignments = Vec::new();
         for row in rows {
             let Some(arm_name) = row.arm else {
@@ -59,6 +70,19 @@ impl OrbitRuntime {
                 .iter()
                 .find(|arm| arm.name == arm_name)
                 .ok_or_else(|| OrbitError::Store("assigned experiment arm is missing".into()))?;
+            // Enrollment is historical evidence, not perpetual execution
+            // authority. Preserve paused/retired behavior, but terminal
+            // experiments cannot authorize another delivery. A later audited
+            // task pin also supersedes a forced assignment (ties keep force).
+            let overlay = ExperimentOverlay::parse(
+                &arm_name,
+                serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
+                })?,
+            )?;
+            let task_override = explicit
+                && overlay.crew.is_some()
+                && (!row.forced || explicit_at.is_some_and(|at| at > row.assigned_at));
             assignments.push(CapturedExperiment {
                 experiment: row.experiment,
                 arm: arm_name,
@@ -70,7 +94,9 @@ impl OrbitRuntime {
                     .digest
                     .ok_or_else(|| OrbitError::Store("assigned digest is missing".into()))?,
                 overlay_json: arm.overlay_json.clone(),
-                live: record.experiment.mode == super::overlay::LIVE,
+                live: record.experiment.mode == super::overlay::LIVE
+                    && !matches!(record.experiment.status.as_str(), "concluded" | "abandoned")
+                    && !task_override,
                 instructions: Vec::new(),
                 skills: Vec::new(),
             });
@@ -90,7 +116,7 @@ impl OrbitRuntime {
             return Ok(());
         };
         // Claimed leaves never consult replica experiments, including on resume.
-        let capture = if self
+        let mut capture = if self
             .worker_invocation()
             .is_some_and(|binding| binding.task_id == task_id)
         {
@@ -104,6 +130,23 @@ impl OrbitRuntime {
         } else {
             self.capture_task_experiments(&self.get_task(&task_id)?)?
         };
+        // An explicit run crew supersedes a crew-bearing treatment as a
+        // whole: never deliver only part of an arm and count it as treated.
+        if input
+            .get("crew")
+            .and_then(Value::as_str)
+            .is_some_and(|crew| !crew.trim().is_empty())
+        {
+            for entry in &mut capture.assignments {
+                let overlay: ExperimentOverlay = serde_json::from_str(&entry.overlay_json)
+                    .map_err(|error| {
+                        OrbitError::Store(format!("invalid experiment overlay: {error}"))
+                    })?;
+                if overlay.crew.is_some() {
+                    entry.live = false;
+                }
+            }
+        }
         input[EXPERIMENT_CAPTURE_KEY] = serde_json::to_value(capture).map_err(|error| {
             OrbitError::Execution(format!("serialize experiment capture: {error}"))
         })?;

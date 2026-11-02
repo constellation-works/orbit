@@ -167,7 +167,6 @@ impl OrbitRuntime {
         if !POLICY_PIPELINES.contains(&job_name) {
             return Ok(None);
         }
-        self.install_experiment_capture(input)?;
         if resuming {
             return Ok(None);
         }
@@ -199,8 +198,14 @@ impl OrbitRuntime {
                 {
                     input["crew"] = selection["crew"].clone();
                     input[SELECTION_KEY] = selection.clone();
+                    if let Some(capture) = parent.get("experiment_capture") {
+                        input["experiment_capture"] = capture.clone();
+                    } else {
+                        self.install_experiment_capture(input)?;
+                    }
                     return Ok(None);
                 }
+                self.install_experiment_capture(input)?;
                 self.capture_auto_task_selection(input, &task_id, random)
             }
             // A top-level submission — a drain, a ship wrapper, or an ordinary
@@ -209,6 +214,7 @@ impl OrbitRuntime {
             // multi-task or discovery run leaves each leaf to draw at its own
             // admission, so siblings stay independent.
             None => {
+                self.install_experiment_capture(input)?;
                 input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
                 let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
                     return Ok(None);
@@ -296,7 +302,16 @@ impl OrbitRuntime {
     ) -> Result<AdmissionTaskWrites, OrbitError> {
         let pools = pools_from_input(input)?;
         let task_id = &task.id;
-        let experiment_pool = self.experiment_crew_pool(task_id)?;
+        let experiment_pool = if input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .is_some()
+        {
+            None
+        } else {
+            self.experiment_crew_pool(task_id)?
+        };
         let allowlist = self.crew_allowlist_from_input(input)?;
         let explicit = input
             .get("crew")
@@ -496,6 +511,27 @@ impl OrbitRuntime {
                 input[SELECTION_KEY]["deviation"] = json!({
                     "intended_crew": planned, "actual_crew": selected.crew.name, "reason": source,
                 });
+            }
+        }
+        if let Some(assignments) = input
+            .get("experiment_capture")
+            .and_then(|capture| capture.get("assignments"))
+            .and_then(Value::as_array)
+        {
+            let suppressed = assignments
+                .iter()
+                .filter(|entry| entry["live"] == false)
+                .map(|entry| {
+                    json!({
+                        "experiment": entry["experiment"], "arm": entry["arm"],
+                        "intended_overlay_digest": entry["digest"],
+                        "actual_crew": selected.crew.name,
+                        "reason": "treatment inactive or superseded by explicit crew",
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !suppressed.is_empty() {
+                input[SELECTION_KEY]["experiment_suppressions"] = json!(suppressed);
             }
         }
         input["crew"] = json!(selected.crew.name);

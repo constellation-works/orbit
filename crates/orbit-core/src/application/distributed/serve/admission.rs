@@ -216,7 +216,7 @@ impl OrbitRuntime {
             .flatten();
         #[cfg(feature = "test-support")]
         crate::application::distributed::admission_checkpoint::notify();
-        boundary.admit_task_with_guidance(
+        boundary.admit_task_with_crew_guidance(
             identity,
             request,
             &AdmissionOrdering {
@@ -287,6 +287,7 @@ impl OrbitRuntime {
                     _ => Ok(None),
                 }
             },
+            &|task| self.fresh_claim_crew_task(task, request),
             &|task| {
                 Ok(AdmissionTaskGuidance {
                     experiments: self.capture_claimed_task_experiments(task, &request.ship)?,

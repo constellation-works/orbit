@@ -30,6 +30,7 @@
 mod activity;
 mod admission;
 mod candidates;
+mod claims;
 mod draw;
 mod purpose;
 #[cfg(feature = "test-support")]

@@ -421,7 +421,31 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CrewPools,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        let (candidates, source, hold) = self.held_crew_candidates(task, pools)?;
+        self.admissible_crew_candidates_for(task, pools, false)
+    }
+
+    /// The owner-issued claim carries the task's assignment. Select from the
+    /// follower's normal current pool and local gates without consulting its
+    /// experiment assignment store.
+    pub(in crate::application) fn admissible_claimed_leaf_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        self.admissible_crew_candidates_for(task, pools, true)
+    }
+
+    fn admissible_crew_candidates_for(
+        &self,
+        task: &Task,
+        pools: &CrewPools,
+        claimed_leaf: bool,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let (candidates, source, hold) = if claimed_leaf {
+            self.held_claimed_leaf_crew_candidates(task, pools)?
+        } else {
+            self.held_crew_candidates(task, pools)?
+        };
         let gate = self.provider_limit_gate(Utc::now());
         Ok(
             match self.provider_limited_candidates(

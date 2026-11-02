@@ -177,6 +177,7 @@ impl OrbitRuntime {
     pub(crate) fn write_back_claimed_leaf_crew(
         &self,
         task_id: &str,
+        claim_id: &str,
         crew: Option<&str>,
         committed: bool,
         recorded_crew: Option<&str>,
@@ -187,16 +188,28 @@ impl OrbitRuntime {
         let Some(crew) = crew.and_then(non_empty) else {
             return;
         };
-        let written = match self.experiment_crew_pool(task_id) {
-            Ok(Some(pool)) => AdmittedCrewSource::experiment(&pool.experiment, &pool.arm),
-            Ok(None) => AdmittedCrewSource::redraw_reason("claimed_leaf"),
-            Err(error) => {
-                tracing::warn!(
-                    task_id,
-                    "could not read the task's experiment crew pool: {error}"
-                );
-                AdmittedCrewSource::redraw_reason("claimed_leaf")
-            }
+        // Settlement attributes the contract this leaf actually received,
+        // even when the experiment ended while its worker was running.
+        let captured = self
+            .claim_receipt(claim_id)
+            .ok()
+            .and_then(|receipt| receipt.experiments);
+        let treatment = captured
+            .iter()
+            .flat_map(|capture| &capture.assignments)
+            .filter(|entry| entry.live)
+            .find(|entry| {
+                serde_json::from_str::<serde_json::Value>(&entry.overlay_json)
+                    .ok()
+                    .and_then(|overlay| overlay["crew"]["pool"].as_array().cloned())
+                    .is_some_and(|pool| {
+                        pool.iter()
+                            .any(|member| member["crew"].as_str() == Some(crew))
+                    })
+            });
+        let written = match treatment {
+            Some(entry) => AdmittedCrewSource::experiment(&entry.experiment, &entry.arm),
+            None => AdmittedCrewSource::redraw_reason("claimed_leaf"),
         };
         match self.write_task_crew(
             task_id,
