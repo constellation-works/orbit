@@ -20,6 +20,24 @@ non-PTY SSH connection to a destination Orbit. Federated mode combines the local
 host with every registered remote host into one tool surface. There is no
 `orbit mcp connect` command; use `serve --mode remote`.
 
+### Role and toolset selection
+
+Choose the role and additional toolsets as described in [MCP roles and
+toolsets](configuration.md#mcp-roles-and-toolsets). Both `serve` and `listen`
+read their defaults from this machine's global `machine.mcp.role` and
+`machine.mcp.toolsets` settings. Their `--role` and `--toolset` flags override
+the corresponding setting for that server. Remote mode forwards the selected
+role and toolsets to its destination; federated mode applies the selection to
+each destination. A directly launched server on another machine uses that
+machine's own global settings.
+
+This selection controls which tools MCP advertises and dispatches. It does not
+grant authority: even the `operator` role needs the separate `--operator`
+choice for operator-only capabilities. To inspect what a remote or federated
+client actually receives, initialize that MCP connection and call
+`tools/list`; `orbit tool list --role <role>` reports the built-in role
+baseline, not remote-specific or extra configured toolsets.
+
 For federation, register each remote host on the calling machine:
 
 ```bash
