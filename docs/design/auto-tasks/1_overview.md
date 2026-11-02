@@ -202,10 +202,12 @@ definition of the same name.
   after the areas, tagged `qa-full-sweep` + `qa-full-sweep-rollup` +
   `no-diff-expected` + `auto-task:qa-full-sweep`, with no crew and no `os:`
   tag. Its description and acceptance criteria carry an owner-evidence
-  contract: area-task status reads and each area's `qa-progress.json` are
-  evidence only the owner task store can produce, because a claimed
-  `orbit.task.show` or `orbit.task.artifact.get` refuses an id other than
-  the claimed task. Preparation records that contract as `required_machine`,
+  contract: area-task status reads and each area's `qa-progress.json` must
+  come from the owner task store. A claimed worker can read ordinary task
+  records and non-review artifacts for any task in its claimed workspace;
+  `review-*` artifact reads remain limited to the claimed task. This roll-up's
+  owner-local evidence requirement is a separate policy. Preparation records
+  that contract as `required_machine`,
   so a follower is not offered the roll-up and the owner's drain may start
   it. The coordinator sets the roll-up's `dependencies` to every area task
   with `orbit.task.update` on the owner, and finishes only when that field

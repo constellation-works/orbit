@@ -353,15 +353,16 @@ template:
     > Execute on the owning machine. Each area's status is an
     > `orbit.task.show` of that area task, and each area's progress is an
     > `orbit.task.artifact.get` of that area task's `qa-progress.json`. Both
-    > reads are evidence only the owner task store can produce. A claimed
-    > follower refuses each of them because the request names a task other
-    > than the claimed task. Declaring `orbit.task.show` and
-    > `orbit.task.artifact.get` does not authorize those reads and does not
-    > widen what the broker accepts. Preparation must record
+    > reads must come from the owner task store under this roll-up's contract.
+    > A claimed worker can read ordinary task records and non-review artifacts
+    > for any task in its claimed workspace; `review-*` artifact reads remain
+    > limited to the claimed task. This roll-up's owner-local evidence
+    > requirement is separate from that broker scope. Preparation must record
     > `required_machine` for this owner-evidence contract before admission,
     > so a follower is not offered this roll-up; the owner's own drain may
-    > start it, and on the owner those reads stay authorized. Do not guess a
-    > missing artifact, substitute another host's copy, or record `PASS`
+    > start it. Declaring these tools does not widen broker scope or relax the
+    > owner-local evidence requirement. Do not guess a missing artifact,
+    > substitute another host's copy, or record `PASS`
     > from anything except the owner-local reads below. Routing grants no
     > additional tool scope.
     >

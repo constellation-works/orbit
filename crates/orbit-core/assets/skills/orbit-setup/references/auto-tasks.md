@@ -440,10 +440,12 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   when every area is done and every required scenario passed at the pinned
   SHA, otherwise `INCOMPLETE`, including when an area's progress is missing,
   unreadable, or names another SHA or area. The roll-up's description and
-  acceptance criteria carry an owner-evidence contract. Area status and
-  `qa-progress.json` reads name other tasks, which a claimed worker cannot
-  do, so preparation records `required_machine` and only the owning machine
-  runs the roll-up. Area tasks stay portable, with no crew and no `os:` tag.
+  acceptance criteria carry an owner-evidence contract. A claimed worker can
+  read ordinary task records and non-review artifacts for any task in its
+  claimed workspace; `review-*` artifact reads remain limited to the claimed
+  task. This roll-up still requires owner-local evidence by policy, so
+  preparation records `required_machine` and only the owning machine runs it.
+  Area tasks stay portable, with no crew and no `os:` tag.
   The coordinator sets those dependencies with `orbit.task.update` on the
   owner and finishes only when the roll-up's `dependencies` field lists
   every area. If that write is unavailable, it returns a
