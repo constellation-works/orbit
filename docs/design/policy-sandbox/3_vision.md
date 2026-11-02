@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Vision"
 type: design
 title: "Policy & Sandboxing — Vision"
 owner: claude
-last_updated: 2026-10-09
+last_updated: 2026-11-02
 status: Draft
 feature: policy-sandbox
 doc_role: vision
 tags: ["policy-sandbox"]
-last_validated: 2026-10-21
+last_validated: 2026-11-02
 ---
 
 # Policy & Sandboxing — Vision
@@ -198,12 +198,7 @@ External reference categories:
 
 ## Task References
 
-- **[T20260416-0728]** — Established the v2 policy contract that this document extends.
-- **[T20260419-0503]** — Made `fsProfiles` enforcement runtime-wide.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened the supervision contract that §1.11 wants to evolve.
-- **[T20260426-0605]** — Auditability folder linked from §1.10.
-- **[T20260426-0622]** — Add this folder and name the open questions.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[ORB-10552]** — Implement the shipped fail-closed Linux Bubblewrap write-confinement backend for CLI agents.
+- [ORB-10552] — Implement the shipped fail-closed Linux Bubblewrap write-confinement backend for CLI agents.
+- [ORB-10833] — Retire remaining unregistered filesystem builtins and their private policy helpers.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

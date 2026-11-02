@@ -3,6 +3,7 @@ type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
 last_validated: 2026-10-21
+last_updated: 2026-11-02
 ---
 
 # Spec: Sandboxed Exec Contract
@@ -245,7 +246,11 @@ metadata check without a retained descriptor does not meet this contract.
 The guarantee covers renames and link replacement beneath the opened runtime
 root. It assumes an unprivileged peer cannot remount the runtime root or its
 host ancestors. Bubblewrap consumes and closes the inherited setup descriptors
-before provider exec; the parent closes its copies with the plan after spawn.
+before provider exec. The parent shares the runtime owner's existing authority
+handles and retains the mount plan until the provider and cleanup finish; it
+must not close duplicate SQLite descriptors after spawn, because a close can
+release the host process's POSIX locks. [ORB-12332] completed this lifetime
+contract.
 Non-Linux backends do not consume this authority representation.
 
 ### Ownership and eventual implementation targets
@@ -498,3 +503,13 @@ validation explicitly outstanding. Neither local tests nor workspace lint turn
 those unmet production criteria into passes. The collector records per-command
 latency, including failures; no live AppArmor overhead, large-tree bound or
 supported-platform performance is claimed from these measurements.
+
+## Task References
+
+- [ORB-11514] — Implement the earlier Linux proc.spawn read boundary, subsequently replaced by inherited worker confinement.
+- [ORB-11546] — Investigate live read enforcement and preserve isolated probe evidence without claiming a complete production repair.
+- [ORB-12332] — Share runtime authority handles and retain Linux mount plans through provider cleanup to preserve SQLite locks.
+- [ORB-12736] — Enforce plugin grants and sandbox exec/MCP backends with versioned envelopes.
+- [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

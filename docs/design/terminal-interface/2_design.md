@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-11-01
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -26,7 +26,7 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. The 41 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. Command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
@@ -46,7 +46,7 @@ The audit view still demonstrates the difference between the two renderings. [OR
 
 The eight per-domain wrappers this replaced (`status_color`/`_cell`, `priority_color`/`_cell`, `job_state_color`/`_cell`, `doctor_status_color_cell`, `task_type_color_cell`) are gone, and with them the two-edit cost visible in the history — [T20260427-43] added a `friction` arm to two functions, [ORB-10202] removed it from two — and the `backlog` drift between the pair. Adding a status is now one line in one table. Satisfies [./specs/color-and-styling.md](./specs/color-and-styling.md) §1 [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
-**Still diverges on §3's palette depth.** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code. `Table::render_at` rewrites that form for the four role colors to the 16-color bright code `\e[92m`, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI, which both backends now emit, so they still disagree about the *shade* (bright against normal), though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: a column the caller filtered on stays on screen but is still painted, in every list command.
+**The §3 palette-depth gap is closed [ORB-13140].** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code. `Table::render_at` rewrites that form for the four role colors to the 16-color bright code `\e[92m`, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI, which both backends now emit, so they still disagree about the *shade* (bright against normal), though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: `Column::filtered` keeps a column on screen without removing its cell styling. [ORB-21574] tracks neutralizing filtered values.
 
 ## 5. Sink Resolution
 
@@ -76,9 +76,9 @@ A closed stdout is not an error. During rendering, `output/pipe.rs` suppresses t
 
 ## 8. Test Coverage of Output
 
-Clap-rendered help (flag descriptions, about text, command lists, footers) wraps to the sink width with a hanging indent: the workspace enables Clap's `wrap_help`, `cli_command` hands Clap the sink width, and `help::hang_wrap_footers` wraps footer lines first so a continuation stays under its example. The hand-built grouped rows are template text Clap never re-wraps. Piped help has width 0, which keeps source formatting and so stays unwrapped; the goldens pin that form. The PTY test `clap_help_wraps_to_the_terminal_width_with_a_hanging_indent` covers the terminal layout at 60, 80 and 120 columns.
+Clap-rendered help (flag descriptions, about text, command lists, footers) wraps to the sink width with a hanging indent: the workspace enables Clap's `wrap_help`, `cli_command` hands Clap the sink width, and `help::hang_wrap_footers` wraps footer lines first so a continuation stays under its example. The hand-built grouped rows are template text Clap never re-wraps. Piped help has width 0, which keeps source formatting and so stays unwrapped; the goldens pin that form. The PTY test `clap_help_wraps_to_the_terminal_width_with_a_hanging_indent` covers the terminal layout at 60, 80 and 120 columns [ORB-20753].
 
-Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; the table form needs a terminal, so no golden covers it.
+Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; ordinary terminal table layout and doctor findings are exercised by the boundary fixtures in `crates/orbit-cli/tests/output/table_rendering.rs` and `crates/orbit-cli/tests/output/doctor.rs`. The full findings behavior landed in [ORB-14829].
 
 The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit task list` is *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
@@ -88,7 +88,7 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 
 ## 9. Concerns & Honest Limitations
 
-**The specs and implementation now share the main rendering path.** Remaining differences are explicit compatibility cases: some commands with no record stream return `Silent`, and the two styling backends can choose different shades for the same semantic role. Reading only `specs/` still omits those implementation details.
+**The specs and implementation share the main rendering path, with committed gaps.** [ORB-21574] tracks filtered-value neutrality; [ORB-21575] tracks missing full detail paths; [ORB-21576] tracks health/status prose still returned as stdout text blocks by doctor, tool/skill doctor, and migration inspection. Those are incomplete contract work, separate from the explicit `Silent` compatibility cases and differing basic-palette shades. The shared fitter now warns on all-fixed overflow without cutting identifiers [ORB-20485].
 
 **The payload refactor was broad.** `Execute::execute` now returns `CommandOut` (`Result<CommandOutput, OrbitError>`), and `entry/finish.rs` hands the result to `output::render`. `CommandOutput::Silent` remains for no-record operations such as MCP and web servers, host-prerequisites-only init, and pipeline-worker execution; the renderer emits nothing for that variant. Task update and workspace init return `Payload::detail`, so their human confirmation text and JSON document are projections of the same payload rather than a separate printing path.
 
@@ -108,14 +108,20 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 
 ## Task References
 
-- [T20260411-0335] — introduced the dynamic full-width table arrangement that produces the current wrapping.
-- [T20260427-43] — added a `friction` arm to both halves of the duplicated color vocabulary.
-- [ORB-00279] — flattened the `orbit-cli` command tree into the current per-command module layout.
 - [ORB-10202] — removed the `friction` arm from both halves when the status was retired.
 - [ORB-10228] — added trusted MCP session context to the audit event JSON payload, but not to the printed line.
-- [ORB-10356] — made `OrbitError` `#[non_exhaustive]`, adding the `internal_error` catch-all to the payload's `code` discriminator.
-- [ORB-10569] — introduced `output/sink.rs` and the global `--format`, resolved once per invocation and not yet consumed.
-- [ORB-10570] — wired the sink into color and width, retired the eight color wrappers and the hand-padded `audit list` line, and moved errors to stderr.
-- [ORB-10585] — files the ADR for the process-global sink, which [ORB-10570] could not allocate.
+- [ORB-10356] — Make OrbitError non-exhaustive and add the internal-error JSON catch-all.
+- [ORB-10567] — Replace bordered wrapping tables with borderless one-line rows and column metadata.
+- [ORB-10569] — Introduce the output sink and global format selection.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-10586] — Convert command bodies to payload returns and give the shared renderer stdout ownership.
+- [ORB-13140] — Translate table role colors to basic 16-color ANSI after layout.
+- [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
+- [ORB-20485] — Warn when fixed table columns exceed terminal width without cutting identifiers.
+- [ORB-20753] — Wrap CLI help to the detected terminal width with hanging indents.
+- [ORB-21574] — Track the filed repair for filtered terminal values retaining color.
+- [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
+- [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
+- [T20260427-43] — Extend the earlier duplicated color vocabulary for friction status.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

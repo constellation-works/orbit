@@ -3,8 +3,8 @@ summary: "Task Artifacts — Overview"
 type: design
 title: "Task Artifacts — Overview"
 owner: codex
-last_updated: 2026-05-17
-last_validated: 2026-10-30
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 stage: shipped
 next: "—"
@@ -102,15 +102,17 @@ Before narrowing a listing by parent, the store verifies the generated `child_of
 
 ---
 
+The core cutover is shipped (legacy-backend removal `e9582ebafee9342ec38d663e4d5aedd8edb189e6`). Later completed slices include atomic bundle creation [ORB-10466], explicit orchestrator attribution [ORB-10580] and its contract repair [ORB-10587], host-prefixed allocation [ORB-10721], bounded list hydration [ORB-11205], consistent concurrent reads [ORB-11349], image retrieval [ORB-11365], and parent-index freshness [ORB-15856]. Publication is a separate feature, not unfinished reset scope.
+
 ## 3. At a Glance
 
 | Concern | File | Task |
 |---------|------|------|
-| V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-types/src/task/artifacts.rs](../../../crates/orbit-types/src/task/artifacts.rs) | — |
-| Public `Task` DTO | [crates/orbit-types/src/task/model/task.rs](../../../crates/orbit-types/src/task/model/task.rs) | — |
-| V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | — |
-| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | — |
-| Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/driver/sqlite/task_registry/](../../../crates/orbit-store/src/driver/sqlite/task_registry/) | — |
+| V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-types/src/task/artifacts.rs](../../../crates/orbit-types/src/task/artifacts.rs) | Done: [ORB-10580], [ORB-11365] |
+| Public `Task` DTO | [crates/orbit-types/src/task/model/task.rs](../../../crates/orbit-types/src/task/model/task.rs) | Done: [ORB-10580], [ORB-10587] |
+| V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | Done: [ORB-10466], [ORB-11349] |
+| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | Done: [ORB-11205], [ORB-15856] |
+| Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/driver/sqlite/task_registry/](../../../crates/orbit-store/src/driver/sqlite/task_registry/) | Done: [ORB-10721], [ORB-11205] |
 | V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-runtime/src/builder.rs](../../../crates/orbit-runtime/src/builder.rs) | — |
 | Local task store and canonical lookup | [2_design.md §6](./2_design.md#6-local-task-store-and-canonical-lookup) | — |
 | Task ID local-only doctrine after graph attribution removal | [docs/POSITIONING.md](../../POSITIONING.md) | [T20260506-11] |
@@ -122,7 +124,14 @@ Before narrowing a listing by parent, the store verifies the generated `child_of
 
 ## Task References
 
-- [T20260505-12] — Designed git-orphan-branch task sync and preserved `T<YYYYMMDD>-<N>` for that proposal.
+- [ORB-10466] — Publish new bundles atomically and isolate unrelated reads from malformed bundles.
+- [ORB-10580] — Add explicit orchestration ownership to task metadata and read/write surfaces.
+- [ORB-10587] — Complete orchestrator attribution validation and read projections after review.
+- [ORB-10721] — Give each machine a distinct task prefix and remove the old host-mode distinction.
+- [ORB-11205] — Bound task-list hydration and eliminate repeated dashboard bundle reads.
+- [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
+- [ORB-11365] — Added the bounded artifact read surface, image presentation classification, and the dashboard image preview.
+- [ORB-15856] — Validate child-of index freshness against canonical parent-target sets.
 - [T20260506-11] — Removed knowledge-graph task attribution and made task IDs local search keys rather than cross-machine references.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

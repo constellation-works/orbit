@@ -3,8 +3,8 @@ summary: "Task Artifacts — Vision"
 type: design
 title: "Task Artifacts — Vision"
 owner: codex
-last_updated: 2026-10-04
-last_validated: 2026-10-19
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 feature: task-artifacts
 doc_role: vision
@@ -55,7 +55,7 @@ The v2 artifact introduces append-only logs, but the envelope remains a snapshot
 
 ### 1.6 Should old task IDs survive the reset?
 
-No. Orbit is pre-release, so v2 should not carry old `T<YYYYMMDD>-<N>` IDs as supported aliases. A cutover command may print a local old-to-new mapping for humans, but commits and docs after the reset should cite only `[ORB-00000]` IDs.
+No. Orbit is pre-release, so v2 should not carry old `T<YYYYMMDD>-<N>` IDs as supported aliases. A cutover command may print a local old-to-new mapping for humans, but commits and docs after the reset should cite canonical `<prefix>-<digits>` IDs. [ORB-10721] subsequently gave each host a distinct prefix; `ORB` is an example, not the only valid authority.
 
 ### 1.7 Are review threads task artifacts or PR artifacts?
 
@@ -161,6 +161,7 @@ Orbit tasks should feel local and inspectable without forcing every user into a 
 
 ## Task References
 
+- [ORB-10721] — Give each machine a distinct task prefix and remove the old host-mode distinction.
 - [ORB-11068] — separated authority-owned task publication from the retired multi-writer sync proposal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

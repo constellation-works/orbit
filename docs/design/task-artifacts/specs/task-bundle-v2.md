@@ -2,7 +2,8 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-10-22
+last_validated: 2026-11-02
+last_updated: 2026-11-02
 ---
 
 # Spec: Task Bundle V2
@@ -427,11 +428,12 @@ registered, settled envelope, then select from the index: SQL answers the
 status, priority, job-run, tag and continuation predicates, newest-first
 ordering (task ID ascending for ties), the limit and the total, so only the
 selected envelopes leave the parse cache and only the selected bundles load.
-A parent predicate narrows the selection through the indexed `child_of`
-relation rows, but the freshness scan does not compare relations, so each
-selected envelope still confirms it. That predicate and those the index does
-not project (search, type, external references) narrow the indexed candidates
-in memory before the limit. Exact
+A parent predicate narrows selection through indexed `child_of` relation
+rows. The freshness scan compares every envelope's complete parent-target set
+with those rows, and proof fingerprints include it, so a relation-only restore
+cannot hide a child behind a stale parent index [ORB-15856]. Predicates the
+index does not project (search, type, external references) narrow the indexed
+candidates in memory before the limit. Exact
 totals count metadata matches; they do not certify off-page body, event, or
 artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search
@@ -522,3 +524,14 @@ references resolve in the checkout's repository. The CI-failure filer uses it
 on archived/rejected exact-key sweep tasks to retain operator coverage;
 [CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery.md)
 describes open, landed, unavailable and abandoned cover handling.
+
+## Task References
+
+- [ORB-10332] — Retire review-thread task surfaces and leave their legacy sidecars inert.
+- [ORB-10343] — Bound failure-history notes while retaining a command to retrieve the full durable error.
+- [ORB-11205] — Bound task-list hydration and eliminate repeated dashboard bundle reads.
+- [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
+- [ORB-14181] — Report canonical dangling relations and bound failed task-index repair attempts.
+- [ORB-15856] — Validate child-of index freshness against canonical parent-target sets.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_updated: 2026-10-26
-last_validated: 2026-10-18
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
@@ -31,15 +31,17 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
 | `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs and the regression cross-tabs |
 
+Workspace doctor now prints full non-ok findings and remediation below its terminal table [ORB-14829]; `orbit doctor --format plain` and `orbit doctor --json` retain complete messages. Non-ok findings therefore have full recovery; ok/info rows still have no per-check detail command. The remaining per-record recovery gaps below are tracked by [ORB-21575].
+
 ## Gaps
 
 These views can truncate a column and have no detail command. Listed rather than invented — closing them is separate work, and `--json` is the interim answer.
 
 | List view | Truncatable columns | Note |
 |-----------|--------------------|------|
-| `orbit doctor` | `DETAILS` | Diagnostic output; the message is authored short. No per-check detail command. |
-| `orbit tool doctor` | `DETAILS` | As above. |
-| `orbit skill doctor` | `DETAILS` | As above. |
+| `orbit doctor` | `DETAILS` | Full non-ok findings print below the table; ok/info rows still lack a per-check detail command. |
+| `orbit tool doctor` | `DETAILS` | No per-tool diagnostic detail command; plain/JSON carries the full message. |
+| `orbit skill doctor` | `DETAILS` | No per-skill diagnostic detail command; plain/JSON carries the full message. |
 | `orbit tool show` (parameters) | `DESCRIPTION` | Already the detail view; the parameter description has no deeper surface than `--json`. |
 | `orbit migrate` (inspection readout) | `COMPONENT` | Lists every component, but the column is flexible, so a narrow sink can cut it. `--json` carries the full report. |
 
@@ -67,3 +69,11 @@ CLI run JSON and `orbit.workflow.run.list` expose `task_ids` using the same
 nullable array as the dashboard: sorted, unique, nonempty IDs extracted from
 submitted `task_ids`/`task_id`, or null for a task-free run. Listing identities
 never reads task records; title lookup is reserved for detail views.
+
+## Task References
+
+- [ORB-10567] — Replace bordered wrapping tables with borderless one-line rows and column metadata.
+- [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
+- [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

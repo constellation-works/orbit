@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Overview"
 type: design
 title: "Policy & Sandboxing — Overview"
 owner: claude
-last_updated: 2026-10-06
-last_validated: 2026-10-30
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 status: Draft
 stage: shipped
 next: "—"
@@ -63,6 +63,8 @@ When the default policy denies workspace `.orbit/**`, the engine host re-allows 
 
 ---
 
+Committed scope is shipped: [ORB-10552] delivered the Linux backend, [ORB-10602] and [ORB-10607] completed policy-derived grants, and [ORB-15117] aligned macOS worktree policy. The read-policy and other extensions in the vision remain future scope.
+
 ## 3. At a Glance
 
 | Concern | Where it lives | Primary task ID |
@@ -70,12 +72,12 @@ When the default policy denies workspace `.orbit/**`, the engine host re-allows 
 | Policy schema and validation | `crates/orbit-types/src/policy/policy_def.rs`, `crates/orbit-types/src/resource/data.rs` | [T20260416-0728] |
 | Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator}.rs` | [T20260416-0728] |
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
-| Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
+| Shipped versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | Done: [ORB-10560], [ORB-10573], [ORB-10602], [ORB-10607] |
 | Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/actions/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
 | Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/fs_audit.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
-| Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | [ORB-10552] |
+| Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | Done: [ORB-10552] |
 | Process supervision | `crates/orbit-common/src/process/supervisor/`; exec's policy in `crates/orbit-exec/src/supervision/` | [T20260417-0558-4], [T20260417-0558-5] |
 | Filesystem denial audit channel | `crates/orbit-tools/src/fs_audit.rs` (`FsAuditLogger`), `crates/orbit-engine/src/activity_job/dispatcher.rs` → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
 
@@ -83,18 +85,20 @@ When the default policy denies workspace `.orbit/**`, the engine host re-allows 
 
 ## Task References
 
-- **[T20260416-0728]** — Align policy contract with runtime enforcement (v2 schema, effective profile resolution).
-- **[T20260417-0550]** — Decompose `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Harden `orbit-exec` supervision (signal pipe, process-group reaping).
-- **[T20260419-0503]** — Enforce `fsProfiles` across runtime and CLI.
-- **[T20260426-0605]** — Add the auditability design folder cross-linked from §3.
-- **[T20260426-0622]** — Add this policy & sandboxing design folder under claude ownership.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[ORB-00129]** — Keep child Orbit runtime write roots narrow under the macOS sandbox while supporting activity-exposed learning, friction, and job-run state tools.
-- **[ORB-10552]** — Add fail-closed Linux Bubblewrap write confinement for shipped CLI agents.
-- **[ORB-10560]** — Permit only explicit versioned `.orbit` configuration beneath the default protected boundary.
-- **[ORB-10573]** — Prepare only missing, exactly scoped versioned-config anchors that remain permitted by the effective host policy/profile.
-- **[ORB-10602]** — Derive write-grant anchors from the effective profile at each spawn instead of a hardcoded table plus a context-file snapshot, and report every unmountable grant.
-- **[ORB-11376]** — Keep checkout-local runtime identity outside the agent-write and sandbox-anchor surface; add exact-registration recovery for missing or corrupt identity.
+- [ORB-10552] — Implement the shipped fail-closed Linux Bubblewrap write-confinement backend for CLI agents.
+- [ORB-10560] — Permit only explicit versioned `.orbit` configuration beneath the default protected boundary.
+- [ORB-10573] — Prepare only missing, exactly scoped versioned-config anchors that remain permitted by the effective host policy/profile.
+- [ORB-10602] — derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate.
+- [ORB-10607] — Enforce final-policy grant preparation, anchor kinds, containment and failed-write attribution.
+- [ORB-10828] — Retire the registered filesystem read and delete builtins.
+- [ORB-10833] — Retire remaining unregistered filesystem builtins and their private policy helpers.
+- [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
+- [ORB-15117] — Apply worktree-anchored macOS modify rules and retain terminal host-clock denies.
+- [T20260416-0728] — Establish schema-v2 policy and effective-profile resolution.
+- [T20260417-0550] — Decompose orbit-exec supervision modules.
+- [T20260417-0558-4] — Harden subprocess signal forwarding and process-group cleanup.
+- [T20260417-0558-5] — Harden shared signal-handler and process-group supervision.
+- [T20260419-0503] — Bind filesystem profiles throughout runtime and CLI activity dispatch.
+- [T20260426-0605] — Document the auditability surface that records policy denials.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
