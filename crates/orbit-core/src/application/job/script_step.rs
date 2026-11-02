@@ -780,10 +780,14 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         )
     })?;
     record.duration_ms = Some(u64::try_from(run.duration.as_millis()).unwrap_or(u64::MAX));
-    let log = redact_secret_values_text(
-        &redact_all_and_home(&String::from_utf8_lossy(&run.log)),
+    // The passed values are redacted first so their `[REDACTED]` placeholder
+    // wins when a passed name is also sensitive (`redact_all_and_home` would
+    // otherwise replace it with `[REDACTED_ENV]` first); the later `redact_all`
+    // pass leaves `[REDACTED]` untouched.
+    let log = redact_all_and_home(&redact_secret_values_text(
+        &String::from_utf8_lossy(&run.log),
         &secrets,
-    )
+    ))
     .into_bytes();
     // The step output, and every record built from it, is parsed from this
     // stdout: a passed value echoed into it is redacted before it is parsed.
