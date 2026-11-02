@@ -573,6 +573,83 @@ fn notice_attention_items(
     Ok(items)
 }
 
+/// `resident_stalled`: every active resident mandate that has not
+/// checkpointed for twice its heartbeat, or whose last three cycles were all
+/// `incomplete`. Paused, taken-over, handed-off and ended mandates are meant
+/// to wait and are never stalled.
+fn resident_stalled_items(
+    runtime: &OrbitRuntime,
+    workspace: &AttentionWorkspace,
+    host: &AttentionHost,
+    now: DateTime<Utc>,
+    settings: &AttentionSettings,
+) -> Result<Vec<AttentionItem>, OrbitError> {
+    let mut items = Vec::new();
+    for metadata in runtime.list_task_metadata()? {
+        if metadata.status.is_terminal()
+            || !metadata
+                .tags
+                .iter()
+                .any(|tag| tag == orbit_types::workflow::RESIDENT_TAG)
+        {
+            continue;
+        }
+        let task = runtime.get_task(&metadata.id)?;
+        let history = runtime.get_task_history(&task.id)?;
+        let view = runtime.resident_view(task.clone(), &history)?;
+        let Some(stall) = runtime.resident_stall_of(&view, now)? else {
+            continue;
+        };
+        let subject = Subject {
+            runtime,
+            task: &task,
+            workspace,
+            host,
+            now,
+        };
+        let mut next = subject.tool_next(
+            "orbit.resident.control",
+            "Ask the resident for a status checkpoint",
+        );
+        next.input = Some(json!({
+            "task_id": task.id,
+            "workspace": workspace.id,
+            "action": "wake",
+            "status_request": true,
+        }));
+        next.needs = vec!["reason".into()];
+        next.command = format!(
+            "orbit --workspace '{}' resident control {} wake --status-request --reason '<reason>'",
+            workspace.id, task.id
+        );
+        let mut show = subject.tool_next("orbit.resident.show", "Inspect the resident");
+        show.input = Some(json!({"task_id": task.id, "workspace": workspace.id}));
+        next.also = vec![show];
+        let item = subject.item(
+            AttentionKind::ResidentStalled,
+            stall.since,
+            &format!("Resident stalled: {}", stall.reason),
+            json!({
+                "stall": stall.reason,
+                "last_checkpoint_at": stall.last_checkpoint_at,
+            }),
+            next,
+        );
+        items.push(finalize_attention_item(
+            item,
+            json!({
+                "stall": stall.reason,
+                "last_checkpoint_at": stall.last_checkpoint_at,
+            }),
+            None,
+            &subject,
+            settings,
+            false,
+        ));
+    }
+    Ok(items)
+}
+
 pub(super) fn read_attention_sources(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -630,6 +707,30 @@ pub(super) fn read_attention_sources(
         result
             .timings
             .insert("notice_open".into(), started.elapsed().as_micros());
+    }
+    // resident_stalled reads the owner's task records, like the task kinds.
+    if filter.selected(K::ResidentStalled) {
+        let started = Instant::now();
+        let read = if runtime.coordination_task_reads_visible() {
+            resident_stalled_items(runtime, workspace, host, now, settings)
+                .map_err(|error| error.to_string())
+        } else {
+            Err("Task records on a replica are not authoritative; read the workspace owner".into())
+        };
+        match read {
+            Ok(items) => result.items.extend(items),
+            // The aggregator's candidate read asks the owner; a replica stays silent.
+            Err(_) if filter.candidate_read && !runtime.coordination_task_reads_visible() => {}
+            Err(message) => result.degraded.push(AttentionDegraded {
+                scope: format!("workspace:{}", workspace.id),
+                kind: K::ResidentStalled.as_str().into(),
+                code: "source_unavailable".into(),
+                message,
+            }),
+        }
+        result
+            .timings
+            .insert("resident_stalled".into(), started.elapsed().as_micros());
     }
     let task_kinds = filter
         .kinds

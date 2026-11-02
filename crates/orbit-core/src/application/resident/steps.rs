@@ -1,7 +1,8 @@
 //! The resident cycle's deterministic steps: `resident_observe` takes the
 //! cycle lease, recovers a dead predecessor, records the cycle's grant and
 //! builds the brief; `resident_finalize` closes the cycle, synthesizing an
-//! `incomplete` checkpoint when the agent wrote none.
+//! `incomplete` checkpoint when the agent wrote none, and hands a stopped
+//! mandate's assignment off to review.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -289,6 +290,8 @@ impl OrbitRuntime {
             "open_requests": open_requests,
             "comments_since_last_cycle": messages,
             "wake": {"reasons": grant.reasons, "digest": grant.digest},
+            // A manager asked for status: checkpoint even when idle.
+            "status_request": grant.reasons.iter().any(|reason| reason == "status_request"),
             "notices": notice_entries,
             "recovery_of": grant.recovery_of,
             "recovered_actions": recovered,
@@ -439,11 +442,14 @@ impl OrbitRuntime {
             None,
         )?;
         self.set_resident_live_cycle(&task_id, Some(&live.cycle), None)?;
+        // A mandate stopped while this cycle ran hands off now.
+        let handoff = self.hand_off_stopped_resident(&task_id)?;
         Ok(json!({
             "task_id": task_id,
             "finalized": true,
             "cycle": live.cycle,
             "synthesized": synthesized,
+            "handoff": handoff,
         }))
     }
 

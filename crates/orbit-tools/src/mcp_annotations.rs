@@ -65,7 +65,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.notice.close" => A::additive(true),
 
         // A task edit can append a note or comment, so a repeat is not a no-op.
-        "orbit.task.update" | "orbit.resident.checkpoint" => A::additive(false),
+        "orbit.task.update" | "orbit.resident.checkpoint" | "orbit.resident.relay" => {
+            A::additive(false)
+        }
 
         // Removes or replaces existing data.
         // A friction edit with `rehome_to` moves the record and resolves the
@@ -77,6 +79,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // A narrowing removes authority; repeating a grant returns the open
         // request or finds the rights already held.
         "orbit.resident.grant" => A::destructive(true),
+        // Pause, stop and takeover stop a resident firing; each call writes
+        // another history entry.
+        "orbit.resident.control" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also

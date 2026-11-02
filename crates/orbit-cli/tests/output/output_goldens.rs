@@ -653,7 +653,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.pipeline.invoke", Placement::Advertised),
     // Listed only by a server that enables the opt-in `resident` toolset.
     ("orbit.resident.checkpoint", Placement::Advertised),
+    ("orbit.resident.control", Placement::Advertised),
     ("orbit.resident.grant", Placement::Advertised),
+    ("orbit.resident.relay", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     // Script grants are reached via `orbit script grant|revoke`; phase 1
     // registers no MCP tool for them, so the governed rows exist to make

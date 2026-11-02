@@ -30,6 +30,10 @@ pub enum AttentionKind {
     HostUnhealthy,
     /// The `notice_open` source condition: an effective-open fleet notice.
     NoticeOpen,
+    /// The `resident_stalled` source condition: an active resident mandate
+    /// with no checkpoint for twice its heartbeat, or three `incomplete`
+    /// cycles in a row.
+    ResidentStalled,
 }
 impl AttentionKind {
     /// Stable wire names, including kinds implemented by later source slices.
@@ -46,6 +50,7 @@ impl AttentionKind {
         "friction_untriaged",
         "host_unhealthy",
         "notice_open",
+        "resident_stalled",
     ];
     /// Kinds derived by this host today; later slices' kinds degrade.
     pub const IMPLEMENTED: &'static [&'static str] = &[
@@ -58,6 +63,7 @@ impl AttentionKind {
         "run_stuck",
         "claim_stale",
         "notice_open",
+        "resident_stalled",
     ];
     /// Kinds read when a call names none: the kinds this build derives.
     /// The others are accepted by name and report `degraded` until their
@@ -73,6 +79,7 @@ impl AttentionKind {
         "claim_stale",
         "host_unhealthy",
         "notice_open",
+        "resident_stalled",
     ];
     /// Kinds derived from one workspace's task, decision and review records,
     /// which only the workspace's owner host reports.
@@ -98,6 +105,7 @@ impl AttentionKind {
             Self::FrictionUntriaged => "friction_untriaged",
             Self::HostUnhealthy => "host_unhealthy",
             Self::NoticeOpen => "notice_open",
+            Self::ResidentStalled => "resident_stalled",
         }
     }
 }

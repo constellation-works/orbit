@@ -11,7 +11,10 @@ use orbit_types::workflow::ResidentRight;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::resident::{ResidentGrantCaller, ResidentGrantParams};
+use crate::application::resident::{
+    ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentGrantCaller,
+    ResidentGrantParams, ResidentRelayParams,
+};
 
 pub(super) fn dispatch(
     runtime: &OrbitRuntime,
@@ -35,6 +38,34 @@ pub(super) fn dispatch(
             let outcome = runtime.grant_resident_authority(&caller, grant_params(&input)?)?;
             serde_json::to_value(outcome)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))
+        }
+        ResidentVerb::Relay => runtime.relay_to_resident(
+            &channel_caller(&input, agent, model)?,
+            ResidentRelayParams {
+                task_id: input.required_string("task_id")?,
+                quote: input.optional_raw_string("quote")?.unwrap_or_default(),
+                source: input.as_value()["source"].clone(),
+                request_id: input.optional_string("request_id")?,
+                reverses: input.optional_string("reverses")?,
+            },
+        ),
+        ResidentVerb::Control => {
+            let name = input.required_string("action")?;
+            let action = ResidentControlAction::parse(&name).ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "unknown action `{name}`; actions are pause, resume, stop, wake, takeover and release"
+                ))
+            })?;
+            runtime.control_resident(
+                &channel_caller(&input, agent, model)?,
+                ResidentControlParams {
+                    task_id: input.required_string("task_id")?,
+                    action,
+                    reason: input.required_string("reason")?,
+                    status_request: input.optional_bool("status_request")?.unwrap_or(false),
+                    by_session: input.optional_string("by_session")?,
+                },
+            )
         }
         ResidentVerb::Checkpoint => runtime.append_resident_checkpoint(
             &input.required_string("task_id")?,
@@ -70,6 +101,20 @@ pub(super) fn dispatch(
             runtime.list_resident_mandates(input.optional_bool("include_ended")?.unwrap_or(false))
         }
     }
+}
+
+fn channel_caller(
+    input: &OperationInput,
+    agent: Option<&str>,
+    model: Option<&str>,
+) -> Result<ResidentChannelCaller, OrbitError> {
+    Ok(ResidentChannelCaller {
+        agent: agent.map(ToOwned::to_owned),
+        model: input
+            .optional_string("model")?
+            .or_else(|| model.map(ToOwned::to_owned)),
+        orchestrator: input.optional_string("orchestrator")?,
+    })
 }
 
 fn rights(input: &OperationInput, field: &str) -> Result<Vec<ResidentRight>, OrbitError> {

@@ -15,12 +15,12 @@ Options:
       --kind <KIND>
           Include kinds (repeatable)
           
-          [possible values: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, host_unhealthy, notice_open]
+          [possible values: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, host_unhealthy, notice_open, resident_stalled]
 
       --exclude-kind <EXCLUDE_KIND>
           Exclude kinds (repeatable)
           
-          [possible values: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, host_unhealthy, notice_open]
+          [possible values: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, host_unhealthy, notice_open, resident_stalled]
 
       --severity <SEVERITY>
           Minimum severity: low, medium, high or critical

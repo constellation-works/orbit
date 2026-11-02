@@ -162,7 +162,9 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | ResidentVerb::Metrics
             | ResidentVerb::Digest => Read,
             ResidentVerb::Checkpoint => Open,
-            ResidentVerb::Grant => Refused,
+            // Relay and control are the manager's: a cycle never speaks for
+            // the human or changes its own firing.
+            ResidentVerb::Grant | ResidentVerb::Relay | ResidentVerb::Control => Refused,
         },
         OrbitBuiltinAction::Friction(verb) => match verb {
             FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags => {

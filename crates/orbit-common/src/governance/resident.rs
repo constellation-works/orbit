@@ -6,7 +6,10 @@
 //! one `resident_authority` decision request quoting the relayed words
 //! verbatim, which only a human answer applies. Narrowing (removing a right,
 //! dropping a workspace, shortening the deadline) is open to any caller that
-//! can write the assignment task. Show and list are reads.
+//! can write the assignment task. Show and list are reads. Relay carries a
+//! human's words to a resident verbatim and can never change its authority;
+//! control pauses, resumes, stops, wakes, takes over or releases it, which
+//! only ever narrows or restores firing under the existing authority.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry, required,
@@ -22,6 +25,10 @@ operation_registry! {
     {
         /// Widen or narrow a mandate's authority.
         Grant => GRANT,
+        /// Relay a human's direction or answer to a resident, verbatim.
+        Relay => RELAY,
+        /// Pause, resume, stop, wake, take over or release a resident.
+        Control => CONTROL,
         /// Append the live cycle's structured checkpoint.
         Checkpoint => CHECKPOINT,
         /// One mandate with its authority, grant history and state.
@@ -40,7 +47,7 @@ pub const RESIDENT: NounSpec<ResidentVerb> = NounSpec {
     cli_name: "resident",
     tool_prefix: "orbit.resident",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Grant, narrow and inspect resident orchestrator mandates",
+    cli_about: "Grant, relay to, control and inspect resident orchestrator mandates",
     audit_target_type: "task",
     audit_target_param: "task_id",
     cli_groups: &[],
@@ -269,5 +276,110 @@ const DIGEST: OperationSpec<ResidentVerb> = OperationSpec {
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const RELAY_PARAMS: &[ParamSpec] = &[
+    TASK_ID,
+    // Not free text: the quote must arrive unchanged, so core refuses text
+    // that would need redaction instead of rewriting it.
+    required(both(
+        "quote",
+        ParamType::RawString,
+        "The human's words, verbatim (1-4000 characters). They reach the resident unchanged as a resident.answer comment; text that would need redaction (a secret or home path) is refused, never rewritten.",
+        CliArgKind::flag("quote"),
+        "The human's words, verbatim",
+    )),
+    required(both(
+        "source",
+        ParamType::Object,
+        "Where the words came from: {human, via, session?, said_at}. human names who said it, via the channel (chat, email, call), session the conversation it came from, said_at an RFC 3339 instant. No other fields.",
+        CliArgKind::flag("source"),
+        "Provenance JSON: {\"human\", \"via\", \"session\"?, \"said_at\"}",
+    )),
+    both(
+        "request_id",
+        ParamType::String,
+        "The resident request or decision request this answers. A relayed answer is a direction: the human still answers the decision request itself.",
+        CliArgKind::flag("request-id"),
+        "Resident request or decision request this answers",
+    ),
+    both(
+        "reverses",
+        ParamType::String,
+        "The resident decision id this direction reverses.",
+        CliArgKind::flag("reverses"),
+        "Resident decision id this direction reverses",
+    ),
+];
+
+const RELAY: OperationSpec<ResidentVerb> = OperationSpec {
+    verb: ResidentVerb::Relay,
+    cli_path: &["relay"],
+    tool_name: "orbit.resident.relay",
+    tool_description: "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment on its assignment carrying `quote` verbatim with its `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or any other field is refused; widen through orbit.resident.grant. Refused for an empty or over-long quote (over 4000 characters) or an ended mandate. Output {task_id, comment_id}.",
+    cli_about: "Relay a human's words to a resident, verbatim",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[RELAY_PARAMS, ATTRIBUTION],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const CONTROL_ACTIONS: &[EnumValue] = &[
+    EnumValue::plain("pause"),
+    EnumValue::plain("resume"),
+    EnumValue::plain("stop"),
+    EnumValue::plain("wake"),
+    EnumValue::plain("takeover"),
+    EnumValue::plain("release"),
+];
+
+const CONTROL_PARAMS: &[ParamSpec] = &[
+    TASK_ID,
+    required(both(
+        "action",
+        ParamType::Enum(CONTROL_ACTIONS),
+        "pause (active to paused: no new cycle), resume (paused to active), stop (ends the mandate: no new cycle, then the assignment moves to review), wake (active: due on the next tick despite the heartbeat, never the cadence floor), takeover (active or paused to taken_over: no cycle fires) or release (taken_over to active).",
+        CliArgKind::Positional,
+        "pause, resume, stop, wake, takeover or release",
+    )),
+    required(free_text(both(
+        "reason",
+        ParamType::String,
+        "Why, recorded in the assignment's history with the caller.",
+        CliArgKind::flag("reason"),
+        "Why, recorded in the history with the caller",
+    ))),
+    both(
+        "status_request",
+        ParamType::Switch,
+        "With wake: the cycle writes a checkpoint even when it has nothing else to do.",
+        CliArgKind::flag("status-request"),
+        "With wake: the cycle checkpoints even when idle",
+    ),
+    both(
+        "by_session",
+        ParamType::String,
+        "The session taking over or acting, recorded with the action.",
+        CliArgKind::flag("by-session"),
+        "Session taking over or acting",
+    ),
+];
+
+const CONTROL: OperationSpec<ResidentVerb> = OperationSpec {
+    verb: ResidentVerb::Control,
+    cli_path: &["control"],
+    tool_name: "orbit.resident.control",
+    tool_description: "Control a resident mandate's firing: pause, resume, stop, wake (status_request makes the cycle checkpoint even when idle), takeover or release. Each action is a history entry with the caller and reason. Pause, stop and takeover start no new cycle; a live cycle keeps its frozen grant, checkpoints and exits at its boundary. Stop ends the mandate and moves the assignment to review once no cycle is live. Resume and release restore firing under the existing authority and never widen it. Any caller that can write the assignment may call it. Output {task_id, action, state, effective_at}.",
+    cli_about: "Pause, resume, stop, wake, take over or release a resident",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[CONTROL_PARAMS, ATTRIBUTION],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
