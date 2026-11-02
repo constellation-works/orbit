@@ -74,9 +74,16 @@ pub use settings::{AutoTaskBody, AutoTaskLayering};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 
+/// Shipped defaults whose bundled body is `enabled: true`. Every other default
+/// ships disabled, and workspace sync refuses a bundled body that breaks this.
+/// An operator's `orbit auto-task toggle` (the settings table) or a forked body
+/// still decides for a workspace.
+pub(crate) const ENABLED_BY_DEFAULT_AUTO_TASKS: &[&str] = &["host-health"];
+
 /// Default definitions embedded in the Orbit binary and materialized into a
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
+/// The one exception ships enabled: [`ENABLED_BY_DEFAULT_AUTO_TASKS`].
 /// A default a later release dropped moves to
 /// [`retired::RETIRED_AUTO_TASK_FILES`] when something replaced it, or to
 /// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS` when it had not proven its

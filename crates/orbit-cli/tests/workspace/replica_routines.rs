@@ -3,10 +3,10 @@
 //!
 //! The fixture host owns one owner checkout and one replica checkout of a
 //! workspace owned by another machine. Both carry the seeded routines. The
-//! replica's worktree GC, CI-failure sweep and an auto-task are all enabled; only the
-//! GC may fire there, and the GC run must retain a task whose prefix it cannot
-//! route. The owner checkout's
-//! scheduling is the control: its routines are evaluated exactly as before.
+//! replica's worktree GC, CI-failure sweep and auto-tasks (including the seeded
+//! host-health) are all enabled; only the GC may fire there, and the GC run must
+//! retain a task whose prefix it cannot route. The owner checkout's scheduling
+//! is the control: its routines are evaluated exactly as before.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -414,7 +414,14 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     }
 
     // Every replica-side candidate is switched on, so only the replica rule
-    // can keep the owner work from firing.
+    // can keep the owner work from firing. host-health is seeded enabled.
+    let replica_host_health =
+        fs::read_to_string(replica_repo.join(".orbit/auto_tasks/host-health.yaml"))
+            .expect("replica seeds host-health");
+    assert!(
+        replica_host_health.contains("enabled: true"),
+        "the replica's seeded host-health is enabled: {replica_host_health}"
+    );
     enable_routine(&replica_repo, "worktree_gc.yaml");
     enable_routine(&replica_repo, "ci_failure_sweep.yaml");
     enable_auto_task(&replica_repo, "qa-sweep.yaml");
@@ -723,6 +730,8 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
         vec!["auto-task", "delete", "doc-duties", "--json"],
         vec!["auto-task", "restore", "friction-curation", "--json"],
         vec!["auto-task", "mint", "qa-sweep", "--json"],
+        // Seeded enabled, yet owner-pinned: a replica never mints it.
+        vec!["auto-task", "mint", "host-health", "--json"],
     ] {
         let before = auto_task_state_snapshot(&replica_repo, &home);
         let mut mutation = command(&replica_repo, &home);
