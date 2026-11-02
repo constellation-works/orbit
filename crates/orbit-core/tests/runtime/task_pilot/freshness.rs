@@ -253,6 +253,96 @@ fn admission_reuses_an_explicit_assessment_off_the_scan_page() {
     );
 }
 
+fn bind_pr_ship_mode(workspace: &mut Workspace) {
+    let workspace_id = workspace.runtime.workspace_id().unwrap();
+    workspace.runtime = OrbitRuntime::from_roots_with_binding(
+        &workspace.runtime.global_root(),
+        &workspace.repo.join(".orbit"),
+        orbit_core::WorkspaceRuntimeBinding {
+            logical_workspace_id: workspace_id.clone(),
+            task_partition_id: workspace_id,
+            owner_machine_id: None,
+            checkout_role: None,
+            repo_root: workspace.repo.clone(),
+            ship_mode: orbit_core::ShipMode::Pr,
+            base_branch: Some("main".into()),
+        },
+    )
+    .unwrap()
+    .with_host_resource_probe(super::super::dispatch_admission::PressureProbe::calm())
+    .with_automation_machine_identity(Some("fixture-machine".into()));
+}
+
+fn discover(workspace: &Workspace) -> Value {
+    workspace.action(
+        "prepare_task_pilot",
+        json!({"workspace_path": workspace.repo, "base_branch": "main"}),
+    )
+}
+
+fn edit_description_and_tags(workspace: &Workspace, task_id: &str, tags: &[&str]) {
+    workspace
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task_id, "model": "codex",
+                "description": "Changed requirements.", "tags": tags,
+            }),
+        )
+        .unwrap();
+}
+
+fn stale_scoped_no_diff_task_is_excluded_while_eligible_stale_task_is_selected() {
+    let workspace = Workspace::new();
+    let excluded = workspace.task("stale no-diff");
+    let eligible = workspace.task("stale eligible");
+    apply_explicit_pilot_assessment(&workspace, &excluded, false);
+    apply_explicit_pilot_assessment(&workspace, &eligible, false);
+    edit_description_and_tags(&workspace, &excluded.id, &["no-diff-expected"]);
+    edit_description_and_tags(&workspace, &eligible.id, &[]);
+    let discovered = discover(&workspace);
+    assert_eq!(discovered["task_ids"], json!([eligible.id]), "{discovered}");
+    assert_eq!(
+        discovered["excluded_by_reason"]["no_diff_task"], 1,
+        "{discovered}"
+    );
+    assert!(
+        discovered["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["task_id"] == excluded.id && entry["reason"] == "no_diff_task"),
+        "{discovered}"
+    );
+}
+
+fn stale_scoped_pr_route_task_without_forge_is_excluded_while_local_route_is_selected() {
+    let mut workspace = Workspace::new();
+    let excluded = workspace.task("stale pr route");
+    let eligible = workspace.task("stale local route");
+    apply_explicit_pilot_assessment(&workspace, &excluded, false);
+    apply_explicit_pilot_assessment(&workspace, &eligible, false);
+    bind_pr_ship_mode(&mut workspace);
+    edit_description_and_tags(&workspace, &excluded.id, &[]);
+    edit_description_and_tags(&workspace, &eligible.id, &["delivery:task_local_pipeline"]);
+    let discovered = discover(&workspace);
+    assert_eq!(discovered["task_ids"], json!([eligible.id]), "{discovered}");
+    assert_eq!(
+        discovered["excluded_by_reason"]["pr_forge_remote_missing"], 1,
+        "{discovered}"
+    );
+    assert!(
+        discovered["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["task_id"] == excluded.id
+                && entry["reason"] == "pr_forge_remote_missing"),
+        "{discovered}"
+    );
+}
+
 fn automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit() {
     let workspace = Workspace::new();
     let task = workspace.task("automatic discovery");
@@ -505,7 +595,9 @@ crate::scenario_table!(
     routine_reuse_obeys_configured_material_source_and_consumer_policy,
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
     admission_reuses_an_explicit_assessment_off_the_scan_page,
-    automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit
+    automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit,
+    stale_scoped_no_diff_task_is_excluded_while_eligible_stale_task_is_selected,
+    stale_scoped_pr_route_task_without_forge_is_excluded_while_local_route_is_selected
 );
 
 // The inert substitute worker uses the same Unix shell fixture as other

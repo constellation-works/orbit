@@ -280,11 +280,19 @@ pub(crate) fn prepare(
             // discovered again for a fresh pilot, unless a live execution
             // claim holds it or a repilot already failed. Its assessed
             // selectors and complexity are the stale assessment's output, so
-            // they do not exclude it either.
+            // they do not exclude it either. Waiving that reason must not
+            // waive exclusions hidden behind it in the short-circuit chain
+            // above: recompute the independent gates in chain order.
             let stale_repilot = matches!(reason, None | Some("context_files_not_empty"))
                 && stale_repilot_candidate(runtime, action, &envelope.id, &claimed_tasks)?;
             let reason = if stale_repilot && reason == Some("context_files_not_empty") {
-                None
+                no_diff_exclusion_reason(&envelope.tags)
+                    .or_else(|| {
+                        active_preparations
+                            .contains_key(&envelope.id)
+                            .then_some("active_pilot_prepared")
+                    })
+                    .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING))
             } else {
                 reason
             };
@@ -366,9 +374,12 @@ pub(crate) fn prepare(
             .get_task(&task_id)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if !explicit_mode {
-            if let Some(outcome) =
-                left_automatic_selection(&snapshot, &task, stale_repilot_ids.contains(&task_id))
-            {
+            if let Some(outcome) = left_automatic_selection(
+                &snapshot,
+                &task,
+                stale_repilot_ids.contains(&task_id),
+                forge_refused(&task.tags),
+            ) {
                 superseded_during_preparation.push(outcome);
                 continue;
             }
@@ -646,7 +657,12 @@ fn pilot_run_id(input: &Value) -> Option<&str> {
 /// The superseded outcome for an automatically selected task that another
 /// writer moved out of automatic selection after its envelope was read, or
 /// `None` while hydration still selects it.
-fn left_automatic_selection(selected: &Value, task: &Task, stale_repilot: bool) -> Option<Value> {
+fn left_automatic_selection(
+    selected: &Value,
+    task: &Task,
+    stale_repilot: bool,
+    pr_route_lacks_forge: bool,
+) -> Option<Value> {
     let exclusion = automatic_exclusion_reason(
         task.status,
         &task.context_files,
@@ -655,7 +671,14 @@ fn left_automatic_selection(selected: &Value, task: &Task, stale_repilot: bool) 
     )?;
     // A stale-repilot selection keeps its assessed selectors and complexity:
     // they are the stale assessment's output, not a move out of selection.
-    if stale_repilot && exclusion == "context_files_not_empty" {
+    // Independent exclusions hidden behind that reason (no-diff, missing
+    // forge) still mark a move out of selection; active preparations are
+    // re-checked at reservation below.
+    if stale_repilot
+        && exclusion == "context_files_not_empty"
+        && no_diff_exclusion_reason(&task.tags).is_none()
+        && !pr_route_lacks_forge
+    {
         return None;
     }
     let (reason, detail) = if task.status.is_terminal() {
@@ -810,10 +833,16 @@ fn automatic_exclusion_reason(
     // `no-diff-expected` from the assessed-complexity gate [ORB-12118], and a
     // `verified_no_diff` assessment leaves `context_files` empty, so admitting
     // them here re-piloted the same task on every routine tick.
-    if tags.iter().any(|tag| NO_DIFF_TAGS.contains(&tag.as_str())) {
-        return Some("no_diff_task");
-    }
-    None
+    no_diff_exclusion_reason(tags)
+}
+
+/// The no-diff exclusion alone: an independent gate that the assessed
+/// footprint reason above can hide, checked separately wherever that
+/// reason is waived for a stale repilot.
+fn no_diff_exclusion_reason(tags: &[String]) -> Option<&'static str> {
+    tags.iter()
+        .any(|tag| NO_DIFF_TAGS.contains(&tag.as_str()))
+        .then_some("no_diff_task")
 }
 
 fn task_snapshot(
