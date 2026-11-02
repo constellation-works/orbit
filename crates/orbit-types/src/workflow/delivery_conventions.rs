@@ -639,10 +639,6 @@ pub struct DeliveryConventions {
     pub commit_subject: Option<ConventionTemplate>,
     /// `commit.body_template`.
     pub commit_body: Option<ConventionTemplate>,
-    /// `commit.planned_by_trailer`.
-    pub planned_by_trailer: bool,
-    /// `commit.implemented_by_trailer`.
-    pub implemented_by_trailer: bool,
     /// `commit.orchestrated_by_trailer`.
     pub orchestrated_by_trailer: bool,
     /// `commit.regression_trailers`.
@@ -670,8 +666,6 @@ impl Default for DeliveryConventions {
             draft: false,
             commit_subject: None,
             commit_body: None,
-            planned_by_trailer: true,
-            implemented_by_trailer: true,
             orchestrated_by_trailer: true,
             regression_trailers: true,
             branch_name: default_branch_template(),

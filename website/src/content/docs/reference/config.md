@@ -828,8 +828,6 @@ established, never as a pass.
 | `pr.draft` | **Advanced.** bool · **Default:** `false`<br>Open every pull request as a draft. A draft is never merged automatically. |
 | `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. Subjects keep a 72-character budget: the title is shortened first, with an ellipsis, and kept whole in the body. |
 | `commit.body_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit bodies, before the trailers. |
-| `commit.planned_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Planned-By` trailer to commit messages that carry it. |
-| `commit.implemented_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Implemented-By` trailer to commit messages that carry it. |
 | `commit.orchestrated_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Orchestrated-By` trailer to commit messages. |
 | `commit.regression_trailers` | **Advanced.** bool · **Default:** `true`<br>Add `Fixes` (when the target's landed commit is resolvable), `Regression-From` and `Regression` trailers for `regression_from` relations to commit messages. |
 | `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. A name containing `..` or starting with `-` is refused. |

@@ -65,6 +65,29 @@ fn delivery_templates_refuse_unknown_placeholders_and_missing_markers_at_load() 
          [branch]\nname_template = \"{{prefix}}/{{ext.jira}}-{{task_id}}-{{hash}}\"\n",
     )
     .expect("known placeholders load");
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(Capture(buffer.clone()))
+        .with_ansi(false)
+        .finish();
+    let legacy = "[commit]\nplanned_by_trailer = false\nimplemented_by_trailer = true\n";
+    tracing::subscriber::with_default(subscriber, || load_workspace(legacy))
+        .expect("retired trailer settings still load");
+    let logs = String::from_utf8(buffer.lock().expect("capture").clone()).expect("utf-8 logs");
+    for key in ["commit.planned_by_trailer", "commit.implemented_by_trailer"] {
+        assert!(
+            logs.lines().any(|line| line.contains(key)
+                && line.contains("config key is deprecated")
+                && line.contains("Co-authored-by")),
+            "{logs}"
+        );
+        assert!(
+            !logs
+                .lines()
+                .any(|line| line.contains(key) && line.contains("unknown config key")),
+            "{logs}"
+        );
+    }
     let conventions = &config.pr.conventions;
     assert!(conventions.pr_title.is_some() && conventions.commit_subject.is_some());
     assert_eq!(conventions.screenshot_section.as_str(), "always");

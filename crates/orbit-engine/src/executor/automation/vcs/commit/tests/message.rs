@@ -76,7 +76,9 @@ fn delivery_markers_survive_a_title_truncated_inside_brackets() {
 
 #[test]
 fn regression_trailers_on_task_batch_and_finalize_paths() {
-    let task = task_with_relations("ORB-9", vec![classified_relation("ORB-20866")]);
+    let mut task = task_with_relations("ORB-9", vec![classified_relation("ORB-20866")]);
+    task.planned_by = Some("planner".to_string());
+    task.orchestrator = Some("crew".to_string());
     let landed = landed_for("ORB-20866");
     let group = expected_group();
     let config = PrConfig::default();
@@ -92,18 +94,17 @@ fn regression_trailers_on_task_batch_and_finalize_paths() {
         batch_message.contains(&group),
         "batch message: {batch_message}"
     );
-    // Next to the existing attribution trailers, after Implemented-By.
-    let implemented = batch_message
-        .find("Implemented-By: codex")
-        .expect("batch message carries Implemented-By");
-    let fixes = batch_message.find("Fixes:").expect("batch carries Fixes");
-    assert!(implemented < fixes, "batch message: {batch_message}");
 
     let finalize_message = finalize_commit_message(std::slice::from_ref(&task), &config, &landed);
     assert!(
         finalize_message.contains(&group),
         "finalize message: {finalize_message}"
     );
+    for message in [&task_message, &batch_message, &finalize_message] {
+        assert!(!message.contains("Planned-By:"), "{message}");
+        assert!(!message.contains("Implemented-By:"), "{message}");
+        assert!(message.contains("Orchestrated-By: crew"), "{message}");
+    }
 }
 
 #[test]
@@ -162,8 +163,6 @@ fn no_regression_relations_leave_message_unchanged() {
         batch_commit_message(&task, &PrConfig::default(), &RegressionLandedCommits::new());
     assert!(!message.contains("Fixes:"), "message: {message}");
     assert!(!message.contains("Regression-From:"), "message: {message}");
-    assert!(
-        message.contains("Implemented-By: codex"),
-        "message: {message}"
-    );
+    assert!(!message.contains("Planned-By:"), "message: {message}");
+    assert!(!message.contains("Implemented-By:"), "message: {message}");
 }

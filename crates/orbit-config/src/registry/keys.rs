@@ -113,6 +113,14 @@ const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review se
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        "commit.planned_by_trailer",
+        "ignored: Planned-By is no longer written; read the implementer from Co-authored-by or task attribution",
+    ),
+    (
+        "commit.implemented_by_trailer",
+        "ignored: Implemented-By is no longer written; read the implementer from Co-authored-by or task attribution",
+    ),
+    (
         "operation.review_minutes",
         "translated to review.minutes, now the limit for one candidate's before-PR review; \
      move the value to [review] minutes",

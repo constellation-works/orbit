@@ -42,21 +42,7 @@
       "path": null,
       "shadowed_by": []
     },
-    "commit.implemented_by_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "commit.orchestrated_by_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "commit.planned_by_trailer": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",

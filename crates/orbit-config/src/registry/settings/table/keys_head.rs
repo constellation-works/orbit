@@ -329,20 +329,6 @@ macro_rules! assemble_config_settings {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_text_template(raw, "commit.body_template"),
     },
-    commit_planned_by_trailer: bool => bool {
-        key: "commit.planned_by_trailer", value_type: "bool",
-        description: "Add the Planned-By trailer to commit messages that carry it.",
-        section: ConfigSection::Delivery, order: 183,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
-    commit_implemented_by_trailer: bool => bool {
-        key: "commit.implemented_by_trailer", value_type: "bool",
-        description: "Add the Implemented-By trailer to commit messages that carry it.",
-        section: ConfigSection::Delivery, order: 184,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
     commit_orchestrated_by_trailer: bool => bool {
         key: "commit.orchestrated_by_trailer", value_type: "bool",
         description: "Add the Orchestrated-By trailer to commit messages.",
