@@ -37,6 +37,48 @@ export async function check(ctx) {
       return rect.width <= 2 && rect.height <= 2 && clipped;
     }
 
+    // A clip-path can leave a box with full layout size and no painted area,
+    // so its text is not a start. Parses a length to px; a percentage resolves
+    // against the given size. Anything else is NaN.
+    function clipLength(token, size) {
+      const match = /^(-?\d*\.?\d+)(px|%)?$/.exec(token);
+      if (!match) return Number.NaN;
+      const value = Number(match[1]);
+      return match[2] === "%" ? (value / 100) * size : value;
+    }
+
+    // An inset whose opposing offsets reach the box size on an axis covers
+    // it. A circle or ellipse with no radius has no area. Shapes and units
+    // this cannot resolve, such as url() or calc(), keep the content.
+    function clipPathPaintsNothing(el) {
+      const clip = getComputedStyle(el).clipPath;
+      if (!clip || clip === "none") return false;
+      const inset = /^inset\((.*)\)$/.exec(clip);
+      if (inset) {
+        const rect = el.getBoundingClientRect();
+        const [top, right = top, bottom = top, left = right] = inset[1].split(/\s+round\s+/)[0].trim().split(/\s+/);
+        const vertical = [clipLength(top, rect.height), clipLength(bottom, rect.height)];
+        const horizontal = [clipLength(left, rect.width), clipLength(right, rect.width)];
+        if ([...vertical, ...horizontal].some(Number.isNaN)) return false;
+        return vertical[0] + vertical[1] >= rect.height - 0.5 || horizontal[0] + horizontal[1] >= rect.width - 0.5;
+      }
+      const shape = /^(circle|ellipse)\((.*)\)$/.exec(clip);
+      if (shape) {
+        const radii = shape[2].split(/\s+at\s+/)[0].trim().split(/\s+/);
+        return radii.every((token) => clipLength(token, 1) === 0);
+      }
+      return false;
+    }
+
+    // A clip-path clips its whole subtree, including a column above the one
+    // being measured, so the walk runs to the root.
+    function hiddenByClip(el) {
+      for (let node = el; node instanceof Element; node = node.parentElement) {
+        if (clipPathPaintsNothing(node)) return true;
+      }
+      return false;
+    }
+
     function kindOf(el) {
       if (el.tagName === "BUTTON" || FIELD.has(el.tagName) || GRAPHIC.has(el.tagName)) return "control";
       if (el.closest("button, select, textarea, input")) return "control";
@@ -138,7 +180,7 @@ export async function check(ctx) {
     }
 
     function contentStart(el) {
-      if (!(el instanceof Element) || !H.visible(el) || assistiveOnly(el)) return null;
+      if (!(el instanceof Element) || !H.visible(el) || assistiveOnly(el) || hiddenByClip(el)) return null;
       if (el.tagName === "SCRIPT" || el.tagName === "STYLE" || el.tagName === "NOSCRIPT" || el.tagName === "TEMPLATE") return null;
       if (FIELD.has(el.tagName) || GRAPHIC.has(el.tagName)) return replacedStart(el);
       for (const node of el.childNodes) {
