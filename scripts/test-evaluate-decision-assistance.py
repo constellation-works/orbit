@@ -917,6 +917,46 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(any("ar-correct-a" in e and "model actor" in e for e in errors), errors)
         self.assertFalse(any("ar-dev-model" in e for e in errors), errors)
 
+    def test_precedent_recorded_automation_must_be_explicitly_false(self):
+        v4 = ("--format-version", "decision-assistance-eval/4")
+        ds = json.loads(self._run("seed", *v4).stdout)
+        ans = self._dump("p-ans.json", json.loads(self._run("seed", *v4, "--answers").stdout))
+        tgt = self._dump("p-tgt.json", json.loads(self._run("seed", *v4, "--targets").stdout))
+        case = next(c for c in ds["cases"] if c["case_id"] == "ar-correct-a")
+        base = dict(case["label"])
+        base.update(provenance="recorded_human_decision", answered_by="human")
+        def run_both():
+            path = str(self._dump("p-ds.json", ds))
+            return (self._run("score", "--dataset", path, "--answers", str(ans), "--targets", str(tgt)),
+                    self._run("validate", "--dataset", path, "--answers", str(ans), "--targets", str(tgt)))
+        for label, change in (("valid false", {"automation": False}),
+                              ("true", {"automation": True}), ("one", {"automation": 1}),
+                              ("zero", {"automation": 0}), ("string true", {"automation": "true"}),
+                              ("string false", {"automation": "false"}), ("null", {"automation": None})):
+            with self.subTest(automation=label):
+                case["label"] = {**base, **change}
+                for result in run_both():
+                    if label == "valid false":
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        errors = json.loads(result.stdout)["errors"]
+                        self.assertTrue(any("ar-correct-a" in e and "automation" in e
+                                            for e in errors), errors)
+        with self.subTest(automation="omitted"):
+            case["label"] = {key: value for key, value in base.items() if key != "automation"}
+            for result in run_both():
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        # The documented pre-window exemption: an otherwise valid recorded
+        # label raised before the window is not refused for its actor.
+        case["label"] = base
+        pre = next(c for c in ds["cases"] if c["case_id"] == "ar-dev-model")
+        pre["label"] = {**base, "automation": 1}
+        del pre["label"]["automation"]
+        pre["label"].update(provenance="recorded_human_decision", answered_by="human")
+        for result in run_both():
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_precedent_pre_window_recorded_label_still_refuses_relabel_and_missing_fields(self):
         v4 = ("--format-version", "decision-assistance-eval/4")
         ds = json.loads(self._run("seed", *v4).stdout)

@@ -2102,6 +2102,40 @@ class ErrorTranslationGuardTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("defines unregistered translator 'stray_error_to_orbit'", result.stdout)
 
+    def test_space_root_and_spaced_quoted_filenames_are_scanned(self):
+        spaced = self.root / "space root"
+        shutil.copytree(self.root / "crates", spaced / "crates")
+        script = spaced / "check-error-translation.sh"
+        script.write_text(self.SCRIPT.read_text())
+        script.chmod(0o755)
+        clean = subprocess.run(["/bin/bash", str(script), str(spaced)],
+                               text=True, capture_output=True)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        # An unregistered translator in a spaced, quoted filename.
+        stray = spaced / "crates/orbit-cli/src/quo'te stray.rs"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("fn stray_error_to_orbit() {}\n")
+        # Ad-hoc mappings for both registry kinds in spaced filenames.
+        mapping = spaced / "crates/orbit-cli/src/ad hoc.rs"
+        mapping.write_text(
+            "fn f() { let _ = AutomationError::X => OrbitError::Y; }\n"
+            "fn g() { let _ = TaskError::X => OrbitError::Y; }\n")
+        result = subprocess.run(["/bin/bash", str(script), str(spaced)],
+                                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stray_error_to_orbit", result.stdout)
+        self.assertIn("maps 'AutomationError' to OrbitError ad hoc", result.stdout)
+        self.assertIn("maps 'TaskError' to OrbitError ad hoc", result.stdout)
+        self.assertNotIn("error translation guard passed", result.stdout)
+
+    def test_scan_failure_cannot_yield_success(self):
+        broken = self.root / "crates/orbit-cli/src/broken.rs"
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.symlink_to(self.root / "crates/orbit-cli/src/missing-target.rs")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("error translation guard passed", result.stdout)
+
     def test_allowlisted_translator_outside_registry_passes(self):
         self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
         text = self.SCRIPT.read_text()

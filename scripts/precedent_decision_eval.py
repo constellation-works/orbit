@@ -161,6 +161,14 @@ def _ineligible_actor_message(label):
         return None
     if label.get("automation") is True:
         return "automation actor labels are not holdout-eligible"
+    # A recorded human decision is eligible only with automation explicitly
+    # boolean false; omitted, null, numeric and string values are not false.
+    # Any other label that carries an automation value must likewise be
+    # explicitly false, rather than merely not the singleton True.
+    if label.get("automation") is not False and (
+        "automation" in label or label.get("provenance") == RECORDED
+    ):
+        return "recorded_human_decision requires automation to be explicitly boolean false"
     for token in _actor_tokens(label):
         if token in INELIGIBLE_ACTORS:
             return f"{token} actor labels are not holdout-eligible"
@@ -349,6 +357,9 @@ def _recorded_field_errors(label, where, *, check_actor=True):
         errors.append(f"{where}: answered_at must be ISO-8601 with a timezone")
     if _text(label.get("channel")) is None:
         errors.append(f"{where}: channel must name the recorded channel")
+    if check_actor and label.get("automation") is not False:
+        errors.append(
+            f"{where}: recorded_human_decision requires automation to be explicitly boolean false")
     if check_actor and _ineligible_actor_message(label) is None and not any(
         token in ELIGIBLE_HUMAN_ACTORS for token in _actor_tokens(label)
     ):

@@ -45,6 +45,42 @@ fi
 
 fail=0
 
+if [[ ! -d "$crates_dir" ]]; then
+  echo "error-translation: crates directory '$crates_dir' is missing; cannot scan" >&2
+  exit 1
+fi
+
+scan_err="$(mktemp)"
+scan_output=""
+trap 'rm -f "$scan_err"' EXIT
+
+# Run one ripgrep scan over every Rust source. Filenames travel in an
+# argument array, never through whitespace-splitting consumers, so roots
+# and filenames containing spaces or quotes are scanned intact. A scan
+# error (exit status above 1) fails closed instead of yielding success.
+run_rg_scan() {
+  local pattern="$1"
+  scan_output=""
+  local scan_files=()
+  local file
+  while IFS= read -r -d '' file; do
+    scan_files+=("$file")
+  done < <(rust_sources "")
+  if [[ "${#scan_files[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  local status=0
+  scan_output="$(rg -n -- "$pattern" "${scan_files[@]}" 2>"$scan_err")" || status=$?
+  if [[ "$status" -gt 1 ]]; then
+    echo "error-translation: scan failed for pattern '$pattern':" >&2
+    cat "$scan_err" >&2
+    fail=1
+    scan_output=""
+    return 1
+  fi
+  return 0
+}
+
 # --- Registry: boundary error type -> owning crate -> translator name. ---
 # Add a line when a typed error starts crossing into OrbitError; the owning
 # crate is where the type (and therefore the translator) must be defined.
@@ -113,12 +149,12 @@ registered_translator_crate() {
 rust_sources() {
   local crate_filter="$1" # crate name, or "" for all crates
   find "$crates_dir" -name '*.rs' -path '*/src/*' \
-    ! -path '*/tests/*' ! -path '*/examples/*' ! -path '*/benches/*' |
-    while IFS= read -r file; do
+    ! -path '*/tests/*' ! -path '*/examples/*' ! -path '*/benches/*' -print0 |
+    while IFS= read -r -d '' file; do
       local rel="${file#"$crates_dir"/}"
       local crate="${rel%%/*}"
       if [[ -z "$crate_filter" || "$crate" == "$crate_filter" ]]; then
-        printf '%s\n' "$file"
+        printf '%s\0' "$file"
       fi
     done
 }
@@ -164,6 +200,7 @@ for entry in "${from_registry[@]}"; do
 done
 
 # --- Check 2: no translator definitions outside the registry/allowlist. ---
+run_rg_scan "fn [a-z0-9_]+_error_to_orbit\\(" || true
 while IFS=: read -r file line text; do
   [[ -n "$file" ]] || continue
   name="$(sed -E 's/.*fn ([a-z0-9_]+_error_to_orbit)\(.*/\1/' <<<"$text")"
@@ -183,12 +220,13 @@ while IFS=: read -r file line text; do
     echo "  or to the allowlist with a justifying comment if it is not a crate-boundary translator"
     fail=1
   fi
-done < <(rust_sources "" | xargs rg -n "fn [a-z0-9_]+_error_to_orbit\\(" 2>/dev/null || true)
+done <<< "$scan_output"
 
 # --- Check 3: no same-line ad-hoc ErrorType -> OrbitError mapping outside the
 # owning crate. ---
 for entry in "${registry[@]}"; do
   IFS=':' read -r err_type crate translator <<<"$entry"
+  run_rg_scan "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" || true
   while IFS=: read -r file line text; do
     [[ -n "$file" ]] || continue
     if [[ "$(crate_of "$file")" == "$crate" ]]; then
@@ -198,11 +236,12 @@ for entry in "${registry[@]}"; do
     echo "    ${text#"${text%%[![:space:]]*}"}"
     echo "  use .map_err(${translator}) from '$crate' instead"
     fail=1
-  done < <(rust_sources "" | xargs rg -n "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" 2>/dev/null || true)
+  done <<< "$scan_output"
 done
 
 for entry in "${from_registry[@]}"; do
   IFS=':' read -r err_type _crate <<<"$entry"
+  run_rg_scan "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" || true
   while IFS=: read -r file line text; do
     [[ -n "$file" ]] || continue
     if [[ "$(crate_of "$file")" == "$from_translation_crate" ]]; then
@@ -212,7 +251,7 @@ for entry in "${from_registry[@]}"; do
     echo "    ${text#"${text%%[![:space:]]*}"}"
     echo "  convert with '?' or OrbitError::from (impl in '$from_translation_crate') instead"
     fail=1
-  done < <(rust_sources "" | xargs rg -n "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" 2>/dev/null || true)
+  done <<< "$scan_output"
 done
 
 if [[ "$fail" -ne 0 ]]; then

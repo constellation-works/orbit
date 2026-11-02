@@ -780,6 +780,35 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_numeric_enum_representation_change_is_not_a_removal(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["level"] = {
+            "enum": [1, [2, {"depth": 3}], "full"]}
+        tools[0]["inputSchema"]["properties"]["flag"] = {"enum": [True]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare numeric enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["properties"]["level"]["enum"] = [
+            1.0, [2.0, {"depth": 3.0}], "full"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Rewrite numeric enums [ORB-65]")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [], report)
+        self.assertEqual(report["bump"], "patch")
+
+        # A real removal and a boolean-to-number change are still breaking.
+        tools[0]["inputSchema"]["properties"]["level"]["enum"] = [
+            [2.0, {"depth": 3.0}], "full"]
+        tools[0]["inputSchema"]["properties"]["flag"]["enum"] = [1]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove numeric enum values [ORB-66]")
+        report = self.report("--range", "v0.35.0..HEAD")
+        details = {detail for _, _, detail in self.signals(report)}
+        self.assertIn("`orbit_task_show` `inputSchema.level` enum value 1 removed", details)
+        self.assertIn("`orbit_task_show` `inputSchema.flag` enum value true removed", details)
+        self.assertEqual(report["bump"], "minor")
+
     def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
         cases = (
             (

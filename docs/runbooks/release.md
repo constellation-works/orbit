@@ -121,7 +121,8 @@ object, removing a root type constraint, and inserting a provably disjoint
 
 3. **Run the install smokes.** `scripts/smoke-plugin-install.sh` installs the
    repository plugin into scratch Claude Code and Codex config roots and checks
-   their MCP and skill assets. Cursor has no supported headless plugin runner,
+   their MCP and skill assets; it also builds an invalid candidate and requires
+   both plugin validators to refuse it. Cursor has no supported headless plugin runner,
    so its leg creates the documented local symlink and validates the Agent
    Plugins 1.0 root manifests. npm download/signature coverage stays solely in
    `scripts/smoke-npm-install.sh`.

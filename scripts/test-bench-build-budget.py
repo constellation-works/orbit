@@ -555,6 +555,7 @@ def scenario_cancellation(root, script):
     )
     errors = []
     pids = []
+    reservation = OwnedArmIdentity()
     try:
         deadline = time.monotonic() + 20
         while not (block / "ready.json").exists():
@@ -563,6 +564,18 @@ def scenario_cancellation(root, script):
                 return errors
             time.sleep(0.02)
         pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+        # Reserve the blocked arm's incarnations before signalling the
+        # benchmark: after it reaps the arm, these numeric PIDs may be
+        # reused, so the finally block must signal only these pidfds.
+        try:
+            pgid = read_arm_proc_identity(pids[0])[0]
+            reservation.pin(pgid, pids)
+        except (OSError, ValueError, IndexError, TypeError):
+            errors.append("cancellation arm identity was not recorded")
+            return errors
+        if process.poll() is None and not reservation.fds:
+            errors.append("cancellation arm identity was not reserved")
+            return errors
         process.send_signal(signal.SIGTERM)
         try:
             process.communicate(timeout=20)
@@ -582,15 +595,7 @@ def scenario_cancellation(root, script):
         if any((work / name).exists() for name in ("trees", "targets", "locks")):
             errors.append("owned directories survived cancellation cleanup")
     finally:
-        for pid in pids:
-            if pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-        if process.poll() is None:
-            process.kill()
-            process.communicate()
+        retire_cancellation_processes(reservation, process)
     return errors
 
 
@@ -929,6 +934,7 @@ def scenario_cancellation_identity(root, script):
     child = 424244
     members = (leader, shim, child)
     cases = (
+        (scenario_cancellation, "cancellation"),
         (scenario_cancellation_spawn_window, "spawn-window"),
         (scenario_cancellation_flag_clear, "flag-clear"),
     )
@@ -1135,11 +1141,12 @@ def scenario_cancellation_identity(root, script):
                 ):
                     problems.append(("opened_after_retire", model["events"]))
             elif mode == "timeout":
-                if scenario_errors != [
-                    "benchmark did not exit after SIGTERM in the spawn window"
-                    if label == "spawn-window"
-                    else "benchmark did not exit after SIGTERM at the flag-clear boundary"
-                ]:
+                timeout_messages = {
+                    "cancellation": "benchmark did not exit after SIGTERM",
+                    "spawn-window": "benchmark did not exit after SIGTERM in the spawn window",
+                    "flag-clear": "benchmark did not exit after SIGTERM at the flag-clear boundary",
+                }
+                if scenario_errors != [timeout_messages[label]]:
                     problems.append(("scenario", scenario_errors))
                 if opened != [leader, shim, child] or signaled != [leader, shim, child]:
                     problems.append(("signals", opened, signaled))

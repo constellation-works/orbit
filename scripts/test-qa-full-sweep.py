@@ -1428,6 +1428,31 @@ def validate_npm_result(repo, command, evidence):
     return body["assertions"]
 
 
+def validate_plugin_result(repo, command, evidence):
+    if command != ["./scripts/smoke-plugin-install.sh"]:
+        raise ValueError("plugin assertions require the plugin-install smoke command")
+    if evidence.get("exit_code") != 0:
+        raise ValueError(f"plugin-install smoke exited {evidence.get('exit_code')}")
+    stdout = evidence.get("stdout", "")
+    required = (
+        "plugin-installs-from-candidate-assets",
+        "plugin-invalid-install-is-refused",
+    )
+    # The smoke prints each assertion label only after exercising it: the
+    # valid-install label after the scratch installs are checked, and the
+    # refusal label only after both validators reject an invalid candidate.
+    markers = {
+        "plugin-installs-from-candidate-assets":
+            "Claude Code and Codex scratch installs expose Orbit MCP and skill assets",
+        "plugin-invalid-install-is-refused":
+            "plugin-invalid-install-is-refused: invalid plugin candidate refused",
+    }
+    missing = [label for label in required if markers[label] not in stdout]
+    if missing:
+        raise ValueError(f"plugin-install smoke did not exercise: {', '.join(missing)}")
+    return list(required)
+
+
 def cargo_outer_suites(command, evidence):
     """Attribute libtest reports to outer suites, never to captured test output.
 
@@ -3126,6 +3151,59 @@ def npm_package_self_test():
             raise AssertionError("exit-zero predicate output substituted for candidate evidence")
 
 
+def plugin_install_self_test():
+    """The plugin refusal assertion is earned only by exercising a refusal."""
+    repo = Path(__file__).resolve().parent.parent
+    scratch = repo / ".orbit/tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    command = ["./scripts/smoke-plugin-install.sh"]
+    env = isolated_environment(scratch / "plugin-self-test-env")
+    evidence = run(command, cwd=repo, env=env)
+    assertions = validate_plugin_result(repo, command, evidence)
+    result = finalize_result(evidence, assertions, "fixture")
+    if result["outcome"] != "PASS" or assertions != [
+            "plugin-installs-from-candidate-assets", "plugin-invalid-install-is-refused"]:
+        raise AssertionError(f"valid plugin candidate failed: {result}")
+    # Exit-zero output without the refusal exercise earns nothing.
+    synthetic = {"exit_code": 0, "stderr": "",
+                 "stdout": "Claude Code and Codex scratch installs expose Orbit MCP and skill assets\n"}
+    try:
+        validate_plugin_result(repo, command, synthetic)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("plugin refusal assertion was earned without a refusal")
+    # Refusal-disabled mutation: validators that always succeed must make
+    # the copied smoke fail, so it cannot earn the assertion.
+    with tempfile.TemporaryDirectory(prefix="plugin-controls-", dir=scratch) as directory:
+        candidate = Path(directory) / "candidate"
+        (candidate / "scripts").mkdir(parents=True)
+        shutil.copytree(repo / "plugin", candidate / "plugin")
+        shutil.copytree(repo / "npm", candidate / "npm")
+        (candidate / ".claude-plugin").mkdir()
+        (candidate / ".agents/plugins").mkdir(parents=True)
+        shutil.copy2(repo / ".claude-plugin/marketplace.json",
+                     candidate / ".claude-plugin/marketplace.json")
+        shutil.copy2(repo / ".agents/plugins/marketplace.json",
+                     candidate / ".agents/plugins/marketplace.json")
+        shutil.copy2(repo / "scripts/smoke-plugin-install.sh",
+                     candidate / "scripts/smoke-plugin-install.sh")
+        for name in ("validate-codex-plugin.sh", "validate-agent-plugin.sh",
+                     "sync-plugin-skills.sh"):
+            stub = candidate / "scripts" / name
+            stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+            stub.chmod(0o755)
+        mutated = run(command, cwd=candidate, env=env)
+        if mutated["exit_code"] == 0:
+            raise AssertionError("refusal-disabled plugin smoke still succeeded")
+        try:
+            validate_plugin_result(candidate, command, mutated)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("refusal-disabled plugin smoke earned assertions")
+
+
 def retired_case_self_test():
     """The three reconciled identities stay executable dispositions, and a bad one cannot validate."""
     repo = Path(__file__).resolve().parents[1]
@@ -3231,6 +3309,7 @@ def self_test():
     process_self_test()
     builtin_init_self_test()
     npm_package_self_test()
+    plugin_install_self_test()
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")
@@ -3802,9 +3881,12 @@ def main():
                     if scenario["id"] == "npm-package":
                         assertions = []
                         assertions = validate_npm_result(repo, command, evidence)
+                    if scenario["id"] == "plugin-install":
+                        assertions = []
+                        assertions = validate_plugin_result(repo, command, evidence)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                     failure = str(error) if failure is None else failure + "; " + str(error)
-                if scenario["id"] == "npm-package" and failure:
+                if scenario["id"] in ("npm-package", "plugin-install") and failure:
                     assertions = []
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, assertions, candidate_id, failure)}
