@@ -359,8 +359,12 @@ Any step may add `when` and `retry`.
 ### `when`: conditional steps
 
 `when` is a boolean expression evaluated once, before any retry. A step
-whose `when` is false is skipped: it records success with a `null` output
-and never retries.
+whose `when` is false is skipped: it succeeds without running, never
+retries, and records no output, so a later step that reads
+`{{ steps.<id>.output }}` from it fails with `no data recorded for step`.
+A resumed run treats the skipped step the same way: it does not run it
+again, and its output stays absent. A step that ran and returned `null`
+keeps that `null` across a resume.
 
 ```yaml
 - id: push
@@ -441,6 +445,12 @@ spec:
 Recovery is not a way to make a failing step pass silently: the original
 failure, every retry and each recovery attempt are recorded in the run's
 audit trail.
+
+After recovery, the step runs once more. If that attempt ends the run
+the way a step can end it without failing, the run ends that way, as it
+would on a first attempt: a review held for external evidence holds the
+run, and a cancelled child run cancels it. Neither runs
+`final_recovery_activity` or `failure_activity`.
 
 ## Agent process policy
 

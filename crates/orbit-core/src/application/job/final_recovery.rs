@@ -342,6 +342,7 @@ fn record_decision(
                     |index: &u32| *index < from || application.preserved_steps.contains(index);
                 state.step_states.retain(|index, _| keep(index));
                 state.step_outputs.retain(|index, _| keep(index));
+                state.skipped_steps.retain(|index| keep(index));
                 state.compound_outputs.retain(|index, _| *index < from);
                 state.script_output_sets.retain(|index, _| *index < from);
             }

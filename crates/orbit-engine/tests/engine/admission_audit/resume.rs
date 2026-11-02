@@ -868,3 +868,203 @@ fn parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection() {
     assert_eq!(read_back["kept"], json!([{"tag": "kept"}]));
     assert_eq!(read_back["step_id"], json!("read_back"));
 }
+
+/// Host that keeps the run's `PipelineState` the way the production host
+/// writes it (an executed step's output, or a `when:`-skipped step's null and
+/// skip marker), and snapshots it after every checkpoint, so a test can
+/// resume from any point the run reached.
+struct StateHost {
+    inner: ScriptedHost,
+    state: StdMutex<PipelineState>,
+    snapshots: StdMutex<Vec<PipelineState>>,
+    inputs: StdMutex<Vec<(String, Value)>>,
+}
+
+impl StateHost {
+    fn new(inner: ScriptedHost) -> Self {
+        Self {
+            inner,
+            state: StdMutex::new(PipelineState::new(
+                "jrun-source".to_string(),
+                "qa_resume".to_string(),
+                Value::Object(Default::default()),
+            )),
+            snapshots: StdMutex::new(Vec::new()),
+            inputs: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, step_index: u32, step_id: &str, output: &Value, skipped: bool) {
+        let mut state = self.state.lock().expect("state");
+        state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
+        state.record_step_skipped(step_index, skipped);
+        state.record_pipeline_output(step_id, output.clone());
+        self.snapshots
+            .lock()
+            .expect("snapshots")
+            .push(state.clone());
+    }
+
+    fn snapshot_after(&self, checkpoints: usize) -> PipelineState {
+        self.snapshots.lock().expect("snapshots")[checkpoints - 1].clone()
+    }
+
+    fn inputs_for(&self, action: &str) -> Vec<Value> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .iter()
+            .filter(|(recorded, _)| recorded == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for StateHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .push((action.to_string(), input.clone()));
+        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+    }
+
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+        output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
+        _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, output, false);
+        Ok(())
+    }
+
+    fn checkpoint_skipped_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, &Value::Null, true);
+        Ok(())
+    }
+}
+
+/// The job behind the skipped-output resume regression: a `when:`-skipped
+/// producer, an executed producer whose output is a genuine JSON null, and
+/// one consumer of each.
+fn skipped_and_null_producer_job() -> JobV2 {
+    let mut optional = target_step("optional", "test_optional");
+    optional.when = Some("false".to_string());
+    let mut null_reader = target_step("null_reader", "test_null_reader");
+    let JobV2StepBody::Target(target) = &mut null_reader.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(json!({"seen": "{{ steps.nullish.output }}"}));
+    let mut optional_reader = target_step("optional_reader", "test_optional_reader");
+    let JobV2StepBody::Target(target) = &mut optional_reader.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(json!({"seen": "{{ steps.optional.output }}"}));
+    job_with_steps(vec![
+        optional,
+        target_step("nullish", "test_nullish"),
+        null_reader,
+        optional_reader,
+    ])
+}
+
+fn null_producer_host() -> StateHost {
+    StateHost::new(ScriptedHost::new([(
+        "test_nullish",
+        vec![Action::Ok(Value::Null)],
+    )]))
+}
+
+#[test]
+fn resume_after_when_false_step_keeps_its_output_absent() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::resume_after_when_false_step_keeps_its_output_absent"
+    )) {
+        return;
+    }
+
+    // ORB-21581: a `when:` false step records no output, so the
+    // uninterrupted run fails where a later step reads it. Resumed from a
+    // checkpoint taken after it, the run must fail the same way rather than
+    // hand the reader a manufactured null, while an executed step's genuine
+    // null output reaches its reader identically in both runs.
+    let job = skipped_and_null_producer_job();
+    let fresh_host = null_producer_host();
+    let fresh = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "run-skip-fresh",
+        std::sync::Arc::new(test_writer("run-skip-fresh")),
+        &fresh_host,
+        None,
+    );
+    let fresh_error = fresh
+        .expect_err("reading a skipped step's output fails the uninterrupted run")
+        .to_string();
+    assert!(
+        fresh_error.contains("no data recorded for step 'optional'"),
+        "{fresh_error}"
+    );
+    let fresh_seen = fresh_host.inputs_for("test_null_reader");
+    assert_eq!(fresh_seen.len(), 1);
+    assert_eq!(fresh_host.inner.call_count("test_optional"), 0);
+    assert_eq!(fresh_host.inner.call_count("test_optional_reader"), 0);
+
+    // Interrupted once both producers had checkpointed.
+    let checkpoint = fresh_host.snapshot_after(2);
+    assert_eq!(
+        checkpoint.step_states.get(&0),
+        Some(&JobRunState::Success),
+        "the skipped step stays a completed step for every other reader",
+    );
+    assert_eq!(checkpoint.step_outputs.get(&0), Some(&Value::Null));
+    assert!(checkpoint.skipped_steps.contains(&0));
+    assert!(!checkpoint.skipped_steps.contains(&1));
+
+    let resumed_host = null_producer_host();
+    let resumed = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "run-skip-resumed",
+        std::sync::Arc::new(test_writer("run-skip-resumed")),
+        &resumed_host,
+        Some(&checkpoint),
+    );
+    let resumed_error = resumed
+        .expect_err("the resumed run fails where the uninterrupted one did")
+        .to_string();
+    assert!(
+        resumed_error.contains("no data recorded for step 'optional'"),
+        "{resumed_error}"
+    );
+    assert_eq!(resumed_host.inner.call_count("test_optional"), 0);
+    assert_eq!(resumed_host.inner.call_count("test_nullish"), 0);
+    assert_eq!(resumed_host.inner.call_count("test_optional_reader"), 0);
+    assert_eq!(
+        resumed_host.inputs_for("test_null_reader"),
+        fresh_seen
+            .into_iter()
+            .map(|mut input| {
+                input["run_id"] = json!("run-skip-resumed");
+                input
+            })
+            .collect::<Vec<_>>(),
+        "a restored genuine null reaches its reader as the executed one did",
+    );
+}

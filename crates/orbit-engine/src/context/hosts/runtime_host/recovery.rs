@@ -56,6 +56,20 @@ macro_rules! recovery_methods {
             script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
         ) -> Result<(), DispatchError>;
 
+        /// Persist the checkpoint of a top-level step its `when:` skipped. It
+        /// records what [`Self::checkpoint_step`] records for a null output
+        /// (the step stays `success`, which readers of completed steps rely
+        /// on) and also marks the step skipped, so a resumed run leaves its
+        /// output absent from later templates, as the uninterrupted run did,
+        /// while an executed step's null output is still restored. Non-fatal,
+        /// like `checkpoint_step`.
+        fn checkpoint_skipped_step(
+            &self,
+            run_id: &str,
+            step_index: u32,
+            step_id: &str,
+        ) -> Result<(), DispatchError>;
+
         /// Observe one `auto-task:` step pass deterministically (ORB-20158):
         /// its durable record, the frozen definition's hold, the bound task's
         /// terminal receipt, the deadline, expiry and readiness at the owner's

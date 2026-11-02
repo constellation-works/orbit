@@ -36,6 +36,7 @@ impl Serialize for PipelineState {
             step_outputs: &self.step_outputs => false,
             compound_outputs: &self.compound_outputs => self.compound_outputs.is_empty(),
             script_output_sets: &self.script_output_sets => self.script_output_sets.is_empty(),
+            skipped_steps: &self.skipped_steps => self.skipped_steps.is_empty(),
             pipeline_patches: &self.pipeline_patches => false,
             step_output_pointers: &self.step_output_pointers => self.step_output_pointers.is_empty(),
             step_states: &self.step_states => false,

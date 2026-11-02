@@ -743,6 +743,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             script_outputs,
         )
     }
+    fn checkpoint_skipped_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_skipped_step(self, run_id, step_index, step_id)
+    }
     fn checkpoint_step_diagnostic(
         &self,
         run_id: &str,

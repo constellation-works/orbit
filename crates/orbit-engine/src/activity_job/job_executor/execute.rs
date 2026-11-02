@@ -248,7 +248,18 @@ pub fn execute_job_with_resume(
                 );
             }
         }
-        let failure = match run_step(step, &ctx) {
+        // A step its `when:` skipped checkpoints with a skip marker, so a
+        // resumed run leaves its output absent as this run does.
+        let mut skipped = false;
+        let ran = match step_skipped_by_when(step, &ctx) {
+            Ok(true) => {
+                skipped = true;
+                Ok(skipped_step_outcome())
+            }
+            Ok(false) => run_admitted_step(step, &ctx),
+            Err(error) => Err(error),
+        };
+        let failure = match ran {
             Ok(outcome) if outcome.success => Ok(outcome),
             Ok(outcome) => {
                 let message = outcome
@@ -360,6 +371,12 @@ pub fn execute_job_with_resume(
         if refreshes_preparation && let Some(refresh) = preparation_refresh.as_ref() {
             refresh.annotate_output(&mut outcome.output)?;
             record_pipeline(&ctx, &step.id, outcome.output.clone());
+            skipped = false;
+        }
+        if skipped {
+            checkpoint_skipped_step(&ctx, step_index, &step.id);
+            index += 1;
+            continue;
         }
         let compound_outputs = pipeline_before
             .map(|before| compound_outputs_since(&ctx, step, &before))
@@ -406,7 +423,9 @@ fn lineage_forge_hold(
 }
 
 /// [ORB-10002] Seed the executor pipeline map from successful checkpoints so
-/// skipped steps' outputs stay visible without exposing failed/timed-out data.
+/// resume-skipped steps' outputs stay visible without exposing failed or
+/// timed-out data. A step its `when:` skipped (`skipped_steps`) stays absent,
+/// as it was in the source run; an executed step's null output is restored.
 ///
 /// Per completed step, in step order (so a later step's write wins, as it
 /// did in the source run): its own output, a top-level fan-in `collect`
@@ -431,6 +450,11 @@ fn seed_pipeline_from_resume(
     for (index, step) in job.steps.iter().enumerate() {
         let step_index = index as u32;
         if state.step_states.get(&step_index) != Some(&JobRunState::Success) {
+            continue;
+        }
+        // A step its `when:` skipped exposed nothing; its null checkpoint
+        // output is not one to restore.
+        if state.skipped_steps.contains(&step_index) {
             continue;
         }
         let Some(output) = state.step_outputs.get(&step_index) else {
@@ -634,6 +658,23 @@ pub(super) fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>
             }
         }
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+}
+
+/// [`checkpoint_completed_step`] for a top-level step its `when:` skipped.
+fn checkpoint_skipped_step(ctx: &ExecCtx<'_>, step_index: u32, step_id: &str) {
+    if let Err(error) = ctx
+        .host
+        .checkpoint_skipped_step(&ctx.run_id, step_index, step_id)
+    {
+        tracing::warn!(
+            target: "orbit.engine.job_executor",
+            run_id = %ctx.run_id,
+            step_id,
+            step_index,
+            error = %error,
+            "skipped step checkpoint persistence failed; run continues without a durable checkpoint",
+        );
     }
 }
 

@@ -107,6 +107,7 @@ pub(super) fn rewind_to_completion(
         }
         state.step_states.remove(&index);
         state.step_outputs.remove(&index);
+        state.skipped_steps.remove(&index);
         state.step_output_pointers.remove(&index);
         state.compound_outputs.remove(&index);
         state.script_output_sets.remove(&index);

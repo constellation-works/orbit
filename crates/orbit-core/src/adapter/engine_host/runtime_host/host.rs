@@ -852,12 +852,35 @@ impl RuntimeHost for OrbitRuntime {
     ) -> Result<(), DispatchError> {
         recovery::checkpoint_step(
             self,
-            run_id,
-            step_index,
-            step_id,
-            output,
-            compound_outputs,
-            script_outputs,
+            &recovery::StepCheckpoint {
+                run_id,
+                step_index,
+                step_id,
+                output,
+                compound_outputs,
+                script_outputs,
+                skipped: false,
+            },
+        )
+    }
+
+    fn checkpoint_skipped_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        recovery::checkpoint_step(
+            self,
+            &recovery::StepCheckpoint {
+                run_id,
+                step_index,
+                step_id,
+                output: &Value::Null,
+                compound_outputs: &BTreeMap::new(),
+                script_outputs: &BTreeMap::new(),
+                skipped: true,
+            },
         )
     }
 

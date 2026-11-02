@@ -294,6 +294,12 @@ fn post_recovery_attempt(
         Err(error @ DispatchError::CandidateAbsorbed { .. }) => {
             ("absorbed", Some(error.to_string()))
         }
+        // A typed stop the retry met is attributed as the stop it is, as a
+        // direct one is on `step.finished`.
+        Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
+        Err(error @ DispatchError::ChildRunCancelled { .. }) => {
+            ("cancelled", Some(error.to_string()))
+        }
         Err(error) => ("error", Some(error.to_string())),
     };
     let error_message = error_message.map(|message| redacted_recovery_diagnostic(&message));
@@ -339,6 +345,18 @@ fn post_recovery_attempt(
             message: format!("{message}; original error before recovery: {original}"),
         })),
         Err(hold @ DispatchError::ForgeUnavailableHold(_)) => PostRecovery::Settled(Err(hold)),
+        // [ORB-14313] A settled review awaiting named evidence holds the run
+        // whether the first attempt or the retry after recovery reached it:
+        // neither final recovery nor the failure handoff may run for it.
+        Err(hold @ DispatchError::ReviewEvidenceHold(_)) => PostRecovery::Settled(Err(hold)),
+        // [ORB-15202] Nor for a child the retry found cancelled: an
+        // operator's cancel is not a parent failure. The original error
+        // stays on the message for diagnosis.
+        Err(DispatchError::ChildRunCancelled { message }) => {
+            PostRecovery::Settled(Err(DispatchError::ChildRunCancelled {
+                message: format!("{message}; original error before recovery: {original}"),
+            }))
+        }
         Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
             PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {
                 candidate,

@@ -41,6 +41,10 @@ enum Reply {
     Observation,
     Diagnostic(String),
     Conflict(RecoverableVcsConflict),
+    /// A settled review awaiting named external evidence.
+    EvidenceHold,
+    /// A child run the step waited on was cancelled.
+    ChildCancelled,
 }
 
 struct RecoveryHost {
@@ -160,6 +164,12 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
             Some(Reply::Conflict(conflict)) => {
                 Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
             }
+            Some(Reply::EvidenceHold) => {
+                Err(DispatchError::ReviewEvidenceHold(Box::new(evidence_hold())))
+            }
+            Some(Reply::ChildCancelled) => Err(DispatchError::ChildRunCancelled {
+                message: "child run jrun-child was cancelled".to_string(),
+            }),
             None if action == "setup" => Ok(json!({
                 "workspace_path": self.workspace_path,
                 "base_ref": "main",
@@ -365,6 +375,8 @@ struct Run {
     attempts: Vec<(String, Option<String>)>,
     /// Detail of each attempt, in the same order as `attempts`.
     details: Vec<Option<String>>,
+    /// `outcome` of every `step.post_recovery_attempt` event.
+    post_recovery: Vec<String>,
 }
 
 fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run {
@@ -430,22 +442,29 @@ fn run_with_input(
     let result = execute_job_with_resume(job, input, RUN_ID, writer.clone(), host, resume);
     let mut attempts = Vec::new();
     let mut details = Vec::new();
+    let mut post_recovery = Vec::new();
     for event in writer.events_snapshot().expect("audit events") {
-        if let V2AuditEventKind::FinalRecoveryAttempted {
-            outcome,
-            decision,
-            detail,
-            ..
-        } = event.kind
-        {
-            attempts.push((outcome, decision));
-            details.push(detail);
+        match event.kind {
+            V2AuditEventKind::FinalRecoveryAttempted {
+                outcome,
+                decision,
+                detail,
+                ..
+            } => {
+                attempts.push((outcome, decision));
+                details.push(detail);
+            }
+            V2AuditEventKind::StepPostRecoveryAttempt { outcome, .. } => {
+                post_recovery.push(outcome);
+            }
+            _ => {}
         }
     }
     Run {
         result,
         attempts,
         details,
+        post_recovery,
     }
 }
 
@@ -843,6 +862,78 @@ fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
             .contains("work failed")
     );
     assert_eq!(input["log_tail"], "this run's failure log");
+}
+
+fn evidence_hold() -> orbit_types::workflow::ReviewEvidenceHold {
+    orbit_types::workflow::ReviewEvidenceHold {
+        schema_version: 1,
+        attempt_id: "attempt-1".to_string(),
+        lineage_key: "lineage-1".to_string(),
+        run_id: RUN_ID.to_string(),
+        candidate: orbit_types::workflow::automation::SourceRevision {
+            commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            tree: "89abcdef0123456789abcdef0123456789abcdef".to_string(),
+        },
+        task_meaning_digest: "meaning".to_string(),
+        requirements: Vec::new(),
+        task_spec_digest: None,
+        published_ref: None,
+        candidate_carry: None,
+    }
+}
+
+/// ORB-21581: a step that fails, admits its step recovery, and then reaches
+/// a settled review awaiting evidence on the retry holds the run, exactly as
+/// a direct hold does.
+fn an_evidence_hold_after_step_recovery_holds_the_run() {
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail, Reply::EvidenceHold]),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(true), &host, None);
+
+    let outcome = run.result.expect("a hold ends the run without an error");
+    assert!(!outcome.success);
+    assert_eq!(outcome.evidence_hold, Some(evidence_hold()));
+    assert!(!outcome.child_cancelled);
+    assert_eq!(
+        host.actions(),
+        ["setup", "work", "step_fix", "work"],
+        "no further attempt, final recovery, failure handoff or delivery runs"
+    );
+    assert!(run.attempts.is_empty(), "final recovery is not attempted");
+    assert_eq!(run.post_recovery, ["held"]);
+}
+
+/// ORB-21581: a child found cancelled on the retry after step recovery
+/// cancels the parent rather than failing it.
+fn a_cancelled_child_after_step_recovery_cancels_the_run() {
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail, Reply::ChildCancelled]),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(true), &host, None);
+
+    let outcome = run
+        .result
+        .expect("a cancelled child ends the run without an error");
+    assert!(!outcome.success);
+    assert!(outcome.child_cancelled);
+    assert!(outcome.evidence_hold.is_none());
+    let message = outcome.message.expect("cancellation message");
+    assert!(
+        message.contains("child run jrun-child was cancelled")
+            && message.contains("original error before recovery")
+            && message.contains("work failed"),
+        "{message}"
+    );
+    assert_eq!(
+        host.actions(),
+        ["setup", "work", "step_fix", "work"],
+        "no further attempt, final recovery, failure handoff or delivery runs"
+    );
+    assert!(run.attempts.is_empty(), "final recovery is not attempted");
+    assert_eq!(run.post_recovery, ["cancelled"]);
 }
 
 fn final_recovery_runs_at_most_once_per_run() {
@@ -1758,6 +1849,14 @@ fn recovery_contracts_2() {
             (
                 "a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision",
                 a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision,
+            ),
+            (
+                "an_evidence_hold_after_step_recovery_holds_the_run",
+                an_evidence_hold_after_step_recovery_holds_the_run,
+            ),
+            (
+                "a_cancelled_child_after_step_recovery_cancels_the_run",
+                a_cancelled_child_after_step_recovery_cancels_the_run,
             ),
         ]);
     });
