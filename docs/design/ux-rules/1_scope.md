@@ -1,7 +1,7 @@
 ---
 title: "Scope: UX rules"
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 last_validated: 2026-11-01
 status: Draft
 stage: designing
@@ -147,7 +147,7 @@ Seeded from the two prompts. Each line is one rule.
 | ui | `console-clean` | No page errors, console errors or failed same-origin requests while rendering. |
 | cli | `help-alignment` | In grouped help, sibling rows' descriptions start in one column with at least two spaces after the longest name, at 60, 80 and 120 columns through a PTY, and piped. |
 | cli | `help-hanging-indent` | Wrapped descriptions keep one hanging indent and no hand-inserted line breaks. |
-| cli | `short-help-shorter` | `-h` is shorter than `--help` wherever both exist. |
+| cli | `short-help-shorter` | Wherever both exist, `-h` carries no content `--help` lacks: a word comparison without clap's help-flag footer, not a byte comparison, since clap's aligned short layout can have more bytes than the long one. A command whose `--help` adds no words is skipped as having no long help. |
 | cli | `help-length` | Per-flag help is one line; long help within a byte budget per command. |
 | cli | `json-valid` | `--json` output parses and keeps its top-level shape across two calls. |
 | cli | `error-exit-codes` | Common mistakes (unknown id, bad flag, conflicting flags) exit non-zero with a next step in the message. |

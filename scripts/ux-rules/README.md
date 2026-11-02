@@ -133,7 +133,7 @@ The fingerprint is `rule id`, the target id, and the target argv (or the target 
 |---|---|
 | `cli.help-alignment` | Grouped help at PTY widths 60, 80 and 120, and piped. Sibling descriptions share one column with a gap of at least two after the longest name. Example blocks are not grouped help. The evidence records each requested width and the ioctl width. |
 | `cli.help-hanging-indent` | Wrapped descriptions in that grouped help keep one hanging indent, and a line break is not inserted while the next word would still fit. |
-| `cli.short-help-shorter` | Where both exist, `-h` is shorter than `--help`. |
+| `cli.short-help-shorter` | Where both exist, `-h` carries no content that `--help` lacks. It compares the forms' words (lowercased, punctuation dropped, counted with repeats), not bytes, and ignores clap's help-flag footer: clap pads `-h` options into aligned columns, so a short help can have more bytes and still say less. A word in `-h` beyond `--help` fails, with a sample in `missing_sample`. When `--help` adds no words, the target is `skipped` with reason `no long help`. |
 | `cli.help-length` | Each flag's prose is one line. Clap's `Possible values:` list is not prose. Long help is at most 8192 bytes. |
 | `cli.json-valid` | `task list`, `workspace list`, and `config show` `--json` parse, and a second call keeps the same top-level shape. |
 | `cli.error-exit-codes` | An unknown task id, an unknown flag, and conflicting flags exit non-zero and name a next step. |
