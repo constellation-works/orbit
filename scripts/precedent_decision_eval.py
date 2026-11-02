@@ -339,7 +339,7 @@ def check_precedent_targets(doc, holdout_opened_at=None):
     return errors
 
 
-def _recorded_field_errors(label, where):
+def _recorded_field_errors(label, where, *, check_actor=True):
     errors = []
     if label.get("relabelled") is True:
         errors.append(f"{where}: recorded_human_decision is not relabelled after the fact")
@@ -349,7 +349,7 @@ def _recorded_field_errors(label, where):
         errors.append(f"{where}: answered_at must be ISO-8601 with a timezone")
     if _text(label.get("channel")) is None:
         errors.append(f"{where}: channel must name the recorded channel")
-    if _ineligible_actor_message(label) is None and not any(
+    if check_actor and _ineligible_actor_message(label) is None and not any(
         token in ELIGIBLE_HUMAN_ACTORS for token in _actor_tokens(label)
     ):
         errors.append(f"{where}: recorded_human_decision requires answered_by human or human_confirmed")
@@ -365,8 +365,8 @@ def validate_precedent_dataset(ds, bounds=None):
     """Structural dataset checks. `bounds` is the (start, end) window, when known.
 
     A recorded label on a request raised before `window_start` is outside the holdout,
-    so its actor and recorded-field eligibility are not checked. Without a window every
-    recorded label is checked.
+    so only its actor eligibility is waived; `relabelled` and the recorded fields are
+    still checked. Without a window every recorded label is fully checked.
     """
     if not isinstance(ds, dict) or ds.get("format_version") != FORMAT:
         return [f"format_version must be {FORMAT}"]
@@ -421,11 +421,10 @@ def validate_precedent_dataset(ds, bounds=None):
         if provenance == "synthetic" and label.get("human_ground_truth") is True:
             errors.append(f"{where}: synthetic labels are not human ground truth")
         raised = _ts(case.get("raised_at", ""))
-        if provenance == RECORDED and not (
-            bounds is not None and raised is not None and raised < bounds[0]
-        ):
-            errors.extend(_recorded_field_errors(label, where))
-            actor = _ineligible_actor_message(label)
+        if provenance == RECORDED:
+            pre_window = bounds is not None and raised is not None and raised < bounds[0]
+            errors.extend(_recorded_field_errors(label, where, check_actor=not pre_window))
+            actor = None if pre_window else _ineligible_actor_message(label)
             if actor:
                 errors.append(f"{where}: {actor}")
     return errors
