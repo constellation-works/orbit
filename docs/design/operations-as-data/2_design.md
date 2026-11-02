@@ -415,19 +415,17 @@ noun's CLI table around `registry_operation`. `lint` declares `Write`, because
 `--restore-pruned` writes, and the table opens the read-only runtime without
 the flag.
 
-**ID routing stays keyed by tool name, outside the spec** (phase 3a's answer).
-Two tool-name lists hold it, and every surface derives from them:
-`ID_ROUTED_TASK_TOOLS` in
-[mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) (a call without a
-workspace selector goes to the host its task-ID prefix names, for the
-federated MCP and the CLI host preflight in `host_route.rs`), and
-`ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server (the call binds the
-workspace that owns the ID, for MCP, `orbit tool run` and now `task_operation`).
-`NOT_ID_ROUTED_TOOLS` records why a required-ID tool such as
-`orbit.friction.show` keeps selector behaviour. `lint` accepts an optional ID
-for its workspace sweep and stays outside the required-ID tables; both forms
-keep the selected workspace. See
-[ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](./4_decisions.md#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec).
+**ID routing is declared at the definition site.** Each builtin declares its
+route in `OperationSpec::id_route`, or in `Tool::declared_id_route` for a
+hand-written tool. The registry resolves these declarations into MCP rules;
+its definition build rejects unclassified and misdeclared tools, and a boundary
+test checks the builtin classifications. A task-routed call without a workspace
+selector goes to the host named by its task-ID prefix in federated MCP and CLI
+host preflight. A workspace-local declaration records why a required-ID tool
+such as `orbit.friction.show` keeps selector behaviour. `lint` accepts an
+optional ID for its workspace sweep and keeps the selected workspace.
+Separately, `ID_RESOLVED_WORKSPACE_TOOLS` identifies calls that bind the
+workspace owning the ID for MCP, `orbit tool run` and `task_operation`.
 
 Redaction derives from the parameters' `redact` class (§2.1), not from the
 effect. Claimed-worker routing stays a core surface table, an exhaustive `match`
