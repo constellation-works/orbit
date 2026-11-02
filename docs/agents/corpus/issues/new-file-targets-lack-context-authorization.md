@@ -48,8 +48,8 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 04:36 | ORB-18083 | not recorded in triage comment | new-file targets absent, no context_creation_authorized; operator must grant exa | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
 | 2026-10-26 05:10 | ORB-18473 | not recorded in triage comment | new-file targets absent, no context_creation_authorized; operator must grant exa | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
 | 2026-10-27 19:41 | ORB-19160 | jrun-20261027-1936-c10 | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass; operator grant required |
-| 2026-10-28 22:06 | ORB-19615 | not recorded in triage comment | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
-| 2026-10-31 03:16 | ORB-20362 | not recorded in triage comment | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
-| 2026-10-31 03:40 | ORB-20371 | not recorded in triage comment | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
-| 2026-10-31 03:41 | ORB-20373 | not recorded in triage comment | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
-| 2026-10-31 03:42 | ORB-20375 | not recorded in triage comment | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-28 22:06 | ORB-19615 | jrun-20261028-2156-c1 (pilot) | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-31 03:16 | ORB-20362 | jrun-20261031-0307-c1 (pilot) | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-31 03:40 | ORB-20371 | jrun-20261031-0334-t1 (pilot) | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-31 03:41 | ORB-20373 | jrun-20261031-0334-t1 (pilot) | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
+| 2026-10-31 03:42 | ORB-20375 | jrun-20261031-0334-t1 (pilot) | creation targets absent, no creation authorization | pilot_warning_triaged human_only in ORB-21505 resume pass |
