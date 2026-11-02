@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::{redact_all, redact_home_dir};
 use orbit_types::task::Task;
 use orbit_types::workflow::{RESIDENT_TAG, ResidentComment};
 use serde_json::{Value, json};
@@ -14,6 +15,32 @@ use crate::application::task::TaskUpdateParams;
 
 fn invalid(message: impl Into<String>) -> OrbitError {
     OrbitError::InvalidInput(message.into())
+}
+
+/// Refuse sensitive records before any writer can sanitize their verbatim text.
+pub(crate) fn ensure_resident_comment_redaction_safe(message: &str) -> Result<(), OrbitError> {
+    if !ResidentComment::is_resident_comment(message) {
+        return Ok(());
+    }
+    let record: Value = serde_json::from_str(message)
+        .map_err(|error| invalid(format!("resident_record_invalid: {error}")))?;
+    // Preserve the serialized-text check, and also inspect decoded strings:
+    // JSON escaping and a closing quote must not hide a home path or secret.
+    if redact_all(message) != message || resident_record_requires_redaction(&record) {
+        return Err(invalid(
+            "resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim",
+        ));
+    }
+    Ok(())
+}
+
+fn resident_record_requires_redaction(value: &Value) -> bool {
+    match value {
+        Value::String(text) => redact_all(text) != *text || redact_home_dir(text) != *text,
+        Value::Array(items) => items.iter().any(resident_record_requires_redaction),
+        Value::Object(fields) => fields.values().any(resident_record_requires_redaction),
+        _ => false,
+    }
 }
 
 impl OrbitRuntime {

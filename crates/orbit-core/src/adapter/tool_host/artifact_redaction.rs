@@ -12,6 +12,7 @@ use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::resident::ResidentVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::visual::VisualVerb;
@@ -27,6 +28,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::resident;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
@@ -104,13 +106,15 @@ pub(super) fn sanitize_tool_input(
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<(Value, ArtifactRedactionReport), OrbitError> {
-    if let Some(comment) = input.get("comment").and_then(Value::as_str)
-        && orbit_types::workflow::ResidentComment::is_resident_comment(comment)
-        && (redact_all(comment) != comment
-            || redact_sensitive_env_text(comment) != comment
-            || redact_home_dir(comment) != comment)
+    if let Some(comment) = input.get("comment").and_then(Value::as_str) {
+        resident::ensure_resident_comment_redaction_safe(comment)?;
+    }
+    if matches!(
+        action,
+        OrbitBuiltinAction::Resident(ResidentVerb::Checkpoint)
+    ) && let Some(record) = input.get("record")
     {
-        return Err(OrbitError::InvalidInput("resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim".into()));
+        resident::ensure_resident_comment_redaction_safe(&record.to_string())?;
     }
     let policy = policy_for_action(action);
     let Value::Object(mut object) = input else {

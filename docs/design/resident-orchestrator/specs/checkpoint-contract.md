@@ -94,7 +94,9 @@ these three shapes. Write `resident.request` and `resident.answer` using that co
 the manager `relay` operation is a later slice. A relay answer must include `source` and
 `relayed_by`; only a human operator write without agent attribution may omit relay attribution. The quote's whitespace is
 preserved. A record containing sensitive text that requires redaction is refused, so redaction
-cannot silently change a verbatim quote. Unknown fields, including nested fields, are refused.
+cannot silently change a verbatim quote. This includes secrets, sensitive environment values
+and the caller's home directory, checked in decoded JSON strings on both write surfaces and
+in direct core writes. Unknown fields, including nested fields, are refused.
 Records cannot be initial task-creation comments: they need an existing, usable mandate.
 Dedicated start/approval/rejection transitions require a separate comment-only update for resident
 records, so their specialized lifecycle writers cannot bypass resident admission.
