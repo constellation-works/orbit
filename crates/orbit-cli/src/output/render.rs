@@ -46,10 +46,16 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
             for notice in table_notices(&view) {
                 eprintln!("{notice}");
             }
+            for notice in block_notices(&view) {
+                eprintln!("{notice}");
+            }
             emit_json(&doc, sink.pretty_json())
         }
         OutputMode::Ndjson => {
             for notice in table_notices(&view) {
+                eprintln!("{notice}");
+            }
+            for notice in block_notices(&view) {
                 eprintln!("{notice}");
             }
             emit_ndjson(&records.map_or(doc, Value::Array))
@@ -69,10 +75,26 @@ fn table_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Table(table) => Some(table.trailing_notices()),
-            Block::Text(_) | Block::DoctorFindings(_) => None,
+            Block::Text(_) | Block::Notice(_) | Block::DoctorFindings(_) => None,
         })
         .flatten()
         .map(String::as_str)
+        .collect()
+}
+
+/// The non-record notices carried as blocks, if the view has any. Read here
+/// rather than inside `emit_human` so a `json`/`ndjson` caller — which never
+/// reaches `emit_human` — still receives them on stderr (spec §5).
+fn block_notices(view: &View) -> Vec<&str> {
+    let View::Blocks(blocks) = view else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Notice(text) => Some(text.as_str()),
+            Block::Text(_) | Block::Table(_) | Block::DoctorFindings(_) => None,
+        })
         .collect()
 }
 
@@ -122,6 +144,7 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
             for block in blocks {
                 match block {
                     Block::Text(text) => println!("{text}"),
+                    Block::Notice(text) => eprintln!("{text}"),
                     Block::Table(table) => truncated |= table.emit(sink),
                     Block::DoctorFindings(rows) => {
                         if sink.mode() == OutputMode::Table {

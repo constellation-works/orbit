@@ -70,7 +70,7 @@ The path from current behavior:
 1. ~~Change the preset in `crates/orbit-cli/src/output/table.rs` to a borderless one and switch `ContentArrangement` off full-width wrapping.~~ Done [ORB-10567].
 2. ~~Make `add_single_line_row` (now `Table::add_row`) the only exported row constructor; convert the 19 call sites that use `Table::add_row` directly.~~ Done [ORB-10567] — `output::table::Table` wraps `comfy_table`, and its `add_row` is the only constructor reachable from a command module.
 3. ~~Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist.~~ Done [ORB-10570] — `OutputSink` prefers `COLUMNS`, falls back to a terminal query, and resolves a zero width for non-terminal sinks; `Table::emit` consumes that resolved width when sizing columns.
-4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done [ORB-10570] — `audit_event_table` uses per-column sizing. **Remaining:** health/status text blocks still reach stdout in human modes (`orbit migrate`, `orbit doctor`, `orbit tool doctor`, `orbit skill doctor`); [ORB-21576] owns moving those non-record trailers to stderr. Doctor repair counts are already fixed [ORB-11597]. The terminal findings section is the full-detail view added by [ORB-14829].
+4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done [ORB-10570] — `audit_event_table` uses per-column sizing. Health/status text blocks no longer reach stdout in human modes (`orbit migrate`, `orbit doctor`, `orbit tool doctor`, `orbit skill doctor`); those non-record trailers go to stderr in every mode [ORB-21576]. Doctor repair counts are already fixed [ORB-11597]. The terminal findings section is the full-detail view added by [ORB-14829].
 5. ~~Add per-column *fixed*/*flexible* and alignment metadata at each call site.~~ Done [ORB-10567] for the 21 table call sites, via `Column::fixed` / `Column::number` / `Column::path` / `Column::filtered`.
 
 Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Step 4 remains per-command and may proceed incrementally.
@@ -89,6 +89,6 @@ Which truncatable column has a detail command, and which views still lack one ([
 - [ORB-12113] — Keep plain-output columns stable rather than suppressing uniform values.
 - [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
 - [ORB-21575] — Track the filed repair for truncated views without a full per-record detail path.
-- [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
+- [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

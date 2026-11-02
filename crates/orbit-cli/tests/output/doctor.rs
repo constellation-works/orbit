@@ -1646,3 +1646,110 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         assert_eq!(n["remediation"], pr["remediation"]);
     }
 }
+/// ORB-21576: plain stdout holds only records; health/status trailers are on stderr in every mode.
+#[test]
+fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
+    if in_child("doctor::stdout_trailers_go_to_stderr_for_doctors_and_migrate") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(
+        &f,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "trailer-fixture",
+            "--ship-mode",
+            "local",
+        ],
+    );
+    // A healthy workspace doctor is the case that emits the trailer: clear
+    // the three warnings a bare fixture would otherwise report.
+    #[cfg(unix)]
+    set_mode(&f.work.join(".orbit"), 0o700);
+    run_ok(&f, &["mcp", "init", "--claude"]);
+    let plain_records_only = |out: &Output, label: &str| {
+        let stdout = utf8(out.stdout.clone());
+        for line in stdout.lines().filter(|line| !line.is_empty()) {
+            assert!(
+                line.contains('\t'),
+                "{label}: plain stdout line is not a record: {line:?}\n{stdout}"
+            );
+        }
+        stdout
+    };
+    // tool doctor: healthy summary is a notice, not a record.
+    let tool_plain = run_ok(&f, &["tool", "doctor", "--format", "plain"]);
+    plain_records_only(&tool_plain, "tool doctor plain");
+    assert!(
+        !utf8(tool_plain.stdout.clone()).contains("All tools healthy."),
+        "tool doctor healthy prose must not be on stdout"
+    );
+    has(&utf8(tool_plain.stderr.clone()), "All tools healthy.");
+    let tool_json = run_ok(&f, &["tool", "doctor", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&tool_json.stdout).expect("tool doctor JSON");
+    assert!(parsed.is_array(), "tool doctor JSON shape: {parsed}");
+    has(&utf8(tool_json.stderr.clone()), "All tools healthy.");
+    let tool_ndjson = run_ok(&f, &["tool", "doctor", "--format", "ndjson"]);
+    for line in utf8(tool_ndjson.stdout.clone()).lines() {
+        serde_json::from_str::<Value>(line).expect("tool doctor ndjson record");
+    }
+    has(&utf8(tool_ndjson.stderr.clone()), "All tools healthy.");
+    // skill doctor: same contract.
+    let skill_plain = run_ok(&f, &["skill", "doctor", "--format", "plain"]);
+    plain_records_only(&skill_plain, "skill doctor plain");
+    assert!(
+        !utf8(skill_plain.stdout.clone()).contains("All skills healthy."),
+        "skill doctor healthy prose must not be on stdout"
+    );
+    has(&utf8(skill_plain.stderr.clone()), "All skills healthy.");
+    let skill_json = run_ok(&f, &["skill", "doctor", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&skill_json.stdout).expect("skill doctor JSON");
+    assert!(parsed.is_array(), "skill doctor JSON shape: {parsed}");
+    has(&utf8(skill_json.stderr.clone()), "All skills healthy.");
+    // migrate inspection: version rows are records; the status trailer is not.
+    let migrate_plain = run_ok(&f, &["migrate", "--format", "plain"]);
+    plain_records_only(&migrate_plain, "migrate plain");
+    assert!(
+        !utf8(migrate_plain.stdout.clone()).contains("Workspace is up to date."),
+        "migrate trailer must not be on stdout"
+    );
+    has(
+        &utf8(migrate_plain.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    let migrate_json = run_ok(&f, &["migrate", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&migrate_json.stdout).expect("migrate JSON");
+    assert_eq!(parsed["up_to_date"], true, "migrate JSON shape: {parsed}");
+    has(
+        &utf8(migrate_json.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    let migrate_ndjson = run_ok(&f, &["migrate", "--format", "ndjson"]);
+    let nd: Value = serde_json::from_slice(&migrate_ndjson.stdout).expect("migrate ndjson record");
+    assert_eq!(nd["up_to_date"], true, "migrate ndjson shape: {nd}");
+    has(
+        &utf8(migrate_ndjson.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    // workspace doctor: the healthy line, when the fixture is healthy, is on stderr in every mode.
+    let doctor_plain = run(&f, &["doctor", "--format", "plain"]);
+    plain_records_only(&doctor_plain, "doctor plain");
+    assert!(
+        !utf8(doctor_plain.stdout.clone()).contains("Workspace healthy."),
+        "doctor healthy prose must not be on stdout"
+    );
+    let doctor_stderr = utf8(doctor_plain.stderr.clone());
+    if doctor_stderr.contains("0 failure(s), 0 warning(s).") {
+        has(&doctor_stderr, "Workspace healthy.");
+        let doctor_json = run(&f, &["doctor", "--format", "json"]);
+        let parsed: Value = serde_json::from_slice(&doctor_json.stdout).expect("doctor JSON");
+        assert!(parsed.is_array(), "doctor JSON shape: {parsed}");
+        has(&utf8(doctor_json.stderr.clone()), "Workspace healthy.");
+    }
+    // ORB-11597: --fix repair counts stay structured rows with the notice on stderr.
+    let fix = doctor(&f, &["--fix-retired-config-keys"]);
+    let fix_rows = rows(&fix);
+    expect_status(&fix_rows, "fix-retired-config-keys", "ok");
+}

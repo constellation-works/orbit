@@ -79,7 +79,7 @@ Precedence, first match wins:
 
 1. ~~Introduce the sink and the global `--format`; leave every command body untouched.~~ Done [ORB-10569].
 2. ~~Route the existing per-command `--json` branches through the resolver so precedence is centralized.~~ Done [ORB-10586]. That routing now reads the global `--json` and command-local `--ops` booleans from parsed matches at any level — the same walk `--format` uses — and passes them as `OutputSink::resolve`'s `legacy_json` rung. The individual output-only `json` fields are removed.
-3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. Doctor repair counts are also complete: [ORB-11597] moved the notices to stderr and added structured result rows. Non-record health/status trailers remain separate work [ORB-21576]. Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
+3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. Doctor repair counts are also complete: [ORB-11597] moved the notices to stderr and added structured result rows. Non-record health/status trailers are also complete: [ORB-21576] moved them to stderr in every mode. Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
 4. ~~Once a command returns a payload, delete its inline table construction and let the renderer own it.~~ Done for every list and detail command [ORB-10586]. A command builds a `Table` and hands it back inside the payload; `Table::print` is gone, and `Table::emit` is called only by the renderer.
 5. ~~Move error output to stderr and audit exit codes.~~ Done [ORB-10570].
 
@@ -105,6 +105,6 @@ The global shorthand replaces the redundant per-command fields and the registry-
 - [ORB-11596] — Convert remaining record-output commands onto shared payload rendering.
 - [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
 - [ORB-11622] — Convert workspace initialization to shared payload rendering.
-- [ORB-21576] — Track the filed repair for non-record health/status trailers on stdout.
+- [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

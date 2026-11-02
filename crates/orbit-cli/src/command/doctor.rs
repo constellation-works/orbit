@@ -380,7 +380,7 @@ fn report_output(mut results: Vec<WorkspaceDoctorResult>, problems: bool) -> Com
         blocks.push(Block::DoctorFindings(results.clone()));
 
         if failures == 0 && warnings == 0 {
-            blocks.push(Block::text(format!(
+            blocks.push(Block::notice(format!(
                 "\n{}",
                 crate::output::color::text("Workspace healthy.", Role::Ok)
             )));

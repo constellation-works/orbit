@@ -40,7 +40,7 @@ impl Execute for SkillDoctorArgs {
         }
         let mut blocks = vec![Block::table(table)];
         if issues == 0 {
-            blocks.push(Block::text(format!(
+            blocks.push(Block::notice(format!(
                 "\n{}",
                 crate::output::color::text("All skills healthy.", Role::Ok)
             )));
