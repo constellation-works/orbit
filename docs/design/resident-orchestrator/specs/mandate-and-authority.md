@@ -113,7 +113,11 @@ without this run's live cycle is refused as `resident_cycle_stale`; a right-gate
 right as `resident_right_refused` (naming the observe-only cause when a maintenance notice or a
 passed deadline emptied the rights); a `workspace` or `workspaces` input that resolves outside the
 granted workspaces and the assignment's own as `resident_scope_refused`; and any other write as
-`resident_tool_refused`. That includes `orbit.task.update` with `approve` or `force`, other status
+`resident_tool_refused`. `orbit.task.lint` without `restore_pruned` is a read. With
+`restore_pruned: true`, both named-task restoration and the no-id sweep are refused: no resident
+right grants context maintenance. This applies to the native `orbit task lint --restore-pruned`
+route too; MCP and `orbit tool run` do not expose lint. Outside a resident cycle, operator
+restoration is unchanged. Other refused writes include `orbit.task.update` with `approve` or `force`, other status
 targets, `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
 operator-only: their capability check runs before the guard. A write from a resident cycle run that

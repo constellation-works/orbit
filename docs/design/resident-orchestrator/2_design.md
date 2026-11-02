@@ -332,7 +332,10 @@ pass; every write needs this run's live, unexpired cycle (else `resident_cycle_s
 naming the observe-only cause when narrowed). The rights mapping is
 [mandate-and-authority](./specs/mandate-and-authority.md#rights--tools). Moving a task to `review`
 is allowed only for the assignment itself (the handoff); everything else that writes and is not in
-the mapping is refused as `resident_tool_refused`.
+the mapping is refused as `resident_tool_refused`. Lint without restoration remains a read;
+`orbit.task.lint` with `restore_pruned: true` is refused for both a named task and a sweep, including
+through native `orbit task lint --restore-pruned`. Context maintenance has no resident right;
+operator restoration outside a cycle is unchanged.
 
 **Action ledger.** Each admitted write (except the checkpoint itself) is keyed
 `resident:<mandate>:<cycle>:<n>`, numbered under the assignment's write lock. A `resident_action`

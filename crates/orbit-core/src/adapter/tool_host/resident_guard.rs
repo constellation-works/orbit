@@ -103,9 +103,17 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Show
-            | TaskVerb::Lint
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList => Read,
+            // Restoration rewrites selectors/history for one task or a whole
+            // sweep. No resident right grants this maintenance operation.
+            TaskVerb::Lint => {
+                if input.get("restore_pruned").and_then(Value::as_bool) == Some(true) {
+                    Refused
+                } else {
+                    Read
+                }
+            }
             TaskVerb::Add => match status(input) {
                 None | Some("proposed") => Open,
                 Some("backlog") => Gated(Promote),
