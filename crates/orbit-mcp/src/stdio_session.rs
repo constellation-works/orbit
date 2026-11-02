@@ -469,29 +469,55 @@ async fn serve_handing_over(
         answered: Vec::new(),
         tracker: Arc::clone(&tracker),
     };
-    let running = match initialize {
-        Some(request) => {
-            let peer_info = server
-                .resumed_peer_info(request)
-                .map_err(|error| start_error(&error))?;
-            tracing::info!(target: "orbit.mcp", "resumed the stdio session after an executable handover");
-            rmcp::service::serve_directly(server, (reader, writer), Some(peer_info))
-        }
-        None => server
-            .serve((reader, writer))
-            .await
-            .map_err(|error| start_error(&error))?,
-    };
-    let cancel = running.cancellation_token();
-    let mut service = tokio::spawn(running.waiting());
+    // Waiting for the client's first initialize request is idle too. Keep
+    // startup inside the cancellable service task so the lifecycle below can
+    // refresh a quiet session before any client traffic arrives.
+    let (cancel, mut cancelled) = tokio::sync::oneshot::channel::<()>();
+    let mut service = tokio::spawn(async move {
+        let start = async move {
+            match initialize {
+                Some(request) => {
+                    let peer_info = server
+                        .resumed_peer_info(request)
+                        .map_err(|error| start_error(&error))?;
+                    tracing::info!(target: "orbit.mcp", "resumed the stdio session after an executable handover");
+                    Ok(rmcp::service::serve_directly(
+                        server,
+                        (reader, writer),
+                        Some(peer_info),
+                    ))
+                }
+                None => server
+                    .serve((reader, writer))
+                    .await
+                    .map_err(|error| start_error(&error)),
+            }
+        };
+        let running = tokio::select! {
+            started = start => started?,
+            _ = &mut cancelled => return Ok(()),
+        };
+        let service_cancel = running.cancellation_token();
+        let waiting = running.waiting();
+        tokio::pin!(waiting);
+        let finished = tokio::select! {
+            finished = &mut waiting => finished,
+            _ = &mut cancelled => {
+                service_cancel.cancel();
+                waiting.await
+            }
+        };
+        finished
+            .map(|_| ())
+            .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))
+    });
     let mut interval = tokio::time::interval(lifecycle_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             finished = &mut service => {
                 finished
-                    .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?
-                    .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?;
+                    .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))??;
                 let _ = stop.send(unix::PumpStop::Always).await;
                 let _ = pump.await;
                 return Ok(StdioExit::Closed);
@@ -550,7 +576,7 @@ async fn serve_handing_over(
         }
         // Let the service finish handling a consumed notification.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        cancel.cancel();
+        let _ = cancel.send(());
         let _ = service.await;
         unix::restore_blocking_stdin();
         return Ok(match decision {

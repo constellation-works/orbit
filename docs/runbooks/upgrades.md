@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980]
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 ---
 
 # Upgrade Orbit Safely
@@ -416,6 +416,10 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  Lifecycle checks also run while the server waits for the client's first
+  initialize request. An idle, not-yet-initialized session can refresh during an
+  already-current recovery without client traffic; the client initializes normally
+  when it is ready.
   A request that arrives while the server stops reading is answered first, and the
   session is then handed over rather than closed.
   Only requests accepted by the MCP transport count as in flight; malformed or

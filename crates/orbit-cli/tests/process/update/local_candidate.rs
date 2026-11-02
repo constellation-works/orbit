@@ -9,7 +9,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -28,6 +28,116 @@ use super::integrity::{
 const COMMIT_B: &str = "b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6b7b8b9b0";
 const OTHER_COMMIT: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
 const RENDEZVOUS_DEADLINE: Duration = Duration::from_secs(60);
+
+/// An idle federated session owns a generation even before its client sends
+/// initialize. Recovery must refresh it without requiring client traffic.
+#[test]
+fn idle_federated_stdio_sessions_survive_an_already_current_update() {
+    if crate::isolated_test::run_in_child(
+        "update::local_candidate::idle_federated_stdio_sessions_survive_an_already_current_update",
+    ) {
+        return;
+    }
+    let install = LocalInstall::new();
+    let manifest = install.manifest(&install.installed, COMMIT_B, "installed.json");
+    let authority = install.home.join(".orbit");
+    for initialized in [true, false] {
+        let mut command = install.command(&install.installed);
+        command
+            .args(["mcp", "serve", "--mode", "federated", "--operator"])
+            .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        #[cfg(target_os = "linux")]
+        let child = orbit_common::test_process::retry_executable_busy(|| command.spawn());
+        #[cfg(not(target_os = "linux"))]
+        let child = command.spawn();
+        let mut server = crate::child_guard::ChildGuard::new(child.expect("stdio server"));
+        let pid = server.id();
+        let mut stdin = server.stdin.take().expect("client input");
+        let stdout = server.stdout.take().expect("client output");
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let initialize = serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize",
+            "params":{"protocolVersion":"2024-11-05", "capabilities":{},
+                      "clientInfo":{"name":"idle-recovery", "version":"1"}}
+        });
+        let exchange = |stdin: &mut std::process::ChildStdin, message: &Value| {
+            writeln!(stdin, "{message}").expect("client request");
+            stdin.flush().expect("flush request");
+            let line = receive
+                .recv_timeout(RENDEZVOUS_DEADLINE)
+                .expect("session still answers")
+                .expect("response line");
+            let response: Value = serde_json::from_str(&line).expect("JSON response");
+            assert_eq!(response["id"], message["id"], "{response}");
+            assert!(response.get("result").is_some(), "{response}");
+        };
+        if initialized {
+            exchange(&mut stdin, &initialize);
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized"})
+            )
+            .expect("initialized notification");
+            stdin.flush().expect("flush notification");
+            exchange(
+                &mut stdin,
+                &serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"ping"}),
+            );
+        }
+        let deadline = Instant::now() + RENDEZVOUS_DEADLINE;
+        loop {
+            if crate::generation_fixture::running_digest(&authority, pid).is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "server did not register");
+            assert!(server.try_wait().expect("server status").is_none());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let output = install
+            .command(&install.installed)
+            .env(orbit_common::fs::generation::QUIESCE_TIMEOUT_ENV, "5")
+            .args(install.install_args(&install.installed, &manifest, COMMIT_B))
+            .output()
+            .expect("recovery update");
+        assert_success(
+            &output,
+            &format!("recovery beside idle stdio (initialized={initialized})"),
+        );
+        let recovered = report(&output);
+        assert_eq!(recovered["outcome"], "already_current", "{recovered}");
+        assert_eq!(recovered["replaced"], false, "{recovered}");
+        assert_converged(&recovered);
+        assert_eq!(recovered["same_generation"][0]["pid"], pid, "{recovered}");
+        assert!(server.try_wait().expect("same server status").is_none());
+        if !initialized {
+            exchange(&mut stdin, &initialize);
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized"})
+            )
+            .expect("initialized notification");
+            stdin.flush().expect("flush notification");
+        }
+        exchange(
+            &mut stdin,
+            &serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"ping"}),
+        );
+        drop(stdin);
+        drop(server);
+        reader.join().expect("stdout reader exited");
+    }
+}
 
 struct LocalInstall {
     root: TempDir,
@@ -889,29 +999,39 @@ fn a_pending_layout_migration_converges_and_same_generation_clients_survive_reco
     );
     drop(client);
 
-    // A session of other bytes is not the installed generation.
+    // Neither other bytes nor an incompatible identity is the installed
+    // generation, even when the session advertises stdio handover.
     let other = sha256(&backup_path(&install.installed));
     assert_ne!(other, installed);
-    let foreign = GenerationGuard::join(
-        &host_global,
-        &Participant {
-            digest: &other,
-            ..session
-        },
-        Duration::ZERO,
-        || Ok(0),
-    )
-    .expect("a compatible session of other bytes joins");
-    let refused = install.run(
-        &install.installed,
-        &install.install_args(&candidate, &manifest, COMMIT_B),
-    );
-    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
-    assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("upgrade admission refused"),
-        "{refused:?}"
-    );
-    drop(foreign);
+    let mut incompatible = identity.clone();
+    incompatible.store_schema.version += 1;
+    incompatible.store_schema.writer_floor = incompatible.store_schema.version;
+    incompatible.store_schema.reader_floor = incompatible.store_schema.version;
+    for (digest, identity) in [(&other, &identity), (&installed, &incompatible)] {
+        let foreign = GenerationGuard::join(
+            &host_global,
+            &Participant {
+                digest,
+                identity,
+                handover: Some(orbit_common::fs::generation::RESUME_MCP_STDIO),
+                ..session
+            },
+            Duration::ZERO,
+            || Ok(0),
+        )
+        .expect("a foreign session joins the empty authority");
+        let record = install.generation_record();
+        let refused = install.run(
+            &install.installed,
+            &install.install_args(&candidate, &manifest, COMMIT_B),
+        );
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains("upgrade admission refused"), "{refused:?}");
+        assert!(stderr.contains("close its MCP client"), "{refused:?}");
+        assert_eq!(install.generation_record(), record);
+        drop(foreign);
+    }
 
     // A holder that never registered is unknown, so it refuses too.
     let unregistered = GenerationGuard::acquire(&workspace_root, &installed)
