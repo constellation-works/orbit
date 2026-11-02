@@ -423,10 +423,128 @@ fn linked_task_done_closes_the_notice_and_frees_its_key() {
     assert_ne!(reposted["notice"]["id"], id);
 }
 
+fn updated_task_links_control_notice_closure() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    let workspace = root.path().join("repo").to_string_lossy().into_owned();
+    let add = |title: &str| {
+        runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({"title": title, "description": "Fixture fix.",
+            "acceptance_criteria": ["Fixed."], "complexity": "low", "workspace": workspace,
+            "type": "bug", "model": "codex"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let done = |task: &str| {
+        for input in [
+            json!({"id": task, "plan": "Fix it.", "model": "codex"}),
+            json!({"id": task, "status": "backlog", "model": "codex"}),
+            json!({"id": task, "status": "in_progress", "model": "codex"}),
+            json!({"id": task, "status": "review", "execution_summary": "Fixed.", "model": "codex"}),
+        ] {
+            runtime.run_tool("orbit.task.update", input).unwrap();
+        }
+        runtime
+            .apply_task_automation_update(
+                task,
+                orbit_engine::TaskAutomationUpdate {
+                    status: Some(orbit_types::task::TaskStatus::Done),
+                    status_note: Some("completion authorized by run jrun-notice".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let post = |key: &str, link: Option<&str>, close: bool| {
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": key,
+            "dedupe_key": key, "linked_task": link, "close_on_linked_done": close}),
+            &operator,
+        )
+        .unwrap()
+    };
+    let show =
+        |id: &str| call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+    let a = add("Original task");
+    let b = add("Replacement task");
+    let already_done = add("Already completed task");
+    done(&already_done);
+
+    let effective = post("effective", None, false)["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        post("effective", Some(&already_done), true)["outcome"],
+        "updated"
+    );
+    assert_eq!(show(&effective)["notice"]["status"], "closed");
+    let closed = call(
+        &runtime,
+        "orbit.notice.list",
+        json!({"status": "closed"}),
+        &operator,
+    )
+    .unwrap();
+    assert!(
+        closed["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|notice| notice["id"] == effective)
+    );
+
+    let linked = post("linked", None, false)["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(post("linked", Some(&b), true)["outcome"], "updated");
+    let relinked = post("relinked", Some(&a), true)["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(post("relinked", Some(&b), true)["outcome"], "updated");
+    let opted_out = post("opted-out", Some(&a), true)["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(post("opted-out", Some(&b), false)["outcome"], "updated");
+    done(&a);
+    assert_eq!(show(&relinked)["notice"]["status"], "open");
+    assert_eq!(show(&opted_out)["notice"]["status"], "open");
+    done(&b);
+    for id in [&linked, &relinked] {
+        let shown = show(id);
+        assert_eq!(shown["notice"]["status"], "closed");
+        assert_eq!(
+            shown["history"].as_array().unwrap().last().unwrap()["action"],
+            "linked_task_done"
+        );
+    }
+    assert_eq!(show(&opted_out)["notice"]["status"], "open");
+    let open = call(&runtime, "orbit.notice.list", json!({}), &operator).unwrap();
+    assert!(
+        open["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|notice| notice["id"] == opted_out)
+    );
+}
+
 crate::scenario_table!(
     notice_authority,
     operator_posts_updates_and_closes_any_notice,
     orchestrator_session_posts_fleet_wide_within_its_caps,
     run_bound_agent_reports_only_about_its_task,
     linked_task_done_closes_the_notice_and_frees_its_key,
+    updated_task_links_control_notice_closure,
 );
