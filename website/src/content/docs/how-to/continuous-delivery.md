@@ -177,6 +177,10 @@ Common reasons a backlog task waits:
   [human crew](../../reference/config/#human-crews), so it waits for that
   person. No drain admits it, even one whose `--allow-crew` names that crew.
   Reassign it to an agent crew to dispatch it.
+- **`no_drain_tag`**: the task carries the `no-drain` tag, so no drain admits
+  it automatically; it still ships when you ship it explicitly. Remove the
+  tag to make it eligible on the next admission pass. A proposed `no-drain`
+  task is also held from drain auto-approval.
 - **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied
   task-pilot assessment found duplicate work or work already landed. This
   also holds tasks filed directly into backlog. Read the finding in the task
