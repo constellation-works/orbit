@@ -2496,6 +2496,41 @@
     "mcp_toolset": "resident"
   },
   {
+    "name": "orbit.resident.digest",
+    "description": "Read the manager digest in the bound workspace: resident state, latest outcome, open requests and stalled flag; open escalations oldest first; reversible decisions in the window still awaiting veto; top evolution pains by minutes plus slot minutes with occurrence, cycle and mandate counts; evolution proposals awaiting human approval; and resident metrics totals. Read-only. Defaults to 14d and the top 5 pains.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "since",
+        "description": "Window start as a span (7d, 24h, 2w) or RFC 3339 instant; defaults to the configured evolution window.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "top",
+        "description": "Maximum pains to return, 1-100; default 5.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "orchestrator",
+        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "resident"
+  },
+  {
     "name": "orbit.resident.grant",
     "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Widening (add, workspaces) is the human's: from an operator it applies at once; from any other caller it changes nothing and raises one resident_authority decision request that quotes `quote` verbatim and names your session, and the authority changes only if a human answers grant. An open request for the same addition is returned, not duplicated; any authority change supersedes it. Narrowing (remove, drop_workspaces, a shorter deadline) applies at once for any caller that can write the assignment and is recorded with that caller. A call may not widen and narrow at once. Output {outcome, authority, request?} with outcome granted, requested or narrowed.",
     "enabled": true,

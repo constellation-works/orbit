@@ -295,7 +295,7 @@ impl OrbitRuntime {
         }))
     }
 
-    fn resident_open_requests(
+    pub(super) fn resident_open_requests(
         &self,
         task_id: &str,
         mandate: &orbit_types::workflow::ResidentMandate,

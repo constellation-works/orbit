@@ -61,6 +61,35 @@ fn published_lists_cover_initialized_defaults_and_owner_pinned_routines() {
     )
     .expect("initialize workspace defaults");
 
+    // Regression: evolution drafting originally named inactive friction read tools,
+    // preventing every activity catalog (including an empty pass) from loading.
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .expect("initialized public runtime");
+    let catalog = runtime.v2_activity_catalog().expect(
+        "shipped evolution draft must load; inactive tools previously broke every workflow",
+    );
+    let draft = catalog
+        .get("evolution_draft")
+        .expect("seeded evolution drafting activity");
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = &draft.spec else {
+        panic!("evolution drafting must be an agent activity");
+    };
+    assert!(
+        !spec.tools.is_empty(),
+        "an empty allowlist would allow unrestricted calls"
+    );
+    assert!(
+        spec.tool_disallow_list.is_none(),
+        "evolution drafting must use an exact read-only grant"
+    );
+    for tool in &spec.tools {
+        assert_eq!(
+            runtime.tool_registry().execution_kind(tool),
+            Some(orbit_tools::ToolExecutionKind::ReadOnly),
+            "evolution drafting must never grant task approval, promotion, dispatch or other writes: {tool}"
+        );
+    }
+
     let defaults = collect_auto_tasks(&workspace);
     assert!(defaults.errors.is_empty(), "{:?}", defaults.errors);
     let auto_tasks: BTreeSet<_> = defaults

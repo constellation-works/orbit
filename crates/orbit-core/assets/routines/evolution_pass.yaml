@@ -1,0 +1,13 @@
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Weekly evidence-led capability proposals. Disabled by default; proposes
+  bounded design work for human approval and never promotes or builds it.
+enabled: false
+trigger:
+  cron: "17 5 * * 1"
+  missed_run: skip
+target: job:evolution_pass_pipeline
+policy:
+  timeout_minutes: 45
+  overlap: forbid

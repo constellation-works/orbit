@@ -15,6 +15,7 @@
 
 mod comments;
 mod cycle;
+mod digest;
 mod due;
 mod grant;
 mod guard;

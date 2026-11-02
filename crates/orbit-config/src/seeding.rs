@@ -34,6 +34,7 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "finding_verification",
     "pilot_warning_triage",
     "resident_cycle",
+    "evolution_pass",
     "worktree_gc",
     "task_publication",
     "store_gc",

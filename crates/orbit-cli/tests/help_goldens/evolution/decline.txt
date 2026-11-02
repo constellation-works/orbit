@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --days <DAYS>
-          Suppression days (default 30)
+          Suppression days (default: configured suppression, initially 30)
 
   -h, --help
           Print help (see a summary with '-h')

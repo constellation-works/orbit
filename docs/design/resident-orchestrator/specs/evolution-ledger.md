@@ -115,8 +115,7 @@ suppression. Zero cost must gain positive cost to reopen early. The runtime's
 linking a non-terminal proposal task. Reads derive resolution from a done proposal and decline
 from a rejected proposal's actual transition time; subsequent cost writes materialize that state.
 A resolved signature's next event starts a new record. No `resolves` relation handles evolution.
-The scheduled ranking/proposal pass, configuration of its thresholds and manager digest remain
-slice 8; this ledger does not file tasks by itself.
+The scheduled pass consumes this ledger through the boundary below; recording a cost alone never files a task.
 
 ## Evolution pass
 
@@ -126,14 +125,26 @@ Seeded, default-disabled routine `evolution-pass-<workspace>`, weekly (Mondays 0
 1. **`evolution_rank`** (deterministic). Selects `open` records whose window aggregates meet every
    threshold, ranks by summed minutes + slot minutes, and keeps the top `max_proposals`. Writes a
    ranking artifact on the job run. If nothing qualifies, it ends the job: no agent runs.
-2. **`agent_loop`** (crew from config). For each kept record: searches open and recent tasks,
+2. **`evolution_draft`** (`agent_loop`, crew from the normal configured job crew). For each kept record: searches open and recent tasks,
    friction and evolution proposals for duplicates; if none, files one `proposed` task in the owning
    workspace with tag `evolution`, a problem statement written from the occurrences, the `wished`
    capability as a starting shape, acceptance criteria, and an `evolution-evidence.json` artifact
    (record id, cycles, occurrences, costs). Links the record (`proposal_task`, state `proposed`).
    If a duplicate exists, links that task instead and adds the evidence as a comment.
-3. The pass's tool grant allows reading, `orbit.task.add` (always `proposed`), comments, artifacts
-   and evolution record updates. It does not allow status changes, dispatch or merges.
+3. **`evolution_apply`** (deterministic). The agent returns advisory drafts; its exact tool
+   allowlist contains only search, task/friction/evolution reads, with a read-only checkout.
+   Application validates each draft against the owning run's frozen ranking and current eligibility,
+   then files only `proposed` feature tasks, attaches evidence, and links the records. It accepts
+   no status or grant fields and cannot promote, dispatch, merge or build. A workspace fence and
+   `evolution-record:<record-id>` tags recover interrupted filing without duplicate tasks. A supplied
+   duplicate must be a non-terminal task in this workspace; it receives namespaced evidence plus a
+   comment, and the record links it without changing its status.
+
+The run keeps `artifacts/evolution-ranking.json` under its job-run directory, including `ran_at`,
+window, thresholds and selected records even when the selection is empty. Re-entry reuses it;
+zero selected records skip both drafting and application. The proposal evidence includes record id,
+window, cycles, occurrences, mandate count, minutes, slot minutes and summed cost. The final applier
+rechecks suppression and thresholds before filing; its evidence is the frozen ranking window.
 
 Thresholds (`[resident.evolution]`): `window_days` 14, `min_occurrences` 3, `min_distinct_cycles` 3,
 `min_distinct_mandates` 1, `min_cost_minutes` 60, `max_proposals` 3, `decline_suppress_days` 30.
@@ -142,7 +153,7 @@ against busywork.
 
 ## Manager digest
 
-`orbit.resident.digest` / `orbit resident digest [--workspace …] [--since …]`, derived on read:
+`orbit.resident.digest` / `orbit resident digest [--workspace …] [--since …] [--top N] --json`, derived on read (the default window is `resident.evolution.window_days`):
 
 - residents: state, last outcome, open requests, stalled flag;
 - open escalations, oldest first;
@@ -151,6 +162,13 @@ against busywork.
 - open evolution-pass proposals awaiting the human's `proposed → backlog` decision;
 - the metrics headline ([2_design.md §9](../2_design.md#9-metrics-that-gate-widening)).
 
+JSON keys are `residents`, `open_escalations`, `decisions_awaiting_veto`, `top_pains`,
+`open_proposals`, `metrics`, `workspace` and `since`. Stalled means a dead cycle or a latest
+`incomplete` checkpoint. Veto candidates are reversible checkpoint decisions in the window without
+an answer naming them in `reverses`. Top pains exclude resolved records and include retained
+occurrences plus occurrence/cycle/mandate counts; cost is minutes plus slot minutes. Open proposals
+are linked or pass-tagged tasks still `proposed`, including duplicates linked to pre-existing tasks.
+`--since` accepts a span or RFC 3339 instant; `--top` accepts 1–100, default 5.
 The manager shows it at session start, weekly, or on request. A consumer hook may inject it.
 
 ## Agent Signature

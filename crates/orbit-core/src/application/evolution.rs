@@ -1,4 +1,6 @@
 //! Workspace capability-gap ledger and proposal suppression.
+mod pass;
+
 use crate::OrbitRuntime;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -43,6 +45,12 @@ fn view(mut record: EvolutionRecord, since: Option<DateTime<Utc>>) -> Result<Val
     Ok(value)
 }
 impl OrbitRuntime {
+    pub(crate) fn evolution_digest_window_days(&self) -> Result<u32, OrbitError> {
+        Ok(self.evolution_pass_settings()?.window_days)
+    }
+    pub(crate) fn evolution_decline_suppress_days(&self) -> Result<u32, OrbitError> {
+        Ok(self.evolution_pass_settings()?.decline_suppress_days)
+    }
     fn evolution_store(&self) -> Result<std::sync::Arc<dyn EvolutionStoreBackend>, OrbitError> {
         Ok(orbit_store::compose::evolution_store(self.sqlite_store()?))
     }
@@ -202,8 +210,14 @@ impl OrbitRuntime {
                     .map(|entry| entry.at)
                     .unwrap_or(task.updated_at);
                 let mut baseline = record.clone();
+                baseline.window_days = self.evolution_pass_settings()?.window_days;
                 baseline.occurrences.retain(|event| event.at <= at);
-                decline(&mut baseline, at, 30);
+                decline(
+                    &mut baseline,
+                    at,
+                    self.evolution_pass_settings()?.decline_suppress_days,
+                );
+                record.window_days = baseline.window_days;
                 record.state = baseline.state;
                 record.declined_until = baseline.declined_until;
                 record.cost_at_decline = baseline.cost_at_decline;
@@ -240,6 +254,7 @@ impl OrbitRuntime {
                         "evolution signature is suppressed, already proposed or resolved".into(),
                     ));
                 }
+                record.window_days = self.evolution_pass_settings()?.window_days;
                 record.state = EvolutionState::Proposed;
                 record.proposal_task = Some(task_id.into());
                 Ok(())
@@ -261,6 +276,7 @@ impl OrbitRuntime {
                 if record.state == EvolutionState::Resolved {
                     return Err(invalid("resolved evolution records cannot be declined"));
                 }
+                record.window_days = self.evolution_pass_settings()?.window_days;
                 decline(record, Utc::now(), days);
                 Ok(())
             })

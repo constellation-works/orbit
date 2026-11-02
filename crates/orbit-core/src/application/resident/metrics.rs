@@ -45,7 +45,7 @@ fn is_human_writer(by: &str) -> bool {
     by == "human" || by == "operator" || by.starts_with("human:") || by.starts_with("human-")
 }
 
-fn parse_window_start(
+pub(super) fn parse_window_start(
     since: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<DateTime<Utc>, OrbitError> {

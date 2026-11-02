@@ -616,6 +616,10 @@ residents and shaped like the architecture and prompt audits.
    against open tasks, friction and earlier proposals. Each proposal is a `proposed` task in the
    owning workspace with an evidence artifact citing the cycles, occurrences and costs. The record
    moves to `proposed` and links the task.
+
+   The implementation uses a read-only `evolution_draft` agent followed by `evolution_apply`:
+   only the deterministic applier files and links the bounded proposals and evidence. The rank step
+   persists its window and selection even for an empty pass; replays recover by record tag.
 3. The pass never promotes, approves or builds anything. Its tool grant cannot move a task past
    `proposed`. The human decides at `proposed → backlog` what the system becomes; that is ownership,
    and it stays human. A declined proposal moves its record to `declined` with a suppression window.

@@ -44,6 +44,22 @@ pub(super) fn dispatch(
                 .optional_string("model")?
                 .or_else(|| model.map(ToOwned::to_owned)),
         ),
+        ResidentVerb::Digest => {
+            let top = input
+                .as_value()
+                .get("top")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput("top must be an integer from 1 to 100".into())
+                        })
+                })
+                .transpose()?
+                .unwrap_or(5);
+            runtime.resident_digest(input.optional_string("since")?.as_deref(), top)
+        }
         ResidentVerb::Metrics => runtime.resident_metrics(
             input.optional_string("mandate")?.as_deref(),
             input.optional_string("since")?.as_deref(),

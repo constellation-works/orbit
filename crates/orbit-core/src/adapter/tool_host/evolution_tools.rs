@@ -62,7 +62,7 @@ pub(super) fn dispatch(
                         })
                 })
                 .transpose()?
-                .unwrap_or(30);
+                .unwrap_or(runtime.evolution_decline_suppress_days()?);
             serde_json::to_value(
                 runtime.decline_evolution_record(&input.required_string("id")?, days)?,
             )

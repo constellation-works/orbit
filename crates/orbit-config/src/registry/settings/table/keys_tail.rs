@@ -6,6 +6,48 @@ macro_rules! with_tail_keys {
     ($($head:tt)*) => {
         define_config_settings! {
             $($head)*
+    resident_evolution_window_days: u32 => u32 {
+        key: "resident.evolution.window_days", value_type: "integer",
+        description: "Evolution pass window days (default 14).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 14, 1, 3650, "resident.evolution.window_days"),
+    },
+    resident_evolution_min_occurrences: u32 => u32 {
+        key: "resident.evolution.min_occurrences", value_type: "integer",
+        description: "Evolution pass min occurrences (default 3).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 3, 1, 1000000, "resident.evolution.min_occurrences"),
+    },
+    resident_evolution_min_distinct_cycles: u32 => u32 {
+        key: "resident.evolution.min_distinct_cycles", value_type: "integer",
+        description: "Evolution pass min distinct cycles (default 3).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 3, 1, 1000000, "resident.evolution.min_distinct_cycles"),
+    },
+    resident_evolution_min_distinct_mandates: u32 => u32 {
+        key: "resident.evolution.min_distinct_mandates", value_type: "integer",
+        description: "Evolution pass min distinct mandates (default 1).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 1, 1, 1000000, "resident.evolution.min_distinct_mandates"),
+    },
+    resident_evolution_min_cost_minutes: u32 => u32 {
+        key: "resident.evolution.min_cost_minutes", value_type: "integer",
+        description: "Evolution pass min cost minutes (default 60).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 60, 1, 1000000000, "resident.evolution.min_cost_minutes"),
+    },
+    resident_evolution_max_proposals: u32 => u32 {
+        key: "resident.evolution.max_proposals", value_type: "integer",
+        description: "Evolution pass max proposals (default 3).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 3, 1, 100, "resident.evolution.max_proposals"),
+    },
+    resident_evolution_decline_suppress_days: u32 => u32 {
+        key: "resident.evolution.decline_suppress_days", value_type: "integer",
+        description: "Evolution pass decline suppress days (default 30).",
+        section: ConfigSection::Housekeeping, order: 96,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, 1, 3650, "resident.evolution.decline_suppress_days"),
+    },
     assistance_settings: crate::assistance::AssistanceSettings => crate::assistance::AssistanceSettings {
         key: "assistance", value_type: "table",
         description: "Host-only bounded decision assistance: explicit workspace grants, modes, evidence and budgets; off by default.",

@@ -109,6 +109,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.orchestrator.show",
             "orbit.pipeline.invoke",
             "orbit.resident.checkpoint",
+            "orbit.resident.digest",
             "orbit.resident.grant",
             "orbit.resident.list",
             "orbit.resident.metrics",
