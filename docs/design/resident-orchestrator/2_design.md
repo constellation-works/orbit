@@ -117,11 +117,12 @@ not the prompt.
    workspaces, watched tasks, crew, cadence).
 3. The manager submits the authority grant with the human's words verbatim. From an MCP session
    that always raises a `resident_authority` decision request, and the human answers it.
-4. The mandate becomes `active` when it has a mandate artifact and a non-empty granted authority. Its
+4. The mandate becomes `active` when it has a valid mandate artifact and its assignment is open
+   (tagged `resident`, control active): a grant is not an activation prerequisite. Its
    first fire follows on the next clock tick.
 
-A mandate without granted authority can still run observe-only cycles if the human enables them.
-That is useful for a resident that only watches and reports.
+Granted rights authorize action, not activation. A mandate without granted rights still runs
+observe-only cycles by default. That is useful for a resident that only watches and reports.
 
 ### 4.2 Fires
 
