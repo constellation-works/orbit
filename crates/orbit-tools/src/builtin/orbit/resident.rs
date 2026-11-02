@@ -14,7 +14,7 @@ use serde_json::Value;
 impl GuardedModes for ResidentVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Grant | Self::Show | Self::List => None,
+            Self::Grant | Self::Checkpoint | Self::Show | Self::List => None,
         }
     }
 
@@ -24,7 +24,7 @@ impl GuardedModes for ResidentVerb {
         _input: &OperationInput,
     ) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Grant | Self::Show | Self::List => None,
+            Self::Grant | Self::Checkpoint | Self::Show | Self::List => None,
         }
     }
 
@@ -34,13 +34,13 @@ impl GuardedModes for ResidentVerb {
                 apply_session_orchestrator_default(ctx, input);
                 Ok(())
             }
-            Self::Show | Self::List => Ok(()),
+            Self::Checkpoint | Self::Show | Self::List => Ok(()),
         }
     }
 
     fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
-            Self::Grant | Self::Show | Self::List => None,
+            Self::Grant | Self::Checkpoint | Self::Show | Self::List => None,
         }
     }
 }

@@ -157,6 +157,12 @@ impl OrbitRuntime {
     ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
+        if comment
+            .as_deref()
+            .is_some_and(orbit_types::workflow::ResidentComment::is_resident_comment)
+        {
+            return Err(OrbitError::InvalidInput("append resident records using a comment-only task update, separately from lifecycle transitions".into()));
+        }
         let comment = comment.map(|value| redact_all(&value));
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;

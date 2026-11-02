@@ -1024,4 +1024,8 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-21211] — added the governed fleet notice writes in the opt-in `notice`
   toolset.
 
+- [ORB-21243] — adds `orbit.resident.checkpoint` as an advertised write in the
+  opt-in `resident` toolset. Agent, operator and runner capabilities provide
+  identification; core checks the mandate's live cycle under the task lock.
+
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

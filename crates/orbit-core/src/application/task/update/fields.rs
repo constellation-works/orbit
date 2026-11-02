@@ -66,6 +66,12 @@ impl OrbitRuntime {
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.
+        if let Some(comment) = &params.comment
+            && orbit_types::workflow::ResidentComment::is_resident_comment(comment)
+            && redact_all(comment) != *comment
+        {
+            return Err(OrbitError::InvalidInput("resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim".into()));
+        }
         for value in [
             &mut params.title,
             &mut params.description,

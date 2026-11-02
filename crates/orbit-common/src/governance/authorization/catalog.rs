@@ -746,6 +746,16 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         ],
         rationale: "closing a fleet notice changes what the fleet sees, so the caller must be identified; core decides which notices the poster class may close",
     },
+    GovernedOperation {
+        id: "orbit.resident.checkpoint",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "resident memory is a governed task write; core validates the record and fences it against the mandate's live cycle",
+    },
     // Resident authority: an identification floor. Core applies a widening
     // only for an operator caller; any other caller's widening becomes a
     // resident_authority decision request a human must answer.

@@ -10,9 +10,13 @@
 //! human's and narrowing is open to anyone who can write the assignment.
 
 mod authority;
+mod comments;
+mod cycle;
 mod mandate;
 
 pub use authority::*;
+pub use comments::*;
+pub use cycle::*;
 pub use mandate::*;
 
 /// The tag that makes an assignment task a resident's mandate.

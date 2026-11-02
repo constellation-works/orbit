@@ -275,3 +275,10 @@ pub enum ResidentMandateError {
     #[error("{0}")]
     Cadence(String),
 }
+
+/// Why a structured resident comment is refused; core judges cycle freshness.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResidentCommentError {
+    #[error("resident_record_invalid: {0}")]
+    Invalid(String),
+}

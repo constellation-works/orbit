@@ -342,8 +342,208 @@ fn any_task_writer_narrows_and_is_recorded() {
     assert_eq!(listed["mandates"][0]["authority_revision"], 4);
 }
 
+fn resident_stale_comment_is_refused_without_writes() {
+    use chrono::{Duration, Utc};
+    use orbit_types::workflow::ResidentLiveCycle;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, _) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    let mut record = json!({"kind": "resident.checkpoint", "schema": 1, "mandate": id,
+        "cycle": "rcy-dead", "run_id": "jrun-dead", "crew": "sol", "recovery_of": null,
+        "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
+        "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
+        "actions": [], "decisions": [], "requests": [], "costs": [], "notes": "",
+        "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
+        "continuity": "off", "outcome": "idle", "probe": false});
+    // The old public comment boundary accepted this dead cycle verbatim.
+    // Compare all durable task state, not just the checkpoint read model.
+    let snapshot = || {
+        (
+            runtime.get_task(&id).unwrap(),
+            runtime.get_task_comments(&id).unwrap(),
+            runtime.get_task_history(&id).unwrap(),
+        )
+    };
+    let refuse = |tool: &str, payload: Value, reason: &str| {
+        let before = snapshot();
+        let error = call(&runtime, tool, payload, &orchestrator()).expect_err(reason);
+        assert!(error.contains(reason), "{error}");
+        assert_eq!(snapshot(), before, "refusal must write nothing");
+    };
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": record.to_string(), "model": "codex"}),
+        "resident_cycle_stale",
+    );
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        "resident_cycle_stale",
+    );
+    assert_eq!(show(&runtime, &id)["latest_checkpoint"], Value::Null);
+
+    let dead = ResidentLiveCycle {
+        cycle: "rcy-dead".into(),
+        run_id: "jrun-dead".into(),
+        expires_at: Utc::now() + Duration::hours(1),
+    };
+    runtime
+        .set_resident_live_cycle(&id, None, Some(&dead))
+        .unwrap();
+    let live = ResidentLiveCycle {
+        cycle: "rcy-live".into(),
+        run_id: "jrun-live".into(),
+        ..dead
+    };
+    runtime
+        .set_resident_live_cycle(&id, Some("rcy-dead"), Some(&live))
+        .unwrap();
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        "resident_cycle_stale",
+    );
+    let before = snapshot();
+    assert!(
+        runtime
+            .set_resident_live_cycle(&id, Some("rcy-dead"), None)
+            .is_err()
+    );
+    assert_eq!(
+        snapshot(),
+        before,
+        "a stale finalizer cannot clear the live cycle"
+    );
+    record["cycle"] = json!("rcy-live");
+    // Correct cycle, wrong run must also fail without writes.
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        "resident_cycle_stale",
+    );
+    record["run_id"] = json!("jrun-live");
+    let mut malformed = record.clone();
+    malformed["schema"] = json!(2);
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": malformed, "model": "codex"}),
+        "resident_record_invalid",
+    );
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": malformed.to_string(), "model": "codex"}),
+        "resident_record_invalid",
+    );
+    malformed = record.clone();
+    malformed["authority"]["workspaces"] = json!(["other"]);
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": malformed, "model": "codex"}),
+        "resident_record_invalid",
+    );
+
+    let request = json!({"kind": "resident.request", "schema": 1, "mandate": id,
+        "cycle": "rcy-live", "id": "q1", "decision_request": "DR-example", "task": id,
+        "class": "architecture", "question": "Which schema?", "recommended": "a", "blocking": false, "blocks": []});
+    call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "comment": request.to_string(), "model": "codex"}),
+        &orchestrator(),
+    )
+    .unwrap();
+    let mut malformed_request = request.clone();
+    malformed_request["class"] = json!("unknown");
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": malformed_request.to_string(), "model": "codex"}),
+        "resident_record_invalid",
+    );
+    malformed_request = request.clone();
+    malformed_request["cycle"] = json!("rcy-dead");
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": malformed_request.to_string(), "model": "codex"}),
+        "resident_cycle_stale",
+    );
+
+    let answer = json!({"kind": "resident.answer", "schema": 1, "mandate": id,
+        "request_id": "q1", "reverses": null, "quote": "  Keep the schema.\nWait until Monday.  ",
+        "source": {"human": "daniel", "via": "manager-session", "session": "session-1", "said_at": "2026-11-02T09:58:00Z"},
+        "relayed_by": {"crew": "sol", "model": "gpt-6.1-sol"}});
+    let mut malformed_answer = answer.clone();
+    malformed_answer["rights"] = json!(["merge"]);
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": malformed_answer.to_string(), "model": "codex"}),
+        "resident_record_invalid",
+    );
+    malformed_answer = answer.clone();
+    malformed_answer["relayed_by"] = Value::Null;
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": malformed_answer.to_string(), "model": "codex"}),
+        "requires `relayed_by`",
+    );
+    call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "comment": answer.to_string(), "model": "codex"}),
+        &orchestrator(),
+    )
+    .unwrap();
+    let comments = runtime.get_task_comments(&id).unwrap();
+    let stored_answer: Value = serde_json::from_str(&comments.last().unwrap().message).unwrap();
+    assert_eq!(
+        stored_answer, answer,
+        "relay quote and provenance stay verbatim"
+    );
+
+    record["notes"] = json!("Recheck the schema next cycle");
+    record["actions"] = json!([{"key": format!("resident:{id}:rcy-live:1"), "kind": "dispatch", "subject": id, "result": "ok", "ref": "jrun-leaf"}]);
+    record["decisions"] = json!([{"id": "d1", "summary": "Wait for the schema", "class": "reversible", "reversible": true, "p_wrong": "low", "rework_units": 1, "precedent": null}]);
+    record["requests"] =
+        json!([{"id": "q1", "decision_request": "DR-example", "task": id, "blocking": false}]);
+    record["costs"] = json!([{"kind": "manual_step", "what": "Checked the schema", "minutes": 1, "retries": 0, "slot_minutes": 0, "wished": "Automatic schema check", "signature": "manual-schema-check"}]);
+    let written = call(
+        &runtime,
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        &orchestrator(),
+    )
+    .unwrap();
+    assert_eq!(written["checkpoint"], record);
+    assert_eq!(show(&runtime, &id)["latest_checkpoint"], record);
+    assert_eq!(
+        show(&runtime, &id)["authority"]["revision"],
+        0,
+        "checkpoint authority is only a report"
+    );
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        "resident_checkpoint_exists",
+    );
+    refuse(
+        "orbit.task.update",
+        json!({"id": id, "comment": record.to_string(), "model": "codex"}),
+        "resident_checkpoint_exists",
+    );
+    runtime
+        .set_resident_live_cycle(&id, Some("rcy-live"), None)
+        .unwrap();
+    refuse(
+        "orbit.resident.checkpoint",
+        json!({"task_id": id, "record": record, "model": "codex"}),
+        "resident_cycle_stale",
+    );
+    assert_eq!(show(&runtime, &id)["latest_checkpoint"], record);
+}
+
 crate::scenario_table!(
     resident_authority,
+    resident_stale_comment_is_refused_without_writes,
     agent_widening_is_a_request_the_human_answers,
     rejected_or_superseded_requests_change_nothing,
     any_task_writer_narrows_and_is_recorded,
