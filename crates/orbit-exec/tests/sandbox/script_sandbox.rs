@@ -317,7 +317,8 @@ mod macos {
     }
 
     /// A granted script writes its cwd worktree, its scratch `out/` and its
-    /// granted write root, reads its copied inputs, and nothing else: no
+    /// granted write root, reads back and enumerates that write root without
+    /// a read-root grant, reads its copied inputs, and nothing else: no
     /// write beside them or into `in/`, `snapshot/` or `.git`, no read of
     /// the cwd's `.orbit/`, the global root, a credential path or a sibling
     /// directory, and no TCP connection, even to loopback.
@@ -349,6 +350,7 @@ mod macos {
         std::fs::write(global.join("secret"), "global-secret").expect("global");
         std::fs::write(home.join(".ssh/id_ed25519"), "ssh-secret").expect("key");
         std::fs::write(beside.join("secret"), "beside-secret").expect("beside");
+        std::fs::write(outbox.join("existing"), "previous").expect("existing export");
         std::fs::write(brief_dir.join("nested/brief.txt"), "brief").expect("brief");
         let scratch = scratch_in(&root);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
@@ -360,6 +362,9 @@ mod macos {
              probe cwd_write 'echo x > {cwd}/made'; \
              probe out_write 'echo x > {s}/out/made'; \
              probe outbox_write 'echo x > {outbox}/made'; \
+             probe outbox_read 'grep -Fxq x {outbox}/made'; \
+             probe outbox_existing_read 'grep -Fxq previous {outbox}/existing'; \
+             probe outbox_list 'ls -1 {outbox} > {s}/out/list && grep -Fxq made {s}/out/list && grep -Fxq existing {s}/out/list'; \
              probe input_read 'grep -q brief {s}/in/briefs/nested/brief.txt'; \
              probe input_write 'echo x > {s}/in/briefs/new'; \
              probe snapshot_write 'echo x > {s}/snapshot/new'; \
@@ -378,7 +383,9 @@ mod macos {
         );
         let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
         let env = vec![("PATH".to_string(), "/usr/bin:/bin".to_string())];
-        let writable = vec![outbox.clone()];
+        // The home grant encloses masked state and credentials: their denies
+        // must still win when a write root also grants reads.
+        let writable = vec![outbox.clone(), home.clone()];
         let masked = vec![cwd.join(".orbit"), global.clone()];
         let inputs = vec![ScriptSandboxInput {
             source: brief_dir.clone(),
@@ -412,6 +419,9 @@ mod macos {
                 "cwd_write=yes",
                 "out_write=yes",
                 "outbox_write=yes",
+                "outbox_read=yes",
+                "outbox_existing_read=yes",
+                "outbox_list=yes",
                 "input_read=yes",
                 "input_write=no",
                 "snapshot_write=no",

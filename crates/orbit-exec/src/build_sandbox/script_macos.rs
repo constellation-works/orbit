@@ -5,8 +5,8 @@
 //! the same paths the Linux profile mounts: the host runtime table and the
 //! grant's recorded interpreters and read roots, read-only; the cwd tree (a
 //! run worktree read-write, or the workspace root read-only) with its Git
-//! metadata read-only; the grant's write roots; and the step's scratch
-//! directory, whose `snapshot/` and `in/` are read-only. Seatbelt filters
+//! metadata read-only; the grant's write roots read-write; and the step's
+//! scratch directory, whose `snapshot/` and `in/` are read-only. Seatbelt filters
 //! paths but cannot remount them, so the script sees the scratch directory
 //! at its host path ([`super::script_scratch_path_in_sandbox`]), and each
 //! declared input is copied into `in/<as>` before spawn instead of bound.
@@ -66,6 +66,9 @@ pub fn compile_macos_script_profile(spec: &ScriptSandboxSpec<'_>) -> Result<Stri
     let mut profile = deny_default_preamble();
     let mut readable = runtime_read_filters();
     readable.extend(spec.readable.iter().map(|path| subpath(path)));
+    // Like Linux's --bind mounts, write roots allow reads and execution.
+    // The later mask and credential rules still protect their children.
+    readable.extend(writable_roots.iter().map(|path| subpath(path)));
     readable.push(subpath(spec.cwd));
     readable.extend(git_dirs.iter().map(|path| subpath(path)));
     readable.push(subpath(spec.scratch));
