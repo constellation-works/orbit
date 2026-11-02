@@ -24,5 +24,6 @@ them a narrower sense.
 | **Materializer** | The writers that persist a linked-task closure already visible on read. [notice-record](../specs/notice-record.md#materializing-closure). |
 | **`notice` toolset** | The opt-in MCP toolset that advertises the notice tools. [notice-tools](../specs/notice-tools.md#the-notice-toolset). |
 | **`notice_open`** | The `orbit attention` kind listing effective-open notices. [notice-delivery](../specs/notice-delivery.md#attention-kind). |
-| **Reports** | `{count, last_at}` of posts that matched a notice, including the first. [notice-record](../specs/notice-record.md#record). |
+| **Reports** | `{count, last_at}` of posts that matched a notice, including the first, except repeats. [notice-record](../specs/notice-record.md#record). |
+| **Repeat** | A post whose fingerprint equals the latest write on its open notice: a lost-reply retry, or the same poster re-sending the same request. Bumps no `reports` or `revision` and counts against no limit. [notice-record](../specs/notice-record.md#retries). |
 | **Scope** | `workspace` (the home workspace) or `global` (every workspace whose readers reach the home owner). [notice-federation](../specs/notice-federation.md#scope). |

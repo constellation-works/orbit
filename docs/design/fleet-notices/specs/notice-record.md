@@ -47,8 +47,8 @@ producing forty notices.
 | `expires_at` | RFC 3339, required | Set at post from `expires_in_hours` or an explicit instant, bounded by [Expiry](#expiry). |
 | `opened_at` | RFC 3339, required | First post. |
 | `updated_at` | RFC 3339, required | Last post that changed content or expiry. |
-| `revision` | integer, required | Starts at 1; each content-changing post increments it. The brief records `id@revision` ([notice-delivery](./notice-delivery.md#delivery-record)). |
-| `reports` | object, required | `{count, last_at}`: posts that matched this open notice, including the first. A corroborating post bumps it without changing content. |
+| `revision` | integer, required | Starts at 1; each post that changes a content field (`title`, `body`, `kind`, `evidence`, `hosts`, `scope`) increments it. An expiry change alone does not. The brief records `id@revision` ([notice-delivery](./notice-delivery.md#delivery-record)). |
+| `reports` | object, required | `{count, last_at}`: matching posts on this open notice, including the first, except [repeats](#retries). Each bumping post increments `count` and sets `last_at`. A corroborating post bumps it without changing content. |
 | `closed` | object | Present once closed: `{at, by, reason, cause}`. `by` has the `author` shape; `cause` is `manual` or `linked_task_done`. `reason` is at most 240 characters. |
 | `status` | enum, required in output | The effective state, below. Never stored as `expired`. |
 
@@ -126,12 +126,38 @@ A post whose key matches an open notice is resolved by the [authority rules](./n
 | Outcome | When | Effect |
 |---|---|---|
 | `created` | no open notice holds the key | new row, `revision: 1`, `reports.count: 1` |
-| `updated` | the poster may edit the matched notice | title, body, kind, evidence, `hosts`, scope (subject to scope rules) and expiry replaced as given; `revision` +1; `reports` bumped |
+| `updated` | the poster may edit the matched notice | title, body, kind, evidence, `hosts`, scope (subject to scope rules) and expiry replaced as given; `revision` +1 only if a content field changed; `reports` bumped |
 | `corroborated` | the poster may not edit it | content unchanged; `reports` bumped; the response returns the existing notice |
 
+A [repeat](#retries) returns `updated` or `corroborated` by the same rights, and moves nothing except,
+for an editor, the expiry.
+
 `corroborated` is how forty agents hitting one bug report it once: the first agent opens it, the
-rest bump `reports.count`, and every brief shows how many runs hit it. A corroboration counts
-against the poster's post rate ([notice-authority](./notice-authority.md#limits)).
+rest bump `reports.count`, and every brief shows how many runs hit it. A corroboration, like any
+other matching post that is not a repeat, counts against the poster's post rate
+([notice-authority](./notice-authority.md#limits)).
+
+### Retries
+
+A post is a **repeat** when its fingerprint equals the fingerprint of the notice's latest audited
+write: the most recent write of any poster on the open notice the post matches. A lost-reply retry
+is a repeat, and so is the same poster sending the same request again to keep an edited notice in
+force. The fingerprint is the resolved `author` object together with the request as given. Omitted
+optional fields and the defaults of `scope`, `dedupe_key` and `close_on_linked_done` are resolved
+first, and the expiry is compared as requested (`expires_in_hours` or `expires_at`), not as the
+instant it resolves to.
+
+A repeat changes no content field, bumps no `revision` and no `reports`, counts against no post rate
+and no open-count limit, and is never refused by a limit (the repeat check runs before them). An
+editor's repeat applies its expiry request as given, measured from the repeat: a retry seconds after
+the original moves `expires_at` by seconds, and a repeat after a while extends the notice within the
+[expiry](#expiry) rules. A repeat that moves no stored field writes nothing; any other repeat is
+audited like a write. A corroborator's repeat writes nothing at all, because its expiry request is
+not applied.
+
+Only the latest write is compared, so a post is never dropped because the notice changed after it.
+An identical request sent after another poster has written applies as a new post: an orchestrator
+re-asserting its notice after an agent's update still takes effect.
 
 ## Invariants
 
@@ -140,7 +166,7 @@ against the poster's post rate ([notice-authority](./notice-authority.md#limits)
   agree.
 - At most one effective-open notice per `(home workspace, dedupe_key)`. The store enforces it with
   a uniqueness check inside the posting transaction, not by readers.
-- `id` never changes on update; `revision` never decreases.
+- `id` never changes on update; `revision` never decreases and moves only with a content change.
 - A notice's `author` never changes. An update records its editor in history (the audit row), not
   in `author`.
 
