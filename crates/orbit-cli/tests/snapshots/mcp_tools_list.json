@@ -452,6 +452,9 @@
         },
         "options": {
           "type": "array",
+          "items": {
+            "type": "object"
+          },
           "description": "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first."
         },
         "topic": {
@@ -900,7 +903,6 @@
         },
         "relations": {
           "type": "array",
-          "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -994,7 +996,8 @@
                 }
               }
             }
-          }
+          },
+          "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link."
         },
         "crew": {
           "type": [
@@ -1215,6 +1218,9 @@
         },
         "options": {
           "type": "array",
+          "items": {
+            "type": "object"
+          },
           "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both"
         },
         "recommended": {
@@ -1577,7 +1583,6 @@
         },
         "relations": {
           "type": "array",
-          "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -1671,7 +1676,8 @@
                 }
               }
             }
-          }
+          },
+          "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source."
         },
         "tags": {
           "anyOf": [

@@ -865,7 +865,7 @@
       {
         "name": "options",
         "description": "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": true
       },
       {
@@ -1290,7 +1290,7 @@
       {
         "name": "arms",
         "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {
@@ -1576,7 +1576,7 @@
       {
         "name": "arms",
         "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {
@@ -2144,7 +2144,7 @@
       {
         "name": "evidence",
         "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {
@@ -2768,7 +2768,7 @@
       {
         "name": "relations",
         "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {
@@ -2945,7 +2945,7 @@
       {
         "name": "options",
         "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {
@@ -3713,7 +3713,7 @@
       {
         "name": "relations",
         "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
-        "param_type": "array",
+        "param_type": "object_array",
         "required": false
       },
       {

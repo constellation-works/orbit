@@ -138,6 +138,10 @@ pub fn tool_parameter_schema(param_type: &str) -> Map<String, Value> {
                 ]),
             );
         }
+        "object_array" => {
+            schema.insert("type".to_string(), Value::String("array".to_string()));
+            schema.insert("items".to_string(), json!({ "type": "object" }));
+        }
         "object_list" | "object[]" | "objects" => {
             schema.insert(
                 "anyOf".to_string(),
