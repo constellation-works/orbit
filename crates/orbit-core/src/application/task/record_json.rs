@@ -253,10 +253,5 @@ fn task_is_done(
     status_by_id
         .and_then(|index| index.get(id).copied())
         .map(|status| status == TaskStatus::Done)
-        .unwrap_or_else(|| {
-            matches!(
-                runtime.get_task(id),
-                Ok(found) if found.status == TaskStatus::Done
-            )
-        })
+        .unwrap_or_else(|| runtime.warning_prerequisite_is_done(id))
 }

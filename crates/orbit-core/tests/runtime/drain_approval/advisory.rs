@@ -467,10 +467,168 @@ fn apply_authority(workspace: &Workspace, task: &Task, assessed: Value, sweep: b
     }
 }
 
+fn foreign_prerequisite_warning_hold_releases_after_completion() {
+    let workspace = Workspace::new();
+    // `review` is unfinished and is the one status that may move to `done`.
+    let foreign = workspace.foreign_task("foreign prerequisite", TaskStatus::Review);
+    let other_foreign =
+        workspace.foreign_task("still unfinished foreign prerequisite", TaskStatus::Backlog);
+    assert!(workspace.runtime.get_task(&foreign.id).is_err());
+    let task = workspace.task(
+        "foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let missing = workspace.task(
+        "missing dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let still_held = workspace.task(
+        "unfinished foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    // No stored dependency edges: the prerequisites exist only in pilot prose.
+    assert!(
+        workspace
+            .runtime
+            .get_task(&task.id)
+            .unwrap()
+            .dependencies()
+            .is_empty()
+    );
+
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let selection = workspace.select(&drain);
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let held_assessment = |task: &Task, prerequisite: &str| {
+        let mut assessed = assessment(task);
+        assessed["blocked_by"] = json!([format!("Wait for {prerequisite} to land")]);
+        assessed
+    };
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![
+                held_assessment(&task, &foreign.id),
+                held_assessment(&missing, "ORB-999999999"),
+                held_assessment(&still_held, &other_foreign.id),
+            ],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    for decision in applied["drain_approval"].as_array().unwrap() {
+        assert_eq!(decision["classification"], "warnings", "{applied}");
+        assert_eq!(decision["decision"], "withhold", "{applied}");
+    }
+    for held_task in [&task, &missing, &still_held] {
+        assert_eq!(workspace.status(held_task), TaskStatus::Proposed);
+        let selection = workspace.select(&drain);
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        assert!(
+            !selection["task_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(held_task.id)),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+        let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+        assert!(
+            triage["qualifying"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["task_id"] == held_task.id.as_str()),
+            "{triage}"
+        );
+    }
+
+    // Completing the foreign prerequisite in its own workspace releases
+    // only that task's hold; missing and unfinished targets still hold.
+    workspace.complete_foreign_task(&foreign);
+    assert_eq!(
+        workspace
+            .runtime
+            .get_dependency_task(&foreign.id)
+            .unwrap()
+            .map(|done| done.status),
+        Some(TaskStatus::Done)
+    );
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    assert_eq!(shown["pilot_warnings"], json!([]), "{shown}");
+    let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+    assert!(
+        !triage["qualifying"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["task_id"] == task.id.as_str()),
+        "{triage}"
+    );
+    let selection = workspace.select(&drain);
+    assert!(held_reason(&selection, &task).is_none(), "{selection}");
+    assert!(
+        selection["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "released hold is selected for a fresh pilot: {selection}"
+    );
+    for held_task in [&missing, &still_held] {
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+    }
+
+    // The subsequent pilot approves without any operator edit to the task.
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![assessment(&task)])
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["drain_approval"][0]["approved"], true, "{applied}");
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&missing), TaskStatus::Proposed);
+    assert_eq!(workspace.status(&still_held), TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     advisory_promotion_scenarios,
     advisory_findings_are_approved_and_reach_the_worker,
     both_promotion_authorities_keep_real_warning_holds,
     malformed_advisories_are_rejected_without_approval,
-    dependency_warnings_agree_across_promotion_projection_and_triage
+    dependency_warnings_agree_across_promotion_projection_and_triage,
+    foreign_prerequisite_warning_hold_releases_after_completion
 );

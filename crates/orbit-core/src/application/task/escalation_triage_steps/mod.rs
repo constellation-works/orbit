@@ -217,7 +217,7 @@ impl OrbitRuntime {
     }
 
     fn task_is_done(&self, id: &str) -> bool {
-        matches!(self.get_task(id), Ok(found) if found.status == TaskStatus::Done)
+        self.warning_prerequisite_is_done(id)
     }
 
     /// The lane's candidate list as JSON: every `proposed` task whose latest

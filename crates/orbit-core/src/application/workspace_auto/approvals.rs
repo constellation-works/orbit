@@ -227,12 +227,7 @@ fn approval_snapshot(
                     task.status,
                     &runtime.get_task_comments(&task.id)?,
                     &task.dependencies(),
-                    &|id: &str| {
-                        matches!(
-                            runtime.get_task(id),
-                            Ok(found) if found.status == TaskStatus::Done
-                        )
-                    },
+                    &|id: &str| runtime.warning_prerequisite_is_done(id),
                 )
             } else {
                 Vec::new()
@@ -293,12 +288,7 @@ fn approval_snapshot(
                         task.status,
                         &runtime.get_task_comments(&task.id)?,
                         &task.dependencies(),
-                        &|id: &str| {
-                            matches!(
-                                runtime.get_task(id),
-                                Ok(found) if found.status == TaskStatus::Done
-                            )
-                        },
+                        &|id: &str| runtime.warning_prerequisite_is_done(id),
                     )
                 } else {
                     Vec::new()
