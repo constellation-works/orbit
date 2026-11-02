@@ -56,12 +56,13 @@ is not an array of strings, a duplicate, or an id past either bound refuses
 enqueue. The stored question then drops the binding and is an ordinary choice
 over that copied set, so answer checks apply to the copied ids plus the
 abstention: the distribution lists exactly those values and sums to one within
-0.001, and the chosen value is the most probable. An answer outside that set
-is a malformed result. `enqueue_assistance` has no template and refuses a
-packet-bound question. A question without the binding, including every
-existing expanded template, keeps its fixed allowed values, its contract
-digest and its admission behavior. With no packet-bound question, an existing
-request is admitted as before.
+0.001; the chosen value's probability may be up to 0.01 below the highest
+probability, and confidence may differ from the chosen value's probability by
+up to 0.01. An answer outside that set is a malformed result.
+`enqueue_assistance` has no template and refuses a packet-bound question. A
+question without the binding, including every existing expanded template,
+keeps its fixed allowed values, its contract digest and its admission behavior.
+With no packet-bound question, an existing request is admitted as before.
 
 The generic core contains no failure or task-quality taxonomy. The offline
 evaluator remains the owner of the two initial versioned question sets. The
