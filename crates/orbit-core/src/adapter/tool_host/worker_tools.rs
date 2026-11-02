@@ -316,10 +316,13 @@ pub(crate) fn execute(
             TaskVerb::Update | TaskVerb::ArtifactPut => {
                 return worker_update(runtime, session, binding, input).map(Some);
             }
+            // Lint can restore context, so it is not an unconditional read.
+            // Resident admission precedes worker handling and refuses that
+            // mode before either the named task or sweep can write.
+            TaskVerb::Lint => return Ok(None),
             TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Show
-            | TaskVerb::Lint
             | TaskVerb::ArtifactGet
             | TaskVerb::LocksList => {
                 return Ok(None);

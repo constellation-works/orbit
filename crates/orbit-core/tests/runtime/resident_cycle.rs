@@ -536,6 +536,163 @@ fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
     });
 }
 
+/// Restoring lint is context maintenance, not a resident read (ORB-21580).
+#[test]
+fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
+    let fx = fixture();
+    let named = fx.task("Restore named context");
+    let swept = fx.task("Restore swept context");
+    std::fs::write(fx.repo.join("pruned.rs"), "pub fn restored() {}\n").unwrap();
+    // Seed the exact history produced by the retired pruning path, using the
+    // coordinated store just as persisted old task records would carry it.
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(&fx.runtime.global_root()),
+    )
+    .unwrap();
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        fx.runtime.workspace_id().unwrap(),
+        fx.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap();
+    let append_history = |id: &str, event: &str, note: String| {
+        backends
+            .task
+            .history
+            .update_task_history(
+                id,
+                orbit_store::contracts::TaskHistoryUpdateParams {
+                    actor: "system".into(),
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: event.into(),
+                        note: Some(note),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    for id in [&named, &swept] {
+        append_history(
+            id,
+            "context_files_pruned",
+            "dropped: file:pruned.rs (selector anchor not found in workspace)".into(),
+        );
+        assert_eq!(
+            fx.runtime.plan_context_file_restore(id).unwrap().restored,
+            ["file:pruned.rs"]
+        );
+    }
+    let mandate = fx.mandate(&named);
+    fx.grant(
+        &mandate,
+        &["dispatch", "promote", "merge", "plugin_upgrade"],
+    );
+    let run = fx.cycle_run(&mandate, "resident-restoring-lint");
+    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+
+    // The native `orbit task lint` command uses this public registry API.
+    // Lint is intentionally inactive on MCP / `orbit tool run`.
+    let lint = |input| {
+        fx.runtime
+            .run_tool("orbit.task.lint", input)
+            .map_err(|error| error.to_string())
+    };
+
+    for (state, expected) in [
+        ("live", "resident_tool_refused"),
+        ("out_of_scope", "resident_scope_refused"),
+        ("expired", "resident_cycle_stale"),
+        ("finished", "resident_cycle_stale"),
+    ] {
+        if state == "expired" {
+            // Advance only persisted lease time, never wall-clock sleeps.
+            let live = orbit_types::workflow::ResidentLiveCycle {
+                cycle: brief["cycle"].as_str().unwrap().into(),
+                run_id: run.clone(),
+                expires_at: Utc::now() - Duration::hours(1),
+            };
+            append_history(
+                &mandate,
+                "resident_cycle_changed",
+                serde_json::to_string(&live).unwrap(),
+            );
+        } else if state == "finished" {
+            fx.runtime.finish_resident_cycle(&run).unwrap();
+        }
+        let before: Vec<_> = [&named, &swept, &mandate]
+            .into_iter()
+            .map(|id| {
+                (
+                    fx.runtime.get_task(id).unwrap().context_files,
+                    serde_json::to_value(fx.runtime.get_task_history(id).unwrap()).unwrap(),
+                )
+            })
+            .collect();
+        fx.as_cycle_agent(&run, || {
+            for id in [Some(&named), None] {
+                let mut input = json!({"model": "codex"});
+                if let Some(id) = id {
+                    input["id"] = json!(id);
+                }
+                // Ordinary lint remains a read even after the lease expires.
+                let read = lint(input.clone()).unwrap();
+                if id.is_none() {
+                    assert_eq!(read["dry_run"], true);
+                    assert_eq!(read["total_restorable"], 2);
+                }
+                input["restore_pruned"] = json!(true);
+                if state == "out_of_scope" {
+                    input["workspace"] = json!("ws_not_granted");
+                }
+                let error = lint(input)
+                    .expect_err("restoring lint must not bypass the resident write guard");
+                assert!(error.contains(expected), "{state}: {error}");
+            }
+        });
+        for (id, (selectors, history)) in [&named, &swept, &mandate].into_iter().zip(before) {
+            assert_eq!(
+                fx.runtime.get_task(id).unwrap().context_files,
+                selectors,
+                "{state}: {id}"
+            );
+            assert_eq!(
+                serde_json::to_value(fx.runtime.get_task_history(id).unwrap()).unwrap(),
+                history,
+                "{state}: {id}: refusal and reads must not write history or a ledger"
+            );
+        }
+    }
+    // Without a resident run binding, both operator entry paths still restore.
+    for input in [
+        json!({"id": named, "restore_pruned": true}),
+        json!({"restore_pruned": true}),
+    ] {
+        lint(input).unwrap();
+    }
+    for id in [&named, &swept] {
+        assert_eq!(
+            fx.runtime.get_task(id).unwrap().context_files,
+            ["file:pruned.rs"]
+        );
+        assert_eq!(
+            fx.runtime
+                .get_task_history(id)
+                .unwrap()
+                .iter()
+                .filter(|row| row.event == "context_files_restored")
+                .count(),
+            1
+        );
+    }
+}
+
 #[test]
 fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it() {
     let fx = fixture();
