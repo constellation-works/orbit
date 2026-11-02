@@ -733,6 +733,7 @@ fn enable_warns_when_a_grant_was_not_requested() {
 #[test]
 fn an_activity_naming_an_unregistered_tool_is_withdrawn_alone() {
     let fixture = Fixture::new();
+    crate::fixture_crew::configure_sol(&fixture.home.join(".orbit"));
     let source = fixture.source("lonely");
     write_status_plugin(
         &source,
