@@ -1,7 +1,7 @@
 ---
 title: Visual Review — Design
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-02
 last_validated: 2026-11-01
 status: Draft
 feature: visual-review
@@ -291,6 +291,13 @@ First dashboard entries, chosen to cover the most edited views:
 | `health-doctor` | `#diagnostics/doctor` | `busy-workspace` | default |
 | `automation-routines` | `#operations/routines` | `busy-workspace` | default, empty |
 | `settings` | `#config` | `busy-workspace` | default |
+
+Every top-level dashboard view (each `section.tab-pane` in the shipped `index.html`) needs a
+manifest entry or an exemption with its reason. The orbit-web dashboard asset test
+`every_top_level_dashboard_view_has_a_visual_manifest_entry_or_exemption` fails otherwise, so
+a new view cannot ship unmeasured. Later entries added `notices` (fixture `fleet-notices`, one
+open notice and none closed in the last 24 hours), `knowledge` and `plugins`; `leases` is
+exempt until a fixture enables path leases.
 
 The dashboard is dark-only ([browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)),
 so `themes = ["dark"]`, and `color_scheme_invariant = true` turns "both themes" into a check
