@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
@@ -14,7 +15,7 @@ use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_
 use crate::activity_job::dispatcher::DispatchOutcome;
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
 
-use super::super::super::super::dispatcher::DispatchError;
+use super::super::super::super::dispatcher::{DispatchError, ResolvedSandbox};
 use super::super::super::super::workspace::WorktreeBoundaryGuard;
 use super::super::super::argv::{
     apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
@@ -32,6 +33,83 @@ use super::super::environment::{
 use super::super::policy::{activity_policy_env, drop_inherited_policy_env};
 use super::super::prepare::{SourceCheckout, prepare_dispatch_sandbox, resolve_dispatch_sandbox};
 use super::{CliDispatchContext, post_run, preparation, subprocess};
+
+/// Environment variable `scripts/cargo-deny.sh` reads for a writable
+/// advisory database root [ORB-11983].
+const CARGO_DENY_DB_PATH_ENV: &str = "CARGO_DENY_DB_PATH";
+
+/// Scratch subdirectory holding this run's cargo-deny advisory database.
+const CARGO_DENY_ADVISORY_DB_SUBDIR: &str = "cargo-deny-advisory-db";
+
+/// Prepare the per-run cargo-deny advisory database directory [ORB-21352].
+///
+/// The sandbox binds only `$CARGO_HOME/registry` and `$CARGO_HOME/git`
+/// writable, so cargo-deny cannot lock the default
+/// `$CARGO_HOME/advisory-dbs`. When the effective sandbox profile already
+/// grants this run write access to its scratch directory, create the
+/// advisory directory there and return it for `CARGO_DENY_DB_PATH`
+/// injection. Every other dispatch — no effective sandbox, or a profile
+/// such as the read-only reviewer that denies scratch writes — returns
+/// `None` and gains no writable advisory path, so cargo-deny in that
+/// profile still fails closed. A directory that cannot be created fails
+/// the dispatch rather than skipping the advisory check.
+fn prepare_cargo_deny_advisory_db_dir(
+    sandbox: Option<&ResolvedSandbox>,
+    scratch_dir: Option<&Path>,
+) -> Result<Option<PathBuf>, DispatchError> {
+    let (Some(sandbox), Some(scratch_dir)) = (sandbox, scratch_dir) else {
+        return Ok(None);
+    };
+    let advisory_db_dir = scratch_dir.join(CARGO_DENY_ADVISORY_DB_SUBDIR);
+    if !sandbox_profile_allows_modify(&sandbox.fs_profile, &advisory_db_dir)? {
+        return Ok(None);
+    }
+    orbit_common::fs::io::create_private_dir_all(&advisory_db_dir).map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "create cargo-deny advisory database dir `{}`: {error}",
+            advisory_db_dir.display()
+        ))
+    })?;
+    Ok(Some(advisory_db_dir))
+}
+
+/// Whether the resolved sandbox profile allows modifying `path`, under the
+/// same last-match-wins precedence the sandbox compilers apply.
+///
+/// The resolved profile holds workspace-absolute rules, while
+/// [`CompiledFsRules`](orbit_types::policy::CompiledFsRules) only decides
+/// workspace-relative paths, so the decision is replayed here with
+/// [`match_glob`](orbit_types::policy::match_glob) over the absolute
+/// candidate. No matching rule means denied.
+fn sandbox_profile_allows_modify(
+    profile: &orbit_types::policy::ResolvedFsProfile,
+    path: &Path,
+) -> Result<bool, DispatchError> {
+    let candidate = path.display().to_string().replace('\\', "/");
+    let mut allowed = false;
+    for rule in &profile.modify {
+        let (negated, body) = rule
+            .strip_prefix('!')
+            .map(|rest| (true, rest))
+            .unwrap_or((false, rule.as_str()));
+        let mut pattern = body.replace('\\', "/");
+        while let Some(stripped) = pattern.strip_prefix("./") {
+            pattern = stripped.to_string();
+        }
+        if pattern.is_empty() {
+            pattern = ".".to_string();
+        }
+        let matched = orbit_types::policy::match_glob(&pattern, &candidate).map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!(
+                "evaluate sandbox modify rules for the cargo-deny advisory database: {error}"
+            ))
+        })?;
+        if matched {
+            allowed = !negated;
+        }
+    }
+    Ok(allowed)
+}
 
 pub(super) fn dispatch_prepared_provider(
     context: CliDispatchContext<'_>,
@@ -627,6 +705,19 @@ pub(super) fn dispatch_prepared_provider(
         }
         None => None,
     };
+    // [ORB-21352] A write-granting sandboxed agent gets a per-run writable
+    // cargo-deny advisory database under its scratch dir; `dispatch_env` is
+    // appended to the child environment last, so this value overrides any
+    // same-named value the allowlist forwarded. No disable-fetch variable
+    // is set: the child still fetches a fresh advisory database.
+    if let Some(advisory_db_dir) =
+        prepare_cargo_deny_advisory_db_dir(sandbox, scratch_dir.as_deref())?
+    {
+        dispatch_env.push((
+            CARGO_DENY_DB_PATH_ENV.to_string(),
+            advisory_db_dir.display().to_string(),
+        ));
+    }
     require_crew_env(&spec.crew_env, &child_env)?;
     require_claude_worker_credential(host, &provider, &child_env)?;
     if inspection.is_some() {
