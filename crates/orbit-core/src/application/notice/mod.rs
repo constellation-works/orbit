@@ -8,6 +8,8 @@
 
 mod authority;
 mod post;
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 
 use std::collections::{BTreeMap, BTreeSet};
 

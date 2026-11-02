@@ -540,6 +540,162 @@ fn updated_task_links_control_notice_closure() {
     );
 }
 
+// Freeze the owner clock rather than sleeping across the five-minute boundary.
+fn lost_reply_retries_preserve_editor_and_corroborator_state() {
+    use chrono::{Duration, Utc};
+    use orbit_core::test_support;
+
+    for editor in [true, false] {
+        for relative in [true, false] {
+            let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+            let runtime = runtime_at(root.path());
+            let task = add_task(&runtime, "Retry report");
+            let agent = agent_session(&runtime, &task);
+            let operator = session(McpCapability::Operator);
+            let now = Utc::now();
+            let mut request = json!({"kind": "incident", "title": "Retry report",
+                "linked_task": task});
+            if relative {
+                request["expires_in_hours"] = json!(1);
+            } else {
+                request["expires_at"] = json!(now + Duration::minutes(6));
+            }
+            if !editor {
+                let mut original = request.clone();
+                original["body"] = json!("Operator content");
+                test_support::with_notice_post_time(now, || {
+                    call(&runtime, "orbit.notice.post", original, &operator).unwrap()
+                });
+            }
+            let posted = test_support::with_notice_post_time(now, || {
+                call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap()
+            });
+            let id = posted["notice"]["id"].as_str().unwrap();
+            let shown = call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+            let audits = notice_audit(&runtime, AuditEventStatus::Success);
+            let later = now + Duration::minutes(if relative { 40 } else { 2 });
+            for _ in 0..6 {
+                let retry = test_support::with_notice_post_time(later, || {
+                    call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap()
+                });
+                assert_eq!(
+                    retry["outcome"],
+                    if editor { "updated" } else { "corroborated" }
+                );
+                assert_eq!(
+                    retry["notice"], posted["notice"],
+                    "a retry must move no stored field"
+                );
+            }
+            // Explicit defaults and omitted defaults identify the same request.
+            let mut defaults = request.clone();
+            defaults["scope"] = json!("workspace");
+            defaults["dedupe_key"] = json!(format!("task:{}", task.to_lowercase()));
+            defaults["close_on_linked_done"] = json!(true);
+            defaults["body"] = json!("");
+            let retry = test_support::with_notice_post_time(later, || {
+                call(&runtime, "orbit.notice.post", defaults, &agent).unwrap()
+            });
+            assert_eq!(retry["notice"], posted["notice"]);
+            assert_eq!(notice_audit(&runtime, AuditEventStatus::Success), audits);
+            assert_eq!(
+                call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap(),
+                shown
+            );
+
+            let mut invalid = request.clone();
+            invalid["body"] = json!("A distinct report still validates expiry");
+            if relative {
+                invalid["expires_in_hours"] = json!(0);
+            }
+            refused(
+                test_support::with_notice_post_time(later, || {
+                    call(&runtime, "orbit.notice.post", invalid, &agent)
+                }),
+                "notice_expiry_invalid",
+            );
+
+            // An intervening write, even at the same timestamp, invalidates the
+            // previous request's retry identity. Never search older fingerprints.
+            let other = agent_session(&runtime, &add_task(&runtime, "Other reporter"));
+            let mut intervening = request.clone();
+            intervening.as_object_mut().unwrap().remove("expires_at");
+            intervening
+                .as_object_mut()
+                .unwrap()
+                .remove("expires_in_hours");
+            test_support::with_notice_post_time(now, || {
+                call(&runtime, "orbit.notice.post", intervening, &other).unwrap()
+            });
+            let result = test_support::with_notice_post_time(later, || {
+                call(&runtime, "orbit.notice.post", request, &agent)
+            });
+            if relative {
+                let result = result.unwrap();
+                assert_eq!(
+                    result["notice"]["reports"]["count"],
+                    posted["notice"]["reports"]["count"].as_u64().unwrap() + 2
+                );
+            } else {
+                refused(result, "notice_expiry_invalid");
+            }
+        }
+    }
+}
+
+fn lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request() {
+    for editor in [true, false] {
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let runtime = runtime_at(root.path());
+        let task = add_task(&runtime, "Rate-limited reporter");
+        let agent = agent_session(&runtime, &task);
+        let operator = session(McpCapability::Operator);
+        let mut request = json!({"kind": "info", "title": "Rate-limited reporter",
+            "linked_task": task});
+        if !editor {
+            call(&runtime, "orbit.notice.post", request.clone(), &operator).unwrap();
+        }
+        // Reach the configured cap with distinct writes of the same open subject.
+        let mut last = Value::Null;
+        for report in 0..runtime.notice_settings().agent_posts_per_task_per_day {
+            request["body"] = json!(format!("Report {report}"));
+            last = call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap();
+        }
+        let id = last["notice"]["id"].as_str().unwrap();
+        let shown = call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
+        let audits = notice_audit(&runtime, AuditEventStatus::Success);
+        let retry = call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap();
+        assert_eq!(
+            retry["outcome"],
+            if editor { "updated" } else { "corroborated" }
+        );
+        assert_eq!(retry["notice"], last["notice"]);
+        assert_eq!(notice_audit(&runtime, AuditEventStatus::Success), audits);
+        assert_eq!(
+            call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap(),
+            shown
+        );
+        // The resolved author includes run/model identity, not just the bound task.
+        let mut other_run = agent.clone();
+        other_run.worker_invocation.as_mut().unwrap().bound_run_id = "jrun-another-run".into();
+        refused(
+            call(&runtime, "orbit.notice.post", request.clone(), &other_run),
+            "notice_limit_exceeded",
+        );
+        request["model"] = json!("codex");
+        refused(
+            call(&runtime, "orbit.notice.post", request.clone(), &agent),
+            "notice_limit_exceeded",
+        );
+        request.as_object_mut().unwrap().remove("model");
+        request["body"] = json!("A genuinely new report");
+        refused(
+            call(&runtime, "orbit.notice.post", request, &agent),
+            "notice_limit_exceeded",
+        );
+    }
+}
+
 crate::scenario_table!(
     notice_authority,
     operator_posts_updates_and_closes_any_notice,
@@ -547,4 +703,6 @@ crate::scenario_table!(
     run_bound_agent_reports_only_about_its_task,
     linked_task_done_closes_the_notice_and_frees_its_key,
     updated_task_links_control_notice_closure,
+    lost_reply_retries_preserve_editor_and_corroborator_state,
+    lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request,
 );

@@ -33,7 +33,7 @@ const DERIVED_DEDUPE_KEY_CHARS: usize = 120;
 const MAX_EVIDENCE_VALUE_CHARS: usize = 256;
 
 /// One post request, as the tool or CLI collected it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NoticePostRequest {
     pub kind: NoticeKind,
     pub title: String,
@@ -109,9 +109,10 @@ struct ValidatedPost {
     close_on_linked_done: bool,
     evidence: Vec<NoticeEvidence>,
     hosts: Vec<String>,
-    /// `None` keeps a matched notice's expiry, or the default for a new one.
-    expires_at: Option<DateTime<Utc>>,
-    default_expires_at: DateTime<Utc>,
+    /// Request values, with omitted defaults resolved except for scope, which
+    /// depends on the matched notice. Keep expiry relative when requested so
+    /// lost-reply retries compare the request rather than a new expiry instant.
+    fingerprint_request: NoticePostRequest,
 }
 
 impl OrbitRuntime {
@@ -130,11 +131,13 @@ impl OrbitRuntime {
             "linked_task": request.linked_task,
         });
         let result = self.post_notice_unaudited(caller, request, &mut audit);
-        audit.record(
-            self,
-            &result.as_ref().map(|posted| posted.notice.id.clone()),
-        );
-        result
+        if !result.as_ref().is_ok_and(|(_, repeated)| *repeated) {
+            audit.record(
+                self,
+                &result.as_ref().map(|(posted, _)| posted.notice.id.clone()),
+            );
+        }
+        result.map(|(posted, _)| posted)
     }
 
     fn post_notice_unaudited(
@@ -142,13 +145,16 @@ impl OrbitRuntime {
         caller: &NoticeCaller,
         request: NoticePostRequest,
         audit: &mut NoticeAudit,
-    ) -> Result<NoticePostResult, OrbitError> {
+    ) -> Result<(NoticePostResult, bool), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let poster = self.resolve_notice_poster(caller)?;
         audit.poster = Some(poster.class);
         let settings = *self.notice_settings();
+        #[cfg(feature = "test-support")]
+        let now = super::test_support::notice_post_time();
+        #[cfg(not(feature = "test-support"))]
         let now = Utc::now();
-        let post = self.validate_notice_post(&poster, &settings, request, now)?;
+        let post = self.validate_notice_post(&poster, &settings, request)?;
         audit.detail["dedupe_key"] = serde_json::Value::String(post.dedupe_key.clone());
         let workspace_id = self.workspace_id()?;
         let workspace = NoticeWorkspace {
@@ -179,6 +185,7 @@ impl OrbitRuntime {
             purge_before: Some(purge_before),
         };
         let outcome = std::cell::Cell::new(PostOutcome::Created);
+        let repeated = std::cell::Cell::new(false);
         let decide = |snapshot: &NoticePostSnapshot| -> Result<NoticePostPlan, OrbitError> {
             let (plan, decided) = decide_post(
                 &poster,
@@ -190,6 +197,7 @@ impl OrbitRuntime {
                 now,
             )?;
             outcome.set(decided);
+            repeated.set(matches!(plan, NoticePostPlan::Unchanged { .. }));
             Ok(plan)
         };
         let row = store.post_notice(&query, &decide)?;
@@ -197,7 +205,9 @@ impl OrbitRuntime {
         notice.resolve_effective_status(now, None);
         let outcome = outcome.get();
         audit.detail["outcome"] = serde_json::Value::String(outcome.as_str().to_string());
-        Ok(NoticePostResult { notice, outcome })
+        audit.detail["request_fingerprint"] =
+            serde_json::json!(post.request_fingerprint(&poster, notice.scope));
+        Ok((NoticePostResult { notice, outcome }, repeated.get()))
     }
 
     fn validate_notice_post(
@@ -205,8 +215,8 @@ impl OrbitRuntime {
         poster: &NoticePoster,
         settings: &NoticeSettings,
         request: NoticePostRequest,
-        now: DateTime<Utc>,
     ) -> Result<ValidatedPost, OrbitError> {
+        let mut fingerprint_request = request.clone();
         let NoticePostRequest {
             kind,
             title,
@@ -217,8 +227,8 @@ impl OrbitRuntime {
             close_on_linked_done,
             evidence,
             hosts,
-            expires_in_hours,
-            expires_at,
+            expires_in_hours: _,
+            expires_at: _,
         } = request;
         if let Some(scope) = scope
             && !poster.may_post_scope(scope)
@@ -359,15 +369,60 @@ impl OrbitRuntime {
                 "no dedupe key could be derived; pass `dedupe_key`",
             ));
         }
-        let cap = poster.expiry_cap_hours(settings, kind);
+        let close_on_linked_done = linked_task.is_some() && close_on_linked_done.unwrap_or(true);
+        fingerprint_request.body.get_or_insert_default();
+        fingerprint_request
+            .dedupe_key
+            .get_or_insert_with(|| dedupe_key.clone());
+        fingerprint_request
+            .close_on_linked_done
+            .get_or_insert(close_on_linked_done);
+        Ok(ValidatedPost {
+            kind,
+            title,
+            body,
+            scope,
+            dedupe_key,
+            close_on_linked_done,
+            linked_task,
+            evidence,
+            hosts,
+            fingerprint_request,
+        })
+    }
+}
+
+impl ValidatedPost {
+    /// Fingerprint the given request and the complete resolved poster, resolving
+    /// only the defaults. In particular, ignore neither a corroborator's content
+    /// nor its expiry input merely because that write cannot replace them.
+    fn request_fingerprint(&self, poster: &NoticePoster, matched_scope: NoticeScope) -> String {
+        let mut request = self.fingerprint_request.clone();
+        request.scope = Some(self.scope.unwrap_or(matched_scope));
+        let identity =
+            serde_json::json!({"version": 1, "author": poster.author(), "request": request});
+        blake3::hash(identity.to_string().as_bytes())
+            .to_hex()
+            .to_string()
+    }
+
+    /// Validate and resolve expiry only after ruling out an unchanged retry.
+    fn resolve_expiry(
+        &self,
+        poster: &NoticePoster,
+        settings: &NoticeSettings,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>, OrbitError> {
+        let cap = poster.expiry_cap_hours(settings, self.kind);
         let earliest = now + Duration::minutes(MIN_EXPIRY_MINUTES);
-        let expires_at = match (expires_in_hours, expires_at) {
-            (Some(_), Some(_)) => {
-                return Err(refuse(
-                    NoticeRefusalCode::InvalidField,
-                    "pass `expires_in_hours` or `expires_at`, not both",
-                ));
-            }
+        match (
+            self.fingerprint_request.expires_in_hours,
+            self.fingerprint_request.expires_at,
+        ) {
+            (Some(_), Some(_)) => Err(refuse(
+                NoticeRefusalCode::InvalidField,
+                "pass `expires_in_hours` or `expires_at`, not both",
+            )),
             (Some(hours), None) => {
                 if hours == 0 {
                     return Err(refuse(
@@ -381,7 +436,9 @@ impl OrbitRuntime {
                         format!("{hours} hours exceeds this poster's {cap}-hour cap"),
                     ));
                 }
-                Some(now + Duration::hours(i64::from(u32::try_from(hours).unwrap_or(cap))))
+                Ok(Some(
+                    now + Duration::hours(i64::from(u32::try_from(hours).unwrap_or(cap))),
+                ))
             }
             (None, Some(at)) => {
                 if at < earliest {
@@ -396,25 +453,10 @@ impl OrbitRuntime {
                         format!("`expires_at` exceeds this poster's {cap}-hour cap"),
                     ));
                 }
-                Some(at)
+                Ok(Some(at))
             }
-            (None, None) => None,
-        };
-        let default_expires_at =
-            now + Duration::hours(i64::from(poster.default_expiry_hours(settings, kind)));
-        Ok(ValidatedPost {
-            kind,
-            title,
-            body,
-            scope,
-            dedupe_key,
-            close_on_linked_done: linked_task.is_some() && close_on_linked_done.unwrap_or(true),
-            linked_task,
-            evidence,
-            hosts,
-            expires_at,
-            default_expires_at,
-        })
+            (None, None) => Ok(None),
+        }
     }
 }
 
@@ -445,6 +487,52 @@ fn decide_post(
     linked_done: &LinkedDone,
     now: DateTime<Utc>,
 ) -> Result<(NoticePostPlan, PostOutcome), OrbitError> {
+    let open: Vec<&NoticeRow> = snapshot
+        .unclosed
+        .iter()
+        .filter(|row| effective_open(row, now, linked_done))
+        .collect();
+    let open_globals = open.iter().filter(|row| row.scope == "global").count();
+    let matched = open
+        .iter()
+        .find(|row| row.workspace_id == workspace.id && row.dedupe_key == post.dedupe_key);
+    let fingerprint = post.request_fingerprint(
+        poster,
+        matched.map_or(NoticeScope::Workspace, |row| {
+            if row.scope == "global" {
+                NoticeScope::Global
+            } else {
+                NoticeScope::Workspace
+            }
+        }),
+    );
+    if let Some(matched) = matched
+        && snapshot
+            .latest_events
+            .iter()
+            .find(|event| event.notice_id == matched.id)
+            .and_then(|event| serde_json::from_str::<serde_json::Value>(&event.detail_json).ok())
+            .and_then(|detail| {
+                detail["request_fingerprint"]
+                    .as_str()
+                    .map(ToOwned::to_owned)
+            })
+            .as_deref()
+            == Some(&fingerprint)
+    {
+        let outcome = if poster.may_edit(&matched.author_class, matched.author_task_id.as_deref()) {
+            PostOutcome::Updated
+        } else {
+            PostOutcome::Corroborated
+        };
+        return Ok((
+            NoticePostPlan::Unchanged {
+                row: (*matched).clone(),
+            },
+            outcome,
+        ));
+    }
+    let expires_at = post.resolve_expiry(poster, settings, now)?;
     match poster.class {
         AuthorClass::Agent
             if snapshot.poster_events.len() >= settings.agent_posts_per_task_per_day as usize =>
@@ -464,15 +552,6 @@ fn decide_post(
         }
         _ => {}
     }
-    let open: Vec<&NoticeRow> = snapshot
-        .unclosed
-        .iter()
-        .filter(|row| effective_open(row, now, linked_done))
-        .collect();
-    let open_globals = open.iter().filter(|row| row.scope == "global").count();
-    let matched = open
-        .iter()
-        .find(|row| row.workspace_id == workspace.id && row.dedupe_key == post.dedupe_key);
     let event = |notice_id: &str, outcome: PostOutcome, revision: u32| NoticeEventRow {
         workspace_id: workspace.id.clone(),
         notice_id: notice_id.to_string(),
@@ -481,7 +560,10 @@ fn decide_post(
         poster_class: poster.class.as_str().to_string(),
         poster_crew: poster.crew.clone(),
         poster_task_id: poster.task_id.clone(),
-        detail_json: serde_json::json!({"revision": revision}).to_string(),
+        detail_json: serde_json::json!({
+            "revision": revision, "request_fingerprint": fingerprint,
+        })
+        .to_string(),
     };
     let Some(matched) = matched else {
         let scope = post.scope.unwrap_or(NoticeScope::Workspace);
@@ -528,7 +610,9 @@ fn decide_post(
             close_on_linked_done: post.close_on_linked_done,
             evidence: post.evidence.clone(),
             hosts: post.hosts.clone(),
-            expires_at: post.expires_at.unwrap_or(post.default_expires_at),
+            expires_at: expires_at.unwrap_or_else(|| {
+                now + Duration::hours(i64::from(poster.default_expiry_hours(settings, post.kind)))
+            }),
             opened_at: now,
             updated_at: now,
             revision: 1,
@@ -594,7 +678,7 @@ fn decide_post(
         notice.linked_task = post.linked_task.clone();
         notice.close_on_linked_done = post.close_on_linked_done;
     }
-    if let Some(expires_at) = post.expires_at {
+    if let Some(expires_at) = expires_at {
         notice.expires_at = expires_at;
     }
     let changed = {
