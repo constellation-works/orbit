@@ -446,7 +446,10 @@ of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment. Explicit
 `task_ids` audits exactly the named tasks, including ones that already have
 selectors, while excluding tasks held by another active run as
-`already_preparing` with `prepared_by_run_ids`. Preparation continues for the
+`already_preparing` with `prepared_by_run_ids`. A child pilot, such as one an
+approve-proposed drain dispatched, is not this operator request: it reuses an
+assessment an explicit or routine pilot already certified instead of calling
+the provider again. Preparation continues for the
 free named tasks. Apply settles each held task as `superseded` with reason
 `piloted_elsewhere`; if every named task is held, the run succeeds without
 agent work. Inspect or resume the owning run for that task's assessment.
@@ -715,7 +718,12 @@ configuration.
 - When none of its pilots is running, a pass selects up to ten qualifying
   proposed tasks, including ones filed mid-window. A task qualifies with the
   `no-diff-expected` tag, or with non-empty `context_files` and an assessed
-  complexity.
+  complexity. A fresh assessment from an explicit request or a routine pilot
+  is approved on that pass without another pilot. A stale description or
+  criteria edit, or a holding warning, keeps the task proposed and is not
+  selected again. A task another pilot is assessing is held as
+  `pilot_running` until it finishes. A new explicit request still starts one
+  pilot; the drain's targeted task ids are not that request.
 - The drain pilots them through a detached `task_pilot_pipeline` run, and the
   pilot's apply step approves a task only under the existing promotion rules:
   no duplicate, already-landed, blocked-by, conflict or warning finding, and
@@ -742,8 +750,11 @@ configuration.
   least one is on the base branch. Human- and orchestrator-filed tasks are
   never closed this way; archive or re-scope them yourself.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
-  report approved, closed and held counts with each hold reason. A held task
-  is not piloted again until it changes.
+  report approved, closed and held counts with each hold reason, and
+  `awaiting_reuse` lists fresh assessments a later pass approves. A task this
+  drain held is not piloted again until it changes. A fresh explicit or
+  routine assessment is approved without another pilot, and a stale one stays
+  proposed until a new explicit assessment.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
 

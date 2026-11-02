@@ -80,7 +80,8 @@ use assessment::{
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
-    approval_disqualification, approved_by_drain, held_classification,
+    ExplicitAssessmentReuse, approval_disqualification, approved_by_drain,
+    classify_explicit_assessment_reuse, held_classification, promote_reusable_assessment,
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};

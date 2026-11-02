@@ -179,25 +179,39 @@ pub(crate) fn prepare(
                 ),
             ));
         }
-        let selected = selected
+        // A child pilot is named like an explicit request, but its host
+        // trigger says otherwise. An assessment an explicit or routine pilot
+        // already certified is reused, not assessed again. Operator explicit
+        // runs are not children.
+        let child = super::drain_promotion::dispatched_child_pilot(runtime, run_id)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        let mut kept = Vec::new();
+        for task in selected
             .into_iter()
             .filter(|task| !superseded.contains_key(&task.id))
-            .filter(|task| {
-                if runtime.is_human_crew(task.crew.as_deref()) {
-                    // Operator work: no pilot assessment, warning or hold.
-                    excluded.record(&task.id, HUMAN_CREW_EXCLUSION, &active_preparations);
-                    false
-                } else if active_preparations.contains_key(&task.id) {
-                    excluded.record(&task.id, "already_preparing", &active_preparations);
-                    false
-                } else if forge_refused(&task.tags) {
-                    excluded.record(&task.id, PR_FORGE_REMOTE_MISSING, &active_preparations);
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect::<Vec<_>>();
+        {
+            let reason = if runtime.is_human_crew(task.crew.as_deref()) {
+                // Operator work: no pilot assessment, warning or hold.
+                Some(HUMAN_CREW_EXCLUSION)
+            } else if active_preparations.contains_key(&task.id) {
+                Some("already_preparing")
+            } else if child
+                && let Some(reason) =
+                    super::drain_promotion::reused_assessment_exclusion(runtime, task)
+                        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
+            {
+                Some(reason)
+            } else if forge_refused(&task.tags) {
+                Some(PR_FORGE_REMOTE_MISSING)
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => excluded.record(&task.id, reason, &active_preparations),
+                None => kept.push(task),
+            }
+        }
+        let selected = kept;
         let task_ids = selected
             .iter()
             .map(|task| task.id.clone())

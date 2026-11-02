@@ -8,11 +8,16 @@
 //! live pilot carries is held as `pilot_running` and never selected again
 //! while that pilot runs.
 //!
-//! Selection only decides who is worth a pilot. Approval itself happens in
-//! the task-pilot apply boundary under the drain's verified authority, so the
-//! qualification checked here is a cost filter, not the gate. A task the
-//! pilot held is not piloted again until it changes: the pilot entry that
-//! records the hold stays the newest in its history. A pilot that finished
+//! Selection decides who is worth a pilot. A proposed task whose latest
+//! certified assessment came from an explicit or routine pilot, and is still
+//! fresh, is approved here without another provider call. A stale one, or
+//! one with a holding warning, stays proposed and is not selected again.
+//! Every other approval happens in the task-pilot apply boundary under the
+//! drain's verified authority, so the qualification checked here is a cost
+//! filter, not the gate. Targeted task ids and promotion authority are not a
+//! new pilot request. A task the pilot held is not piloted again until it
+//! changes: the pilot entry that records the hold stays the newest in its
+//! history. A pilot that finished
 //! without deciding about a task (a failed or stale pilot) is recorded on that
 //! task when the drain that ran it records its approvals, so no later drain
 //! pilots the task again until it changes either. The same recording covers
@@ -32,12 +37,13 @@
 //! `unverified_review_finding` before it costs a pilot: approval would refuse
 //! it anyway, and the detail names the verification job.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskHistoryEntry,
     TaskStatus, TaskType,
@@ -52,14 +58,17 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::INSPECTION_CREW_UNAVAILABLE;
 use crate::application::task::{
     NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PILOT_WARNING_TRIAGED_EVENT, SYSTEM_ACTOR_LABEL,
-    TaskListFilter, TaskRecordUpdateParams, TaskRecords, UNVERIFIED_REVIEW_FINDING, metadata_task,
+    TaskAutomationPort, TaskListFilter, TaskRecordUpdateParams, TaskRecords,
+    UNVERIFIED_REVIEW_FINDING, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    approval_disqualification, approved_by_drain, held_classification, task_pilot_warnings,
+    ExplicitAssessmentReuse, approval_disqualification, approved_by_drain,
+    classify_explicit_assessment_reuse, held_classification, promote_reusable_assessment,
+    task_pilot_warnings,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -91,6 +100,9 @@ pub(super) struct ApprovalSnapshot {
     pub(super) held: Vec<DrainWaitingTask>,
     /// Tasks this pass archived as proven already fixed.
     pub(super) closed: Vec<String>,
+    /// Fresh explicit or routine assessments this pass can approve without
+    /// another pilot. Not candidates: a drain child must not assess them again.
+    pub(super) reusable: Vec<String>,
 }
 
 impl ApprovalSnapshot {
@@ -138,7 +150,9 @@ fn approval_snapshot(
         candidates: Vec::new(),
         held: Vec::new(),
         closed: Vec::new(),
+        reusable: Vec::new(),
     };
+    let holders = runtime.pilot_preparation_holders()?;
     for task in proposed {
         let held = |reason: &str, detail: Option<String>, findings: Vec<DrainHoldFinding>| {
             DrainWaitingTask {
@@ -274,6 +288,16 @@ fn approval_snapshot(
             ));
             continue;
         }
+        // Nor is one an explicit or routine pilot is running: the child this
+        // pass would dispatch could only stand down.
+        if let Some(run_id) = live_pilot_run(runtime, &holders, &task.id)? {
+            snapshot.held.push(held(
+                "pilot_running",
+                Some(format!("task-pilot run {run_id} is assessing it")),
+                Vec::new(),
+            ));
+            continue;
+        }
         let changed_at = latest.map(|entry| entry.at);
         // An undecided pilot an earlier drain recorded holds the task until a
         // real change, even though no pilot of this drain ran it.
@@ -309,12 +333,65 @@ fn approval_snapshot(
             ));
             continue;
         }
-        snapshot.candidates.push(ApprovalCandidate {
-            id: task.id,
-            crew: normalized_task_crew(task.crew.as_deref()),
-        });
+        match classify_explicit_assessment_reuse(runtime, &task)? {
+            ExplicitAssessmentReuse::Promote { .. } => snapshot.reusable.push(task.id),
+            ExplicitAssessmentReuse::Hold { reason, detail } => {
+                let findings = if reason == "warnings" {
+                    task_pilot_warnings(
+                        task.status,
+                        &runtime.get_task_comments(&task.id)?,
+                        &task.dependencies(),
+                        &|id: &str| {
+                            matches!(
+                                runtime.get_task(id),
+                                Ok(found) if found.status == TaskStatus::Done
+                            )
+                        },
+                    )
+                } else {
+                    Vec::new()
+                };
+                snapshot.held.push(held(reason, detail, findings));
+            }
+            ExplicitAssessmentReuse::NotReusable => snapshot.candidates.push(ApprovalCandidate {
+                id: task.id,
+                crew: normalized_task_crew(task.crew.as_deref()),
+            }),
+        }
     }
     Ok(snapshot)
+}
+
+/// A live task-pilot run that names `task_id` in its input, or whose
+/// reservation or prepare checkpoint is among `holders`.
+///
+/// Stored rows only: the reconciling job list resolves the job's catalog
+/// entry and can finalize another run, and selection must do neither.
+fn live_pilot_run(
+    runtime: &OrbitRuntime,
+    holders: &BTreeMap<String, BTreeSet<String>>,
+    task_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    let named = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(PILOT_JOB.to_string()),
+            task_id: Some(task_id.to_string()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+    Ok(named
+        .into_iter()
+        .next()
+        .map(|run| run.run_id)
+        .or_else(|| holders.get(task_id)?.iter().next().cloned()))
 }
 
 /// One task-pilot child this drain dispatched.
@@ -559,6 +636,7 @@ fn record_report(
     run_id: &str,
     snapshot: &ApprovalSnapshot,
     pilots: &[RecordedPilot],
+    reused: &[String],
 ) {
     let closed = &snapshot.closed;
     let held_by_reason = snapshot.held_by_reason();
@@ -581,6 +659,14 @@ fn record_report(
                             Some(pilot.status.to_string()),
                             None,
                         );
+                    }
+                }
+                // A reused assessment is approved once, by the pass whose
+                // promotion moved it, so only this pass's approvals can
+                // repeat it.
+                for task_id in reused {
+                    if !approved.contains(task_id) {
+                        approved.push(task_id.clone());
                     }
                 }
                 let report = state
@@ -617,6 +703,8 @@ fn held_json(snapshot: &ApprovalSnapshot) -> Value {
         "held": snapshot.held.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
         "held_total": snapshot.held.len(),
         "held_by_reason": snapshot.held_by_reason(),
+        "awaiting_reuse": snapshot.reusable.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
+        "awaiting_reuse_total": snapshot.reusable.len(),
     })
 }
 
@@ -662,12 +750,32 @@ pub(crate) fn select_proposed_approvals(
     let pilot_live = !live_pilot_run_ids.is_empty();
     // A stopped drain admits nothing, so it approves and closes nothing either.
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = proposed_tasks(runtime)
+    let mut snapshot = proposed_tasks(runtime)
         .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
         .map_err(|error| {
             DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
         })?;
-    record_report(runtime, run_id, &snapshot, &[]);
+    let mut reused = Vec::new();
+    // While this drain's own pilot is live, leave a certified assessment
+    // proposed. The next pass approves it once that pilot has finished.
+    if !admissions_stopped && !pilot_live && !snapshot.reusable.is_empty() {
+        for task_id in &snapshot.reusable {
+            if promote_reusable_assessment(runtime, run_id, task_id).map_err(|error| {
+                DispatchError::action_failed(
+                    action,
+                    format!("reuse assessment for {task_id}: {error}"),
+                )
+            })? {
+                reused.push(task_id.clone());
+            }
+        }
+        snapshot = proposed_tasks(runtime)
+            .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
+            .map_err(|error| {
+                DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+            })?;
+    }
+    record_report(runtime, run_id, &snapshot, &[], &reused);
     let task_ids = if admissions_stopped || pilot_live {
         Vec::new()
     } else {
@@ -695,6 +803,8 @@ pub(crate) fn select_proposed_approvals(
     output["live_pilot_run_ids"] = json!(live_pilot_run_ids);
     output["pilot_finished"] = json!(pilots.iter().any(PilotChild::awaits_recording));
     output["task_ids"] = json!(task_ids);
+    output["reused"] = json!(reused);
+    output["reused_count"] = json!(reused.len());
     output["drain_promotion"] = json!({ "run_id": run_id });
     Ok(output)
 }
@@ -730,7 +840,7 @@ pub(crate) fn record_proposed_approvals(
         .map_err(|error| {
             DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
         })?;
-    record_report(runtime, run_id, &snapshot, &recorded);
+    record_report(runtime, run_id, &snapshot, &recorded, &[]);
     let approved = recorded
         .iter()
         .flat_map(|pilot| pilot.approved.iter().cloned())

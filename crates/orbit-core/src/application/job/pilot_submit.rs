@@ -110,6 +110,10 @@ impl From<OrbitError> for TaskPilotSubmitError {
 impl OrbitRuntime {
     /// Submit `task_pilot_pipeline` in explicit mode for exactly `task_id`,
     /// through the shared catalog submission path.
+    ///
+    /// Admission records `trigger` on the run. That host-owned provenance,
+    /// not an agent-supplied flag, is how a later drain tells this request
+    /// from one of its own children.
     pub fn submit_explicit_task_pilot(
         &self,
         task_id: &str,
@@ -211,6 +215,10 @@ impl OrbitRuntime {
 
     /// The live pilot run holding `task_id`: one that names it in its input,
     /// or whose reservation or prepare checkpoint holds it.
+    pub(crate) fn live_task_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
+        self.live_pilot_run_for_task(task_id)
+    }
+
     fn live_pilot_run_for_task(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
         let named = self.list_job_runs(JobRunListParams {
             job_id: Some(PILOT_JOB.to_string()),

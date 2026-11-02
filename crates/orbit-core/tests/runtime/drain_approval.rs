@@ -16,12 +16,14 @@ use orbit_tools::ToolContext;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskRelation, TaskRelationType};
 use orbit_types::workflow::{
-    ChildDispatch, ExecutorDef, JobRunState, JobTargetType, PipelineState,
+    ChildDispatch, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod advisory;
+#[cfg(unix)]
+mod explicit_pilot_reuse;
 mod landed_creation;
 mod pilot_mutations;
 #[cfg(unix)]
@@ -482,6 +484,62 @@ impl Workspace {
             input[key] = value.clone();
         }
         self.action("apply_task_pilot_results", input)
+    }
+
+    /// Record the host trigger admission would have written for `run_id`.
+    fn set_trigger(&self, run_id: &str, trigger: JobRunTrigger) {
+        let mut state = self.runtime.read_run_state(run_id).unwrap().unwrap();
+        state.trigger = Some(trigger);
+        self.runtime.write_run_state(run_id, &state).unwrap();
+    }
+
+    /// Persist prepare's output as that run's successful prepare checkpoint.
+    fn checkpoint_prepare(&self, run_id: &str, prepared: &Value) {
+        let mut state = self.runtime.read_run_state(run_id).unwrap().unwrap();
+        state.record_step(0, JobRunState::Success, Some(prepared.clone()), None);
+        self.runtime.write_run_state(run_id, &state).unwrap();
+    }
+
+    /// Prepare `task_ids` as the prepare step of pilot run `run_id`.
+    fn prepare_named(&self, run_id: &str, task_ids: &[String]) -> Value {
+        self.action(
+            "prepare_task_pilot",
+            json!({
+                "task_ids": task_ids,
+                "workspace_path": self.repo,
+                "base_branch": "main",
+                "run_id": run_id,
+            }),
+        )
+        .unwrap_or_else(|error| panic!("prepare {run_id}: {error}"))
+    }
+
+    /// Apply one assessment with no promotion authority, so the task stays proposed.
+    fn apply_unpromoted(&self, run_id: &str, prepared: &Value, task: &Task) -> Value {
+        self.action(
+            "apply_task_pilot_results",
+            json!({
+                "run_id": run_id,
+                "workspace_path": self.repo,
+                "prepared": prepared,
+                "results": [{
+                    "partition_index": 0,
+                    "task_ids": [task.id],
+                    "tasks": [assessment(task)],
+                }],
+                "promotion_authorized": false,
+            }),
+        )
+        .unwrap_or_else(|error| panic!("apply without promotion: {error}"))
+    }
+
+    fn pilot_applications(&self, task: &Task) -> usize {
+        self.runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "task_pilot_applied")
+            .count()
     }
 }
 
@@ -1815,6 +1873,151 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
         assert_eq!(selection["task_ids"], json!([forged.id]), "{selection}");
     }
 }
+
+/// One explicit pilot, one assessment, then the drain approves it.
+///
+/// A pass that sees the explicit pilot holds the task as `pilot_running`. A
+/// child the drain dispatched before that pilot was submitted stands down
+/// while it is preparing, and again after the assessment is applied. The
+/// next pass approves the task without a second provider call. A
+/// never-piloted sibling is still selected.
+fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
+    let workspace = Workspace::new();
+    let drain = workspace.running(
+        "workspace_auto_pipeline",
+        json!({"approve_proposed": true, "for_seconds": 3600}),
+    );
+    let assessed = workspace.task("assessed", &[], &["file:README.md"], TaskComplexity::Low);
+    let explicit = workspace.running("task_pilot_pipeline", json!({"task_ids": [assessed.id]}));
+    workspace.set_trigger(&explicit, JobRunTrigger::cli());
+
+    let prepared = workspace.prepare_named(&explicit, std::slice::from_ref(&assessed.id));
+    assert_eq!(prepared["task_count"], 1, "{prepared}");
+    assert_eq!(
+        prepared["partitions"],
+        json!([{"partition_index": 0, "task_ids": [assessed.id]}]),
+        "{prepared}"
+    );
+    workspace.checkpoint_prepare(&explicit, &prepared);
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([]), "{selection}");
+    assert_eq!(
+        held_reason(&selection, &assessed),
+        Some("pilot_running"),
+        "{selection}"
+    );
+    // The child an earlier pass dispatched, as the race between that pass's
+    // selection and the explicit submission leaves it.
+    let child = workspace.pilot_child(&drain, &json!([assessed.id]));
+    workspace.set_trigger(&child, JobRunTrigger::child());
+    let stood_down = workspace.prepare_named(&child, std::slice::from_ref(&assessed.id));
+    assert_eq!(stood_down["task_count"], 0, "{stood_down}");
+    assert_eq!(
+        stood_down["excluded_by_reason"]["already_preparing"], 1,
+        "{stood_down}"
+    );
+    assert_eq!(stood_down["partitions"], json!([]), "{stood_down}");
+
+    let applied = workspace.apply_unpromoted(&explicit, &prepared, &assessed);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(workspace.status(&assessed), TaskStatus::Proposed);
+    assert_eq!(workspace.pilot_applications(&assessed), 1);
+
+    workspace.finish(&explicit, JobRunState::Success);
+    let reused = workspace.prepare_named(&child, std::slice::from_ref(&assessed.id));
+    assert_eq!(reused["task_count"], 0, "{reused}");
+    assert_eq!(
+        reused["excluded_by_reason"]["assessment_already_applied"], 1,
+        "{reused}"
+    );
+    assert_eq!(reused["partitions"], json!([]), "{reused}");
+    assert_eq!(workspace.pilot_applications(&assessed), 1);
+    workspace.finish(&child, JobRunState::Success);
+
+    // An unrelated drain cannot acquire promotion authority from action
+    // input. Its selection reaches the reusable assessment, and the write
+    // boundary refuses it because the stored drain never asked to approve.
+    let unauthorized = workspace.running("workspace_auto_pipeline", json!({}));
+    let forged = workspace.select(&unauthorized);
+    assert_eq!(forged["reused"], json!([]), "{forged}");
+    assert_eq!(forged["awaiting_reuse"], json!([assessed.id]), "{forged}");
+    assert_eq!(workspace.status(&assessed), TaskStatus::Proposed);
+
+    let fresh = workspace.task("fresh", &[], &["file:README.md"], TaskComplexity::Low);
+    let promoted = workspace.select(&drain);
+    assert_eq!(promoted["task_ids"], json!([fresh.id]), "{promoted}");
+    assert_eq!(promoted["reused"], json!([assessed.id]), "{promoted}");
+    assert_eq!(workspace.status(&assessed), TaskStatus::Backlog);
+    assert_eq!(workspace.pilot_applications(&assessed), 1);
+    let approval = workspace
+        .runtime
+        .get_task_history(&assessed.id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == "proposal_approved")
+        .expect("the drain approves the explicit assessment");
+    assert!(
+        approval
+            .note
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(&format!(
+                "approved by auto drain {drain} after task-pilot verification"
+            )),
+        "{approval:?}"
+    );
+
+    let again = workspace.select(&drain);
+    assert_eq!(again["task_ids"], json!([fresh.id]), "{again}");
+    assert_eq!(again["reused"], json!([]), "{again}");
+    assert_eq!(workspace.pilot_applications(&assessed), 1);
+}
+
+/// A description edit after an explicit assessment stays proposed. The drain
+/// does not pilot it again, and a later explicit prepare still admits it.
+fn a_stale_explicit_assessment_stays_proposed_until_a_new_explicit_pilot() {
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let task = workspace.task("edited", &[], &["file:README.md"], TaskComplexity::Low);
+    let explicit = workspace.running("task_pilot_pipeline", json!({"task_ids": [task.id]}));
+    workspace.set_trigger(&explicit, JobRunTrigger::cli());
+    let prepared = workspace.prepare_named(&explicit, std::slice::from_ref(&task.id));
+    assert_eq!(prepared["task_count"], 1, "{prepared}");
+    let applied = workspace.apply_unpromoted(&explicit, &prepared, &task);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    workspace.finish(&explicit, JobRunState::Success);
+    workspace.edit_description(&task);
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([]), "{selection}");
+    assert_eq!(selection["reused"], json!([]), "{selection}");
+    assert_eq!(
+        held_reason(&selection, &task),
+        Some("changed_since_pilot"),
+        "{selection}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+    assert_eq!(workspace.pilot_applications(&task), 1);
+
+    let again = workspace.running("task_pilot_pipeline", json!({"task_ids": [task.id]}));
+    workspace.set_trigger(&again, JobRunTrigger::cli());
+    let reprepared = workspace.prepare_named(&again, std::slice::from_ref(&task.id));
+    assert_eq!(reprepared["task_count"], 1, "{reprepared}");
+    assert_eq!(
+        reprepared["partitions"],
+        json!([{"partition_index": 0, "task_ids": [task.id]}]),
+        "{reprepared}"
+    );
+    assert_eq!(workspace.pilot_applications(&task), 1);
+}
+
+crate::scenario_table!(
+    explicit_assessment_reuse_scenarios,
+    explicit_assessment_is_promoted_once_while_the_drain_child_stands_down,
+    a_stale_explicit_assessment_stays_proposed_until_a_new_explicit_pilot,
+);
 
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
