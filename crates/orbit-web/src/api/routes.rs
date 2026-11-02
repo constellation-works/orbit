@@ -104,6 +104,14 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/tasks/{id}/archive", post(tasks::archive_task_action))
         .route("/decisions", get(decisions::list_decisions))
         .route("/decisions/{id}/answer", post(decisions::answer_decision))
+        .route(
+            "/residents",
+            get(residents::list_residents).post(residents::create_resident),
+        )
+        .route("/residents/{id}", get(residents::show_resident))
+        .route("/residents/{id}/grant", post(residents::grant_resident))
+        .route("/residents/{id}/control", post(residents::control_resident))
+        .route("/residents/{id}/relay", post(residents::relay_resident))
         .route("/scripts", get(scripts::list_scripts))
         .route("/scripts/{name}/grant", post(scripts::grant_script))
         .route("/tasks/{id}/pilot", post(tasks::pilot::pilot_task_action))

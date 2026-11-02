@@ -104,6 +104,8 @@ mod projections;
 mod provider_auth;
 #[path = "http_api/reliability.rs"]
 mod reliability;
+#[path = "http_api/residents.rs"]
+mod residents;
 #[path = "http_api/resource_profiles.rs"]
 mod resource_profiles;
 #[path = "http_api/runs.rs"]

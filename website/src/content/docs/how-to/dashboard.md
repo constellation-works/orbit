@@ -171,7 +171,7 @@ prove that a particular task or run succeeded.
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
-| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Jobs**, and **Residents**. |
 | **[Leases](#leases)** | Read-only path holders, waiters and recent landing notices for the selected workspace. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
@@ -1369,8 +1369,8 @@ appears in the timeline with actor `dashboard`.
 
 ## Automation
 
-**Automation** has three views: **Routines** (with the host scheduler clock),
-**Auto-tasks**, and **Jobs**. Its controls need a single active workspace and
+**Automation** has these views: **Routines** (with the host scheduler clock),
+**Auto-tasks**, **Jobs**, and [**Residents**](#residents). Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
 [Schedule Recurring Work](../recurring-work/).
@@ -1446,6 +1446,35 @@ run ID. It is disabled on **Delivery** rows, which need a task or a window:
 use **ship** or the [auto-drain](#auto-drain). **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
+
+### Residents
+
+**Residents** (`#operations/residents`) sets up and steers
+[resident mandates](../../reference/resident-mandates/) in the selected
+workspace:
+
+- The **Cycle routine** row shows whether the workspace's resident cycle
+  routine is enabled, with **Enable** or **Disable**. Without it, no cycle
+  wakes a mandate.
+- **New mandate** is a form with the `resident.mandate/v1` fields. **Create
+  mandate** files the `resident`-tagged task and its `resident/mandate.json` in
+  one step. A draft Orbit refuses (for example an empty goal, more than 8 exit
+  criteria, a heartbeat below the floor or an unknown crew) shows Orbit's
+  message and creates nothing.
+- Each mandate card shows its state, a stalled flag, the effective rights and
+  workspaces, the deadline, crew, cadence, open requests and the live cycle.
+  **Authority history and latest checkpoint** lists every grant and narrowing
+  and the last checkpoint's wake digest.
+- **Pause**, **Resume**, **Wake for status**, **Takeover**, **Release** and
+  **Stop** run `orbit resident control`, with the reason you type. **Relay**
+  sends a direction, like `orbit resident relay`.
+- **Widen or narrow authority** adds or removes rights and workspaces. A
+  widening needs your words in **Quote**. Open requests that another caller
+  raised show **Grant** and **Reject**.
+
+Every write needs an [operator session](#authorization) and is audited like
+the matching CLI command. A widening from the dashboard is recorded as your
+answer to a grant request that quotes you, never as a direct grant.
 
 ## Knowledge › Frictions
 

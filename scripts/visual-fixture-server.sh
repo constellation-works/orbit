@@ -147,6 +147,67 @@ if [ "$seed_rows" = "1" ]; then
   done
 fi
 
+# Resident mandates, one per `residents` row: the tagged assignment and its
+# `resident/mandate.json`, then any agent-raised grant requests (left open)
+# and an optional operator control action. The mandate's
+# workspace and crew are this fixture's registered workspace and default crew.
+if [ "$seed_rows" = "1" ]; then
+  workspace_name="$(basename "$work")"
+  default_crew="$(sed -n 's/^default_crew *= *"\([^"]*\)".*/\1/p' "$root/config.toml" | head -n 1)"
+  resident_count="$(node -e '
+    const seed = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const rows = seed.residents ?? [];
+    if (!Array.isArray(rows)) throw new Error("seed.residents must be an array");
+    process.stdout.write(String(rows.length));
+  ' "$seed")"
+  index=0
+  while [ "$index" -lt "$resident_count" ]; do
+    field() {
+      node -e '
+        const seed = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const row = seed.residents[Number(process.argv[2])];
+        const value = process.argv[3].split(".").reduce((node, key) => node?.[key], row);
+        if (value !== undefined) process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
+      ' "$seed" "$index" "$1"
+    }
+    title="$(field title)"
+    added="$(cd "$work" && run_orbit --json task add --title "$title" --complexity medium --tag resident)"
+    id="$(printf '%s' "$added" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).id??"")}catch{}})')"
+    if [ -z "$id" ]; then
+      echo "visual-fixture-server: resident task add returned no ID for $title" >&2
+      exit 1
+    fi
+    mandate_file="$work/resident-mandate-$index.json"
+    node -e '
+      const fs = require("fs");
+      const seed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const mandate = { schema: "resident.mandate/v1", workspaces: [process.argv[3]], crew: process.argv[4], ...seed.residents[Number(process.argv[2])].mandate };
+      fs.writeFileSync(process.argv[5], JSON.stringify(mandate, null, 2));
+    ' "$seed" "$index" "$workspace_name" "$default_crew" "$mandate_file"
+    (cd "$work" && run_orbit task artifact put "$id" "$mandate_file" --path resident/mandate.json >/dev/null)
+    request_count="$(field requests | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(String(d?JSON.parse(d).length:0)))')"
+    request=0
+    while [ "$request" -lt "$request_count" ]; do
+      set --
+      for right in $(field "requests.$request.add" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).join(" ")))'); do
+        set -- "$@" --add "$right"
+      done
+      if [ "$(field "requests.$request.workspace")" = "true" ]; then
+        set -- "$@" --add-workspace "$workspace_name"
+      fi
+      # An agent caller only raises a resident_authority request; it stays
+      # open for the view's answer buttons.
+      (cd "$work" && ORBIT_AGENT_NAME=visual-fixture-relay run_orbit resident grant "$id" "$@" --quote "$(field "requests.$request.quote")" >/dev/null)
+      request=$((request + 1))
+    done
+    control_action="$(field control.action)"
+    if [ -n "$control_action" ]; then
+      (cd "$work" && ORBIT_OPERATOR=1 run_orbit resident control "$id" "$control_action" --reason "$(field control.reason)" >/dev/null)
+    fi
+    index=$((index + 1))
+  done
+fi
+
 first_experiment=""
 if [ "$seed_rows" = "1" ] && [ "$fixture" = "experiments" ]; then
   first_experiment="$(node -e 'const f=require(process.argv[1]); process.stdout.write(f.experiment.id)' "$seed")"

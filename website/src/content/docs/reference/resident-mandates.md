@@ -18,6 +18,8 @@ orbit task artifact put <task id> ./mandate.json --path resident/mandate.json
 
 Use the ID of the new task in place of `<task id>`.
 
+The dashboard's **Automation › Residents** view does both steps in one: its form takes the mandate fields, checks them with the same rules as below, and creates nothing when a field is refused. See [From the dashboard](#from-the-dashboard).
+
 ## Mandate format
 
 This example is illustrative. Replace the goal, criteria, workspace and crew with your own. The crew must be a name from your `[crews]` table in [Configuration](../config/#crews).
@@ -135,6 +137,12 @@ orbit decision answer <request id> grant
 
 `grant` adds exactly the requested rights and workspaces. `reject` leaves the authority unchanged. Any authority change, including a narrowing, supersedes an open request. Answering a superseded request is refused and applies nothing, so raise a new one. Agents can list and show requests but cannot answer them. See [Decision channels](../../how-to/decision-channels/) for the answer path.
 
+### From the dashboard
+
+The dashboard's **Automation › Residents** view widens only when the dashboard server runs with `--operator`. Its widening is not a direct grant. It raises the same `resident_authority` request with the quote you type, naming the dashboard as the relaying session, and answers it `grant` in the same action. The authority change is then recorded `via: decision:<request id>`, with your quote, and the dashboard writes an audit row for it. A widening without a quote is refused.
+
+A dashboard served without `--operator` cannot widen, narrow, control or relay, and cannot answer `resident_authority` requests. It returns `authorization_denied`. Agents and MCP sessions still only raise requests.
+
 ## Narrow the authority
 
 Narrowing applies at once for any caller that can write the assignment task. It raises no request and needs no quote. The change records that caller.
@@ -249,4 +257,5 @@ orbit evolution show <evolution-id>
 - [CLI commands](../cli/) lists every `orbit resident` command.
 - [MCP integration](../../how-to/mcp-integration/) covers roles and toolsets.
 - [Decision channels](../../how-to/decision-channels/) covers answering decision requests.
+- [Dashboard](../../how-to/dashboard/#residents) covers the Residents view.
 - [Configuration](../config/) covers crews and the MCP role setting.

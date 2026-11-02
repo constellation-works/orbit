@@ -549,7 +549,7 @@ pub(super) fn report_json(
     })
 }
 
-fn status_json(status: &RoutineStatus) -> Value {
+pub(super) fn status_json(status: &RoutineStatus) -> Value {
     let mut row = status.project(ROUTINE_COLUMNS);
     // The trigger kinds the edit form may offer without touching the target.
     row.insert(

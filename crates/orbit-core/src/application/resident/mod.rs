@@ -16,6 +16,7 @@
 
 mod comments;
 mod control;
+mod create;
 mod cycle;
 mod digest;
 mod due;
@@ -46,6 +47,7 @@ pub use control::{
     ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentControlState,
     ResidentRelayParams,
 };
+pub use create::ResidentMandateCreateParams;
 pub(crate) use due::ResidentDue;
 pub use grant::{ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams};
 pub(crate) use guard::{ResidentCallAdmission, ResidentCallClass};
@@ -175,22 +177,29 @@ pub(crate) fn resident_mandate_from_artifact(
             "the task has no {RESIDENT_MANDATE_ARTIFACT} artifact"
         )));
     };
-    let mandate = match ResidentMandate::parse(&artifact.content) {
-        Ok(mandate) => mandate,
-        Err(error) => return Ok(Err(error.to_string())),
-    };
-    if runtime
-        .canonical_crew_name(Some(&mandate.crew))
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        return Ok(Err(format!(
-            "mandate crew `{}` is not a configured crew",
-            mandate.crew
-        )));
+    Ok(runtime.check_resident_mandate(&artifact.content))
+}
+
+impl OrbitRuntime {
+    /// Judge mandate bytes the way every mandate read does: the
+    /// `resident.mandate/v1` field rules and a configured crew. The error is
+    /// the message `orbit resident show` reports as `mandate_error`, so a
+    /// form that checks a draft here refuses it with the server's words.
+    pub fn check_resident_mandate(&self, bytes: &[u8]) -> Result<ResidentMandate, String> {
+        let mandate = ResidentMandate::parse(bytes).map_err(|error| error.to_string())?;
+        if self
+            .canonical_crew_name(Some(&mandate.crew))
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return Err(format!(
+                "mandate crew `{}` is not a configured crew",
+                mandate.crew
+            ));
+        }
+        Ok(mandate)
     }
-    Ok(Ok(mandate))
 }
 
 /// The open grant requests in a task's decision requests.
