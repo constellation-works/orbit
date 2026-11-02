@@ -57,6 +57,21 @@ if [ -f "$forge/gates-pending" ] && [ -f "$forge/base-applied" ]; then
     rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
+# The policy-required check is running: the PR rollup and the check-runs API
+# show it in progress, but the required-checks GraphQL read has not reported
+# it as required yet (its nodes below carry only the non-required check).
+if [ -f "$forge/required-pending-unreported" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
+    checks="{\"id\":1,\"name\":\"test\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"in_progress\",\"conclusion\":null}"
+    check_count=2
+fi
+if [ -f "$forge/required-failed-unreported" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
+    checks="{\"id\":1,\"name\":\"test\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"failure\"}"
+    check_count=2
+fi
 if [ -f "$forge/clean-missing" ] && [ -f "$forge/base-applied" ]; then
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
@@ -87,6 +102,10 @@ if [ -f "$forge/auth" ] && [ "$1" = api ]; then echo 'HTTP 403 forbidden' >&2; e
 [ ! -f "$forge/review-required" ] || review=REVIEW_REQUIRED
 review_json="\"$review\""
 [ ! -f "$forge/review-raw" ] || review_json=$(cat "$forge/review-raw")
+gql_rollup=$rollup
+if [ -f "$forge/required-pending-unreported" ] || [ -f "$forge/required-failed-unreported" ]; then
+    gql_rollup='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":false}'
+fi
 case "$1 ${2:-}" in
     'pr view')
         if [ -f "$forge/review-missing" ]; then
@@ -103,7 +122,7 @@ case "$1 ${2:-}" in
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[]}}}}}}\n' "$head" "$base" ;;
             *statusCheckRollup*)
                 if [ -f "$forge/required-rollup-truncated" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}]}}}}}\n' "$head" "$head"; exit; fi
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}%s}}]}}}}}\n' "$head" "$head" "$rollup" "$history" ;;
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}%s}}]}}}}}\n' "$head" "$head" "$gql_rollup" "$history" ;;
             *merge*|*Merge*) echo '{"data":{"repository":{"nameWithOwner":"'"$slug"'","mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":false,"pullRequest":{"baseRefName":"'"$base"'","baseRef":{"branchProtectionRule":{"requiresLinearHistory":false}}}}}}' ;;
             *) echo "unknown graphql $*" >&2; exit 2 ;;
         esac ;;
