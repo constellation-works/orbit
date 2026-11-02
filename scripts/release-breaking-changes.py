@@ -233,7 +233,7 @@ def schema_facts(schema, path, facts):
     if "const" in schema:
         facts.setdefault("const", {})[path] = _json_value_key(schema["const"])
     if "enum" in schema:
-        facts.setdefault("enum", {})[path] = {json.dumps(v, sort_keys=True) for v in schema["enum"]}
+        facts.setdefault("enum", {})[path] = {_json_value_key(v) for v in schema["enum"]}
     if "required" in schema and isinstance(schema["required"], list):
         facts.setdefault("required", {})[path] = set(schema["required"])
     properties = schema.get("properties")
@@ -300,8 +300,8 @@ def schema_property_names(schema):
 def match_schema_alternatives(before, after):
     """Map unchanged, tightened or edited old alternatives to their new positions."""
     matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
-    before_json = [json.dumps(branch, sort_keys=True) for branch in before]
-    after_json = [json.dumps(branch, sort_keys=True) for branch in after]
+    before_json = [_json_value_key(branch) for branch in before]
+    after_json = [_json_value_key(branch) for branch in after]
 
     # Exact branch content is the strongest identity and handles insertions or
     # reorderings without relying on array positions.
@@ -318,9 +318,9 @@ def match_schema_alternatives(before, after):
     # constraints, preferring the same non-required schema shape.
     before_required = [schema_required_names(branch) for branch in before]
     after_required = [schema_required_names(branch) for branch in after]
-    before_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+    before_shapes = [_json_value_key(schema_without_required(branch))
                      for branch in before]
-    after_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+    after_shapes = [_json_value_key(schema_without_required(branch))
                     for branch in after]
     candidates = []
     for old_index in old_left:
@@ -414,7 +414,7 @@ def alternative_path_map(before, after):
     for baseline in matched_baseline:
         if baseline in branch_content:
             parent, keyword, branch = branch_content[baseline]
-            surviving_content.add((parent, keyword, json.dumps(branch, sort_keys=True)))
+            surviving_content.add((parent, keyword, _json_value_key(branch)))
     surviving_applicators = {
         (remap_alternative_path(parent, path_map), keyword)
         for parent, keyword in alternatives
@@ -460,7 +460,7 @@ def alternative_path_map(before, after):
                 continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.
-        if (parent, keyword, json.dumps(branch, sort_keys=True)) in surviving_content:
+        if (parent, keyword, _json_value_key(branch)) in surviving_content:
             continue
         removed.append((baseline, keyword))
     return path_map, unmatched, removed
@@ -495,6 +495,26 @@ def _json_value_key(value):
         return ("object", tuple(sorted((key, _json_value_key(item))
                                         for key, item in value.items())))
     return (type(value).__name__, value)
+
+
+def _json_key_display(key):
+    """Render a `_json_value_key` back as JSON for report details."""
+    kind = key[0]
+    if kind == "boolean":
+        return "true" if key[1] else "false"
+    if kind == "null":
+        return "null"
+    if kind == "number":
+        number = key[1]
+        return str(int(number)) if number == number.to_integral_value() else str(float(number))
+    if kind == "string":
+        return json.dumps(key[1])
+    if kind == "array":
+        return "[" + ", ".join(_json_key_display(item) for item in key[1]) + "]"
+    if kind == "object":
+        return "{" + ", ".join(
+            f"{json.dumps(name)}: {_json_key_display(item)}" for name, item in key[1]) + "}"
+    return json.dumps(str(key[1]))
 
 
 def _json_type_name(value):
@@ -727,13 +747,13 @@ def detect_mcp_changes(git, parent, commit, changed):
                     report(f"`{name}` `{path}` enum constraint removed "
                            "inside oneOf alternative")
                 continue
-            for value in sorted(values - after_enums[path]):
-                report(f"`{name}` `{path}` enum value {value} removed")
+            for value in sorted(values - after_enums[path], key=repr):
+                report(f"`{name}` `{path}` enum value {_json_key_display(value)} removed")
             # A widened enum usually only admits more input. Inside oneOf,
             # that input can start matching another branch as well.
             if inside_oneof(path):
-                for value in sorted(after_enums[path] - values):
-                    report(f"`{name}` `{path}` enum value {value} added "
+                for value in sorted(after_enums[path] - values, key=repr):
+                    report(f"`{name}` `{path}` enum value {_json_key_display(value)} added "
                            "inside oneOf alternative")
         # allOf branches all apply, so their required sets union at their
         # instance location (branch renumbering is not a new constraint).
