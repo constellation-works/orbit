@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod application;
+pub mod attention;
 pub mod audit;
 pub mod auto_task;
 pub mod automation;
@@ -120,6 +121,7 @@ Operate:
   gc           Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
+  attention    List what waits on an operator
   audit        Query the audit event log
   codebase     Rank the repository paths that are risky for agents to change
   agents       Score orchestrators, implementers, reviewers and pilots by crew and model
@@ -195,6 +197,7 @@ pub enum Commands {
     Gc(gc::GcCommand),
 
     // ── Observe ──
+    Attention(attention::AttentionCommand),
     Audit(audit::AuditCommand),
     Codebase(codebase::CodebaseCommand),
     Agents(agents::AgentsCommand),

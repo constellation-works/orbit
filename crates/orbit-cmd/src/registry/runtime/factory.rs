@@ -306,8 +306,24 @@ impl RegisteredRuntimeFactory {
             let hint = preloaded
                 .as_ref()
                 .and_then(|inputs| checkout_root_hint(&inputs.registry, &cwd));
-            let mut roots =
-                OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?;
+            // A host read launched from HOME has no workspace root to resolve.
+            // Keep the ordinary resolver's refusal to adopt ~/.orbit for every
+            // workspace operation; only this existing host-fallback route lends it.
+            let host_root = preloaded.as_ref().filter(|inputs| {
+                host_fallback
+                    && hint.is_none()
+                    && canonical_or_original(&cwd.join(".orbit"))
+                        == canonical_or_original(&inputs.global_root)
+            });
+            let mut roots = if let Some(inputs) = host_root {
+                OrbitRuntimeRoots {
+                    global_root: inputs.global_root.clone(),
+                    shared_root: inputs.global_root.clone(),
+                    local_root: inputs.global_root.clone(),
+                }
+            } else {
+                OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?
+            };
             let inputs = match preloaded {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
                 _ => RuntimeOpenInputs::read(&roots.global_root)?,

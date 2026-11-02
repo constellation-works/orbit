@@ -72,6 +72,7 @@ pub fn register(registry: &mut ToolRegistry) {
     operation::register_noun(registry, &SEARCH);
     // Read-only codebase analytics, the dashboard Codebase view's rankings.
     operation::register_noun(registry, &CODEBASE);
+    operation::register_noun(registry, &orbit_common::governance::attention::ATTENTION);
     // Decision requests: list/show are read-only tools; answer registers
     // inactive (operator CLI and dashboard only); the channel's submit and
     // digest callbacks join the opt-in decision-channel toolset.

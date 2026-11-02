@@ -19,3 +19,5 @@ pub mod task;
 pub mod visual;
 pub mod workflow;
 pub mod workspace_claim;
+
+pub mod attention;

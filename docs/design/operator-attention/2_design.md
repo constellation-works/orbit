@@ -2,14 +2,14 @@
 title: Operator Attention — Design
 owner: claude
 last_updated: 2026-11-02
-last_validated: 2026-11-01
+last_validated: 2026-11-02
 status: Draft
 feature: operator-attention
 doc_role: design
 type: design
 summary: "Design of orbit attention: derived-view architecture, code placement, tool and CLI surface, configuration, relationship to existing reads, and implementation slices"
 tags: [operator-attention, operator-ux]
-paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-types/src/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
+paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-types/src/tool/attention.rs", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, human-decision-channel, federated-mcp, host-registry, distributed-drain]
 related_artifacts: [ORB-21164]
 ---
@@ -17,8 +17,7 @@ related_artifacts: [ORB-21164]
 # Operator Attention — Design
 
 This document describes how `orbit attention` fits together and where it lands in the code.
-It is a design for work not yet built: names of modules below are placement proposals that the
-slices confirm. The prescriptive contracts live in the specs:
+The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; runtime, provider and cross-host sources remain later slices. The prescriptive contracts live in the specs:
 [attention-item](./specs/attention-item.md) (kinds, schema, severity),
 [attention-filters](./specs/attention-filters.md),
 [attention-cursor](./specs/attention-cursor.md) and
@@ -79,7 +78,7 @@ needed, which the slice verifies before it merges.
 
 | Concern | Location (proposed) |
 |---|---|
-| `Item`, `Kind`, `Severity`, `Next`, `Envelope`, `CursorStatus` types | `crates/orbit-types/src/attention/` |
+| `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | the planned `attention.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
 | Derivation, folding, severity, fingerprint, filters, cursor codec, local multi-workspace aggregation | `crates/orbit-core/src/application/attention/` (`sources/` per kind, `derive.rs`, `severity.rs`, `fingerprint.rs`, `filter.rs`, `cursor.rs`, `aggregate.rs`) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
@@ -105,6 +104,10 @@ dashboard reading "the same feed" a later, small step.
   the global `--format` / `--json` modes. Help text and errors stand alone: no source paths,
   no task or friction ids in help, and the kind names are the user-visible vocabulary.
 - **MCP**: one tool, no new transport. Annotated read-only so clients may auto-approve it.
+  It belongs to `tasks-read`, so the operator, manager, resident, agent and reader roles
+  all serve it, as does the default surface. Roles select tools independently of capability:
+  Agent and Operator sessions can both read task-level kinds, and bound sessions still
+  refuse scope widening.
 - **Goldens**: CLI help and the MCP tool text are golden surfaces; the slice that adds them
   runs `make goldens`.
 - **Skill**: the `orbit` skill's reference lists `orbit attention` as the first check for an
@@ -126,26 +129,28 @@ An `[attention]` table, all keys optional:
 | `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
 | `per_workspace_item_cap` | `200` | Items kept per workspace |
 
+Slice 1 owns `orbit_config::AttentionSettings` and all eight registry keys. Supported readback is `orbit config get attention.<key> --json` (effective values), `orbit config keys` (descriptions and types), and `orbit config show` (layer provenance). No setting is changed by querying attention.
+
+Integer keys must be positive. Upper bounds are 8760 cursor hours, 87600 run-window hours, 525600 stuck minutes, 86400 cache seconds, 3600 source/fan-out seconds and 10000 workspace items. `age_bump_hours` accepts an empty list to disable aging; otherwise values must be strictly increasing positive hours up to 87600. Registry resolution validates these before admitting configuration. Slice 1 consumes cursor TTL, severity thresholds and item caps. Slices 2–4 own runtime/provider/fan-out behavior consuming the remaining fields.
+
 Configuration changes thresholds only. It does not add kinds, change `next`, or change what
 counts as a condition; those are code and spec, so two operators' lists mean the same thing.
 
 ## 6. Slices
 
-The implementation is cut so each slice ships a usable feed and the first is what the
-consumer hook ([ORB-21165]) depends on. Dependencies run top to bottom. Task ids are in Task
+Each slice ships a usable feed. Daniel dropped the session hook; [ORB-21165] is archived and is not a dependency or deliverable. Dependencies run top to bottom. Task ids are in Task
 References below; each is a proposed `ws_orbit` task tagged `operator-attention` with acceptance criteria.
 
 1. **Tool, CLI, filters and cursor over the task-level kinds** ([ORB-21168]). Item types and schema;
    `pilot_warning`, `pilot_hold`, `blocked`, `decision_open` (with folding) and
    `review_waiting`; severity and `next`; every filter in the filter spec; fingerprint and the
    `--since` cursor; single-workspace and local `--all`; goldens, skill reference and docs.
-   This is the slice [ORB-21165] depends on: it is the first point a hook can inject the
-   motivating pilot warnings and later inject only what changed.
+   Owns the FULL shared `[attention]` configuration: typed settings, validated defaults, registry, resolution and readback for every §5 key. Later slices consume this owner and create no competing schemas.
 2. **Runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
    `degraded` reporting for sessions without the Operator capability; liveness check
-   confirmed per platform. Depends on slice 1.
+   confirmed per platform. Consumes the shared §5 settings from slice 1. Depends on slice 1.
 3. **Provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
-   read and the friction adapter; offline degrade. Depends on slice 1.
+   read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
 4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
    fan-out and merge, unreachable hosts as items, session-binding refusal, the
    federated-mcp doc amendment, and the local doctor / drain-probe sources for
@@ -153,12 +158,11 @@ References below; each is a proposed `ws_orbit` task tagged `operator-attention`
    [attention-federation](./specs/attention-federation.md#candidate-read): the slice calls
    that shape and does not merge a public page, produced by an omitted `limit`, as the
    destination's candidate set. Depends on slice 1; its unreachable-host item is useful
-   before slices 2 and 3 land.
+   before slices 2 and 3 land. It consumes slice 1’s shared fan-out settings.
 
-A fifth, consumer-side slice (the orchestrator-session hook) is constellation's own task,
-[ORB-21165]; it is deliberately not filed in this repository.
+No session hook, automation, notification or live configuration change is authorized.
 
-Slice 1 also measures per-source cost on the real workspace so the hook cadence guidance in
+Slice 1 also measures per-source cost on the real workspace so explicit polling guidance in
 [attention-cursor](./specs/attention-cursor.md#cost) rests on data.
 
 ## 7. Concerns & Honest Limitations
@@ -175,10 +179,7 @@ Slice 1 also measures per-source cost on the real workspace so the hook cadence 
 - **`run_stuck` has no heartbeat.** Jobs record a pid and a start time, not progress. The kind
   is a liveness check plus a wall-clock bound, which misses a live but wedged process inside
   the bound. A progress signal would be a separate change to the run store.
-- **The `review_waiting` predicate needs confirming.** The kind is defined by behaviour
-  (settled, not being reviewed, awaiting approval or a budget reset). Slice 1 pins the exact
-  predicate in the review gate's records; if the records cannot tell "settled and waiting"
-  from "in review" without a scan, the slice reports it rather than guessing.
+- **`review_waiting` uses settled evidence.** Status must be `review`, the review certificate must name the lineage’s latest attempt under its current reset, that attempt must be `Settled`, and no attempt may be `Open` or have `reviewer_running`. A passing verdict awaits approval; a nonpassing verdict with `remaining_at(now).seconds == 0` awaits a budget reset. `since` is the certificate’s `issued_at`. A missing or unreadable certificate/ledger reports `source_unavailable`; a status or approval request alone is insufficient evidence of settlement.
 - **Pilot hold coverage follows the hold enum.** `pilot_hold` reflects the holds the pilot
   admission code knows. A new hold type that is not added to the adapter is invisible; the
   adapter matches the enum exhaustively so the compiler flags a new variant.
@@ -191,7 +192,7 @@ Slice 1 also measures per-source cost on the real workspace so the hook cadence 
 ## Task References
 
 - [ORB-21164] — designed `orbit attention` and filed its slices
-- [ORB-21165] — constellation consumer hook (separate repository)
+- [ORB-21165] — archived session-hook proposal; not a dependency
 - [ORB-21168] — slice 1: tool, CLI, filters and cursor over the task-level kinds
 - [ORB-21169] — slice 2: runtime kinds `run_failed`, `run_stuck`, `claim_stale`
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`

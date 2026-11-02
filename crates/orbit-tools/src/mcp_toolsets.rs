@@ -13,7 +13,8 @@ use orbit_types::tool::McpToolset;
 pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
     use McpToolset as T;
     let toolset = match name {
-        "orbit.task.show"
+        "orbit.attention"
+        | "orbit.task.show"
         | "orbit.task.list"
         | "orbit.task.eligible"
         | "orbit.task.artifact.get"

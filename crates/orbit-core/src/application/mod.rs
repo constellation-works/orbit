@@ -20,6 +20,7 @@ pub(crate) mod agent_corpus;
 pub mod agents;
 mod application_authority;
 pub mod assistance;
+pub mod attention;
 pub mod audit_event;
 pub mod auto_tasks;
 pub mod change_watch;

@@ -31,3 +31,6 @@ pub use definition::{
     McpToolScope, McpTransport, StoredTool, ToolParam, ToolSchema, ToolSessionContext,
     is_exact_canonical_tool_name, mcp_advertised_tool_name, validate_mcp_tool_definitions,
 };
+
+mod attention;
+pub use attention::*;

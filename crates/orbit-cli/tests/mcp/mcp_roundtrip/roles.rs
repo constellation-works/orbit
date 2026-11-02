@@ -7,9 +7,10 @@ use serde_json::json;
 
 use super::{McpWorkspace, tool_names};
 
-/// The reader role's advertised surface: core discovery plus task, run,
-/// codebase and search reads.
-const READER_TOOLS: [&str; 13] = [
+/// The reader role's advertised surface: core discovery plus attention,
+/// task, run, codebase and search reads.
+const READER_TOOLS: [&str; 14] = [
+    "orbit_attention",
     "orbit_codebase_analytics",
     "orbit_codebase_related",
     "orbit_codebase_show",
@@ -180,6 +181,31 @@ fn a_role_never_grants_operator_capability() {
 
         let mut operator = workspace.serve_with_args(&["--operator", "--role", role]);
         operator.call_tool_ok("orbit_workflow_run_list", json!({}));
+    }
+
+    // Attention belongs to tasks-read, shared by every role, and accepts
+    // both capabilities. Its scope guard must still apply to each session.
+    for role in ["operator", "manager", "resident", "agent", "reader"] {
+        for operator in [false, true] {
+            let mut args = vec!["--role", role];
+            if operator {
+                args.push("--operator");
+            }
+            let mut client = workspace.serve_with_args(&args);
+            let definition = client.listed_tool("orbit_attention");
+            assert_eq!(definition["annotations"]["readOnlyHint"], true);
+            let attention =
+                client.call_tool_ok("orbit_attention", json!({"kind": "pilot_warning"}));
+            assert_eq!(attention["items"], json!([]), "{role}: {attention}");
+            assert_eq!(attention["degraded"], json!([]), "{role}: {attention}");
+            for widening in [
+                json!({"all": true}),
+                json!({"workspace": "another-workspace"}),
+                json!({"host": "another-host"}),
+            ] {
+                client.assert_tool_error("orbit_attention", widening, "scope_not_permitted");
+            }
+        }
     }
 }
 

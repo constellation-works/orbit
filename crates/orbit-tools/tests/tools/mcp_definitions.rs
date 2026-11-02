@@ -60,6 +60,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.agent.invoke",
             "orbit.agents.scorecard",
             "orbit.agents.show",
+            "orbit.attention",
             "orbit.auto_task.add",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",

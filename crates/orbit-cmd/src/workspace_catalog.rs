@@ -124,6 +124,21 @@ impl RegistryWorkspaceCatalog {
 }
 
 impl WorkspaceCatalog for RegistryWorkspaceCatalog {
+    fn attention_registered_hosts(
+        &self,
+    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+        let registry = orbit_registry::hosts::load_host_registry(&self.global_root)?;
+        Ok(registry
+            .hosts()
+            .entries()
+            .iter()
+            .map(|host| orbit_types::tool::AttentionHost {
+                machine_id: host.machine_id.clone(),
+                name: host.name.clone(),
+            })
+            .collect())
+    }
+
     fn resolve_scope(
         &self,
         scope: &WorkspaceScope,
@@ -170,6 +185,19 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             .collect();
         self.remember(&selected);
         Ok(targets)
+    }
+
+    fn open_observational(
+        &self,
+        target: &FederatedWorkspaceTarget,
+    ) -> Result<RuntimeKernel, OrbitError> {
+        let resolved = self.resolve_target(target)?;
+        RegisteredRuntimeFactory::open_registered_checkout_observational(
+            &self.global_root,
+            &resolved.workspace,
+            &resolved.checkout,
+        )
+        .map(OrbitRuntime::into_kernel)
     }
 
     fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError> {
