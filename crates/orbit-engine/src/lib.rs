@@ -99,3 +99,4 @@ pub use executor::automation::vcs::{
     run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
     verify_claimed_known_red, verify_claimed_known_red_base,
 };
+pub use orbit_agent::provider_supports_continuity;

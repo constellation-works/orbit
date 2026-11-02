@@ -100,6 +100,15 @@ pub(crate) fn cycle_grant(history: &[TaskHistoryEntry], cycle: &str) -> Option<R
         .find(|grant| grant.cycle == cycle)
 }
 
+/// Whether `cycle` fell back to `continuity: rebuilt` after an expired or
+/// unresumable conversation reference.
+pub(crate) fn continuity_rebuilt(history: &[TaskHistoryEntry], cycle: &str) -> bool {
+    history.iter().any(|entry| {
+        entry.event == orbit_types::workflow::RESIDENT_CONTINUITY_REBUILT_EVENT
+            && entry.note.as_deref() == Some(cycle)
+    })
+}
+
 /// The mandate's checkpoints, oldest first.
 pub(crate) fn checkpoints(task_id: &str, comments: &[TaskComment]) -> Vec<ResidentCheckpoint> {
     comments
@@ -158,7 +167,10 @@ impl OrbitRuntime {
 
     /// The notices in a mandate's scope (this workspace, the mandate's
     /// workspaces homed on this owner, and global ones), any state.
-    fn resident_notices(&self, mandate: &ResidentMandate) -> Result<Vec<Notice>, OrbitError> {
+    pub(super) fn resident_notices(
+        &self,
+        mandate: &ResidentMandate,
+    ) -> Result<Vec<Notice>, OrbitError> {
         let mut workspaces: BTreeSet<String> = mandate.workspaces.iter().cloned().collect();
         workspaces.insert(self.workspace_id()?);
         let listing = self.list_notices(&NoticeListFilter {
@@ -174,7 +186,7 @@ impl OrbitRuntime {
     }
 
     /// The tasks whose changes wake the mandate, capped.
-    fn resident_watched_tasks(
+    pub(super) fn resident_watched_tasks(
         &self,
         mandate: &ResidentMandate,
         last: Option<&ResidentCheckpoint>,

@@ -38,7 +38,7 @@ impl CodexCliTransport {
     // The transport supplies a complete Orbit MCP entry so its env_vars
     // override is valid even when the user's Codex config has no entry.
     // Managed dispatch replaces the fallback command with its selected binary.
-    pub(crate) fn args(&self) -> Vec<String> {
+    pub(crate) fn args(&self, conversation_ref: Option<&str>) -> Vec<String> {
         let mut args = Vec::new();
         let names = MCP_MANAGED_BINDING_ENV_VARS
             .iter()
@@ -86,6 +86,10 @@ impl CodexCliTransport {
         for dir in &self.writable_dirs {
             args.push("--add-dir".to_string());
             args.push(dir.clone());
+        }
+        if let Some(conversation_ref) = conversation_ref.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("resume".to_string());
+            args.push(conversation_ref.to_string());
         }
         args
     }

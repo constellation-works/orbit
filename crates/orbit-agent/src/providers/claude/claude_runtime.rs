@@ -82,7 +82,7 @@ impl AgentRuntime for ClaudeRuntime {
             self.runtime_key,
             self.required_env_vars,
             self.command.clone(),
-            self.cli.args(),
+            self.cli.args(req.conversation_ref.as_deref()),
             self.cli.stdin(&req.envelope_json),
         );
         spec.fixed_env = CLAUDE_CLI_FIXED_ENV;
@@ -91,5 +91,22 @@ impl AgentRuntime for ClaudeRuntime {
 
     fn model_name(&self) -> Option<&str> {
         self.cli.model_name()
+    }
+
+    fn supports_continuity(&self) -> bool {
+        true
+    }
+
+    fn resume_failed(&self, exit_code: Option<i32>, stdout: &[u8], _stderr: &[u8]) -> bool {
+        if exit_code != Some(0) {
+            return true;
+        }
+        crate::providers::usage_window::top_level_frames(stdout).any(|(_, frame)| {
+            frame.get("type").and_then(serde_json::Value::as_str) == Some("result")
+                && frame.get("is_error").and_then(serde_json::Value::as_bool) == Some(true)
+                && frame
+                    .get("structured_output")
+                    .is_none_or(serde_json::Value::is_null)
+        })
     }
 }

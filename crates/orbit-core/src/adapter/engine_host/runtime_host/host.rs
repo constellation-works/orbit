@@ -787,6 +787,10 @@ impl RuntimeHost for OrbitRuntime {
         self.mid_run_steering().enabled
     }
 
+    fn record_resident_continuity_rebuilt(&self, run_id: &str) -> Result<(), OrbitError> {
+        self.record_resident_continuity_rebuilt_for_run(run_id)
+    }
+
     fn explore_delegation_available(&self) -> bool {
         self.explore_delegation_offered()
     }

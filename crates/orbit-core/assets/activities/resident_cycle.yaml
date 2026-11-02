@@ -105,7 +105,7 @@ spec:
     "actions":[...],"decisions":[...],"requests":[...],"costs":[...],
     "notes":"<what the next cycle must know, at most 2000 characters>",
     "next_wake":{"reason":"heartbeat","not_before":"<RFC 3339 time>"},
-    "continuity":"rebuilt","outcome":"progress|idle|waiting|handoff|ended",
+    "continuity":"<brief.continuity>","outcome":"progress|idle|waiting|handoff|ended",
     "probe":<brief.mandate.probe>}}`.
     Use `outcome: idle` when you woke and had nothing to do. When the exit
     criteria hold, move your assignment to `review` and checkpoint

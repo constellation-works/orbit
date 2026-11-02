@@ -114,10 +114,52 @@ impl OrbitRuntime {
     pub fn append_resident_checkpoint(
         &self,
         task_id: &str,
-        record: Value,
+        mut record: Value,
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Value, OrbitError> {
+        let initial_message = serde_json::to_string(&record)
+            .map_err(|error| invalid(format!("serialize checkpoint: {error}")))?;
+        let ResidentComment::Checkpoint(checkpoint) =
+            ResidentComment::parse(&initial_message).map_err(|error| invalid(error.to_string()))?
+        else {
+            return Err(invalid("checkpoint requires a resident.checkpoint record"));
+        };
+        if let Ok(Ok(mandate)) = super::resident_mandate_from_artifact(self, task_id) {
+            let history = self.get_task_history(task_id)?;
+            let comments = self.get_task_comments(task_id)?;
+            let prior = super::due::checkpoints(task_id, &comments);
+            let forced_continuity = match mandate.continuity {
+                orbit_types::workflow::ResidentContinuity::Off => Some("off"),
+                orbit_types::workflow::ResidentContinuity::Prefer => {
+                    let rebuilt_by_fallback =
+                        super::due::continuity_rebuilt(&history, &checkpoint.cycle)
+                            || std::env::var("ORBIT_ACTIVITY_RESIDENT_CONTINUITY")
+                                .ok()
+                                .as_deref()
+                                == Some("rebuilt");
+                    let had_resumable_ref = prior
+                        .last()
+                        .filter(|last| last.crew == mandate.crew)
+                        .and_then(|last| last.conversation_ref.as_deref())
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                        && self.crew_supports_continuity(&mandate.crew);
+                    if rebuilt_by_fallback
+                        || (checkpoint.continuity == "resumed" && !had_resumable_ref)
+                    {
+                        Some("rebuilt")
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(continuity) = forced_continuity
+                && let Some(object) = record.as_object_mut()
+            {
+                object.insert("continuity".into(), json!(continuity));
+            }
+        }
         let message = serde_json::to_string(&record)
             .map_err(|error| invalid(format!("serialize checkpoint: {error}")))?;
         if !matches!(

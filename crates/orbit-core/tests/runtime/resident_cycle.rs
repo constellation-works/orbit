@@ -166,7 +166,7 @@ impl Fixture {
             "goal": "Deliver the remaining scribe v2 slices",
             "exit_criteria": ["Every scribe-v2 task is done or rejected"],
             "workspaces": [self.runtime.workspace_id().unwrap()],
-            "watch": {"tasks": [watched]},
+            "watch": {"tasks": [watched], "tags": ["scribe-v2"]},
             "crew": "sol",
             "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
         });
@@ -705,4 +705,429 @@ fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
         comments_before,
         "the refused write did not run"
     );
+}
+
+#[test]
+fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref()
+ {
+    let fx = fixture();
+    let watched = fx
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Ship scribe v2 slice 5".into(),
+            description: "Slice 5.".into(),
+            acceptance_criteria: vec!["Green".into()],
+            tags: vec!["scribe-v2".into()],
+            crew: Some("dk".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let mandate = fx.mandate(&watched);
+    fx.grant(&mandate, &["dispatch", "promote"]);
+    let now = Utc::now();
+
+    // Run 6 cycles so the brief carries the newest 5 checkpoints and 1 older checkpoint note.
+    for index in 1..=6 {
+        let step_time = now + Duration::minutes(index * 15);
+        if index > 1 {
+            fx.runtime
+                .update_task_as_human(
+                    &watched,
+                    TaskUpdateParams {
+                        comment: Some(format!("Progress update {index}")),
+                        ..Default::default()
+                    },
+                    "human:daniel".into(),
+                )
+                .unwrap();
+        }
+        let run = fx.cycle_run(&mandate, &format!("resident-brief-cycle-{index}"));
+        let brief = fx.runtime.begin_resident_cycle(&run, step_time).unwrap();
+        assert_eq!(brief["cycle_count"], 1, "{brief}");
+        fx.runtime
+            .append_resident_checkpoint(
+                &mandate,
+                json!({
+                    "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                    "cycle": brief["cycle"], "run_id": run, "crew": "sol",
+                    "recovery_of": brief["recovery_of"], "wake": brief["wake"],
+                    "authority": {"rights": brief["authority"]["rights"],
+                                  "observe_only": brief["authority"]["observe_only"],
+                                  "narrowed_by": brief["authority"]["narrowed_by"]},
+                    "actions": [], "decisions": [], "requests": [], "costs": [],
+                    "notes": format!("Note from cycle {index}."),
+                    "next_wake": {"reason": "heartbeat", "not_before": step_time + Duration::hours(2)},
+                    "continuity": "rebuilt", "outcome": "idle", "probe": false,
+                    // Cycle 6 leaves conversation_ref removed (None).
+                    "conversation_ref": (index < 6).then(|| format!("conv-{index}")),
+                }),
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        fx.runtime.finish_resident_cycle(&run).unwrap();
+        fx.stop_run(&run, JobRunState::Success);
+    }
+
+    // Raise two decision requests (one answered by the human, one still open) and post an in-scope notice.
+    let answered_req = fx
+        .runtime
+        .run_tool(
+            "orbit.decision.raise",
+            json!({
+                "task_id": watched,
+                "model": "codex",
+                "question": "Which serialization format should slice 5 use?",
+                "options": [
+                    {"label": "JSON", "consequence": "Use JSON payloads.", "recommended": true},
+                    {"label": "YAML", "consequence": "Use YAML payloads."}
+                ]
+            }),
+        )
+        .unwrap();
+    let answered_id = answered_req["id"].as_str().unwrap().to_string();
+    fx.runtime
+        .answer_decision_request_as_human(
+            &answered_id,
+            "1",
+            Some("JSON matches checkpoint records.".into()),
+            "human:daniel".into(),
+            Some("cli".into()),
+        )
+        .unwrap();
+
+    let watched_open = fx
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Decide workspace B widening".into(),
+            description: "Slice 5 widening.".into(),
+            acceptance_criteria: vec!["Decided".into()],
+            tags: vec!["scribe-v2".into()],
+            crew: Some("dk".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let open_req = fx
+        .runtime
+        .run_tool(
+            "orbit.decision.raise",
+            json!({
+                "task_id": watched_open,
+                "model": "codex",
+                "question": "Should we widen to workspace B?",
+                "options": [
+                    {"label": "Keep current scope", "consequence": "Stay in workspace A.", "recommended": true},
+                    {"label": "Widen", "consequence": "Include workspace B."}
+                ]
+            }),
+        )
+        .unwrap();
+    let open_id = open_req["id"].as_str().unwrap().to_string();
+
+    let notice_id = call(
+        &fx.runtime,
+        "orbit.notice.post",
+        json!({
+            "kind": "info",
+            "title": "Registry mirror degraded",
+            "body": "Expect slower fetches.",
+            "expires_in_hours": 24
+        }),
+        McpCapability::Operator,
+    )
+    .unwrap()["notice"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let run7 = fx.cycle_run(&mandate, "resident-brief-cycle-7");
+    let brief = fx
+        .runtime
+        .begin_resident_cycle(&run7, now + Duration::minutes(120))
+        .unwrap();
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    assert_eq!(brief["continuity"], "rebuilt");
+    assert_eq!(brief["conversation_ref"], Value::Null);
+    assert_eq!(
+        brief["mandate"]["goal"],
+        "Deliver the remaining scribe v2 slices"
+    );
+    assert_eq!(
+        brief["standing_goals"]["exit_criteria"],
+        json!(["Every scribe-v2 task is done or rejected"])
+    );
+    assert_eq!(brief["authority"]["rights"], json!(["dispatch", "promote"]));
+
+    let checkpoints = brief["checkpoints"].as_array().unwrap();
+    assert_eq!(
+        checkpoints.len(),
+        orbit_types::workflow::RESIDENT_BRIEF_CHECKPOINTS
+    );
+    assert_eq!(checkpoints[0]["notes"], "Note from cycle 6.");
+    assert_eq!(checkpoints[4]["notes"], "Note from cycle 2.");
+    let older = brief["older_checkpoint_notes"].as_array().unwrap();
+    assert_eq!(older.len(), 1);
+    assert_eq!(older[0]["notes"], "Note from cycle 1.");
+
+    let requests = brief["open_requests"].as_array().unwrap();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let answered_entry = requests
+        .iter()
+        .find(|entry| entry["id"] == answered_id)
+        .expect("answered request in brief");
+    assert_eq!(answered_entry["state"], "answered");
+    assert_eq!(answered_entry["answer_id"], "1");
+    assert_eq!(answered_entry["answer"], "JSON");
+    let open_entry = requests
+        .iter()
+        .find(|entry| entry["id"] == open_id)
+        .expect("open request in brief");
+    assert_eq!(open_entry["state"], "open");
+
+    let wake_reasons = brief["wake"]["reasons"].as_array().unwrap();
+    assert!(
+        wake_reasons.contains(&json!("digest_changed")),
+        "{wake_reasons:?}"
+    );
+
+    let notices = brief["notices"].as_array().unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["id"], notice_id);
+    assert_eq!(notices[0]["untrusted_title"], "Registry mirror degraded");
+}
+
+#[cfg(unix)]
+#[test]
+fn continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired() {
+    use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset};
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = fixture();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let program = bin_dir.path().join("codex");
+    let invocations_log = bin_dir.path().join("invocations.jsonl");
+    let script = format!(
+        r#"#!/bin/sh
+stdin_file="$(mktemp)"
+cat > "$stdin_file"
+python3 - "$stdin_file" '{log}' "$@" <<'PY'
+import json, pathlib, sys
+stdin_path = pathlib.Path(sys.argv[1])
+log_path = pathlib.Path(sys.argv[2])
+args = sys.argv[3:]
+prompt = stdin_path.read_text()
+stdin_path.unlink(missing_ok=True)
+envelope = json.loads(prompt.strip().splitlines()[-1])
+brief = envelope["input"]["brief"]
+with log_path.open("a") as f:
+    f.write(json.dumps({{"args": args, "continuity": brief.get("continuity"), "conversation_ref": brief.get("conversation_ref"), "cycle": brief.get("cycle")}}) + "\n")
+if "resume" in args:
+    idx = args.index("resume")
+    if idx + 1 < len(args) and args[idx + 1] == "conv-expired":
+        sys.stderr.write("session conv-expired has expired\n")
+        sys.exit(1)
+print(json.dumps({{"schemaVersion": 1, "status": "success", "result": {{"outcome": "idle", "summary": "ok"}}, "error": None}}))
+PY
+"#,
+        log = invocations_log.display()
+    );
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let resource: ExecutorResource =
+        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
+    let mut def = ExecutorDef::from_resource_spec(
+        resource.metadata.name.clone(),
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    def.command = Some(program.to_string_lossy().into_owned());
+    def.sandbox = None;
+    fx.runtime.upsert_executor_def(&def).unwrap();
+
+    let watched = fx.task("Ship scribe v2 slice 5");
+    let mandate = fx.mandate(&watched);
+    let now = Utc::now();
+
+    // Cycle 1: establishes a live conversation_ref ("conv-live").
+    let run1 = fx.cycle_run(&mandate, "resident-continuity-1");
+    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
+    assert_eq!(brief1["continuity"], "rebuilt");
+    assert_eq!(brief1["conversation_ref"], Value::Null);
+    fx.runtime
+        .append_resident_checkpoint(
+            &mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
+                "recovery_of": null, "wake": brief1["wake"],
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "actions": [], "decisions": [], "requests": [], "costs": [],
+                "notes": "Cycle 1 seeded conv-live.",
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
+                "continuity": "rebuilt", "outcome": "idle", "probe": false,
+                "conversation_ref": "conv-live"
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fx.runtime.finish_resident_cycle(&run1).unwrap();
+    fx.stop_run(&run1, JobRunState::Success);
+
+    // Cycle 2: live reference ("conv-live") -> provider resumes conversation and still receives brief.
+    let run2 = fx.cycle_run(&mandate, "resident-continuity-2");
+    let brief2 = fx
+        .runtime
+        .begin_resident_cycle(&run2, now + Duration::minutes(130))
+        .unwrap();
+    assert_eq!(brief2["continuity"], "resumed");
+    assert_eq!(brief2["conversation_ref"], "conv-live");
+
+    let mut activity_asset =
+        load_activity_asset(include_str!("../../assets/activities/resident_cycle.yaml")).unwrap();
+    if let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(ref mut loop_spec) =
+        activity_asset.spec.spec
+    {
+        loop_spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
+        loop_spec.crew_name = Some("sol".into());
+    }
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit2 = V2AuditWriter::with_disk_sinks(
+        audit_dir.path(),
+        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        "ws_test",
+        &run2,
+        "codex:test".to_string(),
+        None,
+    )
+    .unwrap();
+    let outcome2 = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "resident_cycle",
+        spec: &activity_asset.spec.spec,
+        fs_profile: None,
+        input: json!({"brief": brief2, "crew": "sol"}),
+        audit: audit2,
+        run_id: &run2,
+        host: Some(&fx.runtime),
+    })
+    .unwrap();
+    assert!(outcome2.success, "{outcome2:?}");
+    let cp2 = fx
+        .runtime
+        .append_resident_checkpoint(
+            &mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                "cycle": brief2["cycle"], "run_id": run2, "crew": "sol",
+                "recovery_of": null, "wake": brief2["wake"],
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "actions": [], "decisions": [], "requests": [], "costs": [],
+                "notes": "Cycle 2 resumed conv-live and emitted conv-expired.",
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(4)},
+                "continuity": "resumed", "outcome": "idle", "probe": false,
+                "conversation_ref": "conv-expired"
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(cp2["checkpoint"]["continuity"], "resumed");
+    fx.runtime.finish_resident_cycle(&run2).unwrap();
+    fx.stop_run(&run2, JobRunState::Success);
+
+    // Cycle 3: expired reference ("conv-expired") -> adapter falls back to brief alone and records continuity: rebuilt.
+    let run3 = fx.cycle_run(&mandate, "resident-continuity-3");
+    let brief3 = fx
+        .runtime
+        .begin_resident_cycle(&run3, now + Duration::minutes(260))
+        .unwrap();
+    assert_eq!(brief3["conversation_ref"], "conv-expired");
+    let audit3 = V2AuditWriter::with_disk_sinks(
+        audit_dir.path(),
+        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        "ws_test",
+        &run3,
+        "codex:test".to_string(),
+        None,
+    )
+    .unwrap();
+    let outcome3 = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "resident_cycle",
+        spec: &activity_asset.spec.spec,
+        fs_profile: None,
+        input: json!({"brief": brief3, "crew": "sol"}),
+        audit: audit3,
+        run_id: &run3,
+        host: Some(&fx.runtime),
+    })
+    .unwrap();
+    assert!(outcome3.success, "{outcome3:?}");
+    let cp3 = fx
+        .runtime
+        .append_resident_checkpoint(
+            &mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+                "cycle": brief3["cycle"], "run_id": run3, "crew": "sol",
+                "recovery_of": null, "wake": brief3["wake"],
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "actions": [], "decisions": [], "requests": [], "costs": [],
+                "notes": "Cycle 3 fell back from expired ref.",
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(6)},
+                "continuity": "resumed", "outcome": "idle", "probe": false,
+                "conversation_ref": null
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        cp3["checkpoint"]["continuity"], "rebuilt",
+        "expired reference must record continuity: rebuilt in checkpoint"
+    );
+    fx.runtime.finish_resident_cycle(&run3).unwrap();
+    fx.stop_run(&run3, JobRunState::Success);
+
+    let logged: Vec<Value> = std::fs::read_to_string(&invocations_log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        logged.len(),
+        3,
+        "expected 1 call for cycle 2 and 2 calls (resume + fallback) for cycle 3: {logged:?}"
+    );
+    let call1_args: Vec<String> = serde_json::from_value(logged[0]["args"].clone()).unwrap();
+    assert!(
+        call1_args
+            .windows(2)
+            .any(|pair| pair == ["resume", "conv-live"]),
+        "cycle 2 did not resume conv-live: {call1_args:?}"
+    );
+    assert_eq!(logged[0]["continuity"], "resumed");
+    let call2_args: Vec<String> = serde_json::from_value(logged[1]["args"].clone()).unwrap();
+    assert!(
+        call2_args
+            .windows(2)
+            .any(|pair| pair == ["resume", "conv-expired"]),
+        "cycle 3 first attempt did not try conv-expired: {call2_args:?}"
+    );
+    let call3_args: Vec<String> = serde_json::from_value(logged[2]["args"].clone()).unwrap();
+    assert!(
+        !call3_args
+            .iter()
+            .any(|arg| arg == "resume" || arg == "conv-expired"),
+        "cycle 3 fallback must not pass resume args: {call3_args:?}"
+    );
+    assert_eq!(logged[2]["continuity"], "rebuilt");
+    assert_eq!(logged[2]["conversation_ref"], Value::Null);
 }

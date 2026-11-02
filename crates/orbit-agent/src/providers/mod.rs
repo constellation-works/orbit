@@ -51,6 +51,19 @@ pub(crate) fn build_invocation_spec(
     }
 }
 
+/// Whether the provider's CLI runtime supports resuming a conversation from a
+/// `conversation_ref`.
+pub fn provider_supports_continuity(provider: &str) -> bool {
+    crate::AgentConfig::from_provider_and_cli_config(
+        provider,
+        provider,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .and_then(|config| crate::Agent::new(&config))
+    .is_ok_and(|agent| agent.supports_continuity())
+}
+
 /// Normalize a provider's raw stdout for invocation tracing and diagnostics.
 ///
 /// Most providers emit their Orbit envelope directly and are returned

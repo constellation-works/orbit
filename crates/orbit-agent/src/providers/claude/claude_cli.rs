@@ -60,7 +60,7 @@ impl ClaudeCliTransport {
 
     // Static Claude CLI flags live in the executor definition; this transport
     // adds per-request toggles and the flags Orbit's response contract needs.
-    pub(crate) fn args(&self) -> Vec<String> {
+    pub(crate) fn args(&self, conversation_ref: Option<&str>) -> Vec<String> {
         // [ORB-10746] Structured output is what actually enforces the Orbit
         // response envelope; the prompt contract is guidance the model may
         // ignore, and in `jrun-20260812-0312-9` did.
@@ -97,6 +97,10 @@ impl ClaudeCliTransport {
         if let Some(effort) = self.reasoning_effort {
             args.push("--effort".to_string());
             args.push(effort.to_string());
+        }
+        if let Some(conversation_ref) = conversation_ref.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("--resume".to_string());
+            args.push(conversation_ref.to_string());
         }
         args
     }

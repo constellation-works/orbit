@@ -100,6 +100,7 @@ pub fn run_auth_probe(
             },
             envelope_json: probe.stdin.as_bytes().to_vec(),
             verbose: false,
+            conversation_ref: None,
         })
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let mut env = provider_child_environment(
