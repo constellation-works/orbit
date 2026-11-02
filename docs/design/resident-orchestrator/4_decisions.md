@@ -152,31 +152,6 @@ resident runtime, and no resident feature may depend on attaching to one.
 - Cost: the human cannot watch a resident think in real time. They see checkpoints after each cycle,
   and live run logs only while a cycle runs.
 
-## A from-scratch rewrite, not a restoration of the removed design
-
-**Recorded:** 2026-11 · [ORB-21229]
-
-### Context
-
-Restoring the removed folder from git and adapting it would have been faster. It held a worked
-vocabulary (scan, session log, drain window) and a code history.
-
-### Decision
-
-Daniel (2026-11-02): "we need to re-write the previous design, and start from scratch." The removed
-documents are read only to learn why they failed (recorded above). No section, mechanism or noun is
-carried over. Where this design reaches for something the old one had (an internal session log, an
-epic worktree, a selector activity, a supervisor clock outside Orbit), it has to be justified again
-from today's constraints. Most were not: the session log became checkpoints on the assignment task,
-and the external clock became a routine. The worktree and selector were dropped.
-
-### Consequences
-
-- The design starts from the operator's front-door need, not from epic execution.
-- Cost: the work that drain windows and slot refill inherited from the old design stays in
-  `workspace_auto_pipeline`. This design does not revisit it, and any overlap is found in
-  implementation rather than settled here.
-
 ## Narrowing is free, widening needs the human
 
 **Recorded:** 2026-11 · [ORB-21229]
