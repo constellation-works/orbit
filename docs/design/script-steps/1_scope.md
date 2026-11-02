@@ -527,12 +527,17 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   manager delegates the CPU controller; elsewhere it may be accepted but not enforced.
   Bubblewrap's `--unshare-pid` and `--die-with-parent` mean that killing the
   namespace's init kills every descendant, so on Linux nothing outlives the step.
-- **Process limits (both platforms).** The sandbox wrapper sets `RLIMIT_CPU` to the
-  step's timeout in CPU seconds per process (`SIGXCPU`, then `SIGKILL` 10 s later)
-  and `RLIMIT_NOFILE` to 1024 before it execs, each as both the soft and the hard
-  limit (never above the hard limit the job's process holds), so the script and its
-  descendants inherit them and cannot raise them. A script killed by `SIGXCPU` is a
-  signal exit, `Ok(success = false)`. `RLIMIT_NPROC` is per user and isn't used.
+- **Process limits (both platforms).** Before exec, the sandbox wrapper sets the
+  per-process `RLIMIT_CPU` soft limit to the step's timeout rounded up to CPU seconds,
+  and its hard limit to that value plus 10 CPU seconds. Both are clamped to the
+  inherited hard limit, which can shorten or eliminate the grace. The soft limit
+  delivers `SIGXCPU` (whose default action terminates the process); the hard limit
+  delivers `SIGKILL`. A script can raise its CPU soft limit up to its hard limit.
+  This CPU-time grace is separate from the wall-clock timeout and termination grace
+  above. The wrapper also sets both soft and hard `RLIMIT_NOFILE` to 1024, clamped
+  to the inherited hard limit, so the script cannot raise it. The script and its
+  descendants inherit these limits. A script killed by `SIGXCPU` is a signal exit,
+  `Ok(success = false)`. `RLIMIT_NPROC` is per user and isn't used.
 - **Scratch size.** The scratch directory is size-bounded (`scratch_max_bytes`,
   default 1 GiB), polled as the build directory is. A breach kills the step. On
   macOS the copied inputs (§4 Files in) count against it.
@@ -562,9 +567,10 @@ reports the profile and these gaps in its `script-sandbox` row.
   granted paths and with no network, but it can keep writing there after the step
   ends.
 - **No network** (above).
-- **Metadata stays visible.** As in the build profile, `stat` works on any path, so a
-  script can learn that a path outside its grant exists (a masked `.orbit/` file, a
-  credential file), though it can't list a directory or read a file there.
+- **Metadata stays visible.** The profile allows `stat` on ungranted paths, including
+  masked `.orbit/` files, so a script can learn that they exist even when it cannot
+  list a directory or read a file there. Credential-deny paths are an exception:
+  the final denies cover all file reads and writes, including metadata and `stat`.
 - **Privacy permissions (TCC).** These apply on top of the profile (§9.5).
 
 **Why.** Starting from the build profile means the script inherits a boundary that
