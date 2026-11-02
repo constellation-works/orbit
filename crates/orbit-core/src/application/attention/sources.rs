@@ -575,6 +575,91 @@ fn notice_attention_items(
     Ok(items)
 }
 
+fn friction_attention_items(
+    runtime: &OrbitRuntime,
+    workspace: &AttentionWorkspace,
+    host: &AttentionHost,
+    now: DateTime<Utc>,
+    settings: &AttentionSettings,
+) -> Result<Vec<AttentionItem>, OrbitError> {
+    use orbit_store::contracts::FrictionListFilter;
+    use orbit_types::record::FrictionStatus;
+    let store = crate::runtime::friction::store_for(runtime)?;
+    let records = store.list(&FrictionListFilter {
+        statuses: vec![FrictionStatus::Open],
+        ..Default::default()
+    })?;
+    let mut items = Vec::new();
+    for stored in records {
+        let record = stored.record;
+        if record.status != FrictionStatus::Open {
+            continue;
+        }
+        let title = orbit_common::governance::friction::effective_title(
+            record.title.as_deref(),
+            &record.body,
+            &record.id,
+        );
+        let ws = workspace.id.replace('\'', "'\\''");
+        let next = AttentionNext {
+            summary: "Triage the friction record".into(),
+            tool: Some("orbit.friction.update".into()),
+            input: Some(json!({"id": record.id, "workspace": workspace.id, "status": "triaged"})),
+            command: format!(
+                "orbit --workspace '{ws}' friction update {} --status triaged",
+                record.id
+            ),
+            needs: Vec::new(),
+            also: Vec::new(),
+        };
+        let age = (now - record.created_at).num_seconds().max(0) as u64;
+        let bumps = settings
+            .age_bump_hours
+            .iter()
+            .filter(|hours| age >= u64::from(**hours) * 3600)
+            .count();
+        let severity = if bumps >= 1 {
+            AttentionSeverity::Medium
+        } else {
+            AttentionSeverity::Low
+        };
+        let mut item = AttentionItem {
+            id: format!(
+                "att_friction_untriaged_{}",
+                cursor::attention_digest(
+                    json!([
+                        AttentionKind::FrictionUntriaged,
+                        host.machine_id,
+                        workspace.id,
+                        record.id
+                    ])
+                    .to_string()
+                    .as_bytes()
+                )
+            ),
+            kind: AttentionKind::FrictionUntriaged,
+            severity,
+            workspace: workspace.clone(),
+            host: host.clone(),
+            refs: json!({"friction_id": record.id}),
+            task: None,
+            since: Some(record.created_at),
+            age_seconds: Some(age),
+            expires_at: None,
+            reason: attention_reason(&title),
+            detail: json!({"status": "open", "tags": record.tags}),
+            next,
+            fingerprint: String::new(),
+        };
+        item.fingerprint = cursor::attention_fingerprint(
+            &item,
+            json!({"friction_id": record.id, "status": "open"}),
+        );
+        items.push(item);
+    }
+    Ok(items)
+}
+
 /// `resident_stalled`: every active resident mandate that has not
 /// checkpointed for twice its heartbeat, or whose last three cycles were all
 /// `incomplete`. Paused, taken-over, handed-off and ended mandates are meant
@@ -767,6 +852,21 @@ pub(super) fn read_attention_sources(
         result
             .timings
             .insert("resident_stalled".into(), started.elapsed().as_micros());
+    }
+    if filter.selected(K::FrictionUntriaged) {
+        let started = Instant::now();
+        match friction_attention_items(runtime, workspace, host, now, settings) {
+            Ok(items) => result.items.extend(items),
+            Err(error) => result.degraded.push(AttentionDegraded {
+                scope: format!("workspace:{}", workspace.id),
+                kind: K::FrictionUntriaged.as_str().into(),
+                code: "source_unavailable".into(),
+                message: error.to_string(),
+            }),
+        }
+        result
+            .timings
+            .insert("friction_untriaged".into(), started.elapsed().as_micros());
     }
     let task_kinds = filter
         .kinds

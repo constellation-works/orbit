@@ -1,0 +1,355 @@
+//! `ci_red` and `friction_untriaged` at the public `orbit.attention` boundary.
+use orbit_core::OrbitRuntime;
+use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+fn session() -> ToolSessionContext {
+    ToolSessionContext {
+        effective_capabilities: [McpCapability::Operator].into(),
+        ..Default::default()
+    }
+}
+
+fn call(runtime: &OrbitRuntime, input: Value) -> Value {
+    runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.attention",
+            input,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            session(),
+        )
+        .map(|outcome| outcome.value)
+        .unwrap_or_else(|error| panic!("attention call failed: {error}"))
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+struct Fixture {
+    _root: tempfile::TempDir,
+    runtime: OrbitRuntime,
+    #[allow(dead_code)]
+    repo: PathBuf,
+    head: String,
+    state: PathBuf,
+}
+
+impl Fixture {
+    fn new(auth_ok: bool) -> Self {
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let global = root.path().join("home/.orbit");
+        let repo = root.path().join("repo");
+        let state = root.path().join("gh-state");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), "").unwrap();
+        std::fs::write(repo.join("file.txt"), "hello\n").unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "test@example.test"]);
+        git(&repo, &["config", "user.name", "Test"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "initial"]);
+        git(
+            &repo,
+            &["remote", "add", "origin", "git@github.com:acme/orbit.git"],
+        );
+        let head = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        // Fake `gh` first on PATH for this isolated scenario process.
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let auth_exit = if auth_ok { 0 } else { 1 };
+        let script = format!(
+            "#!/bin/sh\nstate=${{ORBIT_FAKE_GH_STATE:?}}\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit {auth_exit} ;;\n  \"run list\") cat \"$state/runs.json\" ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n"
+        );
+        let gh = bin.join("gh");
+        std::fs::write(&gh, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        // SAFETY: scenario tables run in an isolated child process.
+        unsafe {
+            std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+            std::env::set_var("ORBIT_FAKE_GH_STATE", &state);
+        }
+        std::fs::write(state.join("calls"), "").unwrap();
+        std::fs::write(state.join("runs.json"), "[]").unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+        Self {
+            _root: root,
+            runtime,
+            repo,
+            head,
+            state,
+        }
+    }
+
+    fn set_runs(&self, runs: Value) {
+        std::fs::write(
+            self.state.join("runs.json"),
+            serde_json::to_string(&runs).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.state.join("calls")).unwrap_or_default()
+    }
+
+    fn run(&self, id: u64, conclusion: &str, updated: &str, sha: &str) -> Value {
+        json!({
+            "databaseId": id, "number": id, "workflowName": "CI",
+            "displayTitle": "CI failed", "status": "completed",
+            "conclusion": conclusion, "event": "push", "headBranch": "main",
+            "headSha": sha, "createdAt": updated, "startedAt": updated,
+            "updatedAt": updated, "url": "https://example.test/run"
+        })
+    }
+}
+
+fn ci_red_lists_newest_failed_run_on_head() {
+    let fixture = Fixture::new(true);
+    let old = (chrono::Utc::now() - chrono::Duration::hours(100)).to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &old, &fixture.head)]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["kind"], "ci_red");
+    assert_eq!(
+        items[0]["severity"], "critical",
+        "both age thresholds passed: {response}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "42");
+    assert_eq!(items[0]["next"]["tool"], "github.run.view");
+    assert!(items[0]["fingerprint"].as_str().unwrap().starts_with("fp_"));
+}
+
+fn ci_red_exclude_kind_makes_no_provider_call() {
+    let fixture = Fixture::new(true);
+    fixture.set_runs(json!([fixture.run(
+        42,
+        "failure",
+        &chrono::Utc::now().to_rfc3339(),
+        &fixture.head
+    )]));
+    let response = call(
+        &fixture.runtime,
+        json!({"kind": ["pilot_warning"], "exclude_kind": ["ci_red"]}),
+    );
+    assert!(
+        response["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["kind"] != "ci_red")
+    );
+    assert_eq!(
+        fixture.calls(),
+        "",
+        "--exclude-kind ci_red must skip the provider read"
+    );
+    // Explicit ci_red does call the provider.
+    let _ = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        fixture.calls().contains("run list"),
+        "calls: {}",
+        fixture.calls()
+    );
+}
+
+fn ci_red_missing_auth_degrades_without_failing() {
+    let fixture = Fixture::new(false);
+    fixture.set_runs(json!([fixture.run(
+        42,
+        "failure",
+        &chrono::Utc::now().to_rfc3339(),
+        &fixture.head
+    )]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded
+            .iter()
+            .any(|d| d["kind"] == "ci_red" && d["code"] == "source_unavailable"),
+        "{response}"
+    );
+}
+
+fn ci_red_stale_head_and_success_are_not_red() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    // Failure on a different (older) head is not current.
+    fixture.set_runs(json!([fixture.run(
+        42,
+        "failure",
+        &now,
+        "0".repeat(40).as_str()
+    )]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "stale head: {response}"
+    );
+}
+
+fn ci_red_folds_into_existing_repair_task() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let task = fixture
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Repair CI".into(),
+            description: "Repair.".into(),
+            acceptance_criteria: vec!["CI green.".into()],
+            status: Some(orbit_types::task::TaskStatus::Proposed),
+            creation_decision: Some(orbit_types::task::TaskDecision::CiFailureIdentity(
+                orbit_types::task::CiFailureIdentity {
+                    failure_key: "key".into(),
+                    compiler_cause_digest: None,
+                    open_compiler_set: None,
+                    signature: None,
+                    tested_commit: fixture.head.clone(),
+                    sources: vec![orbit_types::task::CiFailureSource {
+                        run_id: "42".into(),
+                        job_id: "1".into(),
+                        checkout: fixture.head.clone(),
+                    }],
+                },
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["refs"]["task_id"], task.id);
+    assert_eq!(items[0]["next"]["tool"], "orbit.task.show");
+    assert_eq!(items[0]["severity"], "high");
+}
+
+fn ci_red_timeout_degrades() {
+    // Fixture with a 1s source timeout and a provider that sleeps 3s.
+    let fixture = Fixture::new(true);
+    std::fs::write(
+        fixture.repo.join(".orbit/config.toml"),
+        "[attention]\nsource_timeout_seconds = 1\n",
+    )
+    .unwrap();
+    // Re-open so the new config is admitted.
+    let runtime = OrbitRuntime::from_roots(
+        &fixture._root.path().join("home/.orbit"),
+        &fixture.repo.join(".orbit"),
+    )
+    .unwrap();
+    std::fs::write(fixture.state.join("runs.json"), "[]").unwrap();
+    // Replace gh with a sleeping run-list.
+    let bin = fixture._root.path().join("bin/gh");
+    std::fs::write(&bin, "#!/bin/sh\ncase \"$1 ${2:-}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") sleep 3; printf '[]\\n' ;;\n  *) exit 2 ;;\nesac\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let started = std::time::Instant::now();
+    let response = call(&runtime, json!({"kind": "ci_red"}));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "timeout was not bounded"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded
+            .iter()
+            .any(|d| d["kind"] == "ci_red" && d["code"] == "source_unavailable"),
+        "{response}"
+    );
+}
+
+fn friction_untriaged_lists_only_open() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let orbit = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&orbit).unwrap();
+    std::fs::write(orbit.join("config.toml"), "").unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &orbit).unwrap();
+    let store = orbit_core::runtime::friction::store_for(&runtime).unwrap();
+    use orbit_store::contracts::FrictionAddParams;
+    let open = store
+        .add(FrictionAddParams {
+            model: "test".into(),
+            title: Some("Open friction".into()),
+            body: "Open friction body".into(),
+            tags: vec!["other".into()],
+            status: orbit_types::record::FrictionStatus::Open,
+            during_task: None,
+            created_at: chrono::Utc::now(),
+        })
+        .unwrap();
+    store
+        .add(FrictionAddParams {
+            model: "test".into(),
+            title: Some("Triaged friction".into()),
+            body: "Triaged body".into(),
+            tags: vec!["other".into()],
+            status: orbit_types::record::FrictionStatus::Triaged,
+            during_task: None,
+            created_at: chrono::Utc::now(),
+        })
+        .unwrap();
+    let response = call(&runtime, json!({"kind": "friction_untriaged"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["refs"]["friction_id"], open.record.id);
+    assert_eq!(items[0]["severity"], "low");
+    assert_eq!(items[0]["next"]["tool"], "orbit.friction.update");
+    assert_eq!(items[0]["next"]["input"]["status"], "triaged");
+}
+
+crate::scenario_table!(
+    attention_provider,
+    ci_red_lists_newest_failed_run_on_head,
+    ci_red_exclude_kind_makes_no_provider_call,
+    ci_red_missing_auth_degrades_without_failing,
+    ci_red_stale_head_and_success_are_not_red,
+    ci_red_folds_into_existing_repair_task,
+    ci_red_timeout_degrades,
+    friction_untriaged_lists_only_open,
+);
