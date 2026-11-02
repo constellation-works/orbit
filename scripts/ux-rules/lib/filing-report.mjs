@@ -197,7 +197,7 @@ export function filingDocument({ surface, results, aggregates = [], ownerContext
       ambiguous_failures: [...ambiguous.values()].reduce((sum, count) => sum + count, 0),
       absence_credits: credits.length,
       tracked_groups: tracked.size,
-      tracked_groups_unobserved: [...tracked].filter((key) => !observed.has(key)).length,
+      tracked_groups_unobserved: [...tracked.keys()].filter((key) => !observed.has(key)).length,
     },
   };
 }

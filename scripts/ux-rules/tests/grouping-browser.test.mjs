@@ -10,6 +10,8 @@ import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
 
+import { filingDocument } from "../lib/filing-report.mjs";
+
 const exec = promisify(execFile);
 const enabled = Boolean(process.env.PLAYWRIGHT_MODULE);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -178,4 +180,40 @@ test("public runner credits a tracked page-error cause once its page's console s
     assert.deepEqual(credit.defect, before.defect);
   }
   assert.equal(after.report.summary.absence_credits, failures.length);
+});
+
+test("filingDocument counts only tracked groups absent from reported observations", () => {
+  const member = (key, fingerprint) => ({
+    surface: "ui",
+    rule: "ui.x",
+    defect: { version: 1, key },
+    status: "fail",
+    fingerprint,
+    original_fingerprint: fingerprint,
+    target: {},
+    measurements: {},
+    evidence: [],
+  });
+  const contextFor = (keys) => ({
+    schema_version: 1,
+    groups: keys.map((key) => ({ surface: "ui", rule: "ui.x", defect: { version: 1, key } })),
+  });
+
+  const observed = filingDocument({
+    surface: "ui",
+    results: [member("k1", "f1")],
+    ownerContext: contextFor(["k1"]),
+  });
+  assert.equal(observed.summary.tracked_groups, 1);
+  assert.equal(observed.summary.tracked_groups_unobserved, 0);
+
+  const missing = filingDocument({ surface: "ui", results: [], ownerContext: contextFor(["k1"]) });
+  assert.equal(missing.summary.tracked_groups_unobserved, 1);
+
+  const partial = filingDocument({
+    surface: "ui",
+    results: [member("k1", "f1")],
+    ownerContext: contextFor(["k1", "k2"]),
+  });
+  assert.equal(partial.summary.tracked_groups_unobserved, 1);
 });
