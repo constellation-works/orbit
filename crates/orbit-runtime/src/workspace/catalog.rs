@@ -85,6 +85,16 @@ pub trait WorkspaceCatalog: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Default `orbit doctor` workspace checks for one opened checkout, the
+    /// local `host_unhealthy` source. `None` means this catalog has no doctor
+    /// (an in-memory catalog), not that every check passed.
+    fn attention_doctor_checks(
+        &self,
+        _runtime: &RuntimeKernel,
+    ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
+        Ok(None)
+    }
+
     /// Checkouts covered by `scope`, in a stable order.
     fn resolve_scope(
         &self,

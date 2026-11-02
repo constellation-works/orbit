@@ -162,6 +162,9 @@ impl RoutedSession for InProcessRoutedSession {
         }
         destination_context.trace_id = call_context.trace_id;
         destination_context.self_reported_actor = call_context.self_reported_actor;
+        // In-process hops carry the client name a remote hop would announce
+        // at initialize, so the local destination answers a candidate read.
+        destination_context.mcp_client_name = call_context.mcp_client_name;
         self.inner.call_tool(name, arguments, destination_context)
     }
 }

@@ -83,6 +83,9 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
     if matches!(&cli.command, Commands::Notice(_)) {
         return notice_preflight(cli, &global_root);
     }
+    if let Commands::Attention(attention) = &cli.command {
+        return attention_preflight(cli, attention, &global_root);
+    }
     if let Some(host) = host {
         let value = workspace_value(cli)?.ok_or_else(|| {
             OrbitError::InvalidInput(
@@ -160,6 +163,47 @@ fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, Orbi
     )
 }
 
+/// `orbit attention` on a host with registered hosts: an explicit scope
+/// (`--all`, `--host`, `--workspace`) or a call from outside any workspace
+/// fans out through the federated client, whose aggregator reads every
+/// in-scope host and applies the cursor and limit once. A bare call inside a
+/// workspace, `--root`, or a host with no registered hosts stays local.
+fn attention_preflight(
+    cli: &Cli,
+    attention: &super::attention::AttentionCommand,
+    global_root: &Path,
+) -> Result<Preflight, OrbitError> {
+    if explicit_root(cli) || orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+        return Ok(Preflight::Local);
+    }
+    let input = &attention.query.input;
+    let scoped = input.get("all") == Some(&Value::Bool(true))
+        || input.contains_key("host")
+        || input.contains_key("workspace");
+    if !scoped && !workspace_less(cli)? {
+        return Ok(Preflight::Local);
+    }
+    if matches!(
+        inspect_machine_identity(global_root)?,
+        MachineIdentityState::Absent
+    ) {
+        return Err(OrbitError::InvalidInput(
+            "this machine has no [machine] identity yet; run `orbit init` first".into(),
+        ));
+    }
+    let client =
+        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority())?;
+    let answer = orbit_mcp::McpHost::call_tool(
+        &client,
+        attention.query.spec.tool_name,
+        Value::Object(input.clone()),
+        ToolSessionContext::default(),
+    );
+    Ok(Preflight::Remote(
+        answer.and_then(super::attention::render_attention_envelope),
+    ))
+}
+
 /// Whether this invocation names no workspace at all: no selector, no
 /// explicit root, and no initialized workspace discoverable from the cwd.
 fn workspace_less(cli: &Cli) -> Result<bool, OrbitError> {
@@ -205,7 +249,7 @@ fn deliver_notice_aggregate(
         ));
     }
     let client =
-        super::mcp::federated_notice_client(global_root.to_path_buf(), caller_authority())?;
+        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority())?;
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
         AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
@@ -284,7 +328,7 @@ fn may_route(cli: &Cli) -> bool {
                 })
         }
         Commands::Tool(tool) => matches!(tool.command, ToolSubcommand::Run(_)),
-        Commands::Notice(_) => true,
+        Commands::Notice(_) | Commands::Attention(_) => true,
         Commands::Run(run) => {
             matches!(&run.command, RunSubcommand::Auto(auto) if auto.pull.is_some())
         }

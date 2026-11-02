@@ -129,7 +129,7 @@ fn execute_admitted(
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Attention(_) => {
-            crate::application::attention::attention_query(runtime, input)
+            crate::application::attention::attention_query(runtime, input, session_context)
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {

@@ -7,10 +7,10 @@ Options:
           Registered workspaces (repeatable; conflicts with --all)
 
       --all
-          Read every active workspace on this host
+          Read every active workspace on this host and every registered host
 
       --host <HOST>
-          Host name or machine id (repeatable)
+          Host name or machine id (repeatable); narrows which hosts are read
 
       --kind <KIND>
           Include kinds (repeatable)

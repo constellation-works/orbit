@@ -1,6 +1,6 @@
 //! Shared validation and AND-across / OR-within item filters.
-use orbit_common::protocol::tool_input::parse_duration_seconds;
-use orbit_common::{
+use crate::protocol::tool_input::parse_duration_seconds;
+use crate::{
     OrbitError,
     governance::{attention::AttentionVerb, operation::OperationVerb},
 };
@@ -11,14 +11,23 @@ use orbit_types::{
 use serde_json::Value;
 use std::str::FromStr;
 
-pub(super) struct AttentionFilter {
+/// A validated attention input: selected kinds and the item filters.
+pub struct AttentionFilter {
+    /// The admitted input, as the operation spec normalized it.
     pub input: Value,
+    /// Kinds whose sources are read, after `kind` and `exclude_kind`.
     pub kinds: Vec<AttentionKind>,
+    /// Minimum severity.
     pub severity: Option<AttentionSeverity>,
+    /// Minimum age in seconds.
     pub older_than: Option<u64>,
+    /// Public response limit (1–500, default 100).
     pub limit: usize,
+    /// Whether the federated aggregator asked for its candidate read.
+    pub candidate_read: bool,
 }
-pub(super) fn attention_strings(input: &Value, key: &str) -> Vec<String> {
+/// One string or an array of strings under `key`; anything else is empty.
+pub fn attention_strings(input: &Value, key: &str) -> Vec<String> {
     input
         .get(key)
         .map(|value| match value {
@@ -33,6 +42,7 @@ pub(super) fn attention_strings(input: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 impl AttentionFilter {
+    /// Validate an input against the operation spec and the closed vocabularies.
     pub fn parse(input: Value) -> Result<Self, OrbitError> {
         let input = AttentionVerb::Query.spec().parse_input(input)?.into_value();
         let requested = attention_strings(&input, "kind");
@@ -48,7 +58,7 @@ impl AttentionFilter {
         let kinds = AttentionKind::NAMES
             .iter()
             .filter(|kind| {
-                ((requested.is_empty() && AttentionKind::IMPLEMENTED.contains(kind))
+                ((requested.is_empty() && AttentionKind::DEFAULT_NAMES.contains(kind))
                     || requested.iter().any(|v| v == **kind))
                     && !excluded.iter().any(|v| v == **kind)
             })
@@ -91,17 +101,29 @@ impl AttentionFilter {
                 "all conflicts with workspace".into(),
             ));
         }
+        let candidate_read = match input.get("candidate_read") {
+            None | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => true,
+            Some(_) => {
+                return Err(OrbitError::InvalidInput(
+                    "candidate_read must be a boolean".into(),
+                ));
+            }
+        };
         Ok(Self {
             input,
             kinds,
             severity,
             older_than,
             limit: limit as usize,
+            candidate_read,
         })
     }
+    /// Whether `kind`'s source is read.
     pub fn selected(&self, kind: AttentionKind) -> bool {
         self.kinds.contains(&kind)
     }
+    /// Whether a derived item passes every item filter (AND across, OR within).
     pub fn matches(&self, item: &AttentionItem) -> bool {
         if !self.selected(item.kind)
             || self.severity.is_some_and(|min| item.severity < min)

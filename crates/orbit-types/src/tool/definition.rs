@@ -97,6 +97,14 @@ pub struct ToolSessionContext {
     /// switch on the client side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// `clientInfo.name` the MCP client sent at initialize, verbatim.
+    ///
+    /// Self-reported like [`Self::self_reported_actor`], so it grants no
+    /// capability and never enters authorization. It only lets a destination
+    /// keep a reserved input, such as attention's `candidate_read`, to the
+    /// Orbit client that is documented to send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_client_name: Option<String>,
 }
 
 impl ToolSessionContext {
@@ -128,6 +136,7 @@ impl ToolSessionContext {
             // The standalone adapter is launched per call, not configured as
             // a session, so it carries no attribution default.
             orchestrator: None,
+            mcp_client_name: None,
         }
     }
 

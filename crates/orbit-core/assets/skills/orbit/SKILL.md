@@ -11,7 +11,7 @@ checklist. An injected task snapshot is your starting context.
 
 ## Operator attention
 
-Start an orchestrator or on-call inspection with `orbit attention --json` or the read-only `orbit.attention` tool. Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews. Read `degraded` before interpreting an empty result. See [Attention](references/attention.md) for filters, local scopes, suggested actions and the delta cursor.
+Start an orchestrator or on-call inspection with `orbit attention --json` or the read-only `orbit.attention` tool. Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews; `host_unhealthy` reports failing doctor checks and, across registered hosts, hosts that cannot be read. Read `degraded` before interpreting an empty result. See [Attention](references/attention.md) for filters, local scopes, suggested actions and the delta cursor.
 
 ## Connect and act
 

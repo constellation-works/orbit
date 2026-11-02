@@ -139,6 +139,33 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             .collect())
     }
 
+    fn attention_doctor_checks(
+        &self,
+        runtime: &orbit_core::runtime::RuntimeKernel,
+    ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
+        use crate::doctor::{DoctorCommands, WorkspaceDoctorStatus};
+        let runtime = OrbitRuntime::from_kernel_ref(runtime);
+        Ok(Some(
+            runtime
+                .doctor_workspace_with_depth(false)?
+                .into_iter()
+                .filter_map(|row| {
+                    let status = match row.status {
+                        WorkspaceDoctorStatus::Error => "error",
+                        WorkspaceDoctorStatus::Warning => "warning",
+                        _ => return None,
+                    };
+                    Some(orbit_types::tool::AttentionHealthCheck {
+                        check: row.check_name,
+                        status: status.into(),
+                        message: row.message,
+                        remediation: row.remediation,
+                    })
+                })
+                .collect(),
+        ))
+    }
+
     fn resolve_scope(
         &self,
         scope: &WorkspaceScope,

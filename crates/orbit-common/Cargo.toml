@@ -19,6 +19,7 @@ sqlite = ["dep:rusqlite"]
 
 [dependencies]
 orbit-types = { path = "../orbit-types" }
+base64.workspace = true
 chrono.workspace = true
 rusqlite = { workspace = true, optional = true }
 fs2.workspace = true

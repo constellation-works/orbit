@@ -41,53 +41,68 @@ impl FromArgMatches for AttentionCommand {
 impl Execute for AttentionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let value = runtime.run_tool(self.query.spec.tool_name, Value::Object(self.query.input))?;
-        let mut table = Table::new(vec![
-            Column::new("SEVERITY"),
-            Column::new("KIND"),
-            Column::new("WORKSPACE"),
-            Column::new("REF"),
-            Column::new("AGE"),
-            Column::new("REASON"),
-        ]);
-        let mut blocks = vec![Block::text(value["message"].as_str().unwrap_or_default())];
-        let mut records = value["items"].as_array().cloned().unwrap_or_default();
-        for item in &records {
-            let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
-            table.add_row(vec![
-                text(&item["severity"]),
-                text(&item["kind"]),
-                text(&item["workspace"]["name"]),
-                {
-                    let task = text(&item["refs"]["task_id"]);
-                    if task.is_empty() {
-                        text(&item["refs"]["notice_id"])
-                    } else {
-                        task
-                    }
-                },
-                item["age_seconds"]
-                    .as_u64()
-                    .map(|age| format!("{}h", age / 3600))
-                    .unwrap_or_default(),
-                format!(
-                    "{}\n  {}",
-                    text(&item["reason"]),
-                    text(&item["next"]["command"])
-                ),
-            ]);
-        }
-        if !records.is_empty() {
-            blocks.push(Block::table(table));
-        }
-        for degraded in value["degraded"].as_array().into_iter().flatten() {
-            blocks.push(Block::text(format!(
-                "{} {}: {}",
-                degraded["scope"].as_str().unwrap_or_default(),
-                degraded["kind"].as_str().unwrap_or_default(),
-                degraded["message"].as_str().unwrap_or_default()
-            )));
-        }
-        records.push(json!({"summary": {"counts": value["counts"], "cursor": value["cursor"], "degraded": value["degraded"]}}));
-        Ok(Payload::blocks(value, blocks).with_records(records).into())
+        render_attention_envelope(value)
     }
+}
+
+/// Render an attention envelope, local or merged by the federated client.
+/// A federated envelope (one with `hosts`) adds a HOST column.
+pub(crate) fn render_attention_envelope(value: Value) -> CommandOut {
+    let federated = value["hosts"]
+        .as_array()
+        .is_some_and(|hosts| !hosts.is_empty());
+    let mut columns = vec![Column::new("SEVERITY"), Column::new("KIND")];
+    if federated {
+        columns.push(Column::new("HOST"));
+    }
+    columns.extend([
+        Column::new("WORKSPACE"),
+        Column::new("REF"),
+        Column::new("AGE"),
+        Column::new("REASON"),
+    ]);
+    let mut table = Table::new(columns);
+    let mut blocks = vec![Block::text(value["message"].as_str().unwrap_or_default())];
+    let mut records = value["items"].as_array().cloned().unwrap_or_default();
+    for item in &records {
+        let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+        let mut row = vec![text(&item["severity"]), text(&item["kind"])];
+        if federated {
+            row.push(text(&item["host"]["name"]));
+        }
+        row.extend([
+            text(&item["workspace"]["name"]),
+            {
+                let task = text(&item["refs"]["task_id"]);
+                if task.is_empty() {
+                    text(&item["refs"]["notice_id"])
+                } else {
+                    task
+                }
+            },
+            item["age_seconds"]
+                .as_u64()
+                .map(|age| format!("{}h", age / 3600))
+                .unwrap_or_default(),
+            format!(
+                "{}\n  {}",
+                text(&item["reason"]),
+                text(&item["next"]["command"])
+            ),
+        ]);
+        table.add_row(row);
+    }
+    if !records.is_empty() {
+        blocks.push(Block::table(table));
+    }
+    for degraded in value["degraded"].as_array().into_iter().flatten() {
+        blocks.push(Block::text(format!(
+            "{} {}: {}",
+            degraded["scope"].as_str().unwrap_or_default(),
+            degraded["kind"].as_str().unwrap_or_default(),
+            degraded["message"].as_str().unwrap_or_default()
+        )));
+    }
+    records.push(json!({"summary": {"counts": value["counts"], "cursor": value["cursor"], "degraded": value["degraded"]}}));
+    Ok(Payload::blocks(value, blocks).with_records(records).into())
 }

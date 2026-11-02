@@ -7,6 +7,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod attention_fanout;
 #[cfg(unix)]
 mod busy_owner_route;
 mod capability;

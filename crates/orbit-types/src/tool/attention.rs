@@ -56,6 +56,27 @@ impl AttentionKind {
         "review_waiting",
         "notice_open",
     ];
+    /// Kinds read when a call names none: the kinds this build derives.
+    /// The others are accepted by name and report `degraded` until their
+    /// sources land.
+    pub const DEFAULT_NAMES: &'static [&'static str] = &[
+        "pilot_warning",
+        "pilot_hold",
+        "blocked",
+        "decision_open",
+        "review_waiting",
+        "host_unhealthy",
+        "notice_open",
+    ];
+    /// Kinds derived from one workspace's task, decision and review records,
+    /// which only the workspace's owner host reports.
+    pub const TASK_LEVEL_NAMES: &'static [&'static str] = &[
+        "pilot_warning",
+        "pilot_hold",
+        "blocked",
+        "decision_open",
+        "review_waiting",
+    ];
     /// Stable wire name.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -90,10 +111,68 @@ pub enum AttentionSeverity {
 /// Identity of an in-scope workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttentionWorkspace {
-    /// Logical workspace id.
+    /// Logical workspace id; empty (`null` on the wire) for an item about a
+    /// host with no workspace, such as an unreachable destination.
+    #[serde(with = "empty_as_null")]
     pub id: String,
-    /// Registered name.
+    /// Registered name; empty (`null` on the wire) like `id`.
+    #[serde(with = "empty_as_null")]
     pub name: String,
+    /// Host-qualified selector, attached by the federated aggregator from the
+    /// destination's live workspace list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+}
+impl AttentionWorkspace {
+    /// A workspace identity without a federated selector.
+    pub fn local(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            selector: None,
+        }
+    }
+    /// The `{id: null, name: null}` workspace of a host-level item.
+    pub fn none() -> Self {
+        Self::local("", "")
+    }
+}
+mod empty_as_null {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+        if value.is_empty() {
+            serializer.serialize_none()
+        } else {
+            serializer.serialize_str(value)
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+    }
+}
+/// Reachability of one host in a federated response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttentionHostStatus {
+    /// Pinned machine id.
+    pub machine_id: String,
+    /// Configured display name.
+    pub name: String,
+    /// `reachable`, `unreachable_destination` or `tool_not_on_this_host`.
+    pub reachability: String,
+}
+/// One failing or warning default `orbit doctor` workspace check, the local
+/// `host_unhealthy` source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttentionHealthCheck {
+    /// Stable doctor check name.
+    pub check: String,
+    /// `warning` or `error`.
+    pub status: String,
+    /// The check's own message.
+    pub message: String,
+    /// The check's fix hint, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 /// Host whose authoritative state produced the item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +316,9 @@ pub struct AttentionEnvelope {
     pub schema_version: u32,
     /// Shared evaluation time for this response.
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// `true` only on the federated aggregator's candidate read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_read: Option<bool>,
     /// Echoed input filters with resolved workspace identities.
     pub filters: Value,
     /// The ordered public page.
@@ -245,6 +327,9 @@ pub struct AttentionEnvelope {
     pub counts: AttentionCounts,
     /// Stateless delta continuation.
     pub cursor: AttentionCursor,
+    /// Per-host reachability; present when more than the local host was in scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<AttentionHostStatus>,
     /// Incomplete or unreadable sources.
     pub degraded: Vec<AttentionDegraded>,
     /// Explicit human-readable result, including empty and quiet states.

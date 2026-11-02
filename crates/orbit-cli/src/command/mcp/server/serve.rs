@@ -70,12 +70,13 @@ pub(in super::super) fn serve_mcp_stdio(
     finish_stdio_session(exit)
 }
 
-/// The federated client a workspace-less CLI notice list aggregates
-/// through: this machine in-process plus every configured remote over
-/// SSH, the same composition the federated server serves. The SSH-only
-/// routed client cannot answer for the local owner, so a CLI aggregation
-/// composed from it alone would degrade this machine on every call.
-pub(crate) fn federated_notice_client(
+/// The federated client a workspace-less CLI notice list or a fanned-out
+/// `orbit attention` aggregates through: this machine in-process plus every
+/// configured remote over SSH, the same composition the federated server
+/// serves. The SSH-only routed client cannot answer for the local owner, so
+/// a CLI aggregation composed from it alone would degrade this machine on
+/// every call.
+pub(crate) fn federated_aggregate_client(
     global_root: PathBuf,
     authority: McpSessionAuthority,
 ) -> Result<federated::FederatedMcpHost, OrbitError> {
@@ -86,6 +87,7 @@ pub(crate) fn federated_notice_client(
         identity.process_machine_name.clone(),
         remotes,
     );
+    let global_root_for_fanout = global_root.clone();
     let local_machine = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id.clone(),
@@ -104,10 +106,44 @@ pub(crate) fn federated_notice_client(
             authority,
         )),
     );
-    Ok(federated::FederatedMcpHost::new(
-        destinations,
-        Arc::new(probe),
-    ))
+    Ok(
+        federated::FederatedMcpHost::new(destinations, Arc::new(probe))
+            .with_attention_fanout(attention_fanout(&global_root_for_fanout)),
+    )
+}
+
+/// The attention fan-out's deadline and cursor lifetime from the machine's
+/// global `[attention]` settings, and the registered host names items are
+/// attributed to. Unreadable settings fall back to the defaults: the read
+/// still runs, and the host file was already validated by the caller.
+pub(crate) fn attention_fanout(global_root: &std::path::Path) -> federated::AttentionFanout {
+    let mut fanout = federated::AttentionFanout::default();
+    match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root)) {
+        Ok(config) => {
+            let settings = orbit_config::AttentionSettings::from_snapshot(&config.snapshot);
+            fanout.budget = std::time::Duration::from_secs(settings.fanout_budget_seconds.into());
+            fanout.cursor_ttl_hours = settings.cursor_ttl_hours;
+        }
+        Err(error) => tracing::warn!(
+            target: "orbit.mcp",
+            %error,
+            "could not read [attention]; the fan-out uses its defaults"
+        ),
+    }
+    if let Ok(registry) = orbit_registry::hosts::load_host_registry(global_root) {
+        fanout.host_names = registry
+            .hosts()
+            .entries()
+            .iter()
+            .map(|host| (host.machine_id.clone(), host.name.clone()))
+            .collect();
+        if let Some(local) = registry.local() {
+            fanout
+                .host_names
+                .insert(local.id.clone(), local.name.clone());
+        }
+    }
+    fanout
 }
 
 /// Serve the federated mux: the accepting machine plus operator-configured
@@ -184,7 +220,8 @@ pub(in super::super) fn serve_mcp_federated_stdio(
             .with_task_prefix_routing(task_prefixes)
             .with_local_mirror_hint(Arc::new(move |task_id| {
                 orbit_cmd::hosts::local_mirror_workspace(&mirror_root, task_id)
-            })),
+            }))
+            .with_attention_fanout(attention_fanout(&global_root_for_bridge)),
     );
     let host = with_claimed_owner_bridge(
         host,

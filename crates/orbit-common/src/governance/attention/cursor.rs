@@ -1,13 +1,16 @@
-//! Stateless atc1 cursor and canonical material fingerprints.
+//! Stateless atc1 cursor and canonical material fingerprints, shared by the
+//! local derivation and the federated aggregator so one cursor spans hosts.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use orbit_types::tool::{AttentionCursorStatus, AttentionItem};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-pub(super) type Seen = BTreeSet<[u8; 8]>;
+/// Seen-set entries a cursor carries: 8-byte hashes of `id` and `fingerprint`.
+pub type Seen = BTreeSet<[u8; 8]>;
 
-pub(super) fn attention_digest(bytes: &[u8]) -> String {
+/// First 8 bytes of SHA-256 as 16 lowercase hex digits.
+pub fn attention_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .take(8)
@@ -27,7 +30,8 @@ fn canonical(value: &Value) -> Value {
         _ => value.clone(),
     }
 }
-pub(super) fn attention_fingerprint(item: &AttentionItem, state: Value) -> String {
+/// `fp_` digest over the item's identity, severity and canonical material state.
+pub fn attention_fingerprint(item: &AttentionItem, state: Value) -> String {
     format!(
         "fp_{}",
         attention_digest(
@@ -37,7 +41,8 @@ pub(super) fn attention_fingerprint(item: &AttentionItem, state: Value) -> Strin
         )
     )
 }
-pub(super) fn attention_seen_hash(item: &AttentionItem) -> [u8; 8] {
+/// Cursor entry for one item: changes when its fingerprint changes.
+pub fn attention_seen_hash(item: &AttentionItem) -> [u8; 8] {
     let mut hash = Sha256::new();
     hash.update(item.id.as_bytes());
     hash.update([0]);
@@ -47,7 +52,8 @@ pub(super) fn attention_seen_hash(item: &AttentionItem) -> [u8; 8] {
     entry.copy_from_slice(&digest[..8]);
     entry
 }
-pub(super) fn decode_attention_cursor(
+/// Decode a caller's token; every unusable token restarts the full list.
+pub fn decode_attention_cursor(
     token: Option<&str>,
     now: u64,
     ttl_hours: u32,
@@ -89,7 +95,8 @@ pub(super) fn decode_attention_cursor(
     let seen = bytes[11..].as_chunks::<8>().0.iter().copied().collect();
     (S::Accepted, seen)
 }
-pub(super) fn encode_attention_cursor(now: u64, hashes: &[[u8; 8]]) -> String {
+/// Mint an `atc1` token for `hashes`, issued at `now` (Unix seconds).
+pub fn encode_attention_cursor(now: u64, hashes: &[[u8; 8]]) -> String {
     let mut bytes = vec![1];
     bytes.extend(now.to_be_bytes());
     bytes.extend((hashes.len() as u16).to_be_bytes());

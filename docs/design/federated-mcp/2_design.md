@@ -11,7 +11,7 @@ summary: Federated MCP mux, selector, capability split, list schema, and fail-cl
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access, mcp-session-context]
-related_artifacts: [ORB-14449, ORB-14448, ORB-11184, ORB-11044, ORB-11023, ORB-11016, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11012, ORB-11011, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-21171, ORB-14449, ORB-14448, ORB-11184, ORB-11044, ORB-11023, ORB-11016, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11012, ORB-11011, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Design
@@ -37,7 +37,7 @@ Every workspace-scoped federated call that supplies a workspace selector carries
 
 The stable key is `machine_id` (`hm_…`), not renameable `host_id`. Example form: `hm_<id>/ws_orbit`. A display host name such as `orbit-linux/ws_orbit` is not a valid selector.
 
-A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
+A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. The one exception is a named **fan-out read** (§6.1): a call to it without a host-qualified selector reads every in-scope destination instead. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
 
 Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. The v1 id-only default for `orbit.task.show` does not apply in this namespace. Instead, an id-only call to an id-routed task tool routes by task-id prefix to the host that holds it ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). A call that carries a selector is routed by that selector. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
 
@@ -65,6 +65,7 @@ Tool class is assigned by what the tool does, not by a per-tool registry field:
 - fleet notices (`orbit.notice.post`, `orbit.notice.close`, and the workspace-scoped `orbit.notice.list` / `orbit.notice.show` reads) → `control_plane`: a notice lives in its home workspace's owner store, so a replica refuses with `capability_refused` and the gateway never redirects to the owner. The workspace-less `orbit.notice.list` is aggregated by the caller instead — one owner-local aggregate read (`all: true`) per owner machine, merged, deduplicated by id, ordered, then limited once, with each unreachable owner reported as `degraded` ([fleet-notices notice-federation](../fleet-notices/specs/notice-federation.md)).
 - anything touching runs, logs, or scheduler state → `execute`
 - discovery / list tools (`orbit_workspace_list`, …) → unclassified, not subject to `capability_refused`
+- the operator attention feed (`orbit.attention`) → unclassified: each destination derives only the kinds its checkout role is authoritative for (an owner its task-level kinds, every host its own runs and health), so it is answerable everywhere and never refused with `capability_refused` ([operator-attention attention-federation](../operator-attention/specs/attention-federation.md#authority-per-host))
 
 If a caller routes a `control_plane` tool to an execution-binding host, that destination refuses. The gateway must not silently send the call to the owner.
 
@@ -119,6 +120,16 @@ Caller-facing precedence when more than one class could apply:
 
 It must not fall back to a local workspace, another host with a matching `ws_*`, a default workspace, or a cached host-local runtime.
 
+### 6.1 The named fan-out read
+
+One tool is a named exception to "a workspace-scoped call needs a host-qualified selector": `orbit.attention` [ORB-21171]. Called without one (no `workspace`, or registered names and `ws_*` ids rather than a copied selector), the mux does not answer `unknown_selector`. It sends one **candidate read** to every in-scope destination in parallel — the implicit local one plus every host in the host file, narrowed by the call's `host` — under one outer deadline (`attention.fanout_budget_seconds`), and merges the answers itself:
+
+- The hop carries `all: true`, or the workspaces that destination itself lists for the named ones, the item filters and `candidate_read: true`. It never carries `since` or `limit`; the mux sets `candidate_read` itself and refuses a caller-supplied one (`candidate_read_not_permitted`). A destination honours it only on a session whose `clientInfo.name` is `orbit-federated-mux`.
+- Every merged item names its host, and the mux attaches the `selector` the destination lists for its workspace. Ordering, the delta cursor and the public limit are applied once, by the mux, after the merge.
+- Every failure is visible. A destination that does not answer, answers late, answers under another `machine_id` than its pin, or lacks the tool becomes a `host_unhealthy` item and a `degraded` entry carrying its routing identity (`unreachable_destination` or `tool_not_on_this_host`); a body whose counts show a truncated page is `degraded` `response_truncated`.
+
+This is a read, not a merge of state: nothing is written, nothing is cached between calls, no destination answers for another, and no item is presented without its host. A host-qualified selector still routes the call to that one destination as above. The exception covers exactly this tool; adding another is a change to this section. The contract is [operator-attention attention-federation](../operator-attention/specs/attention-federation.md).
+
 ### Delivery budget and post-dispatch ambiguity
 
 The precedence above covers everything decidable **before** the destination sees the call. Two rules cover what happens after [ORB-11023].
@@ -147,7 +158,7 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 
 - v1 `--mode remote` is unchanged. Federated list and routing live only in `--mode federated`.
 - The mux performs no placement and does not detect competing Owner declarations. Those remain operator configuration responsibilities.
-- Availability is bounded by the chosen destination. Callers must handle visible routing failures; there is no transparent substitute result.
+- Availability is bounded by the chosen destination. Callers must handle visible routing failures; there is no transparent substitute result. The fan-out read (§6.1) is no exception: a destination it cannot read is reported as an item and a `degraded` entry, never answered from another host.
 - Task reads remain owner-only because the coordination store is owner-authoritative. Use the owner selector for `orbit.task.list` and `orbit.task.show`; a replica selector receives `capability_refused`.
 - Including unreachable hosts makes the list honest and larger; clients must read reachability rather than treating presence as liveness.
 - Capability advertisement can lag destination Core. The destination refuse is the correctness boundary; the gateway is not a second authorization layer.
@@ -175,5 +186,6 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
 - [ORB-21214] — fleet-notice tools classified `control_plane`; workspace-less notice list aggregated per owner
+- [ORB-21171] — named `orbit.attention` the fan-out read: unclassified, candidate reads to every destination, merged once
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
