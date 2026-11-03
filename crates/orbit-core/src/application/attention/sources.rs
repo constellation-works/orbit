@@ -799,6 +799,9 @@ pub(super) fn read_attention_sources(
     // without recovery: degrade them instead of letting selection or
     // hydration settle the journal. Notice, resident and task-level
     // sources all read task records, so they share this refusal.
+    // Friction is the exception: its workspace-partitioned store reads no
+    // task records, so it is read (or degraded on error) before returning
+    // rather than silently omitted behind the pending guard.
     if let Some(message) = pending_commit_message(runtime) {
         for kind in filter.kinds.iter().copied().filter(|kind| {
             *kind == K::NoticeOpen
@@ -811,6 +814,21 @@ pub(super) fn read_attention_sources(
                 code: "source_unavailable".into(),
                 message: message.clone(),
             });
+        }
+        if filter.selected(K::FrictionUntriaged) {
+            let started = Instant::now();
+            match friction_attention_items(runtime, workspace, host, now, settings) {
+                Ok(items) => result.items.extend(items),
+                Err(error) => result.degraded.push(AttentionDegraded {
+                    scope: format!("workspace:{}", workspace.id),
+                    kind: K::FrictionUntriaged.as_str().into(),
+                    code: "source_unavailable".into(),
+                    message: error.to_string(),
+                }),
+            }
+            result
+                .timings
+                .insert("friction_untriaged".into(), started.elapsed().as_micros());
         }
         return Ok(result);
     }

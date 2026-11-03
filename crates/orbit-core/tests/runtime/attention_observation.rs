@@ -149,7 +149,115 @@ fn attention_does_not_recover_a_pending_task_commit() {
     assert!(runtime.inspect_execution_claims().is_ok());
 }
 
+fn friction_attention_does_not_recover_a_pending_task_commit() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let orbit = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&orbit).unwrap();
+    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &orbit).unwrap();
+    let operator = session(McpCapability::Operator);
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Pending commit friction fixture".into(),
+            description: "Fixture task.".into(),
+            acceptance_criteria: vec!["Fixture task is observable.".into()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+
+    use orbit_store::contracts::FrictionAddParams;
+    let store = orbit_core::runtime::friction::store_for(&runtime).unwrap();
+    let open = store
+        .add(FrictionAddParams {
+            model: "test".into(),
+            title: Some("Open friction".into()),
+            body: "Open friction body".into(),
+            tags: vec!["other".into()],
+            status: orbit_types::record::FrictionStatus::Open,
+            during_task: None,
+            created_at: chrono::Utc::now(),
+        })
+        .unwrap();
+    store
+        .add(FrictionAddParams {
+            model: "test".into(),
+            title: Some("Triaged friction".into()),
+            body: "Triaged body".into(),
+            tags: vec!["other".into()],
+            status: orbit_types::record::FrictionStatus::Triaged,
+            during_task: None,
+            created_at: chrono::Utc::now(),
+        })
+        .unwrap();
+
+    {
+        let connection = rusqlite::Connection::open(global.join("orbit.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_commit_journal \
+                     (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                 VALUES (?1, ?2, ?3, 'prepared', '{}', ?4)",
+                rusqlite::params![
+                    "attention-pending-friction-1",
+                    workspace_id,
+                    task.id,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        journal_state(&runtime, "attention-pending-friction-1").as_deref(),
+        Some("prepared")
+    );
+    let before = runtime.observe_task_metadata().unwrap();
+    assert!(runtime.inspect_execution_claims().is_err());
+
+    // Friction reads use a separate workspace-partitioned store, so a
+    // friction-only query must return the open record (never an empty
+    // all-clear) without settling the pending task journal.
+    let response = call(&runtime, json!({"kind": "friction_untriaged"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["kind"], "friction_untriaged", "{response}");
+    assert_eq!(
+        items[0]["refs"]["friction_id"], open.record.id,
+        "{response}"
+    );
+    assert_eq!(
+        journal_state(&runtime, "attention-pending-friction-1").as_deref(),
+        Some("prepared"),
+        "friction attention must not abort or replay the pending commit: {response}"
+    );
+    assert_eq!(runtime.observe_task_metadata().unwrap(), before);
+    assert!(
+        runtime.inspect_execution_claims().is_err(),
+        "attention left the pending commit for an ordinary read"
+    );
+
+    // Once an ordinary read settles the journal, settled friction status
+    // filtering continues to list only the open record.
+    runtime.list_task_metadata().unwrap();
+    assert_eq!(
+        journal_state(&runtime, "attention-pending-friction-1").as_deref(),
+        Some("aborted")
+    );
+    let response = call(&runtime, json!({"kind": "friction_untriaged"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(
+        items[0]["refs"]["friction_id"], open.record.id,
+        "{response}"
+    );
+}
+
 crate::scenario_table!(
     attention_observation,
     attention_does_not_recover_a_pending_task_commit,
+    friction_attention_does_not_recover_a_pending_task_commit,
 );
