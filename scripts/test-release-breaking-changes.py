@@ -988,6 +988,56 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.assertEqual(report["bump"], "minor")
                 self.assertEqual(report["next_version"], "0.36.0")
 
+    def _set_attention_kind_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "kind": {"anyOf": [
+                    {"type": "string", "enum": ["a", "b"]},
+                    {"type": "array",
+                     "items": {"type": "string", "enum": ["a", "b"]}},
+                ]},
+            },
+            "required": ["id"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add kind anyOf enum [ORB-70] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_anyof_input_enum_widening_is_additive(self):
+        # Gaining enum values in both anyOf branches (direct and items)
+        # accepts everything accepted before (ORB-21674).
+        tools = self._set_attention_kind_schema()
+        kind = tools[0]["inputSchema"]["properties"]["kind"]["anyOf"]
+        kind[0]["enum"].append("c")
+        kind[1]["items"]["enum"].append("c")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Widen kind enum [ORB-71] (#2)")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_anyof_input_enum_narrowing_decides_minor(self):
+        tools = self._set_attention_kind_schema()
+        kind = tools[0]["inputSchema"]["properties"]["kind"]["anyOf"]
+        kind[0]["enum"].remove("b")
+        kind[1]["items"]["enum"].remove("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow kind enum [ORB-72] (#2)")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-72", "mcp-schema",
+             "`orbit_task_show` `inputSchema.kind{anyOf0}` enum value \"b\" removed"),
+            ("ORB-72", "mcp-schema",
+             "`orbit_task_show` `inputSchema.kind{anyOf1}[items]` enum value \"b\" removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_removing_entire_input_mcp_applicator_is_additive(self):
         # Both formerly accepted {id, view} inputs remain accepted; deleting
         # the constraint also admits {id}-only inputs.

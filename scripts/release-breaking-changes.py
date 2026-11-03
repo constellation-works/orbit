@@ -297,6 +297,32 @@ def schema_property_names(schema):
     return set(properties) if isinstance(properties, dict) else set()
 
 
+def schema_same_except_enums(before, after):
+    """Whether two branches are structurally identical apart from enum values.
+
+    Dict keys must match exactly and every non-enum value must be equal;
+    enum lists may differ in either direction. Pairing such branches lets
+    the enum comparison in detect_mcp_changes classify the direction:
+    widening is additive (outside oneOf), narrowing reports removed values.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        if set(before) != set(after):
+            return False
+        for key, old_value in before.items():
+            new_value = after[key]
+            if key == "enum":
+                if not isinstance(old_value, list) or not isinstance(new_value, list):
+                    return False
+            elif not schema_same_except_enums(old_value, new_value):
+                return False
+        return True
+    if isinstance(before, list) and isinstance(after, list):
+        return (len(before) == len(after)
+                and all(schema_same_except_enums(old, new)
+                        for old, new in zip(before, after)))
+    return _json_value_key(before) == _json_value_key(after)
+
+
 def match_schema_alternatives(before, after):
     """Map unchanged, tightened or edited old alternatives to their new positions."""
     matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
@@ -309,6 +335,20 @@ def match_schema_alternatives(before, after):
         candidates = [index for index in new_left if after_json[index] == encoded]
         if candidates:
             new_index = min(candidates, key=lambda index: (abs(index - old_index), index))
+            matches[new_index] = old_index
+            old_left.remove(old_index)
+            new_left.remove(new_index)
+
+    # A branch whose enum gained or lost values differs in whole-value
+    # identity but is the same branch structurally. Pair those next so the
+    # enum diff, not alternative removal, decides the classification.
+    candidates = []
+    for old_index in old_left:
+        for new_index in new_left:
+            if schema_same_except_enums(before[old_index], after[new_index]):
+                candidates.append((-abs(old_index - new_index), old_index, new_index))
+    for _, old_index, new_index in sorted(candidates, reverse=True):
+        if old_index in old_left and new_index in new_left:
             matches[new_index] = old_index
             old_left.remove(old_index)
             new_left.remove(new_index)
