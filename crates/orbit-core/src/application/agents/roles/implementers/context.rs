@@ -1,15 +1,17 @@
-//! Display-only diff discipline and regression comparisons. Expected size
-//! comes from the fleet's task cell, never an individual row's own diff.
+//! Expected change size: the size-adjusted expectation the scored
+//! escaped-regression term compares with, and the display-only diff
+//! economy. Expected size comes from the fleet's task cell, never an
+//! individual row's own diff.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::performance::{Key, configured_type, stat, tier};
+use super::performance::{ESCAPED_REGRESSIONS, Key, configured_type, tier};
 use crate::application::agents::AgentFacts;
 use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::score::{RowInput, Stat, Tally, number};
+use crate::application::agents::score::{RowInput, Stat, number};
 
 fn median(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
@@ -19,14 +21,16 @@ fn median(values: &mut [f64]) -> Option<f64> {
     Some((values[values.len() / 2] + values[(values.len() - 1) / 2]) / 2.0)
 }
 
-/// Append context after all rows' tallies exist, so the fleet and the rows
-/// count the same row-task observations. Medians count unique landed tasks.
+/// Append diff economy after all rows' tallies exist, so the fleet and the
+/// rows count the same row-task observations, and return each row's
+/// expected escaped regressions, in row order. Medians count unique landed
+/// tasks.
 pub(super) fn append_diff_context(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     work: &BTreeMap<Key, Vec<&TaskFacts>>,
     rows: &mut [RowInput<'_>],
-) {
+) -> Vec<f64> {
     let cell = |task: &TaskFacts| {
         (
             tier(task),
@@ -67,24 +71,23 @@ pub(super) fn append_diff_context(
         for task in tasks {
             fleet.entry(bucket(task)).or_default().0 += 1;
         }
-        if let Some(tally) = row.tallies.get("escaped_regressions") {
+        if let Some(tally) = row.tallies.get(ESCAPED_REGRESSIONS) {
             for (task, count) in tally.task_counts() {
                 fleet.entry(bucket(task)).or_default().1 += count;
             }
         }
     }
+    let mut expected_regressions = Vec::with_capacity(rows.len());
     for (row, tasks) in rows.iter_mut().zip(work.values()) {
-        let actual = row
-            .tallies
-            .get("escaped_regressions")
-            .map_or(0.0, Tally::count);
-        let expected: f64 = tasks
-            .iter()
-            .map(|task| {
-                let (units, count) = fleet[&bucket(task)];
-                count / units as f64
-            })
-            .sum();
+        expected_regressions.push(
+            tasks
+                .iter()
+                .map(|task| {
+                    let (units, count) = fleet[&bucket(task)];
+                    count / units as f64
+                })
+                .sum(),
+        );
         let mut ratios = Vec::new();
         if let Some(tally) = row.tallies.get("weighted_landed") {
             for (task, _) in tally.task_counts() {
@@ -96,22 +99,11 @@ pub(super) fn append_diff_context(
                 }
             }
         }
-        row.stats.extend([
-            stat(
-                "escaped_regressions",
-                "Escaped regressions (severity-weighted)",
-                number(actual),
-            ),
-            stat(
-                "regression_residual",
-                "Regression residual (actual − expected)",
-                number(actual - expected),
-            ),
-            Stat {
-                key: "diff_economy",
-                label: "Diff economy (× fleet median)",
-                value: median(&mut ratios).map(number).unwrap_or(Value::Null),
-            },
-        ]);
+        row.stats.push(Stat {
+            key: "diff_economy",
+            label: "Diff economy (× fleet median)",
+            value: median(&mut ratios).map(number).unwrap_or(Value::Null),
+        });
     }
+    expected_regressions
 }

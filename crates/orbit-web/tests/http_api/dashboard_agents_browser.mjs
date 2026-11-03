@@ -39,6 +39,7 @@ const TERMS = {
     ['review_rejects', 'Review rejects', -1, 'problem', 'reject verdicts on the row\'s candidates.'],
     ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem', 'accept_with_fixes verdicts on the row\'s candidates.'],
     ['crew_rework', 'Crew-caused rework', -1, 'problem', 'Rework with cause crew.'],
+    ['escaped_regressions', 'Escaped regressions', -0.5, 'problem', 'regression_from links with escape no_test, at their severity weights, against a size-adjusted expectation.'],
   ],
   reviewers: [
     ['findings_held', 'Findings that held', 1, 'credit', 'Findings repaired by the reviewer and validated, open findings on a reject whose cited path the next run changed, and CONFIRMED review-job findings; each weighted by severity: critical 8, high 4, medium 2, low 1.'],
@@ -497,7 +498,9 @@ try {
   assert.equal(await body.evaluate(node => node.querySelector('.agents-how')?.nextElementSibling?.classList.contains('agents-role-panel') ?? false), true, 'the panel directly follows the disclosure, whatever sections come after it');
   assert.equal(await body.locator('.agents-execution').count(), 1, 'the interactive-work section stays rendered for implementers');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
-  for (const label of ['Escaped regressions', 'Regression residual', 'Diff economy']) assert.ok((await body.locator('.agents-stats').textContent()).includes(label));
+  const shownNotScored = await body.locator('.agents-stats').textContent();
+  assert.ok(shownNotScored.includes('Diff economy'), 'diff economy stays in Shown, not scored');
+  assert.ok(!shownNotScored.includes('Escaped regressions') && !shownNotScored.includes('Regression residual'), 'escaped regressions are a scored term, not unscored context');
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
 

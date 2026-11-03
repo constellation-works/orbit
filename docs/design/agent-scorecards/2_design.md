@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -137,7 +137,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Review verdict `accept_with_fixes` | review report | Implementer | the implementation run whose candidate was reviewed |
 | Regression with escape `spec_ambiguous` | `regression_from` classification | Orchestrator | the culprit task's orchestrator attribution |
 | Regression with escape `review_missed` | `regression_from` classification | Reviewer | the review run that accepted the culprit's landed candidate |
-| Regression with escape `no_test` | `regression_from` classification | Implementer (unscored context) | the culprit's final implementation run; shown as escaped regressions, without affecting its score |
+| Regression with escape `no_test` | `regression_from` classification | Implementer | the culprit's final implementation run; scored as escaped regressions (§5.2) unless a pre-landing review already charged the same defect |
 | Regression with escape `test_not_selected`, `platform_only`, `nondeterministic` or `unclassified` | `regression_from` classification | Not scored | — |
 | Regression with nature `merge_reintroduced` or `contract_drift`, regardless of escape | `regression_from` classification | Not scored | — |
 | Finding closed by an authorized decision (`Disposed`) | review report | Reviewer | the review run that raised it |
@@ -149,7 +149,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Lock wait on a path the holder reserved through a selector that covered none of its landed files | lock-wait episodes, pilot receipt | Pilot | the holder task's pilot run |
 | Rework with cause `infrastructure`, `other` or no recorded cause | history | Not scored | — |
 
-A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** takes precedence: `merge_reintroduced` and `contract_drift` go to Not scored regardless of escape. Every other nature follows the escape's owner. Ownership does not by itself make a problem a scored term: `no_test` remains owned by Implementers in the strip and shown as escaped regressions in their unscored stats (§5.2), but it contributes nothing to their score. Two consequences follow:
+A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** takes precedence: `merge_reintroduced` and `contract_drift` go to Not scored regardless of escape. Every other nature follows the escape's owner. Ownership does not by itself make a problem a scored term; `no_test` regressions are scored for Implementers as escaped regressions (§5.2) [ORB-21789]. Two consequences follow:
 
 - Orchestrator spec regressions use escape `spec_ambiguous` only. An incomplete delivery whose escape is not `spec_ambiguous` follows whichever owner its escape names.
 - An implementer is not charged for a defect review should have seen (`review_missed`). The reviewer is.
@@ -159,13 +159,13 @@ A regression's **escape** decides its owner, because the escape records which sa
 A problem counts against the run responsible for it, not the task's latest crew, so a task that moved between crews charges each crew only for its own attempt.
 
 - **Implementation run**: the activity job run that produced the candidate. A problem recorded on a task is charged to the implementation run whose span (the run's start to the next status change, as `run_spans` computes it today) contains the problem's timestamp. If none does, it goes to the most recent run before it.
-- **Final implementation run**: the run whose candidate landed. Landed credit, first-pass accepts, and `no_test` regressions go to it.
+- **Final implementation run**: the run whose candidate landed. Landed credit and `no_test` regressions go to it.
 - **Review run**: the review gate's settlement comment for the attempt. Its reviewer line names the row's crew and model. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
 - **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot.rs`).
 
 ### 3.3 The attribution strip
 
-`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (crew, model, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators. In particular, `no_test` escapes increase the Implementers strip count and escaped-regression stats while leaving the Implementers score unchanged. The strip explains that ownership counts include unscored context and Implementers' escaped regressions do not affect scores [ORB-19644].
+`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (crew, model, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators, so a `no_test` escape that §5.2 counts once as a pre-landing review's verdict still adds one to the Implementers strip. The strip explains that ownership counts include unscored context and rankings use only each role's scored terms [ORB-19644].
 
 The Not scored bucket covers problems without a role owner; it is not a total of every unscored stat. An Implementers-owned `no_test` escape is unscored context within Implementers, not a Not scored reason (unless attribution is unavailable or the attempt is `no-diff-expected`, as below).
 
@@ -238,7 +238,7 @@ use requires its own evaluated proposal and explicit adoption decision.
 
 ### 4.6 Severity
 
-Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; a missed regression adds its severity weight to the reviewer term. Escaped regressions retain their severity-weighted count as unscored implementer context (§5.2). Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
+Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; a missed regression adds its severity weight to the reviewer term. Escaped regressions enter the implementer score at their severity weight (§5.2). Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
 
 A regression link records `severity_source`: `filer`, `verified`, `operator`, `backfill` or `default`. A new classified link must carry a severity. Finding verification runs as a different crew from the filer. When it confirms a review-filed finding, its rating replaces the filer's on that finding's links as `verified`, and an `operator` rating stands. So a reviewer cannot earn more by inflating its own findings. Without verification the filer's value scores, and a link stored before severity existed counts as `medium` (`default`). Review gate findings are not verified and count at the reviewer's own severity; a value off the scale counts 1. A review-job finding that lands without a verification verdict (§5.3) counts at the highest severity rated on its own `regression_from` links, the only typed record of its severity at filing, and as `low` when it has none.
 
@@ -295,8 +295,9 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 | Review rejects | −1 | `reject` verdicts on the row's candidates. |
 | Reviewer repairs | −0.5 | `accept_with_fixes` verdicts on the row's candidates. |
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
+| Escaped regressions | −0.5 | `regression_from` links with escape `no_test` against the row's landed tasks (§3.1), mostly delivery-review findings, each at its severity weight (§4.6), so a `medium` one costs as much as a review reject. Expected counts are size-adjusted (below). A link whose defect site a pre-landing review already charged is not counted again [ORB-21789]. |
 
-Every scored term uses a fleet expectation for the row's **same task mix**:
+Every scored term uses a fleet expectation for the row's **same task mix**; escaped regressions refine it to the same tier and expected change size (below):
 
 ```
 expected(row, term) = Σ tier [row_tasks(tier) × fleet_count(term, tier) / fleet_tasks(tier)]
@@ -349,30 +350,44 @@ actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
 rounding. Other roles have neither additive field and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
-**Escaped regressions, residual and diff economy are shown, not scored [ORB-19629].** The
-2026-10-27 riskiness backtest found lines changed the strongest regression
-predictor (AUC 0.737); crew proneness added nothing beyond size. Routing larger
-work to a crew should not penalize its score. Regression linking is still thin;
-the residual remains unscored pending roughly 100 linked regressions with sites
-and another backtest. Dividing regressions by the crew's actual diff size would
-reward bloat, so expected size and size discipline are separate.
+**Escaped regressions are scored against a size-adjusted expectation [ORB-21789].**
+[ORB-19629] left them unscored until roughly 100 linked regressions with sites
+and another backtest. The 2026-11-03 rerun had 662 links with sites and found
+that change size predicts regressions (cross-validated AUC 0.77) while crew adds
+nothing beyond size and tier ([decision](./4_decisions.md#score-escaped-regressions-against-expected-change-size)).
+Delivery review covers every landed task, so the term is the only review
+evidence for crews whose work no pre-landing review sees. Routing larger work to
+a crew must not penalize its score, and dividing regressions by the crew's own
+diff size would reward bloat, so the expectation uses expected size, never
+actual size:
 
-Each row's `stats` includes:
-
-- `escaped_regressions`: the severity-weighted count of `no_test` regressions
+- The term's **actual** is the severity-weighted count of `no_test` regressions
   against the row's final implementation runs (§4.6), including a measured zero.
-- `regression_residual`: severity-weighted actual minus expected **counts**, not
-  a per-line or per-100 rate. Expected size is the fleet median lines changed
-  among unique landed tasks in the window with the same `(tier, type)`; type is
-  classified by the configured by-type rules and admitted tags below. Fleet
-  medians include all rows, including the row being compared. Tasks enter
-  buckets by that **cell median**, never by their own lines changed: `[0, 2)`,
-  `[2, 4)`, `[4, 8)`, and so on. Each `(tier, expected-size bucket)` has a fleet
-  severity-weighted regression rate per row-task observation. The row's expected
-  count sums that rate over its tasks. Missing cell medians use an explicit
-  unknown-size bucket in that same tier. Sparse buckets keep their own rate;
-  no tiers pool for this display-only metric. This conserves actual and
-  expected counts across the fleet; matching bucket rates yields residual zero.
+- Its **expected** count is size-adjusted, unlike the other terms' tier pools.
+  Expected size is the fleet median lines changed among unique landed tasks in
+  the window with the same `(tier, type)`; type is classified by the configured
+  by-type rules and admitted tags below. Fleet medians include all rows,
+  including the row being compared. Tasks enter buckets by that **cell
+  median**, never by their own lines changed: `[0, 2)`, `[2, 4)`, `[4, 8)`, and
+  so on. Each `(tier, expected-size bucket)` has a fleet severity-weighted
+  regression rate per row-task observation, and the row's expected count sums
+  that rate over its tasks. Missing cell medians use an explicit unknown-size
+  bucket in that same tier. Sparse buckets keep their own rate and no tiers
+  pool. This conserves actual and expected counts across the fleet; matching
+  bucket rates yields contribution zero. The by-type cells (§5.2 below) use
+  their `(tier, type)` cell rates for this term like every other.
+- **Counted once across review layers.** A pre-landing review gate and delivery
+  review can both see a task. A `no_test` link whose `sites` name a path that a
+  finding of a `reject` (not a false reject) or `accept_with_fixes` on the row's
+  candidate cited or changed is the defect that verdict already charged, so it
+  adds nothing to escaped regressions. A `dir:` site covers the paths under it,
+  and a link without sites always counts. The charge stays in the attribution
+  strip's Implementers ownership count.
+
+The former `escaped_regressions` and `regression_residual` stats are removed:
+the term's count, expected count and contribution carry them. Each row's
+`stats` includes:
+
 - `diff_economy`: the median, over the row's landed tasks with measured diffs
   and a positive fleet cell median, of `lines_changed / fleet_cell_median`.
   Above 1 means larger diffs for comparable work; twice each median gives 2.
@@ -415,7 +430,7 @@ Implementers' role panel is **Regression rate by change size**, display only and
 served by the size-curves route (§6); its **Complexity** filter is separate from
 **Rank within**. The score-against-cost plot and per-tier review table remain
 removed. **Rank within** offers All tiers, low, medium, hard and xhard.
-All tiers preserves the existing tier-mix score without escaped regressions.
+All tiers preserves the existing tier-mix score.
 A tier ranks each crew/model by the matrix's `crew_mean`, sums its cell `n` for
 support, hides rows with no work there and leaves below-support rows unranked.
 Ties use support, crew and model. The detail explicitly labels the profile,
@@ -639,6 +654,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
   - Orchestrator credit does not grow with assessed complexity, spec defects on a tenth of a row's tasks lower its rank, and unclassified regressions are shown, not scored.
   - Below-support rows sort last without a rank.
   - Regressions filed after the window still count.
+  - A delivery-review finding lowers the score of an implementer no pre-landing review saw, and a defect both review layers report counts once.
   - Reviewer provisional counts follow the 30-day lookback.
   - A reject the next run proved wrong is the reviewer's false reject, a reject whose cited path changed holds its finding, and rejecting more without being right never raises a reviewer's score.
   - A pilot hold settles from history alone: a description edit before approval confirms it, an unedited approval delivered clean dismisses it, an approval after a bare-note edit is excluded, advisory findings never hold, and a superseded assessment gives way to the next. Warning terms are rated per 100 settled assessments and provisional below 10, and the missed-scope-block source reads unavailable until a block-triage marker is in the window.
@@ -702,7 +718,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-19304 — one severity scale for findings and regression links (critical to nit, weights 8 to 0.25), verified severity scored, escaped and missed regressions weighted by it.
 - ORB-17814 — the Implementers by-type matrix that scores each crew and model per complexity tier and type.
 - ORB-18078 — the `no-diff-expected` exclusion from Implementers units, credit, charges and fleet expectations.
-- ORB-19629 — unscored escaped regressions with the severity-weighted residual and diff economy shown beside the score.
+- ORB-19629 — unscored escaped regressions with the severity-weighted residual and diff economy shown beside the score (superseded by ORB-21789).
+- ORB-21789 — escaped regressions scored against a size-adjusted expectation, counted once when a pre-landing review already charged the defect.
 - ORB-19644 — the strip ownership clarification that unscored `no_test` context still counts toward Implementers ownership.
 - ORB-19633 — scoring an unverified review-job finding by its task's outcome (landed holds, open unjudged, drops neutral).
 

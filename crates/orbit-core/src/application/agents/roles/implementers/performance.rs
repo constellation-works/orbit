@@ -53,6 +53,13 @@ pub(super) const TERMS: &[Term] = &[
         definition: "Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues with cause crew, charged to the run that ended the attempt. Review verdicts are not counted again here.",
         group: "problem",
     },
+    Term {
+        key: ESCAPED_REGRESSIONS,
+        label: "Escaped regressions",
+        weight: -0.5,
+        definition: "regression_from links with escape no_test against the row's landed tasks, mostly delivery-review findings, each at its severity weight (critical 8, high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review reject. Expected counts use the fleet's rate for the same tier and expected change size, never the row's own diff. A link whose defect site a pre-landing review finding on the row's candidate already cited or fixed is that review's reject or repair and is not counted again.",
+        group: "problem",
+    },
 ];
 
 pub(super) type Key = (String, String);
@@ -121,7 +128,7 @@ pub(super) fn rows(
         .iter()
         .map(|(row, tasks)| row_input(facts, since, row.clone(), tasks, &charges, &credits))
         .collect();
-    super::context::append_diff_context(facts, since, &work, &mut rows);
+    let expected_regressions = super::context::append_diff_context(facts, since, &work, &mut rows);
     let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
     for tasks in work.values() {
         for task in tasks {
@@ -162,11 +169,20 @@ pub(super) fn rows(
                 *pool.counts.entry(term).or_default() += count;
             }
         }
-        for (row, tasks) in rows.iter_mut().zip(work.values()) {
+        for ((row, tasks), regressions) in rows
+            .iter_mut()
+            .zip(work.values())
+            .zip(&expected_regressions)
+        {
             row.expected = Some(
                 TERMS
                     .iter()
                     .map(|term| {
+                        // Regression risk follows change size, so escaped
+                        // regressions take the size-adjusted expectation.
+                        if term.key == ESCAPED_REGRESSIONS {
+                            return (term.key, *regressions);
+                        }
                         let expected = tasks
                             .iter()
                             .map(|task| {
@@ -257,6 +273,58 @@ fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Opt
     })
 }
 
+/// Whether a pre-landing review already charged the row for the defect a
+/// regression link names: a `reject` or `accept_with_fixes` on the row's
+/// candidate with a finding that cites or changed one of the link's sites.
+/// That defect counts once, as the review's verdict. A link without sites
+/// names no defect to match and always counts.
+fn charged_by_pre_landing_review(
+    task: &TaskFacts,
+    row: &Key,
+    since: DateTime<Utc>,
+    sites: &[String],
+) -> bool {
+    let sites: Vec<&str> = sites
+        .iter()
+        .filter_map(|site| selector_path(site))
+        .map(|path| path.trim_end_matches('/'))
+        .filter(|path| !path.is_empty())
+        .collect();
+    if sites.is_empty() {
+        return false;
+    }
+    task.reviews
+        .iter()
+        .filter(|review| match review.verdict {
+            ReviewVerdict::Reject => !review.false_reject(),
+            ReviewVerdict::AcceptWithFixes => true,
+            ReviewVerdict::Accept | ReviewVerdict::Incomplete => false,
+        })
+        .filter(|review| {
+            task.attempt_at(review.at).is_some_and(|index| {
+                let attempt = &task.attempts[index];
+                counted(attempt, since) && key(attempt) == *row
+            })
+        })
+        .flat_map(|review| &review.findings)
+        .flat_map(|finding| &finding.paths)
+        .any(|cited| {
+            // A cited path may carry a line suffix (`src/a.rs:10-20`).
+            let path = cited
+                .split_once(':')
+                .map_or(cited.as_str(), |(path, _)| path);
+            sites.iter().any(|site| {
+                path == *site
+                    || path
+                        .strip_prefix(site)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+}
+
+/// The scored escaped-regression term, also read by the diff context.
+pub(super) const ESCAPED_REGRESSIONS: &str = "escaped_regressions";
+
 /// Minimum fleet row-task observations before a tier has its own rate.
 pub(super) const MIN_TIER_TASKS: usize = 30;
 
@@ -338,7 +406,12 @@ pub(super) fn compute_tallies<'a>(
             let term = match charge.problem {
                 Problem::ReviewReject => "review_rejects",
                 Problem::ReviewFixes => "reviewer_repairs",
-                Problem::Regression => "escaped_regressions",
+                Problem::Regression
+                    if charged_by_pre_landing_review(task, row, since, &charge.sites) =>
+                {
+                    continue;
+                }
+                Problem::Regression => ESCAPED_REGRESSIONS,
                 problem if problem.is_rework() => "crew_rework",
                 _ => continue,
             };

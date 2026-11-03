@@ -61,6 +61,9 @@ pub struct Charge {
     pub(super) cause: Option<Cause>,
     /// The regression link's severity, for a regression.
     pub severity: Option<DefectSeverity>,
+    /// The defect sites the regression link names (`symbol:`, `file:` or
+    /// `dir:` selectors), for a regression; empty otherwise.
+    pub(super) sites: Vec<String>,
 }
 
 impl Charge {
@@ -268,6 +271,7 @@ impl Draft<'_> {
             detail: self.detail,
             cause: self.cause,
             severity: self.severity,
+            sites: Vec::new(),
         }
     }
 
@@ -467,7 +471,7 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         | RegressionNature::Incomplete
         | RegressionNature::Unclassified => {}
     }
-    match classification.escape {
+    let mut charge = match classification.escape {
         RegressionEscape::SpecAmbiguous => draft.orchestrator(),
         RegressionEscape::ReviewMissed => {
             let accepted = task
@@ -482,7 +486,9 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         RegressionEscape::PlatformOnly => draft.not_scored("platform_only"),
         RegressionEscape::Nondeterministic => draft.not_scored("nondeterministic"),
         RegressionEscape::Unclassified => draft.not_scored("unclassified"),
-    }
+    };
+    charge.sites.clone_from(&classification.sites);
+    charge
 }
 
 /// An assessment's costly misses and the lock waits it caused, charged to
@@ -502,6 +508,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             detail,
             cause: None,
             severity: None,
+            sites: Vec::new(),
         }
     };
     let misses = graded.costly.iter().map(move |(path, contest)| {

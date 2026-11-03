@@ -1,6 +1,7 @@
 //! Implementers: the crew and model of the implementation runs that did the
-//! work. Escaped regressions and diff context are unscored. Every scored term is compared with the fleet on the same tier mix;
-//! recorded cost and duration remain unscored context. Work admitted as
+//! work. Every scored term is compared with the fleet on the same tier mix,
+//! escaped regressions on the same tier and expected change size; diff
+//! economy, recorded cost and duration remain unscored context. Work admitted as
 //! `no-diff-expected` (reviews, audits, sweeps) is not implementation and
 //! counts nowhere here: no units, credit, charges or fleet expectation.
 //! The tag is judged as of each attempt's start, so retagging a task after

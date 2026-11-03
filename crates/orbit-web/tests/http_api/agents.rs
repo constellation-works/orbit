@@ -81,6 +81,18 @@ pub(super) fn rated_regression(
     escape: RegressionEscape,
     severity: DefectSeverity,
 ) -> String {
+    sited_regression(fixture, culprit, nature, escape, severity, &[])
+}
+
+/// A classified `regression_from` link whose defect lives at `sites`.
+pub(super) fn sited_regression(
+    fixture: &Fixture,
+    culprit: &str,
+    nature: RegressionNature,
+    escape: RegressionEscape,
+    severity: DefectSeverity,
+    sites: &[&str],
+) -> String {
     add(
         fixture,
         Owned {
@@ -97,7 +109,7 @@ pub(super) fn rated_regression(
                     escape,
                     severity,
                     severity_source: SeveritySource::Filer,
-                    sites: Vec::new(),
+                    sites: sites.iter().map(|site| (*site).to_string()).collect(),
                 }),
             }],
         },
@@ -1346,12 +1358,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                     .as_array()
                     .unwrap()
                     .iter()
-                    .all(|term| term["key"] != "escaped_regressions"),
-                "escaped regressions remain unscored context"
-            );
-            assert_eq!(
-                implemented["fleet_average"],
-                implemented_before["fleet_average"]
+                    .any(|term| term["key"] == "escaped_regressions"),
+                "escaped regressions are a scored implementer term"
             );
             for row in implemented["rows"].as_array().unwrap() {
                 let before = implemented_before["rows"]
@@ -1360,10 +1368,16 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                     .iter()
                     .find(|before| before["crew"] == row["crew"] && before["model"] == row["model"])
                     .unwrap();
-                for field in ["counts", "expected", "raw", "score", "rank"] {
+                for term in [
+                    "weighted_landed",
+                    "first_pass_accepts",
+                    "review_rejects",
+                    "reviewer_repairs",
+                    "crew_rework",
+                ] {
                     assert_eq!(
-                        row[field], before[field],
-                        "a no_test regression changes ownership context, not {field}: {row}"
+                        row["counts"][term], before["counts"][term],
+                        "a no_test regression enters escaped regressions only, not {term}: {row}"
                     );
                 }
             }
@@ -1375,13 +1389,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 .unwrap();
             assert_eq!(sol["units"], 2);
             assert_eq!(
-                sol["stats"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|stat| stat["key"] == "escaped_regressions")
-                    .unwrap()["value"],
-                4.0,
+                sol["counts"]["escaped_regressions"], 4.0,
                 "only no_test reaches the implementer, weighted by its high severity; review_missed is the reviewer's"
             );
             assert_eq!(sol["counts"]["review_rejects"], 1);

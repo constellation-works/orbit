@@ -7,11 +7,12 @@ use orbit_core::application::agents::{
     AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
 };
 use orbit_core::application::task::TaskAddParams;
-use orbit_types::task::{RegressionEscape, RegressionNature, TaskComplexity};
+use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature, TaskComplexity};
 use serde_json::{Value, json};
 
 use super::agents::{
     Owned, WS, add, append, as_f64, comment, implementation_run, regression, retag,
+    sited_regression,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -180,7 +181,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     "a fleet-average row starts at 100"
                 );
                 assert!(as_f64(&r["counts"]["crew_rework"]) > 0.0);
-                assert!(as_f64(&stat_value(r, "escaped_regressions")) > 0.0);
+                assert!(as_f64(&r["counts"]["escaped_regressions"]) > 0.0);
                 for term in card["terms"].as_array().unwrap() {
                     let key = term["key"].as_str().unwrap();
                     assert_eq!(
@@ -678,9 +679,62 @@ fn implementers_report_zero_reviewed_units_without_making_review_terms_provision
 }
 
 #[test]
-fn implementer_regressions_do_not_rank_comparable_work() {
+fn a_defect_both_review_layers_report_counts_once() {
     isolated(
-        "agents_implementers::implementer_regressions_do_not_rank_comparable_work",
+        "agents_implementers::a_defect_both_review_layers_report_counts_once",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let both = landed_with_tags(&fixture, "jrun-both", "both", Vec::new());
+            let solo = landed_with_tags(&fixture, "jrun-solo", "solo", Vec::new());
+            // The pre-landing review rejected `both`'s candidate for a
+            // defect in src/a.rs.
+            comment(
+                &fixture,
+                &both,
+                "before-landing review settled attempt `rv-both`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20",
+            );
+            // Delivery review then files that same defect, and a second
+            // one in src/b.rs, against `both`; and the same src/a.rs defect
+            // against `solo`, which had no pre-landing review.
+            for (culprit, site) in [
+                (&both, "symbol:src/a.rs#parse:fn"),
+                (&both, "file:src/b.rs"),
+                (&solo, "symbol:src/a.rs#parse:fn"),
+            ] {
+                sited_regression(
+                    &fixture,
+                    culprit,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Medium,
+                    &[site],
+                );
+            }
+            let card = fixture
+                .runtime
+                .agent_role_scorecard(AgentRole::Implementers, &query)
+                .unwrap();
+            let both = row(&card, "both");
+            assert_eq!(both["counts"]["review_rejects"], 1, "{both}");
+            assert_eq!(
+                both["counts"]["escaped_regressions"], 2,
+                "the src/a.rs defect counts once, as the pre-landing reject; only the src/b.rs finding adds its medium weight: {both}"
+            );
+            let solo = row(&card, "solo");
+            assert_eq!(solo["counts"]["review_rejects"], 0, "{solo}");
+            assert_eq!(
+                solo["counts"]["escaped_regressions"], 2,
+                "with no pre-landing review the delivery-review finding counts: {solo}"
+            );
+        },
+    );
+}
+
+#[test]
+fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
+    isolated(
+        "agents_implementers::delivery_review_regressions_rank_crews_without_pre_landing_review",
         || {
             let fixture = Fixture::new();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
@@ -736,17 +790,26 @@ fn implementer_regressions_do_not_rank_comparable_work() {
                 RegressionNature::DefectInNew,
                 RegressionEscape::NoTest,
             );
+            // No task has a pre-landing review: the delivery-review finding
+            // is the only review evidence, and it must reach the score.
             let card = fixture
                 .runtime
                 .agent_role_scorecard(AgentRole::Implementers, &query)
                 .unwrap();
-            assert_eq!(
-                row(&card, "large")["score"],
-                row(&card, "peer-a")["score"],
-                "regression linking must not rank otherwise identical implementer outcomes"
+            assert!(
+                card["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|term| term["key"] == "escaped_regressions"),
+                "escaped regressions are a scored implementer term: {card}"
             );
-            assert_eq!(stat_value(row(&card, "large"), "escaped_regressions"), 1);
-            assert_eq!(stat_value(row(&card, "peer-a"), "escaped_regressions"), 0);
+            assert!(
+                as_f64(&row(&card, "large")["score"]) < as_f64(&row(&card, "peer-a")["score"]),
+                "a delivery-review finding must rank an unreviewed crew below its clean peer: {card}"
+            );
+            assert_eq!(row(&card, "large")["counts"]["escaped_regressions"], 1);
+            assert_eq!(row(&card, "peer-a")["counts"]["escaped_regressions"], 0);
             assert_eq!(stat_value(row(&card, "large"), "diff_economy"), 2);
             assert_eq!(
                 stat_value(row(&card, "missing"), "diff_economy"),
@@ -754,11 +817,13 @@ fn implementer_regressions_do_not_rank_comparable_work() {
             );
             // Missing own size still uses the known fleet cell median, so the
             // expected count is identical for all four comparable tasks.
-            assert_eq!(stat_value(row(&card, "large"), "regression_residual"), 0.75);
-            assert_eq!(
-                stat_value(row(&card, "missing"), "regression_residual"),
-                -0.25
-            );
+            for crew in ["peer-a", "peer-b", "large", "missing"] {
+                assert_eq!(
+                    as_f64(&row(&card, crew)["expected"]["escaped_regressions"]),
+                    0.25,
+                    "{crew} expects the fleet rate of its expected-size bucket"
+                );
+            }
             for id in [&ids[0], &ids[1], &ids[3]] {
                 regression(
                     &fixture,
@@ -776,9 +841,14 @@ fn implementer_regressions_do_not_rank_comparable_work() {
             );
             for crew in ["peer-a", "peer-b", "large", "missing"] {
                 assert_eq!(
-                    stat_value(row(&card, crew), "regression_residual"),
-                    0,
+                    as_f64(&row(&card, crew)["counts"]["escaped_regressions"]),
+                    as_f64(&row(&card, crew)["expected"]["escaped_regressions"]),
                     "fleet-matched expected-size buckets have no residual"
+                );
+                assert_eq!(
+                    row(&card, crew)["score"],
+                    row(&card, "peer-a")["score"],
+                    "matching regression rates rank alike"
                 );
             }
             let matrix = agent_by_type_scorecard(&facts, &query, &[], std::time::Duration::ZERO);
