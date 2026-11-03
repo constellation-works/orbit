@@ -433,7 +433,11 @@ targets. It may omit a selector it verifies as read-only evidence or an
 incidental shared-doc touch by recording its exact selector and inspection
 reason in `context_evidence_dropped`. Apply validates each record against
 omitted, resolving review selectors and saves it in the assessment audit;
-unexplained omissions remain in filed order as `context_evidence_retained`.
+for `selectors`, unexplained omissions remain in filed order as
+`context_evidence_retained`. A `verified_no_diff` review assessment validates
+the same drop records against its prepared scope at the inspection revision,
+then keeps its empty footprint. Drop reasons do not replace the existing
+already-landed or invalid-finding proof.
 A record cannot override a proposed change target or an operator-declared
 creation target. Keep evidence references in the finding's description.
 

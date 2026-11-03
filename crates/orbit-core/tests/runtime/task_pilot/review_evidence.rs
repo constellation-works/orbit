@@ -3,7 +3,7 @@
 //! findings still fire for swept proposals. Fixtures drive the real prepare
 //! and apply actions against a real store and repository in isolated children.
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{Task, TaskStatus};
 use serde_json::{Value, json};
 
@@ -344,6 +344,291 @@ fn invalid_evidence_drop_records_cannot_narrow_the_scope() {
         let applied = workspace.assess_with_drops(&prepared, &NARROWED, "medium", drops);
         assert_eq!(outcome(&applied)["outcome"], "invalid", "{applied}");
         assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+    }
+}
+
+fn no_diff_input(workspace: &Workspace, prepared: &Value, drops: Value) -> Value {
+    let task_id = &prepared["task_ids"][0];
+    let evidence = format!(
+        "The finding is already satisfied by {} at the pinned source.",
+        prepared["source"]["source_revision"].as_str().unwrap()
+    );
+    json!({
+        "workspace_path": workspace.repo, "prepared": prepared,
+        "results": [{"partition_index": 0, "task_ids": [task_id], "tasks": [{
+            "task_id": task_id, "context_files_after": [],
+            "disposition": "verified_no_diff", "evidence": evidence,
+            "already_landed": {"evidence": evidence},
+            "context_evidence_dropped": drops,
+            "recommended_crew": "fixture", "recommended_complexity": "medium",
+            "confidence": "high", "assessment_rationale": "The pinned sources need no change.",
+            "validation_approach": "Verify source proof, scope, audit and replay.",
+            "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+            "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+            "duplicate_of": null,
+        }]}],
+    })
+}
+
+fn verified_no_diff_accepts_evidence_drops_on_initial_and_targeted_repair_apply() {
+    for repair in [false, true] {
+        let workspace = Workspace::new();
+        workspace.commit_files(&FILED);
+        let task = workspace.filed_task(
+            "already satisfied review",
+            &["delivery-code-review"],
+            &FILED,
+        );
+        let pinned = workspace.object("HEAD");
+        let prepared = workspace.prepare(&[&task.id]);
+        assert_eq!(prepared["source"]["source_revision"], pinned);
+        let drops = json!([
+            {"selector": DUPLICATES, "reason": "Inspected the pinned caller; the duplicate is already suppressed."},
+            {"selector": FILING, "reason": "Inspected filing at the pinned source; it needs no change."},
+        ]);
+        let input = if repair {
+            // Exercise the real targeted-repair payload, retaining preparation
+            // and carried outcomes after a malformed first assessment.
+            let first = workspace.action(
+                "apply_task_pilot_results",
+                no_diff_input(
+                    &workspace,
+                    &prepared,
+                    json!([{"selector": DUPLICATES, "reason": ""}]),
+                ),
+            );
+            assert_eq!(first["repair_count"], 1, "{first}");
+            assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+            let mut input = no_diff_input(&workspace, &first["repair_prepared"], drops.clone());
+            input["prior_applied_count"] = first["applied_count"].clone();
+            input["carried_task_outcomes"] = first["non_repairable_outcomes"].clone();
+            input
+        } else {
+            no_diff_input(&workspace, &prepared, drops.clone())
+        };
+        let applied = workspace.action("apply_task_pilot_results", input.clone());
+        assert_eq!(
+            applied["status"], "succeeded",
+            "initial/repair={repair}: {applied}"
+        );
+        assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+        assert_eq!(applied["tasks"][0]["disposition"], "verified_no_diff");
+        assert_eq!(applied["tasks"][0]["context_evidence_dropped"], drops);
+        assert!(
+            applied["tasks"][0]
+                .get("context_evidence_retained")
+                .is_none()
+        );
+        assert!(workspace.scope(&task.id).is_empty());
+        assert_eq!(
+            workspace.runtime.get_task(&task.id).unwrap().status,
+            TaskStatus::Proposed
+        );
+        assert_eq!(
+            workspace.action("pipeline_success_guard", json!({"result": applied}))["succeeded"],
+            true
+        );
+        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+        let audit: Value =
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+        assert_eq!(audit["assessment"]["context_evidence_dropped"], drops);
+        assert_eq!(audit["recheck_basis"]["source_revision"], pinned);
+        assert_eq!(audit["context_files_before"], json!(FILED));
+        assert_eq!(
+            audit["assessment"]["already_landed"],
+            input["results"][0]["tasks"][0]["already_landed"]
+        );
+        let replayed = workspace.action("apply_task_pilot_results", input);
+        assert_eq!(
+            outcome(&replayed)["outcome"],
+            "already_applied",
+            "{replayed}"
+        );
+        assert_eq!(
+            workspace.runtime.get_task_comments(&task.id).unwrap().len(),
+            comments.len()
+        );
+        assert_eq!(
+            workspace.object("HEAD"),
+            pinned,
+            "no manufactured implementation commit"
+        );
+        assert!(workspace.git(&["status", "--porcelain"]).is_empty());
+    }
+}
+
+crate::scenario_table!(
+    verified_no_diff_evidence_drop_scenarios,
+    verified_no_diff_accepts_evidence_drops_on_initial_and_targeted_repair_apply,
+    verified_no_diff_drop_records_cannot_bypass_scope_or_inspection_proof,
+    verified_no_diff_drop_records_cannot_revoke_creation_grants,
+    verified_no_diff_drop_records_preserve_covering_proof_for_closure,
+);
+
+fn verified_no_diff_drop_records_preserve_covering_proof_for_closure() {
+    for proved in [true, false] {
+        let workspace = Workspace::new();
+        workspace.commit_files(&FILED);
+        let task = workspace.filed_task(
+            "already satisfied review",
+            &[
+                "delivery-code-review",
+                "ci-failure-sweep",
+                "ci-failure:fixture-key",
+            ],
+            &FILED,
+        );
+        let prepared = workspace.prepare(&[&task.id]);
+        let pinned = workspace.object("HEAD");
+        let drops =
+            json!([{"selector": DUPLICATES, "reason": "Inspected the already repaired source."}]);
+        let mut input = no_diff_input(&workspace, &prepared, drops.clone());
+        // An explicit already_landed finding uses its own existing hold.
+        // Exercise the separate verified_no_diff covering-proof closure here.
+        input["results"][0]["tasks"][0]["already_landed"] = Value::Null;
+        if !proved {
+            let evidence =
+                json!("An unresolvable commit 0badc0ffee1 supposedly fixed the finding.");
+            input["results"][0]["tasks"][0]["evidence"] = evidence;
+        }
+        input["ci_sweep_filing"] = json!({
+            "task_id": task.id, "failure_key": "fixture-key", "tested_commit": "0123abcd",
+            "workflow": "ci", "job": "test", "step": "cargo test",
+            "run_urls": ["https://github.com/example/repo/actions/runs/1"],
+        });
+        input["promotion_authorized"] = json!(true);
+        let applied = workspace.action("apply_task_pilot_results", input);
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        let decision = &applied["ci_sweep_admission"][0];
+        assert_eq!(
+            decision["classification"], "pilot_verified_no_diff",
+            "{applied}"
+        );
+        assert_eq!(decision["closed"], proved, "{applied}");
+        assert_eq!(
+            workspace.runtime.get_task(&task.id).unwrap().status,
+            if proved {
+                TaskStatus::Archived
+            } else {
+                TaskStatus::Proposed
+            }
+        );
+        if proved {
+            assert_eq!(decision["covering_commits"], json!([pinned]));
+        } else {
+            assert!(
+                decision["not_closed_reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("not a commit"),
+                "{applied}"
+            );
+        }
+        assert_eq!(applied["tasks"][0]["context_evidence_dropped"], drops);
+        assert_eq!(workspace.object("HEAD"), pinned);
+        assert!(workspace.git(&["status", "--porcelain"]).is_empty());
+    }
+}
+
+fn verified_no_diff_drop_records_cannot_bypass_scope_or_inspection_proof() {
+    let workspace = Workspace::new();
+    workspace.commit_files(&[DUPLICATES, EXTRA]);
+    let missing = "file:src/removed.rs";
+    let task = workspace.filed_task(
+        "already satisfied review",
+        &["code-review"],
+        &[DUPLICATES, missing],
+    );
+    let prepared = workspace.prepare(&[&task.id]);
+    let valid =
+        json!([{"selector": DUPLICATES, "reason": "The pinned source is already correct."}]);
+    let mut inputs = vec![
+        no_diff_input(
+            &workspace,
+            &prepared,
+            json!([{"selector": EXTRA, "reason": "Not in the prepared review scope."}]),
+        ),
+        no_diff_input(
+            &workspace,
+            &prepared,
+            json!([{"selector": missing, "reason": "Does not resolve at the pinned source."}]),
+        ),
+    ];
+    for field in ["observed_revision", "observed_tree"] {
+        let mut forged =
+            workspace.with_inspection_proof(no_diff_input(&workspace, &prepared, valid.clone()));
+        forged["results"][0][field] = json!("0badc0ffee1");
+        inputs.push(forged);
+    }
+    let mut unproved = no_diff_input(&workspace, &prepared, valid.clone());
+    unproved["results"][0]["tasks"][0]["evidence"] = json!("");
+    inputs.push(unproved);
+    let mut target = no_diff_input(&workspace, &prepared, valid);
+    target["results"][0]["tasks"][0]["disposition"] = json!("selectors");
+    target["results"][0]["tasks"][0]["context_files_after"] = json!([DUPLICATES]);
+    inputs.push(target);
+    let history = workspace.runtime.get_task_history(&task.id).unwrap().len();
+    for input in inputs {
+        let applied = workspace.action("apply_task_pilot_results", input);
+        assert_eq!(applied["applied_count"], 0, "{applied}");
+        assert_eq!(applied["repair_count"], 1, "{applied}");
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap().len(),
+            history
+        );
+        assert!(
+            workspace
+                .runtime
+                .get_task_comments(&task.id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+fn verified_no_diff_drop_records_cannot_revoke_creation_grants() {
+    for landed in [false, true] {
+        let workspace = Workspace::new();
+        let creation = "file:src/created.rs";
+        let task = workspace
+            .runtime
+            .add_task_screened(
+                TaskAddParams {
+                    title: "review requires creation".into(),
+                    description: "Create the missing module.".into(),
+                    acceptance_criteria: vec!["The module exists.".into()],
+                    plan: "Create the module.".into(),
+                    status: Some(TaskStatus::Proposed),
+                    tags: owned(&["delivery-code-review"]),
+                    context_files: owned(&[creation]),
+                    ..Default::default()
+                },
+                &TaskWriteScreen::unbound(true),
+                None,
+                None,
+            )
+            .unwrap()
+            .task;
+        if landed {
+            workspace.commit_files(&[creation]);
+        }
+        let prepared = workspace.prepare(&[&task.id]);
+        let history = workspace.runtime.get_task_history(&task.id).unwrap();
+        let applied = workspace.action(
+            "apply_task_pilot_results",
+            no_diff_input(
+                &workspace,
+                &prepared,
+                json!([{"selector": creation, "reason": "Claimed read-only."}]),
+            ),
+        );
+        assert_eq!(outcome(&applied)["outcome"], "invalid", "{applied}");
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap(),
+            history
+        );
     }
 }
 
