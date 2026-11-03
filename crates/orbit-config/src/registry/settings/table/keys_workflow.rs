@@ -197,14 +197,22 @@ macro_rules! with_workflow_keys {
         description: "Largest factor usage pressure scales a crew's draw weight up or down by.",
         section: ConfigSection::Delivery, order: 111,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<f64>| crate::provider_limit::admit_usage_pressure_cap(raw),
+        resolve: crate::finite_factor_admission(
+            crate::DEFAULT_USAGE_PRESSURE_CAP,
+            1.0,
+            "workflow.usage_pressure_cap",
+        ),
     },
     workflow_usage_pressure_strength: f64 => f64 {
         key: "workflow.usage_pressure_strength", value_type: "number",
         description: "Exponent applied to usage pressure before the cap; 0 disables weighting.",
         section: ConfigSection::Delivery, order: 112,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<f64>| crate::provider_limit::admit_usage_pressure_strength(raw),
+        resolve: crate::finite_factor_admission(
+            crate::DEFAULT_USAGE_PRESSURE_STRENGTH,
+            0.0,
+            "workflow.usage_pressure_strength",
+        ),
     },
     workflow_crew_performance_types: Vec<CrewPerformanceType> => Vec<CrewPerformanceType> {
         key: "workflow.crew_performance_types", value_type: "array<table>",
@@ -225,14 +233,22 @@ macro_rules! with_workflow_keys {
         description: "Scale of the crew-performance factor's exponent; 0 disables it.",
         section: ConfigSection::Delivery, order: 116,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<f64>| crate::crew_performance::admit_crew_performance_strength(raw),
+        resolve: crate::finite_factor_admission(
+            crate::DEFAULT_CREW_PERFORMANCE_STRENGTH,
+            0.0,
+            crate::CREW_PERFORMANCE_STRENGTH_KEY,
+        ),
     },
     workflow_crew_performance_cap: f64 => f64 {
         key: "workflow.crew_performance_cap", value_type: "number",
         description: "Largest factor crew performance scales a crew's draw weight up or down by.",
         section: ConfigSection::Delivery, order: 117,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<f64>| crate::crew_performance::admit_crew_performance_cap(raw),
+        resolve: crate::finite_factor_admission(
+            crate::DEFAULT_CREW_PERFORMANCE_CAP,
+            1.0,
+            crate::CREW_PERFORMANCE_CAP_KEY,
+        ),
     },
     workflow_crew_performance_window_days: u32 => u32 {
         key: "workflow.crew_performance_window_days", value_type: "integer",
