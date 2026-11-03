@@ -39,8 +39,10 @@
 orbit_common::isolate_test_process!();
 
 mod activity_catalog;
-mod application_admission;
-pub mod application_authority;
+/// Host-local application authority audit hooks.
+pub mod application_authority {
+    pub use crate::application_consent::{finish_application_dispatch, take_application_audit};
+}
 mod application_consent;
 mod application_port;
 pub mod assets;
