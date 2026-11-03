@@ -3558,6 +3558,49 @@ fn auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persisten
     );
 }
 
+/// [ORB-21766] A transient (TLS) required-checks read failure after a
+/// completion mutation was already recorded (post-recovery) holds as
+/// inconclusive check evidence, not a plain auto-fix stop: the read is
+/// read-only, so the next pass can re-read the forge and reconcile any
+/// earlier mutation from the PR status.
+#[test]
+fn auto_fix_holds_transient_required_checks_after_completion_mutation() {
+    auto_fix_table(
+        "auto_fix::auto_fix_holds_transient_required_checks_after_completion_mutation",
+        "tls_after_mutation",
+        |case, row| {
+            let (fx, host) = opened_review(row);
+            fx.script_checks(&["success"]);
+            seed_auto_fix_history(
+                &host,
+                orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT,
+                &json!({"run_id": RUN_ID, "operation": "merge"}),
+            );
+            fx.script_required_check_outcomes(&["tls"]);
+            let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: transient required-checks read must hold, not stop: {error}"
+            );
+            assert!(
+                error.to_string().contains("TLS handshake timeout"),
+                "{case}: {error}"
+            );
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(refusal.error_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal)),
+                "{case}: the run holds for the next auto-fix pass"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
 /// [ORB-21436] A completion deadline expiring during the auto-fix
 /// required-checks read carries its own typed refusal: the run holds as
 /// `CompletionBudgetExpired`, not as inconclusive check evidence.

@@ -29,7 +29,7 @@ use super::super::merge::PermittedMerge;
 use super::ci_rerun_hold::{CiRerunHold, CiRerunHoldStep, CiRerunRecoveryOutcome};
 use super::conflict::is_blocked_merge_state;
 use super::drive::Delivery;
-use super::mutation::observation_failure;
+use super::mutation::{checked_required_check_observation_failure, observation_failure};
 use super::reviewed::{
     ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_wait_timeout,
 };
@@ -282,7 +282,20 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             &mut self.unreported,
             (max_wait_seconds > 0).then_some(completion_deadline_ms),
         )
-        .map_err(|refusal| observed(refusal.into_error(|reason| stopped(pr_number, reason))))?;
+        .map_err(|refusal| {
+            let error = refusal.into_error(|reason| stopped(pr_number, reason));
+            if auto_fix.is_some() {
+                checked_required_check_observation_failure(
+                    host,
+                    input,
+                    mutated,
+                    observation_budget,
+                    error,
+                )
+            } else {
+                observed(error)
+            }
+        })?;
         if !base_refresh_wait
             && !self.base_adopted
             && (matches!(state, PrMergeState::Blocked(_))
