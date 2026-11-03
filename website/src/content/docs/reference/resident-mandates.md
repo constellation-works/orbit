@@ -5,7 +5,7 @@ description: "Prepare a resident mandate, check its fields, inspect its effectiv
 
 A resident mandate is an assignment task tagged `resident` that carries a `resident/mandate.json` artifact. The artifact says what the resident works toward and which workspaces it concerns. The mandate's authority, the rights and workspaces the resident may use, is a separate record. It starts with no rights. A human widens it. Anyone who can write the assignment task can narrow it.
 
-This page covers the mandate format, the authority commands and the manager's relay and control commands in this release. It does not describe how a resident cycle is scheduled or started. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
+This page covers the mandate format, the authority commands, the manager's relay and control commands, and the digest and metrics reports in this release. It does not describe how a resident cycle is scheduled or started. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
 
 ## Prepare the assignment
 
@@ -251,6 +251,63 @@ orbit evolution show <evolution-id>
 ```
 
 `orbit evolution decline <evolution-id> [--days <n>]` suppresses proposals for a signature. It is operator-only and CLI-only, so it is not listed over MCP.
+
+## Digest and metrics
+
+`orbit resident digest` and `orbit resident metrics` report on the workspace's resident mandates. Neither command writes state. Both only read tasks, comments, history, decision requests and checkpoints; the digest also reads evolution records and the `resident.evolution` settings. Neither records anything on a task, a request or the authority, and neither starts, pauses or changes a resident.
+
+### Digest
+
+```bash
+orbit resident digest
+orbit resident digest --since 7d --top 10
+```
+
+The digest is the manager's view of the bound workspace. Read it to see what a person needs to act on: what each resident is waiting on, which escalations are open, which decisions could still be vetoed, and which costs keep recurring. Its text output has these parts, in order:
+
+- **Residents**: one line per mandate, with its title, state, last checkpoint outcome and open request count. A mandate that [is stalled](#stalled-residents) is marked `(stalled)`.
+- **Open escalations**: open decision requests that residents raised, and open grant requests, oldest first.
+- **Decisions awaiting veto**: reversible decisions from checkpoints in the window that no answer has reversed yet. `--json` gives each decision's ID. To veto one, relay the human's words with `--reverses` (see [Relay a human's words](#relay-a-humans-words)).
+- **Proposals awaiting approval**: proposed tasks linked to evolution records. The digest lists them and approves none of them.
+- **Top pains**: unresolved evolution pains from the window, costliest first. Each shows its minutes plus slot minutes, and its occurrence, cycle and mandate counts. See the [Evolution ledger](#evolution-ledger).
+- **Metrics**: the workspace totals of interventions and escalations over the same window.
+
+Its flags:
+
+- `--since <window>` sets the window for the decisions, the pains and the metrics line. It takes the forms that `metrics --since` takes. The default is `resident.evolution.window_days`, which is 14 days unless you change it (see [Configuration](../config/)). Open escalations, proposals and residents are current state, so `--since` does not limit them.
+- `--top <n>` caps the pains shown, from 1 to 100. The default is 5.
+
+### Metrics
+
+```bash
+orbit resident metrics
+orbit resident metrics --mandate <task id> --since 2w
+orbit resident metrics --baseline <task id>
+```
+
+Its flags:
+
+- `--mandate <task id>` reports one mandate. Without it, the report covers every resident mandate in the workspace and adds a `totals` block. The text output leaves `totals` out when exactly one mandate is listed, because it would repeat that mandate.
+- `--since <window>` sets the window start. Use a span such as `7d`, `24h` or `2w` (units `m`, `h`, `d` and `w`), an RFC 3339 instant, or a `YYYY-MM-DD` date. The window ends when you run the command. The default is 30 days.
+- `--baseline <task id>` computes the same measures for an assignment task that a person worked interactively, not through a resident. Use it to compare resident work with the same kind of work done by hand. With `--baseline` alone, the report covers only the baseline.
+
+The text output prints one block per mandate, labelled by its task ID, then `totals` and `baseline`. Each block has four measures.
+
+**Interventions** counts the times a person changed the course of the work in the window. It counts unprompted relays (a `resident.answer` with no request ID) whoever sent them, because a relay carries a person's words. It counts other comments, status changes, and history events that name a requeue, cancel, stop or takeover only when a person wrote them. An author counts as a person when it is `human` or `operator`, or starts with `human:` or `human-`. Answers to escalations, grants and the resident's own events do not count. The count covers the assignment and the tasks it watches: its `watch` list, tasks with its watched tags, related tasks, and the subjects of its actions. The text shows the count and the count per active mandate-day.
+
+**Escalation load** counts the decision requests the resident raised in the window. The text also shows the rate per active mandate-day, the median seconds from raised to answered, the share answered with the recommended option, and the number that expired unanswered. The recommended share counts only answered requests that offered a recommendation. The median is blank when no request in the window has been answered, and the share is blank when no answered request offered a recommendation.
+
+**Reversal rate** is the share of the resident's decisions and successful actions, recorded in checkpoints within the window, that a person undid within 7 days. Each counts once. A decision is undone when a `resident.answer` names its ID in `reverses`. An action is undone when a `resident.answer` names its key, when a human write moves its subject to `proposed` or `rejected`, or when a human write records a revert. The text shows `reversed/total (rate …)`, and the rate is blank when there is nothing to judge.
+
+**Recovery cost** covers cycles that ended without a complete checkpoint (an `incomplete` outcome). For each, `--json` gives the time from the dead cycle's start to the next complete checkpoint, as a median and a maximum, and the human interventions in that span. The text shows three numbers: the crashed cycles; the repeated actions, meaning successful actions that ran a second time, including a dead cycle's completed action that a recovery cycle ran again instead of skipping; and the recovery slot minutes, the minutes from each recovery cycle's start to its checkpoint.
+
+How the window and the baseline work:
+
+- Only events between the window start and now count. A mandate's active days run from the later of its creation and the window start to now, rounded up to whole days and at least one. Per-mandate-day rates divide by those days. In `totals`, they divide by the summed active days of all mandates. The per-human-day escalation rate divides by the calendar length of the window instead.
+- The baseline uses the same window and its own active days. A baseline with no checkpoints reports `not_derivable` for the reversal rate and recovery cost, never zero. Its interventions and escalation load still compute.
+- A watched task in another registered workspace on this machine contributes its history and decision requests, but not its comments, which cannot be read across workspaces. A reference that no registered workspace holds is listed under `references.unreachable` and skipped.
+
+`--json` returns the payload: `window` and `mandates`, plus `totals` and `baseline` when they apply. Each measure appears under two keys, for example `interventions` and `manual_interventions`, `escalations` and `escalation_load`, `reversals` and `reversal_rate`, `recovery` and `recovery_cost`.
 
 ## Related pages
 
