@@ -865,16 +865,29 @@ pub(super) fn read_attention_sources(
             .timings
             .insert("resident_stalled".into(), started.elapsed().as_micros());
     }
+    // friction_untriaged is derived only on the home owner: a replica's
+    // friction store is not authoritative, so it degrades like the task kinds.
     if filter.selected(K::FrictionUntriaged) {
         let started = Instant::now();
-        match friction_attention_items(runtime, workspace, host, now, settings) {
-            Ok(items) => result.items.extend(items),
-            Err(error) => result.degraded.push(AttentionDegraded {
+        if runtime.coordination_task_reads_visible() {
+            match friction_attention_items(runtime, workspace, host, now, settings) {
+                Ok(items) => result.items.extend(items),
+                Err(error) => result.degraded.push(AttentionDegraded {
+                    scope: format!("workspace:{}", workspace.id),
+                    kind: K::FrictionUntriaged.as_str().into(),
+                    code: "source_unavailable".into(),
+                    message: error.to_string(),
+                }),
+            }
+        } else if !filter.candidate_read {
+            result.degraded.push(AttentionDegraded {
                 scope: format!("workspace:{}", workspace.id),
                 kind: K::FrictionUntriaged.as_str().into(),
                 code: "source_unavailable".into(),
-                message: error.to_string(),
-            }),
+                message:
+                    "Friction records on a replica are not authoritative; read the workspace owner"
+                        .into(),
+            });
         }
         result
             .timings

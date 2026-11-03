@@ -13,6 +13,16 @@ fn session() -> ToolSessionContext {
 }
 
 fn call(runtime: &OrbitRuntime, input: Value) -> Value {
+    call_with(runtime, input, session())
+}
+
+fn aggregator_session() -> ToolSessionContext {
+    let mut session = session();
+    session.mcp_client_name = Some("orbit-federated-mux".into());
+    session
+}
+
+fn call_with(runtime: &OrbitRuntime, input: Value, session: ToolSessionContext) -> Value {
     runtime
         .execute_tool_command_dispatch_with_session_context(
             "orbit.attention",
@@ -20,10 +30,28 @@ fn call(runtime: &OrbitRuntime, input: Value) -> Value {
             None,
             None,
             ToolEntryPoint::Mcp,
-            session(),
+            session,
         )
         .map(|outcome| outcome.value)
         .unwrap_or_else(|error| panic!("attention call failed: {error}"))
+}
+
+fn add_open_friction(runtime: &OrbitRuntime) -> String {
+    use orbit_store::contracts::FrictionAddParams;
+    let store = orbit_core::runtime::friction::store_for(runtime).unwrap();
+    store
+        .add(FrictionAddParams {
+            model: "test".into(),
+            title: Some("Open friction".into()),
+            body: "Open friction body".into(),
+            tags: vec!["other".into()],
+            status: orbit_types::record::FrictionStatus::Open,
+            during_task: None,
+            created_at: chrono::Utc::now(),
+        })
+        .unwrap()
+        .record
+        .id
 }
 
 fn git(repo: &Path, args: &[&str]) {
@@ -343,8 +371,88 @@ fn friction_untriaged_lists_only_open() {
     assert_eq!(items[0]["next"]["input"]["status"], "triaged");
 }
 
+fn replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let friction_id = add_open_friction(&fixture.runtime);
+    let replica = fixture
+        .runtime
+        .clone()
+        .with_coordination_write_owner(Some("hm_owner".into()));
+    let candidate = call_with(
+        &replica,
+        json!({"kind": ["ci_red", "friction_untriaged"], "candidate_read": true}),
+        aggregator_session(),
+    );
+    assert_eq!(candidate["items"], json!([]), "{candidate}");
+    assert_eq!(candidate["degraded"], json!([]), "{candidate}");
+    assert_eq!(
+        fixture.calls(),
+        "",
+        "replica candidate read must not call the provider: {}",
+        fixture.calls()
+    );
+    // The owner still reports both sources.
+    let owner = call(
+        &fixture.runtime,
+        json!({"kind": ["ci_red", "friction_untriaged"]}),
+    );
+    let items = owner["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{owner}");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["kind"] == "ci_red" && item["refs"]["run_id"] == "42"),
+        "{owner}"
+    );
+    assert!(
+        items.iter().any(|item| item["kind"] == "friction_untriaged"
+            && item["refs"]["friction_id"] == friction_id),
+        "{owner}"
+    );
+    assert!(fixture.calls().contains("run list"), "{}", fixture.calls());
+}
+
+fn replica_direct_reads_identify_owner_only_sources_without_provider_call() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    add_open_friction(&fixture.runtime);
+    let replica = fixture
+        .runtime
+        .clone()
+        .with_coordination_write_owner(Some("hm_owner".into()));
+    let direct = call(&replica, json!({"kind": ["ci_red", "friction_untriaged"]}));
+    assert_eq!(direct["items"], json!([]), "{direct}");
+    for kind in ["ci_red", "friction_untriaged"] {
+        let entry = direct["degraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["kind"] == kind)
+            .unwrap_or_else(|| panic!("missing degraded for {kind}: {direct}"));
+        assert_eq!(entry["code"], "source_unavailable", "{direct}");
+        assert!(
+            entry["message"]
+                .as_str()
+                .unwrap()
+                .contains("read the workspace owner"),
+            "{direct}"
+        );
+    }
+    assert_eq!(
+        fixture.calls(),
+        "",
+        "direct replica read must not call the provider: {}",
+        fixture.calls()
+    );
+}
+
 crate::scenario_table!(
     attention_provider,
+    replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
+    replica_direct_reads_identify_owner_only_sources_without_provider_call,
     ci_red_lists_newest_failed_run_on_head,
     ci_red_exclude_kind_makes_no_provider_call,
     ci_red_missing_auth_degrades_without_failing,

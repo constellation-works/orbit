@@ -797,6 +797,11 @@ fn task_show_object_field_projection_keeps_its_value_under_fields() {
 
 #[test]
 fn local_read_projection_contracts() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::local_read_projection_contracts",
+    ) {
+        return;
+    }
     for (name, check) in [
         (
             "local_read_projections_return_registered_keys_task_flow_and_artifact_manifest",

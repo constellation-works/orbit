@@ -872,10 +872,79 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
     std::fs::write(
         &config_path,
         format!(
-            "{existing}\n[[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"no-diff-expected\"]\n"
+            "{existing}\n[[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"audit-work\"]\n"
         ),
     )
     .unwrap();
+
+    // Seed one counted implementation attempt so the cell matrix is
+    // nonempty: a tagged task moved into in-progress by its crew/model,
+    // worked by a finished implementation run in the window.
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        let workspace = runtime.workspace_id().unwrap();
+        let id = runtime
+            .add_task(TaskAddParams {
+                title: "by-type implemented".into(),
+                description: "by-type scorecard fixture".into(),
+                plan: "implement the change".into(),
+                tags: vec!["audit-work".to_string()],
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                Some("claude".into()),
+                Some("model-fixture".into()),
+            )
+            .unwrap();
+        let finished = Utc::now();
+        let started = finished - chrono::Duration::hours(1);
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(
+                &workspace,
+                &JobRun {
+                    build: None,
+                    run_id: "jrun-by-type-0".into(),
+                    job_id: "task_pr_pipeline".into(),
+                    attempt: 1,
+                    state: JobRunState::Success,
+                    scheduled_at: started,
+                    created_at: started,
+                    started_at: Some(started),
+                    finished_at: Some(finished),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({ "task_ids": [id] })),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: Some("sol".into()),
+                    crew_model: Some("model-fixture".into()),
+                    steps: Vec::new(),
+                    executed_on: None,
+                },
+                None,
+            )
+            .unwrap();
+    }
 
     let card = fixture.json(&[
         "agents",
@@ -888,7 +957,18 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
     assert_eq!(card["by_type"], true, "{card}");
     assert_eq!(card["types"][0]["name"], "review", "{card}");
     assert!(card["cells"].is_array(), "{card}");
-    for cell in card["cells"].as_array().unwrap() {
+    let cells = card["cells"].as_array().unwrap();
+    assert!(
+        !cells.is_empty(),
+        "the seeded attempt must produce cells: {card}"
+    );
+    assert!(
+        cells
+            .iter()
+            .any(|cell| cell["type"] == "review" && cell["n"].as_u64().is_some_and(|n| n >= 1)),
+        "the seeded audit-work attempt lands in a review cell: {card}"
+    );
+    for cell in cells {
         for field in [
             "crew",
             "model",
