@@ -498,6 +498,20 @@ impl TaskBundleStoreV2 {
         ]))
     }
 
+    /// The bundle directory a caller stamps instead of reading, under the
+    /// same settledness rule as [`Self::settled_log_paths`]: `None` while an
+    /// incomplete write is recorded for it or an interrupted commit awaits
+    /// replay.
+    pub(crate) fn settled_bundle_dir(&self, task_id: &str) -> Result<Option<PathBuf>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if bundle_dir.join(PENDING_WRITE_FILE_NAME).try_exists()?
+            || has_interrupted_commit(&bundle_dir)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(bundle_dir))
+    }
+
     fn read_sidecar_if_settled<T>(
         &self,
         task_id: &str,

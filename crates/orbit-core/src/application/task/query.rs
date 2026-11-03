@@ -35,6 +35,24 @@ impl OrbitRuntime {
         self.task_decision_requests_in(&task, &history, &comments, chrono::Utc::now())
     }
 
+    /// [`Self::get_task_decision_requests`], plus whether the history holds
+    /// any `decision_requested` event, so a scan knows the task can raise
+    /// none until its history changes.
+    pub(crate) fn get_task_decision_requests_with_events(
+        &self,
+        id: &str,
+    ) -> Result<(Vec<DecisionRequest>, bool), OrbitError> {
+        let task = self.get_task(id)?;
+        let history = self.get_task_history(id)?;
+        let comments = self.get_task_comments(id)?;
+        let raised_any = history
+            .iter()
+            .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT);
+        let requests =
+            self.task_decision_requests_in(&task, &history, &comments, chrono::Utc::now())?;
+        Ok((requests, raised_any))
+    }
+
     /// Effective decision requests over records a read-only aggregate already loaded.
     /// `task` must include its requirements: revision-bound requests cannot be
     /// checked against bodyless task-index metadata.
@@ -245,6 +263,23 @@ impl OrbitRuntime {
             .unwrap_or_else(|error| {
                 tracing::debug!(task_id = %id, %error, "task history stamp unavailable");
                 None
+            })
+    }
+
+    /// Evidence that each listed task's whole bundle is unchanged since an
+    /// earlier stamp, taken without reading it; a task is absent when
+    /// nothing can vouch for it. A worker reads through its owner, so it has
+    /// none.
+    pub(crate) fn task_bundle_stamps(&self, ids: &[String]) -> BTreeMap<String, String> {
+        if self.worker_invocation().is_some() {
+            return BTreeMap::new();
+        }
+        self.stores()
+            .task_history()
+            .task_bundle_stamps(ids)
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "task bundle stamps unavailable");
+                BTreeMap::new()
             })
     }
 
