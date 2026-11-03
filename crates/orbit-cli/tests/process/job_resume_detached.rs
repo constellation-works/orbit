@@ -648,23 +648,37 @@ spec:
     fn resume_wait_exits_nonzero_for_a_failed_detached_run() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
-        let path = fixture
-            .home
-            .join(".orbit/resources/jobs/resume_cli_fixture.yaml");
-        let mut job: Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).expect("fixture job");
-        job["spec"]["steps"][0]["spec"]["action"] = json!("missing_action");
-        fs::write(&path, job.to_string()).expect("change resumed job definition");
-
-        let output = fixture
-            .command()
-            .args(["job", "resume", &source, "--wait", "--json"])
-            .assert()
-            .failure()
-            .get_output()
-            .stdout
-            .clone();
-        let waited: Value = serde_json::from_slice(&output).expect("failed wait JSON");
+        // The resumed run re-enters the source run's gate step. Failing it at
+        // the gate fails the run at once; left unanswered, the step only
+        // failed when its 120-second FIXTURE_STEP_DEADLINE expired, which set
+        // this row's cost (ORB-21846).
+        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let mut child = crate::child_guard::ChildGuard::new(
+            command
+                .current_dir(&fixture.repo)
+                .env("HOME", &fixture.home)
+                .env("USERPROFILE", &fixture.home)
+                .args(["job", "resume", &source, "--wait", "--json"])
+                .stdout(output_file.as_file().try_clone().unwrap())
+                .spawn()
+                .unwrap(),
+        );
+        fixture.gate.wait_ready();
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "--wait returned before execution"
+        );
+        fixture.gate.fail();
+        assert!(
+            !child.wait().unwrap().success(),
+            "--wait must exit nonzero for a failed run"
+        );
+        let waited: Value = serde_json::from_slice(&fs::read(output_file.path()).unwrap())
+            .expect("failed wait JSON");
         assert_eq!(waited["waited"], true);
         assert_eq!(waited["state"], "failed");
         let run_id = waited["run_id"].as_str().expect("resumed run id");
