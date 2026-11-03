@@ -23,16 +23,29 @@ fn role_surface_budget() {
         let max_tokens = budget["max_approx_tokens"]
             .as_u64()
             .expect("max_approx_tokens") as usize;
-        if report.tools > max_tools || report.approx_tokens > max_tokens {
+        let tool_overage = report.tools.saturating_sub(max_tools);
+        let token_overage = report.approx_tokens.saturating_sub(max_tokens);
+        if tool_overage > 0 || token_overage > 0 {
+            let tool_budget = if tool_overage > 0 {
+                format!("over by {tool_overage}")
+            } else {
+                "within budget".to_owned()
+            };
+            let token_budget = if token_overage > 0 {
+                format!("over by {token_overage}")
+            } else {
+                "within budget".to_owned()
+            };
             over.push(format!(
-                "{name}: {} tools / ~{} tokens, budget {max_tools} / {max_tokens}",
-                report.tools, report.approx_tokens
+                "{name}: {} tools (limit {max_tools}, {tool_budget}); ~{} tokens (limit {max_tokens}, {token_budget})",
+                report.tools, report.approx_tokens,
             ));
         }
     }
     assert!(
         over.is_empty(),
-        "MCP role surfaces over their budget in tests/boundary/mcp_role_budgets.json: {over:?}"
+        "MCP role surfaces exceed their budgets. Reduce the listed role's MCP tool set or update its reviewed limits in crates/orbit-mcp/tests/boundary/mcp_role_budgets.json:\n{}",
+        over.join("\n")
     );
 }
 
