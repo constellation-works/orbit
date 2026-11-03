@@ -306,3 +306,162 @@ fn every_module_the_dashboard_imports_is_served() {
         );
     });
 }
+
+#[test]
+fn hosts_reuse_workspace_projection_and_observe_registry_replacements() {
+    isolated(
+        "host::hosts_reuse_workspace_projection_and_observe_registry_replacements",
+        || {
+            use orbit_registry::workspace_registry::{
+                load_registry_from_read_only, save_registry_to,
+            };
+            let fixture = Fixture::new();
+            let path = fixture.global.join("workspaces.json");
+            let mut registry = load_registry_from_read_only(&path).unwrap().registry;
+            for index in 1..13 {
+                let id = format!("ws_projection_{index:02}");
+                let repo = fixture.path(&format!("repo-{index}"));
+                let orbit = repo.join(".orbit");
+                std::fs::create_dir_all(&orbit).unwrap();
+                std::fs::write(
+                    orbit.join("config.yaml"),
+                    format!("schema_version: 1\nworkspace_id: {id}\n"),
+                )
+                .unwrap();
+                let mut workspace = registry.workspaces[0].clone();
+                workspace.id = id.clone();
+                workspace.name = format!("projection-{index:02}");
+                registry.workspaces.push(workspace);
+                registry
+                    .checkouts
+                    .push(orbit_types::workspace::WorkspaceCheckout::owner(
+                        id, repo, orbit,
+                    ));
+            }
+            save_registry_to(&registry, &path).unwrap();
+            write_host_entry(&fixture, "remote", "hm_0000000000000099", "RR", 0);
+            let trace = fixture.path("projection.jsonl");
+            let env = vec![("ORBIT_HTTP_HOST_PROJECTION_TRACE", trace.as_os_str())];
+            #[cfg(unix)]
+            let (ssh_log, search_path) = {
+                use std::os::unix::fs::PermissionsExt;
+                let bin = fixture.path("probe-bin");
+                std::fs::create_dir_all(&bin).unwrap();
+                let script = bin.join("ssh");
+                std::fs::write(
+                    &script,
+                    r#"#!/bin/sh
+printf 'probe\n' >> "$HOST_PROJECTION_SSH_LOG"
+exit 99
+"#,
+                )
+                .unwrap();
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let log = fixture.path("ssh-calls.log");
+                let mut paths = vec![bin];
+                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+                (log, std::env::join_paths(paths).unwrap())
+            };
+            #[cfg(unix)]
+            let env = {
+                let mut env = env;
+                env.extend([
+                    ("PATH", search_path.as_os_str()),
+                    ("HOST_PROJECTION_SSH_LOG", ssh_log.as_os_str()),
+                ]);
+                env
+            };
+            let server = fixture.server_with_envs(false, &env);
+            let first = get_hosts(&server.origin);
+            assert_eq!(
+                first["hosts"][0]["workspaces"].as_array().unwrap().len(),
+                13
+            );
+            assert_eq!(first["hosts"][1]["reachable"], json!(null));
+            assert_eq!(first["hosts"][1]["error"], json!(null));
+            for _ in 0..20 {
+                assert_eq!(get_hosts(&server.origin), first);
+            }
+            let parses = || std::fs::read_to_string(&trace).unwrap().lines().count();
+            assert_eq!(
+                parses(),
+                1,
+                "unchanged host-list reads must reuse registry parse/validation"
+            );
+
+            // save_registry_to replaces the file atomically. Equal-length names
+            // exercise content invalidation without relying on clock granularity.
+            registry.workspaces[1].name = "replacement01".into();
+            save_registry_to(&registry, &path).unwrap();
+            let replaced = get_hosts(&server.origin);
+            assert_eq!(
+                replaced["hosts"][0]["workspaces"][1]["name"],
+                json!("replacement01")
+            );
+            assert_eq!(parses(), 2);
+            assert_eq!(get_hosts(&server.origin)["hosts"], replaced["hosts"]);
+            assert_eq!(parses(), 2);
+
+            let replacement = fixture.path("replacement.json");
+            std::fs::write(&replacement, "{broken").unwrap();
+            std::fs::rename(&replacement, &path).unwrap();
+            let malformed = get_hosts(&server.origin);
+            assert_eq!(malformed["hosts"][0]["workspaces"], json!([]));
+            assert_eq!(malformed["hosts"][1], first["hosts"][1]);
+            assert_eq!(get_hosts(&server.origin), malformed);
+            assert_eq!(
+                parses(),
+                3,
+                "malformed unchanged bytes also reuse their empty projection"
+            );
+            save_registry_to(&registry, &path).unwrap();
+            assert_eq!(get_hosts(&server.origin)["hosts"], replaced["hosts"]);
+
+            // Missing files and invalid machine context must not serve stale
+            // rows. Both recover immediately after repair.
+            std::fs::rename(&path, &replacement).unwrap();
+            assert_eq!(
+                get_hosts(&server.origin)["hosts"][0]["workspaces"],
+                json!([])
+            );
+            std::fs::rename(&replacement, &path).unwrap();
+            assert_eq!(get_hosts(&server.origin)["hosts"], replaced["hosts"]);
+            let config = fixture.global.join("config.toml");
+            let valid = std::fs::read_to_string(&config).unwrap();
+            let original_machine = fixture.machine_id();
+            std::fs::write(&config, "[machine]\nid = 123\n").unwrap();
+            assert_eq!(
+                get_hosts(&server.origin)["hosts"][0]["workspaces"],
+                json!([])
+            );
+            std::fs::write(
+                &config,
+                valid.replace(&original_machine, "hm_0000000000000088"),
+            )
+            .unwrap();
+            assert_eq!(
+                get_hosts(&server.origin)["hosts"][0]["workspaces"],
+                json!([])
+            );
+            std::fs::write(&config, valid).unwrap();
+            assert_eq!(get_hosts(&server.origin)["hosts"], replaced["hosts"]);
+            #[cfg(unix)]
+            {
+                std::fs::rename(&path, &replacement).unwrap();
+                std::os::unix::fs::symlink(&replacement, &path).unwrap();
+                assert_eq!(
+                    get_hosts(&server.origin)["hosts"][0]["workspaces"],
+                    json!([])
+                );
+                std::fs::remove_file(&path).unwrap();
+                std::fs::rename(&replacement, &path).unwrap();
+                assert_eq!(get_hosts(&server.origin)["hosts"], replaced["hosts"]);
+            }
+            #[cfg(unix)]
+            assert!(
+                !ssh_log.exists(),
+                "cached host reads must launch zero SSH probes"
+            );
+        },
+    );
+}

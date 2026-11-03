@@ -1,16 +1,18 @@
 //! `orbit host list` and `show`: this machine's row, every registered remote's
 //! row (probed live when asked), and one host's detail with its dependents.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use orbit_common::OrbitError;
-use orbit_registry::MachineIdentity;
 use orbit_registry::hosts::{
     HostRegistry, RegisteredHosts, ResolvedHost, hosts_path, load_host_registry,
 };
 use orbit_registry::workspace_registry::{
-    find_workspace_by_id, load_registry_from_read_only, registry_path_for,
+    WorkspaceRegistryMachineContext, find_workspace_by_id, parse_workspace_registry,
+    registry_file_fingerprint, registry_path_for,
 };
+use orbit_registry::{MachineIdentity, inspect_machine_identity};
 use orbit_types::workspace::WorkspaceCheckoutRole;
 
 use super::dependents::host_dependents;
@@ -97,16 +99,76 @@ fn local_row(global_root: &Path, identity: &MachineIdentity) -> HostRow {
     }
 }
 
+// One slot bounds retention even when callers inspect many roots. Only the
+// workspace projection is memoized: host facts and remote probe policy remain
+// fresh. Read bytes (rather than trusting mtime/length) to observe equal-size
+// atomic replacements even on filesystems with coarse timestamp resolution.
+struct LocalWorkspaceProjection {
+    path: PathBuf,
+    content: String,
+    context: WorkspaceRegistryMachineContext,
+    workspaces: Vec<HostWorkspace>,
+}
+
+static LOCAL_WORKSPACE_PROJECTION: Mutex<Option<LocalWorkspaceProjection>> = Mutex::new(None);
+
 fn local_workspaces(global_root: &Path) -> Vec<HostWorkspace> {
-    let Ok(load) = load_registry_from_read_only(&registry_path_for(global_root)) else {
+    // Serialize sampling and publication too: an older reader must not publish
+    // its projection over a newer one and force another parse of that generation.
+    let mut cached = LOCAL_WORKSPACE_PROJECTION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let Ok(global_root) = global_root.canonicalize() else {
+        *cached = None;
         return Vec::new();
     };
-    let registry = load.registry;
+    let path = registry_path_for(&global_root);
+    // The loader's path check rejects registry symlinks and inaccessible roots.
+    // Never let a cached value bypass that refusal or an unreadable/missing file.
+    if registry_file_fingerprint(&path).is_none() {
+        *cached = None;
+        return Vec::new();
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        *cached = None;
+        return Vec::new();
+    };
+    let Ok(identity) = inspect_machine_identity(&global_root) else {
+        *cached = None;
+        return Vec::new();
+    };
+    let context = WorkspaceRegistryMachineContext::from(&identity);
+    if let Some(projection) = cached.as_ref()
+        && projection.path == path
+        && projection.content == content
+        && projection.context == context
+    {
+        return projection.workspaces.clone();
+    }
+    tracing::debug!(target: "orbit.hosts.workspace_projection", "workspace_registry_parse");
+    let _parse = tracing::debug_span!(target: "orbit.hosts.workspace_projection", "workspace_registry_parse").entered();
+    let workspaces = parse_workspace_registry(&content, &context)
+        .map(|(registry, _)| project_local_workspaces(&registry))
+        .unwrap_or_default();
+    // Malformed documents still produce the established empty workspace list;
+    // their exact bytes/context are safe to memoize and repairs differ in key.
+    *cached = Some(LocalWorkspaceProjection {
+        path,
+        content,
+        context,
+        workspaces: workspaces.clone(),
+    });
+    workspaces
+}
+
+fn project_local_workspaces(
+    registry: &orbit_types::workspace::WorkspaceRegistry,
+) -> Vec<HostWorkspace> {
     registry
         .checkouts
         .iter()
         .filter_map(|checkout| {
-            let workspace = find_workspace_by_id(&registry, &checkout.workspace_id)?;
+            let workspace = find_workspace_by_id(registry, &checkout.workspace_id)?;
             let replica = checkout.role == Some(WorkspaceCheckoutRole::Replica);
             Some(HostWorkspace {
                 id: workspace.id.clone(),

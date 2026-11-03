@@ -4,7 +4,10 @@
 //! caches only what never changes on a host (`machine_id`, `task_prefix`) plus
 //! the operator's name and SSH target; reachability, version, protocol and
 //! workspaces are read live from the host whenever a command asks, and never
-//! written back. The CLI and the dashboard both call these operations, so
+//! written back. The local workspace projection reuses unchanged registry bytes
+//! and machine validation context in one bounded process-local slot; every read
+//! still checks path safety, readability and current contents. The CLI and the
+//! dashboard both call these operations, so
 //! validation, migration and writes have one implementation.
 
 mod dependents;
