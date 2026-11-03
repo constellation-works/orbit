@@ -413,7 +413,7 @@ fn decision_channel_cli_registers_submits_and_revokes() {
     config.push_str("\n[decision_channel]\nenabled = true\n");
     std::fs::write(&config_path, config).unwrap();
 
-    let (request_id, token) = {
+    let (request_id, token, fresh_request_id, fresh_token, fresh_task_id) = {
         let _authority = orbit_common::test_env::unset(
             orbit_common::test_env::INHERITED_AUTHORITY_ENV
                 .iter()
@@ -491,7 +491,70 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             .register_decision_channel("email", "human:operator", "decision-mail", vec![])
             .unwrap();
         let token = runtime.mint_decision_token("email", &request_id).unwrap();
-        (request_id, token)
+
+        // A second, still-outstanding request on its own blocked task:
+        // the revoke check below submits its fresh token, so only a
+        // working revocation (not the first token's consumption) can
+        // refuse it.
+        let fresh_task = runtime
+            .add_task(TaskAddParams {
+                title: "Blocked awaiting a revoked channel".into(),
+                description: "decision channel revoke fixture".into(),
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            })
+            .unwrap();
+        let fresh_history = runtime.get_task_history(&fresh_task.id).unwrap();
+        let fresh_blocked_at = fresh_history
+            .iter()
+            .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+            .expect("seeded blocked task records its block")
+            .at;
+        let fresh_request = DecisionRequest::new(
+            fresh_task.id.to_string(),
+            DecisionGate::BlockTriage,
+            vec![
+                DecisionAnswer {
+                    risk_tier: Default::default(),
+                    id: "1".to_string(),
+                    label: "Drop criterion 2".to_string(),
+                    consequence: "the old API stays retired".to_string(),
+                    option: None,
+                },
+                DecisionAnswer {
+                    risk_tier: Default::default(),
+                    id: "dismiss".to_string(),
+                    label: "Dismiss".to_string(),
+                    consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
+                },
+            ],
+            DecisionBinding::BlockEpisode {
+                episode: fresh_blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            },
+            "block_triage".to_string(),
+            chrono::Utc::now(),
+        );
+        let fresh_request_id = fresh_request.id.clone();
+        runtime
+            .apply_task_automation_update(
+                &fresh_task.id,
+                TaskAutomationUpdate {
+                    append_history: vec![fresh_request.history_entry("system")],
+                    ..Default::default()
+                },
+            )
+            .expect("record the fresh decision request");
+        let fresh_token = runtime
+            .mint_decision_token("email", &fresh_request_id)
+            .unwrap();
+        (
+            request_id,
+            token,
+            fresh_request_id,
+            fresh_token,
+            fresh_task.id.to_string(),
+        )
     };
 
     let channels = fixture.json(&["decision", "channel", "list", "--json"]);
@@ -628,22 +691,39 @@ fn decision_channel_cli_registers_submits_and_revokes() {
     let replay: serde_json::Value = serde_json::from_slice(&replay.stderr).unwrap();
     assert_eq!(replay["code"], "token_consumed", "{replay}");
 
-    // Revocation refuses the next submission through the channel.
+    // Revocation refuses the next submission through the channel. Use
+    // the fresh outstanding request: its token was never consumed, so
+    // only a working CLI revoke can refuse it, as `channel_revoked`,
+    // leaving its task and request untouched.
+    let before_task = fixture.json(&["task", "show", &fresh_task_id, "--json"]);
+    assert_eq!(before_task["status"], "blocked", "{before_task}");
     fixture.json(&["decision", "channel", "revoke", "email", "--json"]);
-    fixture
+    let revoked = fixture
         .command(&[
             "decision",
             "submit",
-            &request_id,
+            &fresh_request_id,
             "dismiss",
             "--channel",
             "email",
             "--token",
-            &token,
+            &fresh_token,
+            "--json",
         ])
         .env("ORBIT_OPERATOR", "1")
         .assert()
-        .failure();
+        .failure()
+        .get_output()
+        .clone();
+    let revoked: serde_json::Value = serde_json::from_slice(&revoked.stderr).unwrap();
+    assert_eq!(revoked["code"], "channel_revoked", "{revoked}");
+    assert_eq!(
+        fixture.json(&["task", "show", &fresh_task_id, "--json"])["status"],
+        "blocked",
+        "a revoked submission leaves its task unchanged"
+    );
+    let fresh_shown = fixture.json(&["decision", "show", &fresh_request_id, "--json"]);
+    assert_eq!(fresh_shown["state"], "open", "{fresh_shown}");
 }
 
 /// `orbit decision digest` over the real CLI: the operator's call raises

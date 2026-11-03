@@ -14,6 +14,11 @@ use isolated_cli_fixture::Fixture;
 
 #[test]
 fn operator_closes_rescued_blocked_task_without_force_while_another_run_claims_its_files() {
+    if crate::isolated_test::run_in_child(
+        "rescue_close_cli::operator_closes_rescued_blocked_task_without_force_while_another_run_claims_its_files",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     fixture_crew::configure_sol(&fixture.root);
     fs::write(fixture.repo.join("shared.txt"), "fixture\n").unwrap();
