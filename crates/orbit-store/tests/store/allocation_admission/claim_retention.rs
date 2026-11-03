@@ -73,6 +73,144 @@ fn friction() -> ClaimMutation {
     })
 }
 
+#[test]
+fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
+    if !allocation_admission_isolated(
+        "claim_retention::friction_projection_follows_commit_and_silences_replays_and_rollbacks",
+    ) {
+        return;
+    }
+    use orbit_common::observability::logging;
+
+    // SAFETY: this exact test runs alone in its re-executed child, before
+    // installing the subscriber and starting its background writer.
+    unsafe { std::env::set_var("RUST_LOG", "warn") };
+    logging::init_default_subscriber("warn");
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    owner.create_task_in("reporting", &["src/a.rs"]);
+    let attempt = owner.bound_attempt("reporting");
+    let token = format!("ghp_{}", "b".repeat(36));
+    let params = FrictionAddParams {
+        model: "gpt-6.1-sol".into(),
+        title: Some(format!("Build exposed GITHUB_TOKEN={token}")),
+        body: "Private claim evidence must stay out of live tracing".into(),
+        tags: vec!["other".into()],
+        status: Default::default(),
+        during_task: None,
+        created_at: Utc::now(),
+    };
+    let mutation = ClaimMutation::Friction(params.clone());
+    let first = owner.mutate(&attempt.worker, "report", &mutation).unwrap();
+    let record = first.friction.as_ref().unwrap();
+    assert_eq!(
+        record.during_task.as_deref(),
+        Some(attempt.claim.task_id.as_str())
+    );
+    assert_eq!(
+        owner.mutate(&attempt.worker, "report", &mutation).unwrap(),
+        first
+    );
+
+    // Fail after allocation and insertion, when writing the replay row. A
+    // projection emitted inside the transaction would falsely report success.
+    let conn = sql(root.path());
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_friction_receipt BEFORE INSERT ON task_coordination_rows
+         WHEN NEW.kind = 'distributed-claim-friction-v1'
+         BEGIN SELECT RAISE(ABORT, 'fixture refuses friction receipt'); END;",
+    )
+    .unwrap();
+    let error = owner
+        .mutate(&attempt.worker, "rolled-back", &mutation)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("fixture refuses friction receipt")
+    );
+    conn.execute_batch("DROP TRIGGER refuse_friction_receipt")
+        .unwrap();
+
+    let store = compose::workspace_friction_store(
+        Store::open(&root.path().join("state.sqlite")).unwrap(),
+        PARTITION_ID,
+        root.path().join("frictions"),
+    )
+    .unwrap();
+    assert_eq!(store.list(&Default::default()).unwrap().len(), 1);
+    assert_eq!(store.show(&record.id).unwrap().unwrap().record, *record);
+
+    let mut automatic = params;
+    automatic.body = "dedupe-key: report-once\nPrivate automation evidence".into();
+    let created = store
+        .add_or_reuse("report-once", automatic.clone())
+        .unwrap();
+    assert_eq!(
+        store.add_or_reuse("report-once", automatic).unwrap().record,
+        created.record
+    );
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_friction_insert BEFORE INSERT ON friction_records
+         BEGIN SELECT RAISE(ABORT, 'fixture refuses friction insert'); END;",
+    )
+    .unwrap();
+    let failed = FrictionAddParams {
+        model: record.model.clone(),
+        title: None,
+        body: "Refused insert".into(),
+        tags: vec!["other".into()],
+        status: Default::default(),
+        during_task: None,
+        created_at: Utc::now(),
+    };
+    assert!(
+        store
+            .add(failed)
+            .unwrap_err()
+            .to_string()
+            .contains("fixture refuses friction insert")
+    );
+    assert_eq!(store.list(&Default::default()).unwrap().len(), 2);
+
+    logging::shutdown_jsonl_writer();
+    let log = std::fs::read_to_string(logging::global_jsonl_log_path().unwrap()).unwrap();
+    let events = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| event["target"] == "orbit.friction.reported")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events.len(),
+        2,
+        "only newly committed friction records project"
+    );
+    for (stored, task_id) in [
+        (record, attempt.claim.task_id.as_str()),
+        (&created.record, ""),
+    ] {
+        let event = events
+            .iter()
+            .find(|event| event["fields"]["friction_id"] == stored.id)
+            .unwrap();
+        assert_eq!(event["fields"]["workspace_id"], PARTITION_ID);
+        assert_eq!(event["fields"]["task_id"], task_id);
+        assert_eq!(event["fields"]["agent"], "codex");
+        assert_eq!(event["fields"]["model"], stored.model);
+        assert!(
+            event["fields"]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("[REDACTED_SECRET]")
+        );
+        assert!(event["fields"].get("body").is_none());
+    }
+    let projected = serde_json::to_string(&events).unwrap();
+    assert!(!projected.contains(&token));
+    assert!(!projected.contains(&record.body));
+    assert!(!projected.contains(&created.record.body));
+}
+
 fn sql(root: &Path) -> rusqlite::Connection {
     rusqlite::Connection::open(root.join("state.sqlite")).unwrap()
 }

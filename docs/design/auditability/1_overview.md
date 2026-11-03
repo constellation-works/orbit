@@ -17,10 +17,10 @@ tags: ["auditability"]
 
 Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? The contract spans command rows, Orbit tool mutations, activity/job runs, provider turns, tool calls, filesystem denials, task attribution, metrics, and redacted payload storage. [2_design.md](./2_design.md) describes the shipped implementation; [3_vision.md](./3_vision.md) names the remaining gaps.
 
-The main audit channels are implemented. The committed friction live-projection
-contract in [the coverage matrix](./specs/coverage-matrix.md#operation-classes) is
-still incomplete: [ORB-21797] tracks restoring its missing producer. This keeps
-the feature `building`; tamper evidence and joined queries remain vision work.
+The main audit channels are implemented, including the friction live-projection
+contract in [the coverage matrix](./specs/coverage-matrix.md#operation-classes)
+restored by [ORB-21797]. The feature remains `building`; tamper evidence and
+joined queries remain vision work.
 
 ---
 
@@ -78,7 +78,7 @@ Blob writes apply pattern-based redaction at write time, and CLI error audit pat
 
 ### 2.7 Process tracing has a global JSONL feed
 
-The default tracing subscriber appends redacted operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to the separately budgeted `orbit-agent.jsonl` beside it after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials and proc-spawn allowlist denials also project stable `tracing::warn!` events under the `orbit.policy.deny` target beside their canonical stores. Friction record submissions have no such projection; [ORB-21797] tracks restoring it while the friction store remains canonical. Friction records now live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
+The default tracing subscriber appends redacted operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to the separately budgeted `orbit-agent.jsonl` beside it after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials and proc-spawn allowlist denials also project stable `tracing::warn!` events under the `orbit.policy.deny` target beside their canonical stores. Friction submissions project `orbit.friction.reported` only after their SQLite transaction commits, including owner-applied claimed-worker reports. The event correlates workspace, friction record, optional task, and reporter model/family, with a redacted title and no body. Rejected writes, receipt replays, and dedupe reuse emit no submission event. Friction records live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
 
 ---
 
@@ -93,12 +93,12 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-runtime/src/audit/run/trail.rs` | Landed: [T20260426-0705], [T20260426-0709] |
 | Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | Landed: [T20260426-0605] |
 | Redaction utilities | [crates/orbit-common/src/security/redaction/](../../../crates/orbit-common/src/security/redaction/) | Landed: [T20260426-0605], [T20260426-2349] |
-| Global tracing JSONL feed and policy-denial projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers | Landed: [T20260426-2343], [T20260427-0023] |
+| Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers, `crates/orbit-store/src/driver/sqlite/friction_write.rs` | Landed: [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | Landed: [T20260510-13], [ORB-00062] |
 | V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | Landed: [T20260426-0526] |
 | Task attribution fields | `crates/orbit-types/src/task/model/task.rs`, task update/runtime host paths | Landed: [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | Landed: [T20260508-22], [T20260509-12] |
-| Friction live-tracing projection | `crates/orbit-store/src/repository/friction/mutations.rs` | Open repair: [ORB-21797] |
+| Friction live-tracing projection | `crates/orbit-store/src/repository/friction/mutations.rs`, `crates/orbit-store/src/driver/sqlite/friction_write.rs` | Landed: [ORB-21797] |
 
 ---
 
