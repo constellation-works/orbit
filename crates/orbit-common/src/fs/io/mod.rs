@@ -32,9 +32,9 @@ pub use atomic::{
     sync_file_data, sync_parent_dir, write_new_private_text, write_text_with_parent,
 };
 pub use lock::{
-    HeldFileLock, hold_exclusive_file_lock_options, with_exclusive_file_lock,
-    with_exclusive_file_lock_named_options, with_exclusive_file_lock_options,
-    with_shared_file_lock, with_shared_file_lock_options,
+    HeldFileLock, hold_exclusive_file_lock_options, try_with_exclusive_file_lock,
+    with_exclusive_file_lock, with_exclusive_file_lock_named_options,
+    with_exclusive_file_lock_options, with_shared_file_lock, with_shared_file_lock_options,
 };
 pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io};
 #[cfg(any(unix, windows))]

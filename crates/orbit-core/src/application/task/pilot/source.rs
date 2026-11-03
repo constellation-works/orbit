@@ -2,17 +2,19 @@
 //!
 //! Inspection and deterministic selector validation share one pinned revision
 //! so a newly merged target is not reported as missing when the primary
-//! checkout lags origin. Fetch updates only remote refs/objects; the primary
+//! checkout lags origin. Fetch writes only objects, a short-lived private ref
+//! and (under the shared fetch lock) the remote-tracking ref; the primary
 //! HEAD, index and working files are never aligned or otherwise modified.
 
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
     GIT_FETCH_CAS_ATTEMPTS, GIT_REMOTE_TIMEOUT, git_fetch_cas_retry_delay, run_git, run_git_within,
-    should_retry_git_ref_cas, with_git_fetch_lock,
+    should_retry_git_ref_cas, try_with_git_fetch_lock,
 };
 use orbit_engine::DispatchError;
 use serde_json::{Value, json};
@@ -464,27 +466,33 @@ pub(crate) fn resolve_source_snapshot(
     }
     let has_origin = has_origin_remote(action, workspace_root)?;
 
-    // Shared git-common-dir lock (`orbit-git-fetch`): the same identity
-    // delivery `fetch_remote_base` uses. ORB-11269's pilot-only
-    // `orbit-task-pilot-fetch` lock left that writer uncoordinated.
-    let (source_ref, source_revision) = with_git_fetch_lock(workspace_root, || {
-        let source_ref = if has_origin {
-            fetch_origin_branch(action, workspace_root, &base_branch, GIT_REMOTE_TIMEOUT)
-                .map_err(FetchLockError::Dispatch)?;
-            format!("origin/{base_branch}")
-        } else {
-            format!("refs/heads/{base_branch}")
+    // The pin is the commit this run's own fetch read from origin, so it is
+    // as fresh as fetching under the shared lock was, but the network wait
+    // no longer queues behind (or holds up) other Orbit fetches [ORB-21834].
+    // `refs/remotes/origin/*` is still written only under the shared
+    // git-common-dir lock (`orbit-git-fetch`), the identity delivery
+    // `fetch_remote_base` uses; see `publish_remote_tracking_ref`.
+    let (source_ref, source_revision) = if has_origin {
+        let revision =
+            fetch_origin_branch(action, workspace_root, &base_branch, GIT_REMOTE_TIMEOUT)?;
+        publish_remote_tracking_ref(workspace_root, &base_branch, &revision);
+        (format!("origin/{base_branch}"), revision)
+    } else {
+        let source_ref = format!("refs/heads/{base_branch}");
+        // Preserve the workspace-local lock-path probe without waiting on a
+        // fetch that does not affect this local branch read.
+        let revision = match try_with_git_fetch_lock(workspace_root, || {
+            Ok::<_, FetchLockError>(rev_parse_commit(action, workspace_root, &source_ref))
+        }) {
+            Ok(Some(revision)) => revision?,
+            Ok(None) => rev_parse_commit(action, workspace_root, &source_ref)?,
+            Err(error) => {
+                tracing::debug!(%error, "could not probe the fetch lock for a local source branch");
+                rev_parse_commit(action, workspace_root, &source_ref)?
+            }
         };
-        let revision = rev_parse_commit(action, workspace_root, &source_ref)
-            .map_err(FetchLockError::Dispatch)?;
-        Ok::<_, FetchLockError>((source_ref, revision))
-    })
-    .map_err(|error| match error {
-        FetchLockError::Dispatch(error) => error,
-        FetchLockError::Io(error) => {
-            DispatchError::action_failed(action, format!("git fetch lock: {error}"))
-        }
-    })?;
+        (source_ref, revision)
+    };
 
     Ok(Some(SourceSnapshot {
         base_branch,
@@ -525,17 +533,27 @@ fn normalize_base_branch(action: &str, base: &str) -> Result<String, DispatchErr
     Ok(branch.to_string())
 }
 
-/// Local-error wrapper so [`with_git_fetch_lock`] (which requires
-/// `E: From<io::Error>`) can carry either lock-acquisition failures or the
-/// module's own [`DispatchError`] out of the locked closure.
+/// Local-error wrapper so [`try_with_git_fetch_lock`] (which requires
+/// `E: From<io::Error>`) can carry lock-acquisition failures or a Git failure
+/// out of the locked closure.
+#[derive(Debug)]
 enum FetchLockError {
     Io(io::Error),
-    Dispatch(DispatchError),
+    Git(String),
 }
 
 impl From<io::Error> for FetchLockError {
     fn from(error: io::Error) -> Self {
         FetchLockError::Io(error)
+    }
+}
+
+impl std::fmt::Display for FetchLockError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchLockError::Io(error) => write!(formatter, "git fetch lock: {error}"),
+            FetchLockError::Git(message) => formatter.write_str(message),
+        }
     }
 }
 
@@ -556,34 +574,56 @@ fn has_origin_remote(action: &str, workspace: &Path) -> Result<bool, DispatchErr
         .any(|name| name == "origin"))
 }
 
-/// Fetch `origin/<branch>` with each attempt bounded by `deadline`. The
-/// caller holds the shared fetch lock, so a stalled remote is killed at the
-/// deadline rather than holding every other workspace fetch behind it.
+/// Fetch `origin/<branch>` and return the commit origin had, with each
+/// attempt bounded by `deadline`.
+///
+/// The fetch writes only objects and a ref private to this call
+/// (`refs/orbit/pilot-source/…`, deleted again before returning): no
+/// remote-tracking ref, tag or `FETCH_HEAD`. Nothing it writes is shared with
+/// another Orbit fetch, so it takes no lock and a slow remote never holds up
+/// another workspace fetch; a stalled remote is still killed at the deadline.
 pub(super) fn fetch_origin_branch(
     action: &str,
     workspace: &Path,
     branch: &str,
     deadline: Duration,
-) -> Result<(), DispatchError> {
-    let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+) -> Result<String, DispatchError> {
+    let private_ref = private_source_ref();
+    let spec = format!("+refs/heads/{branch}:{private_ref}");
     let mut last_stderr = String::new();
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
-        let output =
-            run_git_within(workspace, &["fetch", "origin", &spec], deadline).map_err(|error| {
-                let failure = match error {
-                    OrbitError::ProcessTimeout { .. } => "remote failure: timed out fetching",
-                    _ => "failed to fetch",
-                };
-                DispatchError::action_failed(
-                    action,
-                    format!(
-                        "{failure} origin/{branch} in '{}': {error}",
-                        workspace.display()
-                    ),
-                )
-            })?;
+        let output = run_git_within(
+            workspace,
+            &[
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--no-write-fetch-head",
+                // Without it Git also updates `refs/remotes/origin/<branch>`
+                // from the configured refspec, outside the shared lock.
+                "--refmap=",
+                "origin",
+                &spec,
+            ],
+            deadline,
+        )
+        .map_err(|error| {
+            let failure = match error {
+                OrbitError::ProcessTimeout { .. } => "remote failure: timed out fetching",
+                _ => "failed to fetch",
+            };
+            DispatchError::action_failed(
+                action,
+                format!(
+                    "{failure} origin/{branch} in '{}': {error}",
+                    workspace.display()
+                ),
+            )
+        })?;
         if output.success {
-            return Ok(());
+            let revision = rev_parse_commit(action, workspace, &private_ref);
+            delete_private_source_ref(workspace, &private_ref, revision.as_deref().ok());
+            return revision;
         }
         last_stderr = output.stderr.trim().to_string();
         if should_retry_git_ref_cas(attempt, &last_stderr) {
@@ -604,6 +644,111 @@ pub(super) fn fetch_origin_branch(
             workspace.display(),
         ),
     ))
+}
+
+/// Namespace of the per-call refs [`fetch_origin_branch`] fetches into.
+const PRIVATE_SOURCE_REF_PREFIX: &str = "refs/orbit/pilot-source/";
+
+/// A ref name no other fetch, in this process or another, uses at once.
+fn private_source_ref() -> String {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!(
+        "{PRIVATE_SOURCE_REF_PREFIX}{}-{nanos}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Best-effort removal of a [`private_source_ref`]. A leftover only keeps its
+/// commit reachable; it never feeds a later pin, which always fetches anew.
+fn delete_private_source_ref(workspace: &Path, private_ref: &str, revision: Option<&str>) {
+    let mut args = vec!["update-ref", "-d", private_ref];
+    args.extend(revision);
+    match run_git(workspace, &args) {
+        Ok(output) if output.success => {}
+        Ok(output) => tracing::warn!(
+            private_ref,
+            stderr = output.stderr.trim(),
+            "could not delete the pilot's private source ref"
+        ),
+        Err(error) => tracing::warn!(
+            private_ref,
+            %error,
+            "could not delete the pilot's private source ref"
+        ),
+    }
+}
+
+/// Advance `refs/remotes/origin/<branch>` to the freshly fetched `revision`
+/// when the shared fetch lock is free now, as fetching under the lock used
+/// to. A held lock means another Orbit fetch is updating remote-tracking refs
+/// at this moment, so the update is skipped rather than waited for: the pin
+/// never reads the shared ref. Under the lock the ref only moves forward, by
+/// compare-and-swap, so a newer value another writer published since this
+/// fetch is never rolled back. A failure is logged, never the pin's failure.
+fn publish_remote_tracking_ref(workspace: &Path, branch: &str, revision: &str) {
+    let tracking_ref = format!("refs/remotes/origin/{branch}");
+    let published = try_with_git_fetch_lock(workspace, || {
+        let current = run_git(
+            workspace,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{tracking_ref}^{{commit}}"),
+            ],
+        )
+        .map_err(|error| FetchLockError::Git(error.to_string()))?;
+        let current = current.success.then(|| current.stdout.trim().to_string());
+        let expected = match current.as_deref() {
+            Some(current) if current == revision => return Ok(()),
+            Some(current) => {
+                let ancestor = run_git(
+                    workspace,
+                    &["merge-base", "--is-ancestor", current, revision],
+                )
+                .map_err(|error| FetchLockError::Git(error.to_string()))?;
+                if !ancestor.success {
+                    return Ok(());
+                }
+                current.to_string()
+            }
+            // An empty old value makes the update create-only.
+            None => String::new(),
+        };
+        let output = run_git(
+            workspace,
+            &[
+                "update-ref",
+                "-m",
+                "orbit: task-pilot source fetch",
+                &tracking_ref,
+                revision,
+                &expected,
+            ],
+        )
+        .map_err(|error| FetchLockError::Git(error.to_string()))?;
+        if output.success {
+            Ok(())
+        } else {
+            Err(FetchLockError::Git(output.stderr.trim().to_string()))
+        }
+    });
+    match published {
+        Ok(Some(())) => {}
+        Ok(None) => tracing::debug!(
+            branch,
+            "git fetch lock held by another fetch; left origin/{branch} to it"
+        ),
+        Err(error) => tracing::warn!(
+            branch,
+            %error,
+            "could not advance origin/{branch} to the pilot's fetched source"
+        ),
+    }
 }
 
 fn rev_parse_commit(action: &str, workspace: &Path, rev: &str) -> Result<String, DispatchError> {

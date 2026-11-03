@@ -213,6 +213,66 @@ fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking
     assert_eq!(head(&workspace), local);
 }
 
+/// ORB-21834: pilot prepare queued behind every other Orbit fetch on the
+/// shared fetch lock. It now pins the commit its own fetch read from origin
+/// while another holder keeps the lock, leaves the remote-tracking ref to
+/// that holder, and advances the ref itself once the lock is free.
+fn a_pilot_prepare_pins_fresh_origin_while_another_fetch_holds_the_lock() {
+    use std::sync::mpsc;
+    use std::time::Duration as StdDuration;
+
+    let workspace = Workspace::new();
+    let (task, _) = disjoint_tasks(&workspace);
+    let (local, origin) = origin_ahead(&workspace);
+    let primary_index = workspace.git(&["write-tree"]);
+    let tracking = || {
+        workspace
+            .git(&[
+                "for-each-ref",
+                "--format=%(objectname)",
+                "refs/remotes/origin/main",
+            ])
+            .trim()
+            .to_string()
+    };
+    assert_eq!(tracking(), "", "the fixture starts with no tracking ref");
+
+    let (held, lock_held) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let repo = workspace.repo.clone();
+    let holder = std::thread::spawn(move || {
+        orbit_common::fs::git::with_git_fetch_lock(&repo, || {
+            held.send(()).unwrap();
+            // A prepare that queues on the lock is still waiting here, so
+            // the holder gives up and the case fails instead of hanging.
+            Ok::<_, std::io::Error>(released.recv_timeout(StdDuration::from_secs(20)).is_ok())
+        })
+    });
+    lock_held.recv().unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    release.send(()).unwrap();
+    assert!(
+        holder.join().unwrap().unwrap(),
+        "prepare returned only after the other fetch gave up the lock"
+    );
+    assert_eq!(prepared["source"]["source_revision"], origin);
+    assert_eq!(prepared["source"]["source_ref"], "origin/main");
+    assert_eq!(prepared["task_ids"], json!([task.id]));
+    assert_eq!(tracking(), "", "the tracking ref moved without the lock");
+    assert_eq!(
+        workspace.git(&["for-each-ref", "refs/orbit/pilot-source/"]),
+        "",
+        "the private fetch ref is removed"
+    );
+
+    // With the lock free, the same fetch also advances the tracking ref.
+    let second = workspace.prepare(&[&task.id]);
+    assert_eq!(second["source"]["source_revision"], origin, "{second}");
+    assert_eq!(tracking(), origin);
+    assert_eq!(head(&workspace), local);
+    assert_eq!(workspace.git(&["write-tree"]), primary_index);
+}
+
 fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
     let workspace = Workspace::new();
     workspace.install_pilot_job();
@@ -754,6 +814,7 @@ crate::scenario_table!(
     a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags_scenarios,
     a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags,
     a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref,
+    a_pilot_prepare_pins_fresh_origin_while_another_fetch_holds_the_lock,
     a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head,
     a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry,
     editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it,

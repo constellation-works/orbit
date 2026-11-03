@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use super::private::{create_private_dir_all, write_access_error_message};
 use crate::fs::file_lock::{
     FileLockOptions, LockReportScope, acquire_exclusive_file_lock, acquire_shared_file_lock,
+    try_acquire_exclusive_file_lock,
 };
 
 thread_local! {
@@ -127,6 +128,41 @@ where
     let _lock = acquire_exclusive_file_lock(&lock_path, label, options)?;
 
     op()
+}
+
+/// Run `op` under the exclusive lock [`with_exclusive_file_lock`] takes for
+/// `target_path` only when that lock is free now: `Ok(None)` when another
+/// holder owns it, without queueing behind that holder.
+///
+/// For work that is worth doing only when it costs no wait. Contention is
+/// decided as [`crate::fs::io::try_acquire_exclusive_file_lock`] decides it.
+/// A request made while this thread already holds the lock runs `op` under
+/// the outer acquisition.
+pub fn try_with_exclusive_file_lock<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    op: F,
+) -> Result<Option<T>, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    let parent = target_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("cannot determine parent for '{}'", target_path.display()),
+        )
+    })?;
+    // Created before resolving, for the reason the closure helper gives.
+    create_private_dir_all(parent).map_err(|e| classify_lock_io(parent, e))?;
+    let lock_path = resolved_lock_path(target_path)?;
+    let Some(_held) = claim_lock_path(&lock_path) else {
+        return op().map(Some);
+    };
+    let Some(_lock) = try_acquire_exclusive_file_lock(&lock_path, label)? else {
+        return Ok(None);
+    };
+    op().map(Some)
 }
 
 /// An exclusive advisory lock held for as long as the guard
