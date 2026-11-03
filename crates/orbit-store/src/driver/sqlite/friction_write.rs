@@ -1,10 +1,28 @@
-//! Friction allocation and publication inside a caller-owned SQLite transaction.
+//! Friction allocation in caller-owned transactions and post-commit projection.
 use crate::contracts::FrictionAddParams;
 use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::observability::logging;
 use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
 use orbit_common::{OrbitError, StorageLayer, governance::friction::derive_title};
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use rusqlite::Connection;
+
+/// Project a newly committed submission, never an uncommitted allocation,
+/// imported record, re-home copy, or replay. Keep the body out of live logs;
+/// redact even when the caller installed a subscriber without redacting fields.
+pub(crate) fn project_committed_friction(workspace_id: &str, record: &FrictionRecord) {
+    let agent = orbit_types::identity::infer_agent_family_from_model(&record.model);
+    orbit_common::tracing::warn!(
+        target: "orbit.friction.reported",
+        workspace_id = %logging::redact_event_text(workspace_id),
+        friction_id = %record.id,
+        task_id = %logging::redact_event_text(record.during_task.as_deref().unwrap_or_default()),
+        agent = agent.as_deref().unwrap_or("unknown"),
+        model = %logging::redact_event_text(&record.model),
+        summary = %logging::redact_event_text(record.title.as_deref().unwrap_or_default()),
+        "friction reported"
+    );
+}
 
 fn encode_timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Nanos, true)

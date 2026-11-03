@@ -44,6 +44,7 @@ mod crew_effort_admission;
 mod decision_cli;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
+mod friction_tracing;
 #[cfg(unix)]
 mod hydrate_follower_observation;
 mod live_run_status;

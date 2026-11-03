@@ -27,7 +27,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 | Activity/job step | V2 envelope audit row | run id, step id, outcome or skip/retry reason |
 | Filesystem policy decision inside v2 run | V2 envelope audit row | profile, op, path, allowed, matched rule |
 | Filesystem or proc-spawn policy denial live projection | Global tracing JSONL | target, tool, path, profile, matched_rule |
-| Friction task submission live projection | Global tracing JSONL | target, task_id, agent, model, summary |
+| Friction record submission live projection | Global tracing JSONL | target, workspace_id, friction_id, task_id, agent, model, summary |
 | HTTP provider turn | Loop audit row plus blob store | run id, session id, provider, model, request/response blob hashes |
 | Tool call inside HTTP loop | Loop audit row plus blob store | run id, session id, tool name, input/output blob hashes, outcome |
 | CLI backend provider invocation | V2 envelope audit row | provider, redacted argv, stdin/stdout/stderr blob refs, timeout, exit code |
@@ -40,6 +40,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - A provider request or response must not be stored inline in a command audit row.
 - A policy or allowlist denial must record both the denied subject and the reason.
 - Live tracing projections must be additional to canonical audit, error, log, or scoreboard writes.
+- A friction submission projects `orbit.friction.reported` once after its canonical transaction commits, with a redacted title and no body. Reports outside a task carry an empty `task_id`; rejected writes, receipt replays and dedupe reuse emit no successful-submission event.
 - A task-state mutation must leave task history or document metadata in addition to any audit row.
 - New operation classes must update this matrix in the same PR that introduces the operation.
 - Registry-backed and in-process MCP tools must have parity for preflight denial, runtime success, and tool failure, with one trusted call context across the path.
@@ -52,7 +53,6 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - Some deterministic automation actions rely on enclosing job context rather than dedicated targeted audit rows.
 - CLI backend tool allowlists are recorded as harness-delegated advisories, not enforced Orbit denials.
 - Command audit stdout/stderr fields exist but are not broadly populated.
-- Friction report submissions have no active producer for the live `orbit.friction.reported` JSONL event; the CLI and web formatters retain only its renderer. [ORB-21797] tracks restoring this required projection.
 
 ## Review Checklist
 

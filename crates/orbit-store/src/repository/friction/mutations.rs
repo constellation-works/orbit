@@ -18,14 +18,18 @@ use super::{
 use crate::contracts::FrictionLandingOutcome;
 use crate::contracts::normalize_friction_tags as normalize_and_validate_tags;
 use crate::driver::file::friction_store::load_tag_taxonomy;
+use crate::driver::sqlite::friction_write;
 
 impl FrictionStore {
     pub fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError> {
         let prepared = prepare_add(&self.files_root, params)?;
-        self.store
+        let stored = self
+            .store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 allocate_record(tx.connection(), &self.workspace_id, &prepared)
-            })
+            })?;
+        friction_write::project_committed_friction(&self.workspace_id, &stored.record);
+        Ok(stored)
     }
 
     /// Insert `params` unless `dedupe_key` already identifies a record in this
@@ -52,16 +56,22 @@ impl FrictionStore {
             ));
         }
         let prepared = prepare_add(&self.files_root, params)?;
-        self.store
-            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let conn = tx.connection();
-                if let Some(existing) =
-                    queries::find_by_dedupe_marker(conn, &self.workspace_id, &marker)?
-                {
-                    return Ok(existing);
-                }
-                allocate_record(conn, &self.workspace_id, &prepared)
-            })
+        let (stored, created) =
+            self.store
+                .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                    let conn = tx.connection();
+                    if let Some(existing) =
+                        queries::find_by_dedupe_marker(conn, &self.workspace_id, &marker)?
+                    {
+                        return Ok((existing, false));
+                    }
+                    allocate_record(conn, &self.workspace_id, &prepared)
+                        .map(|record| (record, true))
+                })?;
+        if created {
+            friction_write::project_committed_friction(&self.workspace_id, &stored.record);
+        }
+        Ok(stored)
     }
 
     pub fn update(
