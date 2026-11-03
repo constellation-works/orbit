@@ -1414,6 +1414,83 @@ fn a_candidate_failure_still_blocks_the_task() {
         None,
         "a candidate failure is no host's"
     );
+    // [ORB-21840] A markerless candidate failure stays a failure.
+    assert_eq!(
+        serde_json::to_value(owner_record).unwrap()["accounting"],
+        json!({"outcome": "failure", "counts_as_failure": true, "reason": "candidate_failure"}),
+    );
+
+    // A claim settled before the owner recorded settlements keeps no typed
+    // evidence: it stays explicit as unrecorded and still counts.
+    let rewritten = pair
+        .wire
+        .owner
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE task_coordination_rows \
+             SET payload_json = json_remove(payload_json, '$.settlement') \
+             WHERE kind = 'distributed-claim-lifecycle-v1' \
+             AND json_extract(payload_json, '$.settlement') IS NOT NULL",
+            (),
+        )
+        .unwrap();
+    assert_eq!(rewritten, 1, "one settled claim");
+    let legacy = &pair.wire.owner.leaf_settlements(None, false).unwrap()[0];
+    assert_eq!((legacy.kind, legacy.evidence), (None, "unrecorded"));
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap()["accounting"],
+        json!({"outcome": "unrecorded", "counts_as_failure": true, "reason": "unrecorded"}),
+    );
+    assert_eq!(pair.owner_status(&task), "blocked");
+}
+
+/// [ORB-21840] Only a failed candidate settlement can be a before-landing
+/// review's designed wait: a pending-decision flag on any other settlement
+/// is malformed evidence and stays a failure, with that reason.
+fn a_pending_decision_flag_on_a_release_stays_a_failure() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let claim = pair.admission(&leaf).receipt.unwrap().claim.unwrap();
+    let settlement = ClaimMutation::Release(ClaimEvidence {
+        summary: Some("released by follower drain".into()),
+        failure: Some(orbit_store::contracts::ClaimFailure {
+            class: ClaimFailureClass::Transient,
+            review_decision_pending: true,
+            reason: "the pull request stays open and unmerged until a recorded decision lands it"
+                .into(),
+            crew: Some("sol".into()),
+            candidate: None,
+            provider_limit: false,
+            provider_refusal: false,
+            owner_busy: false,
+        }),
+        ..ClaimEvidence::default()
+    });
+    pair.wire
+        .call(
+            "",
+            "orbit.drain.claim.settle",
+            json!({"claim_id": claim.claim_id, "run_id": leaf, "settlement": settlement}),
+        )
+        .unwrap();
+    let [record] = &pair.wire.owner.leaf_settlements(None, false).unwrap()[..] else {
+        panic!("one settlement");
+    };
+    assert!(record.review_decision_pending, "{record:?}");
+    assert_eq!(
+        serde_json::to_value(record).unwrap()["accounting"],
+        json!({
+            "outcome": "failure",
+            "counts_as_failure": true,
+            "reason": "review_decision_pending_without_candidate_failure",
+        }),
+        "the reason text alone never makes a hold"
+    );
 }
 
 /// [ORB-16793] The owner's task history says why a follower's leaf blocked
@@ -1551,6 +1628,12 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     );
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert_eq!(release["failure"]["class"], "operator_cancel", "{release}");
+    // [ORB-21840] A cancellation keeps its own accounting outcome.
+    let listed = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    assert_eq!(
+        serde_json::to_value(&listed[0]).unwrap()["accounting"],
+        json!({"outcome": "operator_cancel", "counts_as_failure": false, "reason": "operator_cancel"}),
+    );
     assert_eq!(release["failure"]["candidate"]["branch"], BRANCH);
     assert_eq!(release["failure"]["candidate"]["head_sha"], HEAD);
     assert_eq!(
@@ -2119,6 +2202,7 @@ crate::scenario_table!(
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew_scenarios,
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew,
     a_candidate_failure_still_blocks_the_task,
+    a_pending_decision_flag_on_a_release_stays_a_failure,
     a_failed_leaf_names_its_cause_in_owner_history,
     cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason,
     cancelling_a_launched_claimed_leaf_with_block_blocks_its_task,

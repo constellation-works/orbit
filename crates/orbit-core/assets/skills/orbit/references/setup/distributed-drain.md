@@ -356,6 +356,13 @@ claims needs no operator capability:
 orbit run settlements --since 7d --no-reconcile --json
 ```
 
+Each settlement's `accounting` says how a failure scan counts it, derived from
+its typed kind, class and pending-decision flag, never its reason: `outcome` is
+`failure`, `review_decision_hold`, `evidence_hold`, `operator_cancel`,
+`baseline_red` or `unrecorded`, with `counts_as_failure` (true for `failure`,
+`baseline_red` and `unrecorded`) and a `reason` token. It changes nothing about
+the claim or its task.
+
 Each settlement's `run_evidence` is the leaf's own run record: `job_id`, `build`
 and failing step (`root_cause`), sent with the settlement and kept in an
 immutable row beside the claim. `provenance` is `settlement`, `hydrated` or null

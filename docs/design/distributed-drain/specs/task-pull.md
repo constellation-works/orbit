@@ -549,7 +549,9 @@ A before-landing review refusal whose diagnostic carries the pending-decision ma
 `failure.review_decision_pending: true` to its `Fail` evidence. The owner keeps that flag on the
 settlement record; `orbit run settlements --json` exposes it beside `failure_class: "candidate"`.
 The claim still fails and the task stays blocked for a recorded decision, without a release or
-release-budget charge. Scans count it separately from failures. Missing flags read as false,
+release-budget charge. Scans count it separately from failures through the projection's typed
+`accounting` (`outcome: review_decision_hold`, `counts_as_failure: false`), derived from the
+record's kind, class and flag, never its reason text. Missing flags read as false,
 and older readers ignore the added field, preserving the existing enum values.
 
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to

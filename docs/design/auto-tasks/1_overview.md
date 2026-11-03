@@ -271,7 +271,9 @@ re-init does not overwrite a workspace-authored definition of the same name.
   deltas in `run-failure-report.json` (schema version 2). On an owner it also
   reads the failure and release settlements followers' claimed leaves sent,
   through `orbit run settlements --no-reconcile`, since those leaves never
-  enter the owner's run history. A follower settlement duplicates an owner
+  enter the owner's run history, and counts one as a failure only when its
+  typed `accounting.counts_as_failure` is true; designed holds go to a
+  separate `held_7d` counter so raw occurrences reconcile [ORB-21840]. A follower settlement duplicates an owner
   history row only when all three match: the row's `executed_on.machine_id`
   equals the settlement's `machine_id`, the row's `run_id` equals the
   settlement's `leaf_run_id`, and the row's `task_ids` lists the settlement's

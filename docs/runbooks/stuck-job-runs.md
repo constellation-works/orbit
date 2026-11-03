@@ -74,6 +74,11 @@ awaiting a recorded decision with `review_decision_pending: true`. Its `kind` st
 `failure_class` stays `candidate`, so the claim remains failed and the task blocked until that
 decision, with no release-budget charge. Count these separately from leaf failures. Older
 settlements without the flag read as false; absence is not evidence of a pending decision.
+Each settlement's typed `accounting` (`outcome`, `counts_as_failure`, `reason`) says how a
+failure scan counts it: `review_decision_hold`, `evidence_hold` and `operator_cancel` are held,
+while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
+settlement other than a failed candidate stays a `failure` with reason
+`review_decision_pending_without_candidate_failure`. Accounting changes no claim or task.
 
 `.pipeline_state.drain_pass_counters` (the Admission passes: line) counts what limited every admission pass of a drain's lineage, local or pull, since `since`: `passes`, and `outcomes` with exactly one per pass, the first that applies of `admitted`, `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held` and `deferred`; `held_by_reason` and `throttle_by_resource` split those two, and `waiting_by_reason` counts the passes in which a reason kept at least one task waiting, so its entries overlap. The counters survive terminalization and resume; a pull pass whose window has closed only settles and is not counted. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff` (a claimed leaf was released because the owner's store stayed locked: no claim is requested for 5 minutes from when it ended, `.crew_window.owner_busy_backoff` names `until`, and a third such episode in the window suppresses the host with `.crew_window.host_suppressed_by_busy_owner` set, whose remedy is on the owner), or the owner's probe refusal; `before_pr_reviewer_unavailable` names the review's timing (before-PR or before-landing) and, while its crew is only backed off for capacity, the time it lifts, when requests resume by themselves.
 
