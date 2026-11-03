@@ -129,9 +129,10 @@ default. Treat it as configuration, not as evidence of who is calling. A long-li
 connection outlives a model switch in the client, so pass `orchestrator` on the individual \
 call, or restart the connection with a new value, when the orchestrating crew actually \
 changes.\n\n\
-The default toolset (tasks, workflows and runs, automation, decision list and show, codebase, \
-friction, search, the UI and visual tools, command execution and workspace discovery) is \
-always advertised. `leases` adds the lease tools; `experiments` the experiment tools; \
+Only `core` is always advertised. Without a configured role, the default tier (tasks, \
+workflows and runs, automation, decision list and show, codebase, friction, search, the UI \
+and visual tools, and command execution) is advertised. Named toolsets and toolsets stamped \
+for a managed activity add to the selected role or default tier. `leases` adds the lease tools; `experiments` the experiment tools; \
 `analytics` the agent and orchestrator scorecards and the crew ladder; `decision-channel` a \
 decision channel's submit and digest, which only the bound channel plugin or the operator may \
 call; `agent-invoke` agent invocation, which a managed run offered explorer delegation enables \
