@@ -27,7 +27,7 @@ task that fails.
   distributed-drain protocol revision and fingerprint as the owner. A leaf
   runs the owner's captured `workflow.required_validation_commands`; a
   difference from the replica's list warns when the drain starts. If the owner
-  turns on before-PR review (`review.timing = "before_pr"`), every replica must be able to run
+  turns on before-PR review (`review.timing = "before_pr"`, deprecated; new setups use `before_landing`), every replica must be able to run
   the owner's pre-landing reviewer (`workflow.purpose_crews.pre_landing_review`,
   or `workflow.purpose_crews.review` while that is unset): each pulled task is then reviewed, and the
   reviewer's fixes committed, on the replica before its pull request opens.
