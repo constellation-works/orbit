@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery]
 status: active
-links: [ORB-18010, ORB-18052, ORB-20155]
+links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21229, ORB-21876]
 ---
 
 # Worker killed by SIGTERM before landing
@@ -13,7 +13,7 @@ links: [ORB-18010, ORB-18052, ORB-20155]
 
 ## Mechanism
 
-An external process, often an operator or an orchestrator cancelling, terminated the run after implementation. OOM and PID-limit counters read zero.
+An external process terminated the worker. Historical cases retained candidates; the November 2 cases include clean, pre-implementation attempts. Recorded senders include another `orbit` process; its initiating operation is unknown. OOM and PID-limit counters read zero. A parent scope name differing from a child run is not by itself evidence of faulty targeting.
 
 ## Resolution
 
@@ -21,7 +21,7 @@ Check whether an operator cancelled it on purpose before resuming. When a contra
 
 ## Fix task
 
-No open fix task found.
+ORB-21876 (proposed, tagged `run-failure-patterns`) owns investigation and repair of the recurring Orbit-origin SIGTERM episodes. The initiating operation is unconfirmed; sender command and zero resource-limit counters do not establish why it sent the signal.
 
 ## Occurrences
 
@@ -32,3 +32,21 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 01:54 | ORB-18010 | jrun-20261025-0154-t1 | SIGTERM before landing | human:daniel moved to backlog at 2026-10-25T01:54Z |
 | 2026-10-25 03:05 | ORB-18052 | jrun-20261025-0305-t1 | SIGTERM, sender unknown | claude moved to backlog at 2026-10-25T03:06Z |
 | 2026-10-30 09:00 | ORB-20155 | jrun-20261030-0859-t1 | SIGTERM from an orbit process | codex moved to archived at 2026-10-30T09:24Z |
+
+### ORB-21875 owner scan, 2026-11-03
+
+Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 7 source occurrences across 3 tasks; route `run_failure`, disposition `filed:ORB-21876`. Covering repair: ORB-21876. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
+
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-02T01:50:48.514899357Z | ORB-21174 | jrun-20261102-0149-c3 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0149-c3, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=3275102, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 01:49:11 2026); worker exit: its supervisor reaped pid 3275102 at 2026-11-02T01:50:48.341377798+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0149-c2-28c67911.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0149-c3; source ORB-21174 history:workflow_run_interrupted@2026-11-02T01:50:48.514899357Z | status_changed done at 2026-11-02T04:16:48.042586529Z |
+| 2026-11-02T01:51:17.865000273Z | ORB-21111 | jrun-20261102-0145-c3 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0145-c3, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=2959134, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 01:45:21 2026); worker exit: its supervisor reaped pid 2959134 at 2026-11-02T01:51:17.689108899+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0145-c2-d2e9ab4b.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0145-c3; source ORB-21111 history:workflow_run_interrupted@2026-11-02T01:51:17.865000273Z | review_approved done at 2026-11-02T03:34:27.103395859Z |
+| 2026-11-02T01:53:37.251941531Z | ORB-21111 | jrun-20261102-0152-c12 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0152-c12, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=3541701, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 01:52:29 2026); worker exit: its supervisor reaped pid 3541701 at 2026-11-02T01:53:37.085859407+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0152-c7-03acb695.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0152-c12; source ORB-21111 history:workflow_run_interrupted@2026-11-02T01:53:37.251941531Z | review_approved done at 2026-11-02T03:34:27.103395859Z |
+| 2026-11-02T01:53:52.087173473Z | ORB-21174 | jrun-20261102-0152-c11 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0152-c11, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=3541691, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 01:52:29 2026); worker exit: its supervisor reaped pid 3541691 at 2026-11-02T01:53:51.914193457+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0152-c8-21d3dc65.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0152-c11; source ORB-21174 history:workflow_run_interrupted@2026-11-02T01:53:52.087173473Z | status_changed done at 2026-11-02T04:16:48.042586529Z |
+| 2026-11-02T02:10:30.711374844Z | ORB-21111 | jrun-20261102-0208-c2 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0208-c2, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=108066, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 02:08:33 2026); worker exit: its supervisor reaped pid 108066 at 2026-11-02T02:10:30.548661939+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0208-c1-e398f4d6.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0208-c2; source ORB-21111 history:workflow_run_interrupted@2026-11-02T02:10:30.711374844Z | review_approved done at 2026-11-02T03:34:27.103395859Z |
+| 2026-11-02T02:51:02.053206076Z | ORB-21174 | jrun-20261102-0248-c27 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0248-c27, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=560304, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 02:48:37 2026); worker exit: its supervisor reaped pid 560304 at 2026-11-02T02:51:01.873722182+00:00: killed by signal 15 (SIGTERM), sent by pid 1227088 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0248-c14-30e4d00d.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0248-c27; source ORB-21174 history:workflow_run_interrupted@2026-11-02T02:51:02.053206076Z | status_changed done at 2026-11-02T04:16:48.042586529Z |
+| 2026-11-02T03:28:56.631967965Z | ORB-21229 | jrun-20261102-0328-c3 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0328-c3, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=3239733, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 03:28:01 2026); worker exit: its supervisor reaped pid 3239733 at 2026-11-02T03:28:56.453288474+00:00: killed by signal 15 (SIGTERM), sent by pid 3266805 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0328-c2-53b89c8c.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0328-c3; source ORB-21229 history:workflow_run_interrupted@2026-11-02T03:28:56.631967965Z | status_changed done at 2026-11-02T04:10:58.680990206Z |
+
+No open run-failure-patterns owner existed. ORB-21822 report maps broader class to F2026-11-081. New bug owns source investigation and repair, not failure-rate measurement. Initiating operation remains unknown.

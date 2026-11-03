@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery, agent_implement]
 status: active
-links: [ORB-20503]
+links: [ORB-20503, ORB-21875]
 ---
 
 # A reproduced failure sits outside the task's declared scope
@@ -30,3 +30,13 @@ Recorded by ORB-20998 from the retained collection.
 | Date (UTC) | Task | Run | Matched signature | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-10-31 16:50 | ORB-20503 | jrun-20261031-1634-c4 | fixture assertion passed; phone navigation failure is outside the fixture-only scope | triage disposition=decision outcome=proposed at 2026-10-31T16:59Z; answer not in the snapshot |
+
+### ORB-21875 owner scan, 2026-11-03
+
+Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 1 source occurrence on 1 task; route `authoring`, disposition `counted`. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
+
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T16:59:50.297125033Z | ORB-20503 | jrun-20261031-1634-c4 | decision: separate repair or expand fixture-only scope; implement_one; reproduced phone navigation bounds failure; decision: horizon assertion passes, phone navigation bounds -13..71 vs row 8..367 fails; source mechanism unconfirmed; source ORB-20503 history:blocked_task_triaged@2026-10-31T16:59:50.297125033Z | external_merge_settled done at 2026-10-31T17:59:06.522047628Z |

@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: active
-links: [ORB-19066, ORB-20598, ORB-20646]
+links: [ORB-19066, ORB-20598, ORB-20646, ORB-21875]
 ---
 
 # Implementer stops for scope reassessment with no candidate
@@ -31,3 +31,13 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | --- | --- | --- | --- | --- |
 | 2026-10-27 07:28 | ORB-19066 | jrun-20261027-0723-c3 | scope exceeds pilot footprint | human:daniel moved to archived at 2026-10-27T07:52Z |
 | 2026-10-31 23:32 | ORB-20598 | jrun-20261031-2330-c5 | per-task denominator data not stored | claude moved to backlog at 2026-11-01T00:30Z |
+
+### ORB-21875 owner scan, 2026-11-03
+
+Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 1 source occurrence on 1 task; route `authoring`, disposition `counted`. Covering repair: ORB-20646. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
+
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T23:32:59.761256064Z | ORB-20598 | jrun-20261031-2330-c5 | decision: split historical denominator semantics; implement_one scope_reassessment; aggregate rows lack task path attribution; No implementation; multi-task rows share base/head range and lack paths. Operator split per-line metrics into ORB-20646 at 2026-11-01T00:30:09Z.; source ORB-20598 history:final_recovery_decided@2026-10-31T23:32:59.761256064Z | status_changed done at 2026-11-01T01:06:41.289626485Z |

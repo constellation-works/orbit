@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: resolved
-links: [ORB-20627, ORB-20470, ORB-20473, ORB-20474]
+links: [ORB-20627, ORB-20470, ORB-20473, ORB-20474, ORB-21875]
 ---
 
 # Performance criterion unstable on identical binaries
@@ -32,3 +32,14 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-31 09:41 | ORB-20470 | jrun-20261031-0903-c8 | warm p95 ratio criterion unstable | human forced blocked->rejected at 2026-10-31T16:09Z |
 | 2026-10-31 11:28 | ORB-20474 | jrun-20261031-0922-c3 | warm p95 ratio criterion unstable | merged outside Orbit at 2026-10-31T16:08Z, settled done |
 | 2026-10-31 12:47 | ORB-20473 | jrun-20261031-0920-c3 | warm p95 ratio criterion unstable | human forced blocked->rejected at 2026-10-31T16:09Z |
+
+### ORB-21875 owner scan, 2026-11-03
+
+Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 2 source occurrences across 2 tasks; route `authoring`, disposition `counted`. Covering repair: ORB-20627. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
+
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T11:32:47.120675574Z | ORB-20474 | jrun-20261031-0922-c3 | human_only / decision: restate unstable warm p95 ratio criterion; implement_one; identical-binary spread; human_only: source-repair authorization requested; identical-binary p95 ratio 0.683 vs earlier 0.601; source ORB-20474 history:blocked_task_triaged@2026-10-31T11:32:47.120675574Z | external_merge_settled done at 2026-10-31T16:08:21.490225763Z |
+| 2026-10-31T12:51:42.177713963Z | ORB-20473 | jrun-20261031-0920-c3 | human_only / decision: restate unstable warm p95 ratio criterion; implement_one; identical-binary spread; decision: median-of-three vs every-pair 0.67 threshold; ratios 0.627, 0.700, 0.623; source ORB-20473 history:blocked_task_triaged@2026-10-31T12:51:42.177713963Z | forced rejected at 2026-10-31T16:09:17.973860406Z |
