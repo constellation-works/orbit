@@ -87,7 +87,7 @@ For a noun with verbs `v₁…vₙ`, find:
 | Action enum variants | `crates/orbit-tools/src/host.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers, and the input names and aliases they read | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
-| Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs` |
+| Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs` |
 | Claimed-worker routing | `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>/` |
 | CLI audit metadata and runtime need | `crates/orbit-cli/src/command/operation/registry.rs` |
@@ -166,7 +166,7 @@ fallout mechanically:
 - turn every wildcard arm that covers the noun into an exhaustive `match` on
   the verb, so a future verb has to state its behaviour. Under
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](../4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)
-  this includes `worker_tools.rs` and `artifact_redaction.rs`. The redaction
+  this includes `worker_tools.rs` and `artifact_redaction/policy.rs`. The redaction
   field lists come from the parameters' `redact` class: give the noun's arm in
   `policy_for_action` its spec's `params` and delete its hand-written lists. A
   declared alias takes its parameter's class, so an accepted spelling is
