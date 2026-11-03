@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.44.0 — 2026-11-03
+
+### Breaking Changes
+
+- **Commit trailers retired**: Orbit no longer writes Planned-By or Implemented-By commit trailers, and `commit.planned_by_trailer` and `commit.implemented_by_trailer` are deprecated → read the implementer from Co-authored-by or the task's planned_by/implemented_by. ([ORB-21285])
+- **Layout version 9**: skipped-step resume markers and source-repair bindings gain fields that older binaries refuse, and layout-v8 clients are fenced from upgraded workspaces → upgrade every host in lockstep before opening one. ([ORB-21604])
+
+### Highlights
+
+- **Resident orchestrator**: a standing orchestrator runs under a mandate with operator-only grants, structured checkpoints, `orbit resident metrics` and an evolution pass, and the dashboard Residents view sets mandates up. ([ORB-21244])
+- **`orbit attention`**: one read-only list of everything waiting on an operator, from pilot holds and blocked tasks to failed runs, red CI, untriaged frictions, notices and unhealthy hosts, across workspaces and hosts with a delta cursor. ([ORB-21168])
+- **Fleet notices**: managed agents post and close notices, reads federate across hosts, and the dashboard shows a banner and a Notices view. ([ORB-21213])
+- **Script steps**: declared file inputs, script-grant decision requests, Linux network grants with redaction of passed values, and a macOS sandbox profile with resource limits. ([ORB-21298])
+- **Precedent decisions**: decision categories can be enabled one at a time, answer themselves from precedent, and be demoted. ([ORB-21097])
+- **host-health on by default**: the host-health auto-task now ships enabled. ([ORB-21596])
+
 ## 0.43.0 — 2026-11-02
 
 ### Breaking Changes
