@@ -1297,6 +1297,55 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
     assert!(!format!("{:?}", trace.tool_calls).contains(patch));
 }
 
+#[test]
+fn grok_multiline_wrapper_preserves_answer_and_document_telemetry() {
+    let answer =
+        r#"{"schemaVersion":1,"status":"success","result":{"source":"final-text"},"error":null}"#;
+    let multiline = format!(
+        r#"{{
+"text":{},
+"stopReason":"end_turn",
+"metadata":[
+{{"type":"tool_call","toolName":"read","toolCallId":"nested"}}
+],
+"usage":{{"input_tokens":10,"output_tokens":2}}
+}}"#,
+        json!(answer)
+    );
+    let wrapper: Value = serde_json::from_str(&multiline).unwrap();
+    let compact = wrapper.to_string();
+
+    for raw in [&compact, &multiline] {
+        let response = project_cli_response("grok", raw.as_bytes());
+        assert_eq!(response.as_ref(), answer.as_bytes());
+        assert_eq!(
+            normalize_cli_stdout("grok", raw.as_bytes()).as_ref(),
+            raw.as_bytes()
+        );
+        assert_eq!(
+            latest_assistant_message("grok", raw.as_bytes()).as_deref(),
+            Some(answer)
+        );
+        assert!(
+            recorded_tool_calls("grok", raw.as_bytes()).is_none(),
+            "nested metadata is not a tool stream"
+        );
+
+        let response = String::from_utf8(response.into_owned()).unwrap();
+        let parsed = ParsedStdout::parse(&response);
+        parsed.response_envelope_protocol_check().unwrap();
+        let (envelope, status, _) = parsed
+            .parse_and_validate(&execution(response.clone()))
+            .unwrap();
+        assert_eq!(status, AgentResponseStatus::Success);
+        assert_eq!(envelope.result.unwrap()["source"], "final-text");
+        let trace = traced("grok", raw);
+        assert_eq!(trace.usage.input, 10);
+        assert_eq!(trace.usage.output, 2);
+        assert!(trace.tool_calls.is_empty());
+    }
+}
+
 // A malformed recognized Grok stream fails closed on every boundary:
 // projection is empty, normalization never leaves the raw capture to be
 // rescanned (only the `end` spend fields survive, with no answer), the

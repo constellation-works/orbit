@@ -169,6 +169,12 @@ const GROK_EVENT_TYPES: [&str; 6] = [
 ];
 
 fn grok_streaming_events(stdout: &[u8]) -> GrokStream {
+    // A complete JSON document belongs to the wrapper/direct-envelope path.
+    // Its nested objects can occupy event-shaped lines without being JSONL.
+    if serde_json::from_slice::<Value>(stdout).is_ok() {
+        return GrokStream::Unrecognized;
+    }
+
     let mut events = Vec::new();
     let mut recognized = false;
     let mut saw_grok_type = false;

@@ -210,6 +210,33 @@ mod grok {
     }
 
     #[test]
+    fn grok_multiline_direct_envelope_preserves_nested_event_result() {
+        let multiline = r#"{
+"schemaVersion":1,
+"status":"success",
+"result":{
+"items":[
+{"type":"text","data":"ordinary task result"}
+]
+},
+"error":null
+}"#;
+        let expected: serde_json::Value = serde_json::from_str(multiline).unwrap();
+        let compact = expected.to_string();
+
+        for stdout in [compact.as_str(), multiline] {
+            let response = projected(stdout);
+            assert_eq!(response, stdout, "direct envelope stays intact");
+            let exec = exec_result(response, 0);
+            let parsed = ParsedStdout::parse(&exec.stdout);
+            parsed.response_envelope_protocol_check().unwrap();
+            let (envelope, status, _) = parsed.parse_and_validate(&exec).unwrap();
+            assert_eq!(status, AgentResponseStatus::Success);
+            assert_eq!(envelope.result.as_ref(), Some(&expected["result"]));
+        }
+    }
+
+    #[test]
     fn grok_final_text_is_the_only_completion_authority() {
         let stdout = serde_json::json!({
             "text": SUCCESS,
