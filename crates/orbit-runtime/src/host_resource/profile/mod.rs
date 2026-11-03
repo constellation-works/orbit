@@ -41,7 +41,9 @@
 //! tags of the cached templates. The probe scans every retained minute row,
 //! so a pass skips it while the store's change counter, which triggers bump
 //! on every write that can move the probe, holds since the cached answer.
-//! Live load is never cached here.
+//! A rebuild re-reads the minutes only of runs whose minute-row count, last
+//! minute index or `job_runs` row moved since the cache's last load. Live
+//! load is never cached here.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

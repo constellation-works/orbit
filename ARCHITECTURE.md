@@ -59,7 +59,10 @@ additive) is a one-row counter that triggers bump on every write that can move
 the probe: a run's first or last minute row, and an insert, delete, re-key or
 `finished_at` change of a sampled run's `job_runs` row. A cache pass probes
 only when the counter moved since its cached answer. The triggers fire on
-older binaries' writes too.
+older binaries' writes too. A rebuild then re-reads minute rows only for runs
+whose shape moved: the minute-row count and last minute index from the
+primary key, and the `job_runs` row, against the shapes of the cache's last
+load.
 
 The workspace agent corpus keeps its versioned row and append contracts in
 `orbit-types`, its mapping in `orbit-config`, and pinned reads and deterministic

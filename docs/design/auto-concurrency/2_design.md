@@ -561,8 +561,16 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   it only when the store's `delivery_runs_stamp` counter moved since the cached
   answer; triggers bump that counter on a run's first or last minute row and on
   an insert, delete, re-key or `finished_at` change of a sampled run's
-  `job_runs` row. The dashboard's read also keeps each workspace's encoded
-  profiles with the cached set, so a hit does not re-encode them.
+  `job_runs` row. A rebuild re-reads minutes only where they moved: the cache
+  keeps the runs its last build read, with each sampled run's shape (its
+  minute-row count and last minute index, read from the primary key, and its
+  `job_runs` row), and the next build re-reads the minutes of a run only when
+  its shape changed. A worker writes each minute index once, past any an
+  earlier worker of the run wrote, and retention only deletes, so an unchanged
+  shape means unchanged minutes. The first build, and one where most runs
+  moved, read every row in one scan. The dashboard's read also keeps each
+  workspace's encoded profiles with the cached set, so a hit does not
+  re-encode them.
   Only profiles are cached: the forecast's live inputs (running deliveries,
   reservations, baseline) are read fresh every pass.
 
