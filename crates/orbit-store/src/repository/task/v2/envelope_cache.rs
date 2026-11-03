@@ -93,13 +93,21 @@ pub(super) fn persisted_file_stamp(path: &Path) -> Option<String> {
     file_stamp(path)?.persisted()
 }
 
+/// [`persisted_file_stamp`] from metadata the caller already holds.
+pub(super) fn persisted_metadata_stamp(metadata: &Metadata) -> Option<String> {
+    metadata_stamp(metadata).persisted()
+}
+
 fn file_stamp(path: &Path) -> Option<EnvelopeStamp> {
-    let metadata = fs::metadata(path).ok()?;
-    Some(EnvelopeStamp {
+    Some(metadata_stamp(&fs::metadata(path).ok()?))
+}
+
+fn metadata_stamp(metadata: &Metadata) -> EnvelopeStamp {
+    EnvelopeStamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),
-        identity: file_identity(&metadata),
-    })
+        identity: file_identity(metadata),
+    }
 }
 
 #[derive(Default)]

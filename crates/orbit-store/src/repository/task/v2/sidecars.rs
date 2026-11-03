@@ -123,6 +123,48 @@ impl TaskV2Store {
             .map(|(events, comments)| format!("{events}/{comments}")))
     }
 
+    /// Filesystem evidence of the bundle a whole-bundle read opens, for each
+    /// of `ids`, taken without reading it: [`bundle_stamp`] over its
+    /// directories and logs.
+    ///
+    /// A store write that changes what a whole-bundle read returns, or
+    /// whether it succeeds, changes the stamp: it appends to a log, truncates
+    /// one, or renames a new file into a directory. It carries the limits
+    /// [`Self::task_history_stamp`] states: taken before a read it labels
+    /// that read or something older, and it is evidence that the store
+    /// wrote nothing, not proof the bytes are identical: an out-of-band
+    /// in-place edit of a renamed-into-place file (the envelope, a document,
+    /// the manifest or a blob), or a change inside a legacy nested artifact
+    /// directory, goes unseen until the bundle's next store write.
+    ///
+    /// The partition is checked once for a commit to recover; a task is
+    /// absent when nothing can vouch for its bundle (a write to settle, a
+    /// missing task, a platform without file identity), and every task is
+    /// when there is no commit boundary or the partition has a commit to
+    /// recover.
+    pub(crate) fn task_bundle_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut stamps = BTreeMap::new();
+        let Some(boundary) = &self.coordination else {
+            return Ok(stamps);
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(stamps);
+        }
+        for id in ids {
+            orbit_types::task::validate_orb_task_id(id)?;
+            let Some(bundle_dir) = self.bundle_store.settled_bundle_dir(id)? else {
+                continue;
+            };
+            if let Some(stamp) = bundle_stamp(&bundle_dir) {
+                stamps.insert(id.clone(), stamp);
+            }
+        }
+        Ok(stamps)
+    }
+
     /// The history from the whole bundle, once the partition has settled.
     fn settled_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.ensure_recovered()?;
@@ -187,4 +229,39 @@ pub(crate) fn task_comment_from_row(comment: TaskCommentRowV2) -> TaskComment {
         message: comment.body,
         operation_id: comment.operation_id,
     }
+}
+
+/// The bundle entries a whole-bundle stamp covers. Every store write but a
+/// log append publishes a file by renaming it into place, and new artifact
+/// blobs land flat in `artifacts/files`, so the stamps of the bundle and
+/// artifact directories move with each of those writes and each added or
+/// removed file; the two logs are stamped themselves, because an append or a
+/// truncation changes the file and not its directory.
+const BUNDLE_STAMP_ENTRIES: [&str; 5] = [
+    "",
+    TASK_ARTIFACTS_DIR_NAME,
+    TASK_BUNDLE_FILES_DIR,
+    orbit_types::task::TASK_EVENTS_FILE_NAME,
+    orbit_types::task::TASK_COMMENTS_FILE_NAME,
+];
+const TASK_BUNDLE_FILES_DIR: &str = "artifacts/files";
+
+/// One `entry=stamp` line per [`BUNDLE_STAMP_ENTRIES`] entry, hashed. An
+/// absent entry stamps as absent, so creating it moves the stamp; `None` when
+/// a present entry has no persisted stamp, so the bundle cannot be vouched
+/// for and the caller reads it instead.
+fn bundle_stamp(bundle_dir: &Path) -> Option<String> {
+    let mut lines = String::new();
+    for entry in BUNDLE_STAMP_ENTRIES {
+        let stamp = match fs::metadata(bundle_dir.join(entry)) {
+            Ok(metadata) => envelope_cache::persisted_metadata_stamp(&metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_string(),
+            Err(_) => return None,
+        };
+        lines.push_str(entry);
+        lines.push('=');
+        lines.push_str(&stamp);
+        lines.push('\n');
+    }
+    Some(sha256_hex(lines.as_bytes()))
 }

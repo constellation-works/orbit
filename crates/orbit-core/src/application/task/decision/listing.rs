@@ -1,10 +1,85 @@
 //! Decision request reads and surface projections.
 
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use orbit_common::OrbitError;
 use orbit_types::task::{DecisionGate, DecisionRequest, DecisionRequestState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+
+/// Tasks a workspace decision scan found raising no request, by workspace
+/// and task id, each with the whole-bundle stamp taken before the read that
+/// showed it.
+///
+/// Requests derive only from `decision_requested` history events, so a task
+/// whose history holds none lists no request in any state, whatever its
+/// status, binding inputs or the clock. While its bundle stamp is unchanged
+/// the store has not written the bundle since, so a read would still find
+/// no event and no damage the store wrote, and the scan may skip it. Any
+/// store write to the bundle changes the stamp, and the next scan reads that
+/// task in full; a task the store cannot stamp is read every time. Only a
+/// clean read is recorded, so a corrupt bundle keeps warning. The stamp's
+/// limits are the store's (`task_bundle_stamps`): an out-of-band in-place
+/// edit stays unseen until the bundle's next write.
+///
+/// The set lives for the process, which for the dashboard is the server:
+/// the first scan after start reads every bundle, later ones only what
+/// changed. Bounded at [`NoRequestTasks::CAPACITY`] entries; overflowing it
+/// starts over, costing one full scan.
+struct NoRequestTasks;
+
+type NoRequestEntries = HashMap<String, HashMap<String, String>>;
+
+impl NoRequestTasks {
+    const CAPACITY: usize = 1 << 18;
+
+    fn entries() -> std::sync::MutexGuard<'static, NoRequestEntries> {
+        static ENTRIES: OnceLock<Mutex<NoRequestEntries>> = OnceLock::new();
+        ENTRIES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The `ids` a scan must read, each with its current stamp when it has
+    /// one: every id but those proven under the stamp they still carry.
+    fn unproven(
+        workspace: &str,
+        ids: Vec<String>,
+        mut stamps: BTreeMap<String, String>,
+    ) -> Vec<(String, Option<String>)> {
+        let entries = Self::entries();
+        let proven = entries.get(workspace);
+        ids.into_iter()
+            .filter_map(|id| {
+                let stamp = stamps.remove(&id);
+                let holds = stamp.as_ref().is_some_and(|stamp| {
+                    proven
+                        .and_then(|proven| proven.get(&id))
+                        .is_some_and(|recorded| recorded == stamp)
+                });
+                (!holds).then_some((id, stamp))
+            })
+            .collect()
+    }
+
+    fn record(workspace: &str, proven: Vec<(String, String)>) {
+        if proven.is_empty() {
+            return;
+        }
+        let mut entries = Self::entries();
+        let held: usize = entries.values().map(HashMap::len).sum();
+        if held + proven.len() > Self::CAPACITY {
+            entries.clear();
+        }
+        entries
+            .entry(workspace.to_string())
+            .or_default()
+            .extend(proven);
+    }
+}
 
 /// Decision requests readable in a workspace scan, with corrupt bundles
 /// identified separately so a partial result never looks complete.
@@ -118,10 +193,25 @@ impl OrbitRuntime {
                 .map(|task| task.id)
                 .collect(),
         };
+        // A workspace scan skips a task proven to raise no request: its whole
+        // bundle still carries the stamp taken before an earlier clean read
+        // found no `decision_requested` event. See [`NoRequestTasks`].
+        let workspace = task_id
+            .is_none()
+            .then(|| self.workspace_id().ok())
+            .flatten();
+        let reads = match &workspace {
+            Some(workspace) => {
+                let stamps = self.task_bundle_stamps(&ids);
+                NoRequestTasks::unproven(workspace, ids, stamps)
+            }
+            None => ids.into_iter().map(|id| (id, None)).collect(),
+        };
         let mut listing = DecisionRequestListing::default();
-        for id in &ids {
-            let read = self.get_task_decision_requests(id);
-            let requests = if tolerate_corrupt {
+        let mut proven = Vec::new();
+        for (id, stamp) in reads {
+            let read = self.get_task_decision_requests_with_events(&id);
+            let (requests, raised_any) = if tolerate_corrupt {
                 let Some(requests) =
                     super::super::listing::task_bundle_scan_result(read, &mut listing.warnings)?
                 else {
@@ -131,6 +221,9 @@ impl OrbitRuntime {
             } else {
                 read?
             };
+            if !raised_any && let Some(stamp) = stamp {
+                proven.push((id, stamp));
+            }
             for request in requests {
                 if gate.is_some_and(|gate| gate != request.gate) {
                     continue;
@@ -140,6 +233,9 @@ impl OrbitRuntime {
                 }
                 listing.requests.push(request);
             }
+        }
+        if let Some(workspace) = &workspace {
+            NoRequestTasks::record(workspace, proven);
         }
         listing
             .requests

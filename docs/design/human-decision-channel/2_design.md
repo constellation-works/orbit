@@ -195,6 +195,19 @@ CLI warnings go to stderr, preserving its JSON record array. Explicit single-tas
 reads, request lookup and answering stay strict. I/O and authorization failures
 still fail the operation.
 
+A workspace scan reads a task's whole bundle only when the task may hold a
+request. Requests come only from `decision_requested` history events, so once a
+clean read finds none, the process remembers the task with a stamp of its
+bundle: the stamps of the bundle and artifact directories plus its event and
+comment logs, taken without reading them. Later scans skip the task while that
+stamp holds. Any store write to the bundle (a raised, answered or reopened
+request, a status move, a comment, an artifact) moves the stamp, so the next
+scan reads it again. A bundle the store cannot stamp is read every time.
+Corruption the store writes, such as a removed artifact blob, also moves the
+stamp and still warns. An out-of-band in-place edit to a file published by
+rename stays unseen until the bundle's next write. The first scan after a
+process starts reads every bundle.
+
 ## 3. Delegated-human authority
 
 ### 3.1 The gap, precisely
