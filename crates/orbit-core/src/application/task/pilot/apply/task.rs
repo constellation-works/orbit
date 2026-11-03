@@ -290,9 +290,13 @@ fn scope_with(
     after.extend(retained.iter().cloned());
     // A review-filed task's selectors are the review's evidence: the pilot
     // may drop verified read-only evidence only with an explicit audit record.
-    // Unexplained omissions retain filed order and leave scope unchanged.
+    // No-diff assessments audit the same prepared evidence, but retain no
+    // lock footprint. Their no-change proof and creation-grant checks remain
+    // independent of these explanations.
     let retain_evidence = disposition == "selectors" && review_filed(&snapshot.tags);
-    let mut evidence = if retain_evidence {
+    let inspect_evidence = matches!(disposition.as_str(), "selectors" | "verified_no_diff")
+        && review_filed(&snapshot.tags);
+    let mut evidence = if inspect_evidence {
         retained_review_evidence(
             action,
             &snapshot.context_files,
@@ -306,7 +310,7 @@ fn scope_with(
     };
     let dropped = reviewed_evidence_drops(action, assessment, &evidence)
         .map_err(refused(task_id, "invalid"))?;
-    evidence.retain(|selector| !dropped.contains(selector));
+    evidence.retain(|selector| retain_evidence && !dropped.contains(selector));
     if retain_evidence {
         after = snapshot
             .context_files

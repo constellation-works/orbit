@@ -671,6 +671,11 @@ spec:
       produce every deliverable with agent tools (reading code,
       `orbit.task.add`, comments, `orbit.task.artifact.put`, a review cursor).
       Return an empty `context_files_after` and concrete `evidence`. A
+      review-filed task still records inspected, resolving evidence omissions
+      in `context_evidence_dropped`, including targets already satisfied at
+      the pinned source. Those records explain the inspection; they do not
+      replace already-landed or invalid-finding proof, or revoke creation
+      grants. No selectors are retained for this disposition. A
       `no-diff-expected` task whose outputs are only tasks, comments or
       artifacts belongs here, for example a parity audit that files each gap as
       a task and attaches `surface-parity.json`.
