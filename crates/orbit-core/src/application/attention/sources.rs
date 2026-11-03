@@ -742,7 +742,7 @@ fn resident_stalled_items(
 /// artifacts) settle a pending commit as a side effect, so an
 /// observational attention read must degrade rather than reach them while
 /// a commit awaits an ordinary operational read.
-fn pending_commit_message(runtime: &OrbitRuntime) -> Option<String> {
+pub(super) fn pending_commit_message(runtime: &OrbitRuntime) -> Option<String> {
     if !runtime.coordination_task_reads_visible() {
         return None;
     }

@@ -203,6 +203,131 @@ impl Fixture {
     }
 }
 
+fn journal_state(runtime: &OrbitRuntime, journal_id: &str) -> Option<String> {
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .query_row(
+            "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
+            [journal_id],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+fn ci_red_pending_commit_skips_repair_lookup_and_preserves_journal() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let task = fixture
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Repair CI".into(),
+            description: "Repair.".into(),
+            acceptance_criteria: vec!["CI green.".into()],
+            status: Some(orbit_types::task::TaskStatus::Proposed),
+            creation_decision: Some(orbit_types::task::TaskDecision::CiFailureIdentity(
+                orbit_types::task::CiFailureIdentity {
+                    failure_key: "key".into(),
+                    compiler_cause_digest: None,
+                    open_compiler_set: None,
+                    signature: None,
+                    tested_commit: fixture.head.clone(),
+                    sources: vec![orbit_types::task::CiFailureSource {
+                        run_id: "42".into(),
+                        job_id: "1".into(),
+                        checkout: fixture.head.clone(),
+                    }],
+                },
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+    let workspace_id = fixture.runtime.workspace_id().unwrap();
+    {
+        let connection =
+            rusqlite::Connection::open(fixture.runtime.global_root().join("orbit.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_commit_journal \
+                     (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                 VALUES (?1, ?2, ?3, 'prepared', '{}', ?4)",
+                rusqlite::params![
+                    "attention-ci-pending-1",
+                    workspace_id,
+                    task.id,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        journal_state(&fixture.runtime, "attention-ci-pending-1").as_deref(),
+        Some("prepared")
+    );
+    let before = fixture.runtime.observe_task_metadata().unwrap();
+    assert!(fixture.runtime.inspect_execution_claims().is_err());
+
+    // Fresh and cached provider reads alike: the CI evidence is reported,
+    // the repair-task association degrades explicitly, and neither the
+    // journal nor task/claim state is settled by the query.
+    for attempt in ["fresh", "cached"] {
+        let calls_before = fixture.calls();
+        let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+        let items = response["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{attempt}: {response}");
+        assert_eq!(items[0]["refs"]["run_id"], "42", "{attempt}: {response}");
+        assert!(
+            items[0]["refs"].get("task_id").is_none(),
+            "{attempt}: pending lookup must not link a repair task: {response}"
+        );
+        assert_eq!(
+            items[0]["next"]["tool"], "github.run.view",
+            "{attempt}: {response}"
+        );
+        assert!(
+            response["degraded"].as_array().unwrap().iter().any(|d| {
+                d["kind"] == "ci_red"
+                    && d["code"] == "source_unavailable"
+                    && d["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("pending commit"))
+            }),
+            "{attempt}: repair lookup must degrade explicitly: {response}"
+        );
+        assert_eq!(
+            journal_state(&fixture.runtime, "attention-ci-pending-1").as_deref(),
+            Some("prepared"),
+            "{attempt}: attention must not abort or replay the pending commit"
+        );
+        assert_eq!(fixture.runtime.observe_task_metadata().unwrap(), before);
+        assert!(
+            fixture.runtime.inspect_execution_claims().is_err(),
+            "{attempt}: attention left the pending commit for an ordinary read"
+        );
+        if attempt == "cached" {
+            assert_eq!(
+                fixture.calls(),
+                calls_before,
+                "cached provider read must not call the provider again"
+            );
+        }
+    }
+
+    // Ordinary operational history reads retain recovery semantics, and
+    // once settled the repair-task link works again.
+    fixture.runtime.get_task_history(&task.id).unwrap();
+    assert_eq!(
+        journal_state(&fixture.runtime, "attention-ci-pending-1").as_deref(),
+        Some("aborted"),
+        "an ordinary history read aborts the prepared journal row"
+    );
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["refs"]["task_id"], task.id, "{response}");
+    assert_eq!(items[0]["next"]["tool"], "orbit.task.show", "{response}");
+}
+
 fn ci_red_lists_newest_failed_run_on_head() {
     let fixture = Fixture::new(true);
     let old = (chrono::Utc::now() - chrono::Duration::hours(100)).to_rfc3339();
@@ -555,6 +680,7 @@ crate::scenario_table!(
     ci_red_missing_auth_degrades_without_failing,
     ci_red_stale_head_and_success_are_not_red,
     ci_red_folds_into_existing_repair_task,
+    ci_red_pending_commit_skips_repair_lookup_and_preserves_journal,
     ci_red_reports_remote_head_when_local_behind,
     ci_red_ignores_retained_failure_on_stale_local_head,
     ci_red_advancing_remote_head_invalidates_cache,

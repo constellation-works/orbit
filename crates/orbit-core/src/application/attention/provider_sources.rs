@@ -134,6 +134,11 @@ fn find_repair_task(
     run_id: &str,
 ) -> Option<(String, Option<AttentionTask>)> {
     use orbit_types::task::CiFailureIdentity;
+    // History reads settle a pending task commit; an observational
+    // attention read must never reach them while one is pending.
+    if super::sources::pending_commit_message(runtime).is_some() {
+        return None;
+    }
     let tasks = runtime.observe_task_metadata().ok()?;
     for task in &tasks {
         if task.status.is_terminal() {
@@ -314,10 +319,22 @@ pub(super) fn read_ci_attention(
             }
         }
     }
+    // A pending task commit makes the repair-task association
+    // unavailable: history reads would settle it. The CI evidence itself
+    // is still safe to report, degraded explicitly below.
+    let pending_commit = super::sources::pending_commit_message(runtime);
+    let mut repair_lookup_degraded = false;
     for (workflow_key, run) in newest_by_workflow {
         let conclusion = value_string(&run["conclusion"]);
         if conclusion != "failure" && conclusion != "timed_out" {
             continue;
+        }
+        if !repair_lookup_degraded && let Some(message) = &pending_commit {
+            repair_lookup_degraded = true;
+            degraded(
+                candidates,
+                format!("CI repair-task lookup unavailable: {message}"),
+            );
         }
         let run_id = value_string(&run["run_id"]);
         // `since` is the failing run's `updated_at`, the nearest
@@ -339,7 +356,7 @@ pub(super) fn read_ci_attention(
         } else {
             workflow_key.clone()
         };
-        let repair = if run_id.is_empty() {
+        let repair = if run_id.is_empty() || pending_commit.is_some() {
             None
         } else {
             find_repair_task(runtime, &run_id)
