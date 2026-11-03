@@ -29,13 +29,12 @@
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
-use std::fs::File;
 use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, write_new_private_text};
+use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow, write_new_private_text};
 use orbit_store::maintenance::task_registry::task_registry_path;
 use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry};
 use serde_json::Value;
@@ -108,12 +107,25 @@ enum RecordedBoundary {
 /// Read the boundary file, taking an incomplete one's modification time from
 /// the same open file, so a repair racing this read yields the same instant.
 fn read_boundary(path: &Path) -> io::Result<RecordedBoundary> {
-    let mut file = match File::open(path) {
+    // Open without following a final symlink and inspect that descriptor, so
+    // a boundary file swapped for a link cannot redirect the read outside the
+    // store root.
+    let mut file = match open_read_only_no_follow(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(RecordedBoundary::Absent),
         Err(error) => return Err(error),
     };
-    let modified = file.metadata()?.modified()?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "typed decisions boundary must be a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+    let modified = metadata.modified()?;
     let mut recorded = Vec::new();
     file.read_to_end(&mut recorded)?;
     Ok(std::str::from_utf8(&recorded)
