@@ -106,8 +106,17 @@ pub(crate) struct TaskEligibility {
 /// callers that read status, attribution, tags, relations, context files or
 /// timestamps of the whole workspace.
 pub(crate) fn list_task_metadata_in(store: &dyn TaskStoreBackend) -> Result<Vec<Task>, OrbitError> {
+    list_task_metadata_matching(store, &TaskListFilter::default())
+}
+
+/// [`list_task_metadata_in`] narrowed by `filter`: one freshness pass, and
+/// only the envelopes the filter selects are read.
+pub(crate) fn list_task_metadata_matching(
+    store: &dyn TaskStoreBackend,
+    filter: &TaskListFilter,
+) -> Result<Vec<Task>, OrbitError> {
     Ok(store
-        .task_candidates(&TaskListFilter::default(), usize::MAX)?
+        .task_candidates(filter, usize::MAX)?
         .items
         .into_iter()
         .map(metadata_task)

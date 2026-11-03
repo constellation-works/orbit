@@ -70,6 +70,8 @@ pub struct TaskIndexFilter {
     pub priority: Option<TaskPriority>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
+    /// Tasks carrying at least one of these tags. Empty means no restriction.
+    pub any_tags: Vec<String>,
     /// Tasks carrying a `child_of` relation to this task, from the indexed
     /// relation rows.
     pub parent_id: Option<String>,

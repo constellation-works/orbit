@@ -25,6 +25,9 @@ pub struct TaskListFilter {
     pub parent_id: Option<String>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
+    /// Keep only tasks carrying at least one of these tags (case-insensitive,
+    /// like `tags`). Empty means no such restriction.
+    pub any_tags: Vec<String>,
     pub external_ref: Option<ExternalRef>,
     pub has_external_ref_system: Option<String>,
     /// Order tasks in a terminal status (done, archived, rejected) after the
@@ -45,6 +48,7 @@ impl TaskListFilter {
     pub(crate) fn normalized(&self) -> Self {
         Self {
             tags: normalize_task_tags(self.tags.clone()),
+            any_tags: normalize_task_tags(self.any_tags.clone()),
             search: self
                 .search
                 .as_deref()
@@ -94,6 +98,11 @@ impl TaskListFilter {
                     .iter()
                     .any(|available| available.trim().to_lowercase() == *tag)
             })
+            && (self.any_tags.is_empty()
+                || task
+                    .tags
+                    .iter()
+                    .any(|available| self.any_tags.contains(&available.trim().to_lowercase())))
             && self.external_ref.as_ref().is_none_or(|value| {
                 task.external_refs
                     .iter()
@@ -114,6 +123,7 @@ impl TaskListFilter {
             priority: self.priority,
             job_run_id: self.job_run_id.clone(),
             tags: self.tags.clone(),
+            any_tags: self.any_tags.clone(),
             parent_id: self.parent_id.clone(),
             scan_before: self.scan_before.clone(),
             excluded_ids,

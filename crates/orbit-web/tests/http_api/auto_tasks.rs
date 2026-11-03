@@ -115,7 +115,8 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
             // guard on a saturated host; name the phase that was running.
             let mut progress = FixtureProgress::start("auto-task list freshness");
             let fixture = Fixture::new();
-            let instances = seed(&fixture, 320, &mut progress);
+            // 40 tasks no definition minted: the listing must not read them.
+            let instances = seed(&fixture, 360, &mut progress);
             progress.phase("start server", 1);
             let server = fixture.counted_task_server();
             progress.advance();
@@ -152,7 +153,12 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
                     bundles, 0,
                     "metadata projection must not hydrate task bodies"
                 );
-                assert_eq!(selections.len(), 320);
+                assert_eq!(
+                    selections.len(),
+                    320,
+                    "only auto-task instances are read; selecting every workspace task \
+                     made the listing scale with the workspace [ORB-21824]"
+                );
                 for task in instances.values().flatten() {
                     assert_eq!(selections[&task.id], request, "each instance selected once");
                 }
