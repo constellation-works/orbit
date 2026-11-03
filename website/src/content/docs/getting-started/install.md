@@ -184,10 +184,12 @@ npm install -g @orbit-tools/cli@latest
 
 `orbit update --check` tells you whether a newer release is out. npm owns this
 install, so `orbit update` prints the npm command instead of replacing the
-binary. Pending state migrations apply the next time Orbit opens the
-workspace. After the upgrade, run `orbit workspace sync --all` once on each
+binary. Required state migrations apply the next time Orbit opens the
+workspace; `orbit migrate` lists any others, and `orbit migrate --confirm`
+applies them. After the upgrade, run `orbit workspace sync --all` once on each
 host to bring every registered workspace's managed defaults up to date (see
 [Synchronize shipped defaults](../../how-to/workspace-maintenance/#synchronize-shipped-defaults)).
 Upgrade every host together for distributed work, and restart long-lived MCP
-servers too: older clients cannot write after the current handoff-storage
-migration.
+servers too. Workspace layout 9 (Orbit 0.44.0) fences older clients from
+workspaces a newer build has upgraded, so upgrade every host before any of them
+opens a shared workspace.

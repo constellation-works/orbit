@@ -93,7 +93,7 @@ let a run finish delivery itself, authorize completion:
 
 | From | Do |
 |---|---|
-| Dashboard | On the drain card, set **When a task finishes** to **Mark done** before **Start**. |
+| Dashboard | On the drain card, turn on **Mark shipped tasks done** before **Start**. |
 | Agent | Ask it to merge what passes. Over MCP only a drain can carry this authorization, so the agent starts one. |
 | CLI | `orbit run auto --for 4h --complete`, or `orbit run ship ABC-12 --complete` |
 

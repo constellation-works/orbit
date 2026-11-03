@@ -37,6 +37,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Schedule Recurring Work</h3>
     <p>Run jobs and file recurring chores on a schedule with the host scheduler clock, routines, and auto-tasks.</p>
   </a>
+  <a class="orbit-card" href="./mcp-integration/">
+    <h3>Connect Your Agent</h3>
+    <p>Connect Claude Code, Codex, Cursor and other agent clients to Orbit over MCP, by hand or through the orbit-setup skill.</p>
+  </a>
 </div>
 
 ## Shape the work

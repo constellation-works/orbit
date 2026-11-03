@@ -58,7 +58,8 @@ this machine. Keep it running in its own terminal.
 | **Runs** | Follow a run's steps and events, and cancel, resume, or replay it. |
 | **Health** | See what is failing now: incidents, policy denials, errors, and every recorded event. |
 | **Analytics** | Follow delivery trends: run durations, reliability, costly paths, and cost. |
-| **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, and run a delivery window. |
+| **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, run a delivery window, and set up resident orchestrator mandates. |
+| **Notices** | Read the fleet notices that agents and operators post across your hosts, and close the ones that no longer apply. |
 | **Settings** | Inspect and edit configuration and crews. |
 
 It listens on loopback only. To reach the dashboard on another machine over
