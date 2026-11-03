@@ -337,8 +337,10 @@ pub(super) async fn create_resident(
     .await
 }
 
-/// `POST /api/residents/<id>/grant` — narrow, or widen as an answered
-/// request.
+/// `POST /api/residents/<id>/grant` — narrow, widen as an answered
+/// request, or both as two recorded changes. Core refuses one call that
+/// both widens and narrows, so a mixed dashboard call widens first and
+/// then narrows; the dashboard form also keeps them separate.
 pub(super) async fn grant_resident(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -346,6 +348,9 @@ pub(super) async fn grant_resident(
     Json(body): Json<ResidentGrantBody>,
 ) -> Response {
     let widening = !body.add.is_empty() || !body.workspaces.is_empty();
+    let narrowing = !body.remove.is_empty()
+        || !body.drop_workspaces.is_empty()
+        || non_blank(body.deadline.as_deref()).is_some();
     let quote = non_blank(body.quote.as_deref());
     let mut input = Map::new();
     input.insert("task_id".into(), json!(id));
@@ -394,19 +399,83 @@ pub(super) async fn grant_resident(
             // operator then answers it as the human, as the decision view
             // would.
             session.origin_session_id = Some(format!("dashboard:{}", audit_execution_id("resident")));
-            let raised = runtime.run_tool_with_session("orbit.resident.grant", input, session)?;
-            if raised["outcome"] != "requested" {
-                return Ok(raised);
+            if !narrowing {
+                let raised = runtime.run_tool_with_session("orbit.resident.grant", input, session)?;
+                if raised["outcome"] != "requested" {
+                    return Ok(raised);
+                }
+                let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
+                    OrbitError::Execution("the grant request carries no id".to_string())
+                })?;
+                let answered = runtime.answer_decision_request_as_human(
+                    request_id,
+                    "grant",
+                    Some("Granted from the dashboard Residents view".to_string()),
+                    human_comment_author(None),
+                    Some("dashboard".to_string()),
+                )?;
+                let shown = runtime.run_tool_with_session(
+                    "orbit.resident.show",
+                    json!({"task_id": id}),
+                    dashboard_session(true),
+                )?;
+                return Ok(json!({
+                    "outcome": "granted",
+                    "request": serde_json::to_value(&answered).unwrap_or(Value::Null),
+                    "authority": shown["authority"],
+                    "effective_authority": shown["effective_authority"],
+                }));
             }
-            let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
-                OrbitError::Execution("the grant request carries no id".to_string())
-            })?;
-            let answered = runtime.answer_decision_request_as_human(
-                request_id,
-                "grant",
-                Some("Granted from the dashboard Residents view".to_string()),
-                human_comment_author(None),
-                Some("dashboard".to_string()),
+            // Core refuses one call that both widens and narrows, so split
+            // a mixed dashboard call into two recorded changes: widen
+            // first as an answered request, then narrow.
+            let mut widen_input = Map::new();
+            widen_input.insert("task_id".into(), json!(id));
+            for (key, list) in [("add", &body.add), ("workspaces", &body.workspaces)] {
+                if !list.is_empty() {
+                    widen_input.insert(key.into(), json!(list));
+                }
+            }
+            if let Some(quote) = &quote {
+                widen_input.insert("quote".into(), json!(quote));
+            }
+            let raised = runtime.run_tool_with_session(
+                "orbit.resident.grant",
+                Value::Object(widen_input),
+                session,
+            )?;
+            let request = if raised["outcome"] == "requested" {
+                let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
+                    OrbitError::Execution("the grant request carries no id".to_string())
+                })?;
+                let answered = runtime.answer_decision_request_as_human(
+                    request_id,
+                    "grant",
+                    Some("Granted from the dashboard Residents view".to_string()),
+                    human_comment_author(None),
+                    Some("dashboard".to_string()),
+                )?;
+                serde_json::to_value(&answered).unwrap_or(Value::Null)
+            } else {
+                raised["request"].clone()
+            };
+            let mut narrow_input = Map::new();
+            narrow_input.insert("task_id".into(), json!(id));
+            for (key, list) in [
+                ("remove", &body.remove),
+                ("drop_workspaces", &body.drop_workspaces),
+            ] {
+                if !list.is_empty() {
+                    narrow_input.insert(key.into(), json!(list));
+                }
+            }
+            if let Some(deadline) = non_blank(body.deadline.as_deref()) {
+                narrow_input.insert("deadline".into(), json!(deadline));
+            }
+            runtime.run_tool_with_session(
+                "orbit.resident.grant",
+                Value::Object(narrow_input),
+                dashboard_session(true),
             )?;
             let shown = runtime.run_tool_with_session(
                 "orbit.resident.show",
@@ -414,8 +483,8 @@ pub(super) async fn grant_resident(
                 dashboard_session(true),
             )?;
             Ok(json!({
-                "outcome": "granted",
-                "request": serde_json::to_value(&answered).unwrap_or(Value::Null),
+                "outcome": "granted_and_narrowed",
+                "request": request,
                 "authority": shown["authority"],
                 "effective_authority": shown["effective_authority"],
             }))

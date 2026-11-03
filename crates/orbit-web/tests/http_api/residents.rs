@@ -141,6 +141,58 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
 }
 
 #[test]
+fn dashboard_grant_with_add_and_deadline_records_two_changes() {
+    isolated(
+        "residents::dashboard_grant_with_add_and_deadline_records_two_changes",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            let id = create(&server, "Widen with a deadline.");
+            // The dashboard once sent this as one mixed call, which core
+            // refuses; it must succeed as two recorded changes instead.
+            let granted = json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{id}/grant{WS}"),
+                json!({
+                    "add": ["dispatch"],
+                    "workspaces": ["fixture"],
+                    "deadline": "2030-01-01T00:00:00Z",
+                    "quote": "Dispatch in fixture with a deadline.",
+                }),
+            ));
+            assert_eq!(granted["outcome"], "granted_and_narrowed", "{granted}");
+
+            let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+            assert_eq!(
+                shown["effective_authority"],
+                json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
+                "{shown}"
+            );
+            assert_eq!(
+                shown["mandate"]["deadline"], "2030-01-01T00:00:00Z",
+                "{shown}"
+            );
+            assert_eq!(
+                shown["authority"]["granted"].as_array().unwrap().len(),
+                1,
+                "{shown}"
+            );
+            assert_eq!(
+                shown["authority"]["narrowed"].as_array().unwrap().len(),
+                1,
+                "{shown}"
+            );
+            assert_eq!(
+                shown["authority"]["narrowed"][0]["deadline"], "2030-01-01T00:00:00Z",
+                "{shown}"
+            );
+        },
+    );
+}
+
+#[test]
 fn invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing() {
     isolated(
         "residents::invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing",
