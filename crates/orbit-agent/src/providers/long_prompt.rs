@@ -20,7 +20,9 @@ use super::codex::codex_long_prompt_requests;
 ///
 /// `stdout` is the run's capture; `stdout_complete` is false when it was
 /// truncated, which may have dropped Claude messages but leaves Codex's
-/// rollout whole. `codex_home` is the `CODEX_HOME` the Codex child
+/// rollout whole. Codex uses the latest rollout `task_started` boundary and
+/// requires stdout's `turn.started`; earlier resumed turns are excluded, and a
+/// missing boundary leaves usage unknown. `codex_home` is the `CODEX_HOME` the Codex child
 /// ran with, and `model` the provider-reported model the invocation is priced
 /// as. `None` means the run's per-request usage is unknown; an empty list
 /// means it is known and no request reached the floor.

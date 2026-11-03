@@ -92,7 +92,7 @@ fn dispatch_with_prelude(
     agent_env: &[(&str, &Path)],
     prelude: &str,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    dispatch_with_prelude_and_launcher(binary, provider, stdout, agent_env, prelude, None, &[])
+    dispatch_with_prelude_and_launcher(binary, provider, stdout, agent_env, prelude, None, None)
 }
 
 fn dispatch_with_prelude_and_launcher(
@@ -101,8 +101,8 @@ fn dispatch_with_prelude_and_launcher(
     stdout: &str,
     agent_env: &[(&str, &Path)],
     prelude: &str,
-    interpreter: Option<&str>,
-    extra_args: &[String],
+    launcher: Option<(&str, &[String])>,
+    conversation_ref: Option<&str>,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
     let fake = FakeProvider::with_usage_command(binary, stdout, "", 0, "", prelude);
     let audit = tempfile::tempdir().unwrap();
@@ -111,12 +111,12 @@ fn dispatch_with_prelude_and_launcher(
         .iter()
         .map(|(key, value)| (key.to_string(), value.display().to_string()))
         .collect();
-    let (cli_command, cli_args) = if let Some(interpreter) = interpreter {
+    let (cli_command, cli_args) = if let Some((interpreter, extra_args)) = launcher {
         let mut args = vec![fake.path.display().to_string()];
         args.extend(extra_args.iter().cloned());
         (Some(interpreter.to_string()), args)
     } else {
-        (None, extra_args.to_vec())
+        (None, Vec::new())
     };
     let host = UsageHost {
         provider: host,
@@ -130,7 +130,7 @@ fn dispatch_with_prelude_and_launcher(
         activity_name: "usage_window_fixture",
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
-        input: json!({ "prompt": "implement", "crew": "fixture-crew" }),
+        input: json!({ "prompt": "implement", "crew": "fixture-crew", "conversation_ref":conversation_ref }),
         audit: outcome_writer("usage-run"),
         run_id: "usage-run",
         host: Some(&host),
@@ -266,13 +266,16 @@ fi
             stdout,
             &env,
             prelude,
-            Some("/bin/sh"),
-            &[
-                "--output-format".to_string(),
-                "stream-json".to_string(),
-                "--print-timeout".to_string(),
-                "10m".to_string(),
-            ],
+            Some((
+                "/bin/sh",
+                &[
+                    "--output-format".to_string(),
+                    "stream-json".to_string(),
+                    "--print-timeout".to_string(),
+                    "10m".to_string(),
+                ],
+            )),
+            None,
         )
     };
     let (outcome, limits) = run(&success);
@@ -394,19 +397,22 @@ fn codex_long_prompt_fixture() -> (String, String, TokenUsage) {
     .map(|frame| frame.to_string())
     .collect::<Vec<_>>()
     .join("\n");
-    let rollout = json!({
-        "timestamp":"2026-10-29T01:18:19.662Z",
-        "ordinal":13,
-        "type":"event_msg",
-        "payload":{
-            "type":"token_count",
-            "info":{
-                "total_token_usage":provider_usage.clone(),
-                "last_token_usage":provider_usage
+    let rollout = format!(
+        "{}\n{}",
+        json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":"original"}}),
+        json!({
+            "timestamp":"2026-10-29T01:18:19.662Z",
+            "ordinal":13,
+            "type":"event_msg",
+            "payload":{
+                "type":"token_count",
+                "info":{
+                    "total_token_usage":provider_usage.clone(),
+                    "last_token_usage":provider_usage
+                }
             }
-        }
-    })
-    .to_string();
+        })
+    );
     (stdout, rollout, usage)
 }
 
@@ -426,6 +432,102 @@ fn invocation_trace(outcome: &DispatchOutcome) -> &InvocationTrace {
         .as_ref()
         .expect("dispatch records invocation telemetry")
         .trace
+}
+
+fn resumed_codex_prices_only_current_turn_requests() {
+    let (original_stdout, mut rollout, original_usage) = codex_long_prompt_fixture();
+    let home = codex_home(CODEX_THREAD, Some(&rollout));
+    let day = home
+        .path()
+        .join("sessions")
+        .join(Local::now().format("%Y/%m/%d").to_string());
+    let path = day.join(format!("rollout-2026-10-08T18-18-16-{CODEX_THREAD}.jsonl"));
+    let (original, _) = dispatch(
+        "codex",
+        Provider::Codex,
+        &original_stdout,
+        &[("CODEX_HOME", home.path())],
+    );
+    let original_trace = invocation_trace(&original);
+    assert_eq!(
+        original_trace.long_prompt_requests,
+        Some(vec![original_usage.clone()])
+    );
+    let long_cost = codex_prompt_tier_cost(original_trace).unwrap();
+    let mut total_input = original_usage.input;
+    let mut total_output = original_usage.output;
+    for (turn, input, cached) in [
+        ("short", 1_000, 0),
+        ("long", 300_000, 280_000),
+        ("short-again", 1_000, 0),
+    ] {
+        let usage = TokenUsage {
+            input,
+            cache_read: cached,
+            output: 900,
+            ..Default::default()
+        };
+        rollout.push_str(&format!(
+            "\n{}",
+            json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":turn}})
+        ));
+        // A refresh immediately after resume repeats the previous request.
+        let last_count: Value =
+            serde_json::from_str(rollout.lines().rev().nth(1).unwrap()).unwrap();
+        rollout.push_str(&format!("\n{last_count}"));
+        total_input += input;
+        total_output += usage.output;
+        rollout.push_str(&format!("\n{}", json!({"type":"event_msg", "payload":{"type":"token_count", "info":{
+            "total_token_usage":{"input_tokens":total_input, "output_tokens":total_output},
+            "last_token_usage":{"input_tokens":input, "cached_input_tokens":cached, "output_tokens":usage.output}
+        }}})));
+        fs::write(&path, &rollout).unwrap();
+        let mut frames: Vec<Value> = original_stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        frames.last_mut().unwrap()["usage"] = json!({"input_tokens":input, "cached_input_tokens":cached, "output_tokens":usage.output});
+        let stdout = frames
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (resumed, _) = with_capture_limit(2_048, || {
+            dispatch_with_prelude_and_launcher(
+                "codex",
+                Provider::Codex,
+                &stdout,
+                &[("CODEX_HOME", home.path())],
+                r#"case " $* " in *" resume "*) ;; *) exit 9 ;; esac"#,
+                None,
+                Some(CODEX_THREAD),
+            )
+        });
+        assert!(resumed.success, "resume {turn}: {:?}", resumed.message);
+        let trace = invocation_trace(&resumed);
+        assert_eq!(trace.usage, usage);
+        let expected_requests = if input >= 100_000 {
+            vec![usage.clone()]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            trace.long_prompt_requests,
+            Some(expected_requests),
+            "resume {turn}"
+        );
+        let cost = codex_prompt_tier_cost(trace).unwrap();
+        if turn == "long" {
+            assert_eq!(cost, long_cost);
+        } else {
+            let at = "2026-10-30T00:00:00Z".parse().unwrap();
+            assert_eq!(
+                Some(cost),
+                derive_cost_usd("gpt-6.1-sol", at, &usage, Some(&[]))
+            );
+            assert!(cost < long_cost);
+        }
+    }
 }
 
 fn codex_long_prompt_telemetry_survives_truncated_stdout() {
@@ -867,6 +969,10 @@ fn usage_window_contracts_1() {
             (
                 "a_codex_run_records_the_window_its_own_rollout_reports",
                 a_codex_run_records_the_window_its_own_rollout_reports,
+            ),
+            (
+                "resumed_codex_prices_only_current_turn_requests",
+                resumed_codex_prices_only_current_turn_requests,
             ),
             (
                 "codex_long_prompt_telemetry_survives_truncated_stdout",
