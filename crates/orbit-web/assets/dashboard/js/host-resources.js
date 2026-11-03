@@ -444,7 +444,13 @@ let selectedRead = null;
 const resourceTarget = row => row ? JSON.stringify([row.machine_id, row.ssh || null]) : null;
 export async function fetchHostResourcePayload() {
   const host = getHost();
-  const read = { host, target: resourceTarget(host ? findRegisteredHost(host) : getServingHost()), pending: true, at: 0 };
+  const target = resourceTarget(host ? findRegisteredHost(host) : getServingHost());
+  // Concurrent callers for the same host join the read in flight
+  // instead of each issuing their own /host/resources request.
+  if (selectedRead?.pending && selectedRead.host === host && selectedRead.target === target) {
+    return selectedRead.promise;
+  }
+  const read = { host, target, pending: true, at: 0 };
   selectedRead = read;
   read.promise = fetchHostResourcePayloadFor(read.host);
   try {
@@ -482,20 +488,41 @@ export function applyPushedHostResources(payload) {
   showHostResources(payload);
 }
 
-export async function fetchAndRenderHostResources() {
-  const current = ++sequence;
-  try {
-    const payload = await fetchHostResourcePayload();
-    if (current === sequence) showHostResources(payload);
-  } catch (error) {
-    if (current === sequence) {
-      lastPayload = null;
-      renderHostResources(null);
-      renderProviderUsage(null);
-      for (const listener of listeners) listener(null);
-    }
-    throw error;
+// The dashboard refresh tick and the chips' own 5s timer can land on
+// the same tick. A caller may opt into sharing (shareRecent) the read
+// already in flight, or completed within the last second — the window
+// fetchHostResourcePayloadFor already grants the Hosts view — instead
+// of issuing a second /host/resources request for the same tick. The
+// default, used by the chips' timer and direct callers, always reads
+// fresh, and an explicit Refresh does the same.
+let renderRead = null;
+
+export function fetchAndRenderHostResources({ shareRecent = false } = {}) {
+  if (shareRecent && renderRead
+    && (renderRead.pending || Date.now() - renderRead.at < 1000)) {
+    return renderRead.promise;
   }
+  const current = ++sequence;
+  const read = { pending: true, at: 0, promise: null };
+  read.promise = (async () => {
+    try {
+      const payload = await fetchHostResourcePayload();
+      if (current === sequence) showHostResources(payload);
+    } catch (error) {
+      if (current === sequence) {
+        lastPayload = null;
+        renderHostResources(null);
+        renderProviderUsage(null);
+        for (const listener of listeners) listener(null);
+      }
+      throw error;
+    } finally {
+      read.pending = false;
+      read.at = Date.now();
+    }
+  })();
+  renderRead = read;
+  return read.promise;
 }
 
 /// Forget the last reading when the selected host changes, so one host's
@@ -504,6 +531,7 @@ export async function fetchAndRenderHostResources() {
 export function resetHostResources() {
   sequence += 1;
   pushedAt = 0;
+  renderRead = null;
   selectedRead = null;
   ioReported = false;
   lastPayload = null;

@@ -7,13 +7,48 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 
-import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
 
 function noticesPath() {
   return isAggregateView() ? "/api/notices?workspace=all" : "/api/notices";
+}
+
+// One /api/notices read serves the banner, the rail count and the Notices
+// panel, which all render from the same payload. Concurrent callers join
+// the read in flight, and a completed read is reused for half the 30s
+// dashboard poll interval: every scheduled poll still reads fresh, while
+// a burst of refreshes (tab entry plus an explicit Refresh, or the banner
+// beside the Notices panel) shares one request instead of spending the
+// ten-request poll budget on a duplicate. A failed read is never reused,
+// and a host or workspace switch changes the key, so no payload crosses
+// scopes. Post/close mutations clear the shared read before refreshing.
+const NOTICES_READ_SHARE_MS = 15_000;
+let noticesRead = null;
+
+function fetchNotices() {
+  const key = `${getHostRevision()}:${getWorkspaceRevision()}:${noticesPath()}`;
+  if (noticesRead?.key === key
+    && (noticesRead.pending || Date.now() - noticesRead.at < NOTICES_READ_SHARE_MS)) {
+    return noticesRead.promise;
+  }
+  const read = { key, pending: true, at: 0, promise: null };
+  read.promise = fetchJson(noticesPath()).then(
+    (payload) => {
+      read.pending = false;
+      read.at = Date.now();
+      return payload;
+    },
+    (error) => {
+      read.pending = false;
+      if (noticesRead === read) noticesRead = null;
+      throw error;
+    },
+  );
+  noticesRead = read;
+  return read.promise;
 }
 
 function ageLabel(notice, now = Date.now()) {
@@ -97,7 +132,7 @@ export async function fetchAndRenderNoticeBanner() {
   const revision = getWorkspaceRevision();
   let payload;
   try {
-    payload = await fetchJson(noticesPath());
+    payload = await fetchNotices();
   } catch (_) {
     // A failed read keeps the banner of its own visit. A failed read from a
     // visit the operator has left changes nothing.
@@ -217,7 +252,7 @@ export async function fetchAndRenderNotices() {
   await requestPanel(
     "notices-body",
     `notices:${revision}:${isAggregateView() ? "all" : "one"}`,
-    () => fetchJson(noticesPath()),
+    () => fetchNotices(),
     (payload) => renderNotices(payload),
     "notices-count",
   );
@@ -240,6 +275,7 @@ function renderNotices(payload) {
   const onPost = async (input, feedback, form) => {
     try {
       await postJson("/api/notices", input);
+      noticesRead = null;
       form.reset();
       await refresh();
     } catch (error) {
@@ -251,6 +287,7 @@ function renderNotices(payload) {
     button.disabled = true;
     try {
       await postJson(`/api/notices/${encodeURIComponent(text(notice.id))}/close`, { reason: reason.trim() });
+      noticesRead = null;
       await refresh();
     } catch (error) {
       button.disabled = false;
