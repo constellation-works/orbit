@@ -103,6 +103,7 @@ pub mod test_support {
     pub use crate::application::notice::test_support::with_notice_post_time;
     pub use crate::application::resident::with_resident_cycle_admission_checkpoint;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
+    pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{
         with_decision_answer_checkpoint, with_decision_dkim_resolver,
         with_decision_raise_checkpoint,
