@@ -2,7 +2,7 @@
 title: "Evaluation protocol: bounded decision assistance"
 owner: codex
 last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_validated: 2026-11-03
 status: Draft
 feature: decision-assistance
 doc_role: design
