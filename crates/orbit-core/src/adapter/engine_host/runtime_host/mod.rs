@@ -4,7 +4,7 @@
 //!
 //! Residual size: `host.rs` is 1163 lines. That is above the
 //! ~800-line guideline because Rust requires exactly one
-//! `impl RuntimeHost for OrbitRuntime` block holding all 140 trait methods;
+//! `impl RuntimeHost for OrbitRuntime` block holding all trait methods;
 //! splitting the impl or lowering the count with an assembly macro would
 //! change the trait-implementation structure. Each body in `host` delegates
 //! to `claims`, `validation`, `recovery`, `invocation`, `host_metadata` or
