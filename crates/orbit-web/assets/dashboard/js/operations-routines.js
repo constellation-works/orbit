@@ -294,7 +294,7 @@ export function updateRoutineFailureBadge(routines) {
 
 // Keep Health's warning visible from every tab, including before Routines is
 // opened. A reply from an earlier host/workspace visit must not restore it.
-export async function peekRoutineFailures() {
+export async function peekRoutineFailures(read = null) {
   if (isAggregateView() || !selectedWorkspaceName()) {
     updateRoutineFailureBadge([]);
     return;
@@ -302,7 +302,7 @@ export async function peekRoutineFailures() {
   const visit = captureWorkspaceVisit();
   const request = ++routineFailureRequest;
   try {
-    const payload = await fetchJson("/api/routines");
+    const payload = await (read || fetchJson("/api/routines"));
     if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge(scopedRoutines(payload));
   } catch (_) {
     if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge([]);

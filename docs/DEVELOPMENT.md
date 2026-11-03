@@ -1011,6 +1011,32 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 - Submission fixtures use a harmless worker stub. The replay fixture runs the real worker through the ignored `replay_worker_child` entry point and waits for terminal run state before dropping its roots.
 - The security table discovers literal routes from the API router and their mutating methods from HTTP `Allow` responses, then checks origin/Host protection on every mutation and operator admission on governed actions. A new mutating route defaults to operator-only; existing ordinary writes have explicit exceptions. The table asserts HTTP behavior, not source text; never expose a private router API for testing.
 
+Scheduled dashboard refreshes on Tasks, Jobs Catalogue, Run detail, Frictions
+and Metrics combine their due notice, routine-health, failing-job and audit
+summary reads through `GET /api/dashboard/chrome`. The endpoint dispatches only
+those fixed read handlers and returns each original JSON body and HTTP status
+separately; a component refusal does not discard successful siblings. The
+summary keeps its selected `since` window. Routine and failure reads remain
+optional, so the Tasks five-minute cadence and Metrics failure-peek cadence do
+not change. Explicit refresh and change-stream recovery use fresh direct
+reads. Older forwarded hosts without the endpoint fall back to direct reads;
+the ten-read budget applies to hosts serving the combined endpoint. Host
+resource and fleet timers remain independent.
+
+The intercepted `crates/orbit-web/tests/http_api/dashboard_poll_budget_browser.mjs`
+fixture loads the shipped assets with every fetch in memory. Run it with the
+Playwright module and an evidence directory after sourcing the browser kit.
+It checks regular and five-minute cycles across the affected views and every
+Metrics trend, plus banner recovery, component failure isolation, fresh
+explicit refresh, decisions and scope changes. `--base=<git ref>` loads that
+revision's JavaScript for comparison, `--screenshots` captures 1440px and
+375px views, and `--measure` records one first observation plus twenty warm
+sequential observations with 250ms after completion, nearest-rank p50/p95,
+response bytes and refresh status. Measurement selects the optional Tokens
+trend; the regular regression run checks all eight trends. Repeat the same
+fixture in three independent before/candidate/unchanged-control passes; these
+in-memory timings diagnose client work, not deployed API latency.
+
 ## Browser checks on a prepared host
 
 Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`, built and verified by `orbit browser-kit install` (`status`, `verify` and `remove` manage it; see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)). Once it is verified, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`) and `ORBIT_BROWSER_KIT_ENV`, the kit's `env.sh`, which on Linux also exports `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` when the kit unpacked them. Source it in the shell that runs the check; in a hand-run shell, source `~/.local/chromium-deps/env.sh`. `orbit doctor` reports a missing, mismatched or unverified kit, unresolved libraries and `node` missing from workers' PATH. On a host without a kit, run `orbit browser-kit install` there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.

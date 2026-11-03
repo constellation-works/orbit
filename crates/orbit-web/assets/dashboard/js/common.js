@@ -1077,29 +1077,7 @@ export async function fetchJsonPage(path) {
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
-    if (!res.ok) {
-      const text = await res.text();
-      let message = `${path}: HTTP ${res.status}`;
-      let code = null;
-      // Orbit's own 404s name what is missing. A route this host's Orbit does not
-      // serve answers with no error text (an empty body, or `{"error":""}` from
-      // json_client_error), so it is read as a host without the view.
-      let routeMissing = res.status === 404;
-      try {
-        const body = JSON.parse(text);
-        if (body && body.error) {
-          message = body.error;
-          routeMissing = false;
-        }
-        if (body && typeof body.code === "string") code = body.code;
-      } catch (_) {}
-      const error = new Error(message);
-      error.status = res.status;
-      if (code) error.code = code;
-      if (routeMissing) error.routeMissing = true;
-      throw error;
-    }
-    return { body: await res.json(), header: (name) => res.headers.get(name) };
+    return await dashboardJsonResponse(res, path);
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
     // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
@@ -1641,4 +1619,64 @@ export function formatAge(value, now = Date.now()) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
+}
+
+// Apply the same HTTP/error contract to direct and combined reads.
+async function dashboardJsonResponse(res, path) {
+  if (!res.ok) {
+    const text = await res.text();
+    let message = `${path}: HTTP ${res.status}`;
+    let code = null;
+    // Orbit's own 404s name what is missing. A route this host's Orbit does not
+    // serve answers with no error text (an empty body, or `{"error":""}` from
+    // json_client_error), so it is read as a host without the view.
+    let routeMissing = res.status === 404;
+    try {
+      const body = JSON.parse(text);
+      if (body && body.error) {
+        message = body.error;
+        routeMissing = false;
+      }
+      if (body && typeof body.code === "string") code = body.code;
+    } catch (_) {}
+    const error = new Error(message);
+    error.status = res.status;
+    if (code) error.code = code;
+    if (routeMissing) error.routeMissing = true;
+    throw error;
+  }
+  return { body: await res.json(), header: (name) => res.headers.get(name) };
+}
+
+// Combine only the due chrome reads. No completed-read cache, timers or retry
+// policy lives here: each consumer keeps its existing visit and failure guards.
+export function fetchDashboardChrome({ routines, failures, since }) {
+  const query = new URLSearchParams({ routines: String(routines), failures: String(failures), since });
+  const visit = captureWorkspaceVisit();
+  const envelope = fetchJson(`/api/dashboard/chrome?${query}`).catch(error => {
+    // Older forwarded hosts keep their original direct-read behavior.
+    if (error.routeMissing) return null;
+    throw error;
+  });
+  const component = (name, path) => {
+    const request = envelope.then(payload => {
+      if (payload === null) {
+        if (!visit.isCurrent()) throw new Error("The host or workspace changed before the read began");
+        return fetchJson(path);
+      }
+      const reply = payload[name];
+      return dashboardJsonResponse(new Response(reply.body, { status: reply.status }), path).then(page => page.body);
+    });
+    // A panel already in flight may keep its earlier read. Its unused
+    // component must not become an unhandled rejection; consumers still see
+    // and handle the original promise and error.
+    void request.catch(() => {});
+    return request;
+  };
+  return {
+    notices: component("notices", "/api/notices"),
+    summary: component("summary", `/api/audit/summary?since=${encodeURIComponent(since)}`),
+    routines: routines ? component("routines", "/api/routines") : null,
+    failures: failures ? component("failures", "/api/jobs/failure-streaks") : null,
+  };
 }

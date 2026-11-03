@@ -22,6 +22,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
+        .route("/dashboard/chrome", get(dashboard_chrome::dashboard_chrome))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.
         .route("/hosts", get(host::list_hosts).post(host::add_host))

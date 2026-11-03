@@ -26,14 +26,14 @@ function noticesPath() {
 const NOTICES_READ_SHARE_MS = 15_000;
 let noticesRead = null;
 
-function fetchNotices({ shareRecent = false } = {}) {
+function fetchNotices({ shareRecent = false, read: request = null } = {}) {
   const key = `${getHostRevision()}:${getWorkspaceRevision()}:${noticesPath()}`;
-  if (noticesRead?.key === key
+  if (!request && noticesRead?.key === key
     && (noticesRead.pending || (shareRecent && Date.now() - noticesRead.at < NOTICES_READ_SHARE_MS))) {
     return noticesRead.promise;
   }
   const read = { key, pending: true, at: 0, promise: null };
-  read.promise = fetchJson(noticesPath()).then(
+  read.promise = (request || fetchJson(noticesPath())).then(
     (payload) => {
       read.pending = false;
       read.at = Date.now();
@@ -124,13 +124,13 @@ export function renderNoticeBanner(payload) {
   syncNodes(banner, rows);
 }
 
-export async function fetchAndRenderNoticeBanner({ shareRecent = false } = {}) {
+export async function fetchAndRenderNoticeBanner({ shareRecent = false, read = null } = {}) {
   const banner = $("notice-banner");
   if (!banner) return;
   const revision = getWorkspaceRevision();
   let payload;
   try {
-    payload = await fetchNotices({ shareRecent });
+    payload = await fetchNotices({ shareRecent, read });
   } catch (_) {
     // A failed read keeps the banner of its own visit. A failed read from a
     // visit the operator has left changes nothing.
