@@ -20,10 +20,10 @@
 //! because they are two answers to one question.
 
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
-use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow, with_exclusive_file_lock};
 use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_types::identity::{
     validate_machine_id, validate_machine_name, validate_stored_task_prefix,
@@ -668,14 +668,30 @@ fn utf8(bytes: &[u8], path: &Path) -> Result<String, OrbitError> {
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, OrbitError> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
-            "failed to read '{}': {error}",
+    // Open without following a final symlink and read from that descriptor, so
+    // a host file swapped for a link cannot redirect the read outside the
+    // selected root. A missing file is a valid local-only configuration.
+    let mut file = match open_read_only_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to read '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    let read_error =
+        |error: io::Error| OrbitError::Io(format!("failed to read '{}': {error}", path.display()));
+    if !file.metadata().map_err(read_error)?.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "'{}' must be a regular file",
             path.display()
-        ))),
+        )));
     }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(read_error)?;
+    Ok(Some(bytes))
 }
 
 /// Remove the migrated legacy file from beneath the canonical global root.

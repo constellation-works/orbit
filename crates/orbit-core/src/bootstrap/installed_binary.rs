@@ -14,8 +14,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    CompatibilityIdentity, LedgerCompatibility, installed_executable_other_than_this_process,
-    reported_compatibility,
+    CompatibilityIdentity, LedgerCompatibility, authority_root,
+    installed_executable_other_than_this_process, reported_compatibility,
 };
 use orbit_store::Store;
 use orbit_store::compose::compiled_compatibility;
@@ -56,7 +56,10 @@ pub(crate) fn verify_installed_binary_keeps_state(
             select: |identity| identity.workspace_layout,
         });
     }
-    let database = global_root.join("orbit.db");
+    // Derive the database under the validated authority root, so a caller-
+    // selected root cannot redirect this observational open through traversal
+    // or a symlinked root spelling.
+    let database = authority_root(global_root)?.join("orbit.db");
     if database.is_file()
         && let Ok(schema) =
             Store::open_read_only(&database).and_then(|store| store.schema_version())
