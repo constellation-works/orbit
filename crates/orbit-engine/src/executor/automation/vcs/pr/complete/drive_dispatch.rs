@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::context::RuntimeHost;
 
 use super::super::super::landing::checks::CheckReadGap;
+use super::super::super::operations::BASE_MODIFIED_MERGE_ATTEMPTS;
 use super::super::super::push::push_batch_changes;
 use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome};
@@ -25,9 +26,7 @@ use super::conflict::{
     refresh_conflicting_pr_branch,
 };
 use super::drive::{DeliveredMerge, Delivery};
-use super::drive_phases::{
-    BASE_MODIFIED_MERGE_ATTEMPTS, DispatchFlow, ObservedPoll, PollDriver, SubFlow,
-};
+use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, SubFlow};
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
 use super::reviewed::merge_condition_sha;
 

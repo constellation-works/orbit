@@ -28,6 +28,7 @@ mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
+pub(in crate::executor::automation::vcs) use answers::ReviewedMergeOutcome;
 pub(in crate::executor::automation::vcs) use answers::{CheckState, ReviewDecision};
 pub(in crate::executor::automation::vcs) use answers::{
     RequiredChecks, read_required_checks_observed,

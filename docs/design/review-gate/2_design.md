@@ -1536,7 +1536,9 @@ leaving the task in review. The one refusal retried is GitHub's "Base branch was
 modified" (HTTP 405), raised when another merge lands first [ORB-14205]: after
 the ordinary poll wait, completion re-reads the PR, reapplies its head, branch,
 base, check, review and merge-policy gates, and resends the same `sha`, for at
-most three requests within the unchanged wait budget. Ungated runs retain
+most three requests within the unchanged wait budget. `handoff_land` applies the
+same retry and ceiling to its synchronous merge, resolving each refused intent as
+unmerged before it asks again [ORB-21765]. Ungated runs retain
 ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
@@ -1840,5 +1842,6 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-17043] — a broader required run that only defers the named tests stays covered by per-test `host_sandbox_test` requirements.
 - [ORB-18351] — publishes UI screenshots to a permanent evidence ref and renders them in the pull request body.
 - [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
+- [ORB-21765] — `handoff_land` retries its synchronous merge on the same "Base branch was modified" (HTTP 405) refusal under the same three-request ceiling as completion, instead of failing the landing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

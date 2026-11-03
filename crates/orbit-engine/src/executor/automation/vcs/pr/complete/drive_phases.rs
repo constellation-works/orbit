@@ -34,9 +34,6 @@ use super::reviewed::{
     ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_wait_timeout,
 };
 
-/// Synchronous merge attempts ceiling shared with the merge phase.
-pub(super) const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;
-
 /// One observed poll: the PR status and the state derived from it.
 pub(super) struct ObservedPoll {
     pub(super) status: PullRequestStatus,

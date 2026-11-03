@@ -63,6 +63,10 @@ pub(super) const MAX_WORKFLOW_SOURCE_BYTES: usize = 256 * 1024;
 /// caller opts in with `report_base_modified`.
 pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
 
+/// Synchronous merge requests a completion or a landing makes against a base
+/// that keeps moving, before it stops for the owner.
+pub(crate) const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;
+
 pub(crate) const CI_PREREQUISITE_EVIDENCE: &str = "ci.prerequisite_evidence";
 pub(crate) const CI_PREREQUISITE_OBSERVE: &str = "ci.prerequisite_observe";
 
