@@ -66,7 +66,7 @@ the plugin stays a pure transport.
 
 ### 2.1 Fields
 
-`DecisionRequest` (new, `crates/orbit-types/src/task/decision/request.rs`):
+`DecisionRequest` (new, `crates/orbit-types/src/task/decision/request/model.rs`):
 
 | Field | Meaning |
 |---|---|
