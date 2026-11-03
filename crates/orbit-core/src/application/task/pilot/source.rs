@@ -479,7 +479,18 @@ pub(crate) fn resolve_source_snapshot(
         (format!("origin/{base_branch}"), revision)
     } else {
         let source_ref = format!("refs/heads/{base_branch}");
-        let revision = rev_parse_commit(action, workspace_root, &source_ref)?;
+        // Preserve the workspace-local lock-path probe without waiting on a
+        // fetch that does not affect this local branch read.
+        let revision = match try_with_git_fetch_lock(workspace_root, || {
+            Ok::<_, FetchLockError>(rev_parse_commit(action, workspace_root, &source_ref))
+        }) {
+            Ok(Some(revision)) => revision?,
+            Ok(None) => rev_parse_commit(action, workspace_root, &source_ref)?,
+            Err(error) => {
+                tracing::debug!(%error, "could not probe the fetch lock for a local source branch");
+                rev_parse_commit(action, workspace_root, &source_ref)?
+            }
+        };
         (source_ref, revision)
     };
 
