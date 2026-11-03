@@ -116,6 +116,33 @@ Residents report only through Orbit; there is no inbox to check.
   awaiting veto, the top recurring pains by cost, evolution proposals awaiting
   human approval, and metrics totals. Surface it at the start of a manager
   session, on a regular cadence the human chooses, and on request.
+- `orbit resident metrics` (`orbit.resident.metrics`) — the widening measures
+  behind widening decisions, derived read-only from task history, decision
+  requests, checkpoints and audit rows. It reports manual interventions (per
+  mandate and per active mandate-day), escalation load (per mandate-day and
+  per human-day, median answer latency, share answered with the recommended
+  option, expired-unanswered), reversal rate (resident decisions and actions
+  a human undid within 7 days, each counted once), and crashed-cycle recovery
+  cost (cycles without a checkpoint, time to the next good checkpoint,
+  recovery slot minutes, repeated actions, human interventions needed). It
+  covers every resident mandate in the workspace with workspace totals unless
+  scoped, and it writes nothing. It is part of the `resident` toolset.
+
+Run it as `orbit resident metrics [--mandate <MANDATE>] [--since <SINCE>]
+[--baseline <BASELINE>]`, or call `orbit.resident.metrics` with the same
+`mandate`, `since` and `baseline` inputs. `--mandate` limits the report to
+one mandate's assignment task. `--since` sets the window as a span such as
+`7d`, `24h` or `2w`, or an RFC 3339 instant; without it the window is the
+last `30d`. `--baseline` names an interactive assignment task and computes
+the same measures for it, so the resident's numbers can be compared against
+unmanaged work; a baseline measure that cannot be derived reports
+`not_derivable`, never zero.
+
+The digest is the operational view for the shift — state, open escalations,
+reversible decisions awaiting veto, top pains, pending proposals, plus
+metrics totals. The metrics report is the evidence behind those totals:
+per-mandate and per-day rates to read before a widening decision. To verify,
+run `orbit resident metrics --json` and read the returned measures.
 - `orbit.attention` — everything waiting on the human, including a stalled
   resident (`resident_stalled`: no checkpoint for twice its heartbeat, or
   three `incomplete` checkpoints in a row) and a handed-off mandate waiting
