@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (12)
+### Building (11)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -125,8 +125,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | Land slice 3, ORB-21170: ci_red and friction_untriaged kinds (in review) | claude |
-| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Slice 10, ORB-21251: pilot one mandate against an interactive baseline (backlog) | claude |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
@@ -142,7 +141,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 
-### Shipped (39)
+### Shipped (40)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -166,6 +165,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
+| [Operator Attention](./design/operator-attention/1_overview.md) | — | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | — | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | — | codex |
 | [Path Leases](./design/path-leases/1_overview.md) | — | claude |
@@ -233,7 +233,7 @@ a conservative title/status fallback.
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Implemented | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Proposed | claude |

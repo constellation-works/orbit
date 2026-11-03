@@ -1,11 +1,11 @@
 ---
 title: Resident Orchestrator — Overview
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 stage: building
-next: "Slice 10, ORB-21251: pilot one mandate against an interactive baseline (backlog)"
+next: "Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready"
 feature: resident-orchestrator
 doc_role: overview
 type: design
@@ -98,7 +98,7 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Slices 1–9 ([ORB-21242] to [ORB-21250]) have landed; slice 10, the pilot ([ORB-21251]), is approved (`backlog`).
+Slices 1–9 ([ORB-21242] to [ORB-21250]) have landed; slice 10, the pilot ([ORB-21251]), was archived on 2026-11-03 without running and is not done.
 Planned code locations are in [2_design.md §12](./2_design.md#12-placement-in-the-code).
 
 | Concern | File | Task |
@@ -130,6 +130,6 @@ Planned code locations are in [2_design.md §12](./2_design.md#12-placement-in-t
 - [ORB-21248] — slice 7: cost events and the evolution record kind
 - [ORB-21249] — slice 8: evolution pass and manager digest
 - [ORB-21250] — slice 9: manager and resident skill references
-- [ORB-21251] — slice 10: the pilot mandate
+- [ORB-21251] — slice 10: the pilot mandate (archived 2026-11-03, not done; re-file once a bounded mandate with an operator authority grant and a manager session is ready)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

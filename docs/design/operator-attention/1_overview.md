@@ -1,11 +1,11 @@
 ---
 title: Operator Attention — Overview
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
-status: Draft
-stage: building
-next: "Land slice 3, ORB-21170: ci_red and friction_untriaged kinds (in review)"
+last_updated: 2026-11-03
+last_validated: 2026-11-03
+status: Implemented
+stage: shipped
+next: "—"
 feature: operator-attention
 doc_role: overview
 type: design
@@ -76,7 +76,7 @@ gives the orchestrator one place to look.
 | Rejected alternatives and standing rules | [4_decisions.md](./4_decisions.md) | [ORB-21164] |
 | Deferred directions (ack/snooze, dashboard, notifications, plugin kinds) | [3_vision.md](./3_vision.md) | [ORB-21164] |
 
-Implementation is cut into four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]);
+All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed;
 [2_design.md §6](./2_design.md#6-slices) orders them.
 
 ## Task References
