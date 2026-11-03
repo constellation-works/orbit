@@ -128,6 +128,38 @@ pub struct DeliveryRunResources {
     pub minutes: Vec<ResourceMinuteLoad>,
 }
 
+/// What a store last read of every retained sampled run: the runs, as
+/// [`ResourceUsageStoreBackend::delivery_run_resources`] since the epoch
+/// returns them, and each sampled run's shape when they were read, so a later
+/// [`ResourceUsageStoreBackend::reload_delivery_runs`] re-reads only the runs
+/// whose shape moved.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeliveryRunsLoad {
+    /// Ordered by workspace, then run id.
+    pub runs: Vec<DeliveryRunResources>,
+    /// Every run with a minute row, in the same order. Empty when the store
+    /// keeps no shapes, so the next reload reads every run again.
+    pub shapes: Vec<DeliveryRunShape>,
+}
+
+/// A sampled run's minute-row count and `job_runs` lifecycle. A worker
+/// writes each minute index once, past any an earlier worker of the run
+/// wrote, and retention only deletes, so while a run's shape holds, so do the
+/// minutes and lifecycle a load read for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryRunShape {
+    pub workspace_id: String,
+    pub run_id: String,
+    /// Every minute row of the run, whatever its admission time.
+    pub minute_rows: u64,
+    pub last_minute_index: i64,
+    /// `None` when the run's `job_runs` row is gone.
+    pub job_id: Option<String>,
+    pub finished_at: Option<DateTime<Utc>>,
+    /// The `job_runs` crew model, which a minute without one reads.
+    pub crew_model: Option<String>,
+}
+
 /// A cheap probe of the sampled runs that have finished: it changes whenever
 /// one more finishes, or retention prunes one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -259,6 +291,21 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<DeliveryRunResources>, OrbitError>;
+
+    /// Every sampled run since the epoch, exactly as
+    /// [`Self::delivery_run_resources`] would return it now, reusing each run
+    /// of `previous` whose shape still holds. A store that keeps no shapes
+    /// reads every run.
+    fn reload_delivery_runs(
+        &self,
+        previous: Option<DeliveryRunsLoad>,
+    ) -> Result<DeliveryRunsLoad, OrbitError> {
+        let _ = previous;
+        Ok(DeliveryRunsLoad {
+            runs: self.delivery_run_resources(DateTime::UNIX_EPOCH)?,
+            shapes: Vec::new(),
+        })
+    }
 
     /// The finished sampled runs on the host, as a cache freshness probe.
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;

@@ -14,7 +14,7 @@ use crate::Store;
 use crate::contracts::{
     AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
     CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
-    DeliveryRunsFreshness, HostResourceMinute, ResourceHistoryKeep, ResourceMinuteLoad,
+    DeliveryRunsFreshness, DeliveryRunsLoad, HostResourceMinute, ResourceHistoryKeep,
     ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
 };
 
@@ -138,78 +138,14 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
-        let conn = self.read()?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
-                       r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
-                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples,
-                       COALESCE(r.crew_model, j.crew_model), r.orbit_version
-                FROM run_resource_minutes r
-                LEFT JOIN job_runs j
-                  ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
-                WHERE r.delivery_admitted_at >= ?1
-                ORDER BY r.workspace_id, r.run_id, r.minute_index
-                "#,
-            )
-            .map_err(sqlite_store_error)?;
-        let rows = statement
-            .query_map(params![stamp(since)], |row| {
-                let run = DeliveryRunResources {
-                    workspace_id: row.get(0)?,
-                    run_id: row.get(1)?,
-                    job_id: row.get(2)?,
-                    task_id: row.get(3)?,
-                    work_class: row.get(4)?,
-                    complexity: row.get(5)?,
-                    resumed: row.get(6)?,
-                    delivery_admitted_at: crate::parse_timestamp(&row.get::<_, String>(7)?)?,
-                    finished_at: row
-                        .get::<_, Option<String>>(8)?
-                        .map(|at| crate::parse_timestamp(&at))
-                        .transpose()?,
-                    crew_model: row.get(14)?,
-                    orbit_version: row.get(15)?,
-                    minutes: Vec::new(),
-                };
-                let minute = ResourceMinuteLoad {
-                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(9)?)?,
-                    cpu_cores: row.get(10)?,
-                    memory_bytes: unsigned(row.get(11)?),
-                    cpu_accounting: row.get(12)?,
-                    samples: row.get(13)?,
-                };
-                Ok((run, minute))
-            })
-            .map_err(sqlite_store_error)?;
-        let mut runs: Vec<DeliveryRunResources> = Vec::new();
-        for row in rows {
-            let (run, minute) = row.map_err(sqlite_store_error)?;
-            match runs.last_mut() {
-                Some(last)
-                    if last.workspace_id == run.workspace_id && last.run_id == run.run_id =>
-                {
-                    last.resumed |= run.resumed;
-                    // Minutes come oldest first: the newest that recorded a
-                    // crew model or version names the run's.
-                    if run.crew_model.is_some() {
-                        last.crew_model = run.crew_model;
-                    }
-                    if run.orbit_version.is_some() {
-                        last.orbit_version = run.orbit_version;
-                    }
-                    last.minutes.push(minute);
-                }
-                _ => {
-                    runs.push(DeliveryRunResources {
-                        minutes: vec![minute],
-                        ..run
-                    });
-                }
-            }
-        }
-        Ok(runs)
+        super::delivery_run_load::load_delivery_runs(&*self.read()?, since)
+    }
+
+    fn reload_delivery_runs(
+        &self,
+        previous: Option<DeliveryRunsLoad>,
+    ) -> Result<DeliveryRunsLoad, OrbitError> {
+        super::delivery_run_load::reload_delivery_runs(&*self.read()?, previous)
     }
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {

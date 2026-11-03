@@ -87,7 +87,7 @@ pub(crate) fn template_task_ids(runs: &[DeliveryRunResources]) -> BTreeSet<Strin
 /// tagged `no-diff-expected`; `crew_models` maps each configured crew to its
 /// model.
 pub(crate) fn build_profiles(
-    runs: Vec<DeliveryRunResources>,
+    runs: &[DeliveryRunResources],
     no_diff_tasks: &BTreeSet<String>,
     crew_models: BTreeMap<String, String>,
     bounds: ProfileBounds,
@@ -216,7 +216,7 @@ fn base_of(work_class: &str) -> BaseClass {
 }
 
 /// Group runs into deliveries and sum their minutes on the admission clock.
-fn deliveries(runs: Vec<DeliveryRunResources>) -> Vec<Delivery> {
+fn deliveries(runs: &[DeliveryRunResources]) -> Vec<Delivery> {
     let mut grouped: BTreeMap<(String, String, DateTime<Utc>), Delivery> = BTreeMap::new();
     for run in runs {
         let delivery = grouped
@@ -273,8 +273,8 @@ fn deliveries(runs: Vec<DeliveryRunResources>) -> Vec<Delivery> {
             }
             _ => delivery.live = true,
         }
-        delivery.run_ids.push(run.run_id);
-        for minute in run.minutes {
+        delivery.run_ids.push(run.run_id.clone());
+        for minute in &run.minutes {
             let Some(offset) = minutes_between(delivery.admitted_at, minute.minute_started_at)
             else {
                 continue;

@@ -5,6 +5,7 @@ pub(crate) mod backlog_forecast_store;
 pub(crate) mod codebase_facts_store;
 pub(crate) mod connection;
 pub(crate) mod crew_performance_store;
+mod delivery_run_load;
 mod evolution_store;
 mod experiment_assignments;
 pub(crate) mod experiment_store;
