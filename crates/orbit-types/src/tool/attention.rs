@@ -52,21 +52,6 @@ impl AttentionKind {
         "notice_open",
         "resident_stalled",
     ];
-    /// Kinds derived by this host today; later slices' kinds degrade.
-    pub const IMPLEMENTED: &'static [&'static str] = &[
-        "pilot_warning",
-        "pilot_hold",
-        "blocked",
-        "decision_open",
-        "review_waiting",
-        "run_failed",
-        "run_stuck",
-        "claim_stale",
-        "ci_red",
-        "friction_untriaged",
-        "notice_open",
-        "resident_stalled",
-    ];
     /// Kinds read when a call names none: the kinds this build derives.
     /// The others are accepted by name and report `degraded` until their
     /// sources land.
