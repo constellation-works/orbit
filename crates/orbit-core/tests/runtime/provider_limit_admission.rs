@@ -1018,9 +1018,103 @@ fn allowlist_redraws_a_purpose_assignment() {
     );
 }
 
+/// A host's exhausted provider must not receive a creation-time pool draw,
+/// including when it is the pool's only member. Admission can retry later.
+fn creation_pool_draws_skip_provider_limited_crews() {
+    use chrono::{Duration, Utc};
+    use orbit_types::task::TaskComplexity;
+    use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+
+    for (route, tags, source) in [
+        ("medium_complexity_crews = POOL", vec![], "pool:medium"),
+        (
+            "[workflow.purpose_crews]\nbaseline_red_repair = POOL",
+            vec!["crew-purpose:baseline_red_repair".to_string()],
+            "purpose:baseline_red_repair",
+        ),
+        (
+            "[[workflow.crew_performance_types]]\nname = \"repair\"\ntags = [\"repair\"]\n\
+             [workflow.type_complexity_crews.repair]\nmedium = POOL",
+            vec!["repair".to_string()],
+            "type:repair/medium",
+        ),
+    ] {
+        let fx = Fixture::new(&config("[]", ""));
+        let root = &fx.root;
+        let workspace = root.path().join("repo/.orbit");
+        let configure = |pool: &str| {
+            std::fs::write(
+                workspace.join("config.toml"),
+                format!(
+                    "[workflow]\ndefault_crew = \"orchestration\"\ncrew_selection = \"static\"\n{}\n\
+                     [crews.implementer]\nprovider = \"antigravity\"\nmodel = \"flash-model\"\n\
+                     [crews.orchestration]\nprovider = \"codex\"\nmodel = \"available-model\"\n",
+                    route.replace("POOL", pool)
+                ),
+            )
+            .expect("write pool configuration");
+            OrbitRuntime::from_roots(&root.path().join("global"), &workspace)
+                .expect("reload runtime")
+        };
+        let runtime = configure("[\"implementer\"]");
+        let mut reading = ProviderLimitObservation {
+            provider: "antigravity".into(),
+            account: None,
+            model: None,
+            window: None,
+            exhausted: true,
+            source: ProviderLimitSource::Error,
+            resets_at: Some(Utc::now() + Duration::days(1)),
+            used_percent: None,
+            window_minutes: None,
+            gating: true,
+            partial: false,
+            observed_at: Utc::now(),
+            run_id: None,
+            crew: Some("implementer".into()),
+            detail: "Individual quota reached".into(),
+        };
+        runtime
+            .record_provider_limit(&reading)
+            .expect("record quota");
+        let add = |runtime: &OrbitRuntime, crew| {
+            runtime
+                .add_task(TaskAddParams {
+                    title: "Creation provider limit fixture".into(),
+                    complexity: TaskComplexity::Medium,
+                    tags: tags.clone(),
+                    crew,
+                    ..Default::default()
+                })
+                .expect("creation succeeds while providers are limited")
+        };
+        let waiting = add(&runtime, None);
+        assert_eq!(waiting.crew, None, "{source}: a wholly limited pool waits");
+        assert_eq!(waiting.crew_source, None);
+
+        let runtime = configure("[\"implementer:100\", \"orchestration:1\"]");
+        let available = add(&runtime, None);
+        assert_eq!(available.crew.as_deref(), Some("orchestration"), "{source}");
+        assert_eq!(available.crew_source.as_deref(), Some(source));
+        let pinned = add(&runtime, Some("implementer".into()));
+        assert_eq!(pinned.crew.as_deref(), Some("implementer"));
+        assert_eq!(pinned.crew_source.as_deref(), Some("explicit"));
+
+        reading.resets_at = Some(Utc::now() - Duration::minutes(1));
+        runtime
+            .record_provider_limit(&reading)
+            .expect("reset quota");
+        let runtime = configure("[\"implementer\"]");
+        let reset = add(&runtime, None);
+        assert_eq!(reset.crew.as_deref(), Some("implementer"));
+        assert_eq!(reset.crew_source.as_deref(), Some(source));
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
+    creation_pool_draws_skip_provider_limited_crews,
     a_task_waits_on_an_exhausted_provider_until_the_reset,
     live_provider_policy_reloads_and_keeps_the_last_good_config,
     an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
