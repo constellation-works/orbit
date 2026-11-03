@@ -84,7 +84,7 @@ needed, which the slice verifies before it merges.
 | Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for task-level and friction kinds, `runtime_sources.rs` for runs and claims, `provider_sources.rs` for `ci_red`, `host.rs` for local `host_unhealthy`) |
 | Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
 | Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
-| Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
+| Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `crates/orbit-tools/src/mcp/annotations.rs` lists `orbit.attention` as `READ_ONLY` |
 | Authorization | a catalog entry allowing `Agent` and `Operator`; the runtime kinds check capability themselves and degrade ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)) |
 | Cross-host fan-out and merge | `crates/orbit-mcp/src/federated/attention_aggregate.rs` (the same federated client the CLI's routed calls use; `orbit attention` reaches it from `host_route.rs` preflight) |
 | `[attention]` configuration | `crates/orbit-config` |
