@@ -547,6 +547,50 @@ Look for `input.task_ids` overlap between candidate runs, parent events that inv
 
 A gate or auto run that failed only because its child did records that leaf in its `--json` `root_cause` (`leaf_run_id`, `task_id`, `step`, `code`; null on a run that failed on its own), and `orbit run history --state failed --incidents` shows one row per leaf with the folded parents in `cascaded_run_ids`. `orbit run history --failures` shows one row per task and root cause instead: the root-cause run, its step and crew, the cause's first line in full, and `orbit run show` for that run (`--json`: `failures`). It cannot be combined with `--incidents`. On a drain, `orbit run show` names that same root-cause run in the failed-leaf warning, states each task's current status, and omits the `orbit job resume` line once the task has left `blocked`. A red base or a before-landing review awaiting a decision ends the run `held`, and a cancelled child ends its waiting parents `cancelled`; neither is a failure. A claimed leaf stopped by its provider's usage limit also ends `held`: its step code is `provider_limit`, its message names the provider and the reset, and the claim returns to the owner. A CI sweep whose only gaps are run-scoped retryable collection errors succeeds with outcome `deferred` and a `deferred_count`. Neither lists under `--state failed`; Incidents lists both under the `deferred` class.
 
+## Delivery-refusal holds
+
+A fail-closed delivery decision ends the run `held`, never `failed`. The
+code comes from a typed refusal, never from matching diagnostic wording, so
+read the code rather than the message text. Retry, step recovery, final
+recovery and the failure handoff do not run for these decisions. The refusing
+action keeps its existing task transition and landing evidence; run
+finalization does not change the task's status. Gate and auto parents pass a
+held child. Run history lists the run as `held`, and reliability counts it
+under held, outside the failure rate.
+
+### Read the code on a run
+
+```bash
+orbit run show <run_id> --json
+orbit run history --json
+```
+
+In the run-show response the code is the `run` object's `error_code`, with
+the human-readable detail in `error_message` and the `held` outcome in
+`run.state`. History lists the same run with a `held` state.
+
+### Codes and next steps
+
+Resolve the named refusal before starting a new delivery attempt. Apart from
+`delivery_forge_observation_unavailable`, these holds do not enable a generic
+`orbit job resume`.
+
+| Code | Decision | Next step |
+|---|---|---|
+| `delivery_head_changed` | The pull request reports a head different from the one this run published. | Compare the pull-request head against the published candidate, then start a new delivery attempt on the current head. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. | Re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt. |
+| `delivery_repair_dispatched` | A repair was already dispatched for the blocked head. | Leave the dispatched repair to finish; do not dispatch another one. |
+| `delivery_pr_draft` | The pull request is still a draft. | Mark the pull request ready for review, then start a new delivery attempt. |
+| `delivery_pr_closed` | The pull request closed without merging. | Reopen the pull request or open a new one, then start a new delivery attempt. |
+| `delivery_task_not_promotable` | The task's current status refuses promotion. | Move the task to a promotable status, then start a new delivery attempt. |
+| `delivery_landing_conflict` | Landing requires a conflict repair with fresh validation and a new handoff. | Repair the conflict, revalidate, and hand off again. |
+| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. | Satisfy the required reviews or checks, then start a new delivery attempt. |
+| `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; the base's own result comes before candidate recovery. | Wait for the base's own check result; do not run candidate recovery first. |
+| `delivery_completion_budget_expired` | The completion budget expired before completion could be confirmed; the last observed pull-request state was unmerged and the task stays in review. A hold does not cancel auto-merge, and another actor may have merged since, so the forge is authoritative. | Check the forge for the current pull-request state, then start a new delivery attempt. |
+| `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. | Let the next auto-fix pass reread the pull-request status; do not dispatch a repair on that evidence. |
+| `delivery_forge_observation_unavailable` | Read-only forge reads kept failing with a transport error before any completion mutation. Nothing changed on the forge and the task stays in review. | Run `orbit job resume <run_id>`: it reads the forge again and continues completion from its checkpoints. |
+| `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
+
 ## Check Git State For Workflow Failures
 
 ```bash

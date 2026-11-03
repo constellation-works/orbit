@@ -105,7 +105,8 @@ implementation with the old candidate discarded. See
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
-| Diagnose a specific failed or stuck run | [Run debugging](references/run-debugging.md) |
+| Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
+| Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
 | Tell an inherited red base from candidate damage in hosted CI | [Hosted-check diagnosis](references/run-debugging.md#hosted-check-failures-and-inherited-red-bases) |
 | Diagnose a failed local required-validation command and its replay evidence | [Local validation replay](references/run-debugging.md#local-required-validation-replay) |
 | Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |
