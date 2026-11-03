@@ -26,7 +26,7 @@ carries only the tools its job needs. The decision is recorded in
   `crates/orbit-types/src/tool/mcp_toolset.rs`). `orbit tool list` and
   `orbit tool show` report it as `mcp_toolset`.
 - Builtin MCP tools are placed by one table,
-  `crates/orbit-tools/src/mcp_toolsets.rs::builtin_mcp_toolset`. A builtin
+  `crates/orbit-tools/src/mcp/toolsets.rs::builtin_mcp_toolset`. A builtin
   MCP tool missing from it belongs to no toolset, and the registry refuses
   to build MCP definitions (`McpToolDefinitionError::UnclassifiedToolset`),
   so no tool ships unplaced.

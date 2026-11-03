@@ -51,7 +51,7 @@ needed: every crate below already depends on the ones it would call.
 |---|---|
 | `Notice`, `NoticeKind`, `NoticeScope`, `AuthorClass`, `EffectiveStatus`, `PostOutcome` | `crates/orbit-types/src/record/notice.rs` |
 | The `NOTICE` noun: post, close, list, show; params, descriptions, CLI | `crates/orbit-common/src/governance/notice.rs`, in the shape of `governance/decision.rs` (operations as data) |
-| Registration in the `notice` toolset | `operation::register_noun_in_toolset(registry, &NOTICE, McpToolset::Notice)` in `crates/orbit-tools/src/builtin/orbit/register.rs`; `McpToolset::Notice` in `crates/orbit-types/src/tool/mcp_toolset.rs`; `orbit.notice.list`/`show` annotated read-only in `crates/orbit-tools/src/mcp_annotations.rs` |
+| Registration in the `notice` toolset | `operation::register_noun_in_toolset(registry, &NOTICE, McpToolset::Notice)` in `crates/orbit-tools/src/builtin/orbit/register.rs`; `McpToolset::Notice` in `crates/orbit-types/src/tool/mcp_toolset.rs`; `orbit.notice.list`/`show` annotated read-only in `crates/orbit-tools/src/mcp/annotations.rs` |
 | Authorization catalog entries for `post` and `close` (Agent, Operator and Runner as an identity floor, like leases; poster-class resolution in core; `list` and `show` are open reads) | `crates/orbit-common/src/governance/authorization/catalog/operations.rs` |
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |

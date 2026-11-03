@@ -42,7 +42,7 @@ pub fn register(registry: &mut ToolRegistry) {
     // the MCP surface.
     operation::register_noun(registry, &WORKSPACE_CLAIM);
     // Each MCP tool's `orbit mcp serve` toolset comes from the one table in
-    // `crate::mcp_toolsets`; leases, notices, experiments and the analytics
+    // `crate::mcp`; leases, notices, experiments and the analytics
     // reads are opt-in there, and `orbit tool run` reaches them regardless.
     operation::register_noun(registry, &LEASE);
     operation::register_noun(registry, &NOTICE);
