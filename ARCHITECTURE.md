@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-11-01
+last_validated: 2026-11-03
 ---
 
 # Architecture

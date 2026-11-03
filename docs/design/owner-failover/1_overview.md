@@ -2,7 +2,7 @@
 title: Owner Failover — Overview
 owner: claude
 last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_validated: 2026-11-03
 status: Proposed
 stage: designing
 next: "Daniel reviews the proposal and answers its open questions (ORB-20620)"
