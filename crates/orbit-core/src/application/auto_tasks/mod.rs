@@ -186,3 +186,5 @@ pub(crate) fn render_default_auto_task<'a>(content: &'a str, base_branch: &str) 
 
 #[cfg(test)]
 mod tests;
+
+mod step_observation;

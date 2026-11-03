@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -327,4 +327,246 @@ pub struct ReadoutWarning {
     /// `crew_mismatch_unavailable`.
     pub kind: &'static str,
     pub message: String,
+}
+
+use orbit_types::workflow::TagInstructionRole;
+
+/// Whether an arm does better with a lower or a higher value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Better {
+    Lower,
+    Higher,
+}
+
+/// How a metric is summarised: a mean of per-task values, a rate of
+/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    Mean,
+    Rate,
+    /// Arm total numerator divided by arm total reviewable lines.
+    Ratio,
+}
+
+pub(super) struct MetricSpec {
+    pub(super) name: &'static str,
+    pub(super) kind: Kind,
+    pub(super) better: Better,
+    pub(super) unit: &'static str,
+    /// `false` for a metric whose source series does not exist yet.
+    pub(super) measured: bool,
+}
+
+const fn spec(
+    name: &'static str,
+    kind: Kind,
+    better: Better,
+    unit: &'static str,
+    measured: bool,
+) -> MetricSpec {
+    MetricSpec {
+        name,
+        kind,
+        better,
+        unit,
+        measured,
+    }
+}
+
+/// Every metric an experiment may name, in the definition's order.
+pub(super) const METRIC_SPECS: &[MetricSpec] = &[
+    spec(
+        "implement_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+        true,
+    ),
+    spec(
+        "total_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+        true,
+    ),
+    spec("cost_usd", Kind::Mean, Better::Lower, "usd", true),
+    spec("lead_time", Kind::Mean, Better::Lower, "hours", true),
+    spec(
+        "implement_duration",
+        Kind::Mean,
+        Better::Lower,
+        "minutes",
+        true,
+    ),
+    spec(
+        "turns_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "turns",
+        true,
+    ),
+    spec(
+        "result_bytes_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "bytes",
+        true,
+    ),
+    spec(
+        "first_pass_acceptance",
+        Kind::Rate,
+        Better::Higher,
+        "rate",
+        true,
+    ),
+    spec("review_repairs", Kind::Mean, Better::Lower, "count", true),
+    spec("step_recoveries", Kind::Mean, Better::Lower, "count", true),
+    spec("final_recoveries", Kind::Mean, Better::Lower, "count", true),
+    spec("failed_checks", Kind::Mean, Better::Lower, "count", true),
+    spec("merge_conflicts", Kind::Mean, Better::Lower, "count", true),
+    spec(
+        "delivery_done_rate",
+        Kind::Rate,
+        Better::Higher,
+        "rate",
+        true,
+    ),
+    spec(
+        "escaped_regressions",
+        Kind::Mean,
+        Better::Lower,
+        "count",
+        true,
+    ),
+    spec("lines_changed", Kind::Mean, Better::Lower, "lines", true),
+    spec(
+        "cost_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "usd_per_line",
+        true,
+    ),
+    spec(
+        "lead_time_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "hours_per_line",
+        true,
+    ),
+    // Visual review §12.3: the post-landing comparison's severity-weighted
+    // confirmed findings, the visual fixes and follow-ups of the delivery,
+    // and its reviewer's CONFIRMED / (CONFIRMED + REJECTED).
+    spec(
+        "visual_landed_mismatches",
+        Kind::Mean,
+        Better::Lower,
+        "weighted_findings",
+        true,
+    ),
+    spec(
+        "visual_review_repairs",
+        Kind::Mean,
+        Better::Lower,
+        "count",
+        true,
+    ),
+    spec(
+        "visual_verified_finding_rate",
+        Kind::Mean,
+        Better::Higher,
+        "rate",
+        true,
+    ),
+];
+
+pub(super) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
+    METRIC_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// One task's value for one metric.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Outcome {
+    Value(f64),
+    /// Not settled yet: the task is in flight, or its regression window is
+    /// still open.
+    Open,
+    /// Settled, but the records hold no value (no covered invocation, no
+    /// review, nothing landed).
+    Unmeasured,
+}
+
+/// Reviewable added plus deleted lines for one enrolled task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReviewableDenominator {
+    /// The task is not done, so a denominator is not due.
+    NotDone,
+    /// Done, and no landed-diff row in the read window.
+    Missing,
+    /// Done, with a measured total. Zero is a real zero, not a missing row.
+    Measured(u64),
+    /// Done, but the row has no recoverable denominator.
+    Unavailable,
+}
+
+/// One enrolled, unforced task with its outcomes.
+#[derive(Clone)]
+pub(super) struct TaskOutcome {
+    pub(super) task_id: String,
+    pub(super) arm: String,
+    pub(super) segment: u32,
+    pub(super) complexity: String,
+    /// The crew pool recorded at admission for the task's latest
+    /// delivery, when that evidence exists [ORB-19487]. `None` means the
+    /// historical pool is unavailable, not that the crew mismatched.
+    pub(super) admitted_pool: Option<BTreeSet<String>>,
+    /// What `admitted_pool` is, for a mismatch message.
+    pub(super) admitted_pool_label: Option<String>,
+    /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
+    pub(super) crew: String,
+    pub(super) terminal: bool,
+    /// Latest admission applied this arm; absent for legacy evidence.
+    pub(super) admitted_treatment: Option<bool>,
+    /// An implement invocation at or after assignment recorded an
+    /// explorer-delegation tool call.
+    pub(super) explorer_call: bool,
+    /// No explorer call was recorded, but an implement invocation at or after
+    /// assignment lost its early tool calls to the bounded output capture, so
+    /// the absence is unproven [ORB-20572].
+    pub(super) explorer_unobserved: bool,
+    /// The task's first implement invocation holds only the suffix of its tool
+    /// calls, so its first-edit score is withheld rather than measured.
+    pub(super) first_edit_trace_incomplete: bool,
+    pub(super) assigned_at: DateTime<Utc>,
+    pub(super) assignment_digest: Option<String>,
+    /// Activity roles in which a dispatch received this task's arm overlay
+    /// and the dispatching step then finished successfully, read from the
+    /// run audit trail (`experiment_overlay_applied` joined to the same
+    /// run's `step_finished`).
+    pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
+    /// Present only for settled tasks with complete invocation cost coverage.
+    pub(super) cost_source: Option<CostSource>,
+    /// Reviewable lines recorded for this task. Per-line metrics read this
+    /// instead of a per-task ratio in `values`.
+    pub(super) reviewable: ReviewableDenominator,
+    pub(super) values: BTreeMap<&'static str, Outcome>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CostSource {
+    Reported,
+    Estimated,
+}
+
+/// What the records say about the enrolled tasks.
+pub(super) struct Observed {
+    pub(super) tasks: Vec<TaskOutcome>,
+    /// The shared scan could not confirm tasks' earliest implement invocations.
+    pub(super) first_edit_incomplete: bool,
+    /// Each arm's overlay digests as its runs received them.
+    pub(super) run_digests: BTreeMap<String, BTreeSet<String>>,
+    /// Landed tasks whose regression window is still open.
+    pub(super) open_regression_windows: usize,
+    /// Assigned tasks worked in an interactive session rather than by a
+    /// job: not treated by any arm, so left out of every estimate.
+    pub(super) interactive_excluded: usize,
 }

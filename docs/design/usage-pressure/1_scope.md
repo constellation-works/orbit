@@ -38,7 +38,7 @@ Before this feature, the readings only removed crews; they did not prefer one.
 
 A second fact shaped the fix. A task's pool crew was drawn **once, when the task was created**
 (`CreationCrewAssignment`, source `pool:<complexity>` or `purpose:<purpose>`, in
-[`candidates.rs`](../../../crates/orbit-core/src/application/job/crew_pools/candidates.rs)).
+[`candidate_assignment.rs`](../../../crates/orbit-core/src/application/job/crew_pools/candidate_assignment.rs)).
 Admission then kept that member "while it can run", in `unheld_task_crew_candidates`, and only
 re-drew when a hold or a limit removed it. A task filed on Tuesday could run on Friday with
 Tuesday's draw. Weighting the creation draw alone would weight it with days-old readings.

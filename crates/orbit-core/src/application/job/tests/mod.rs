@@ -2,6 +2,7 @@ mod agent;
 mod crew_pools;
 mod exec;
 mod pipeline;
+#[path = "scripts.rs"]
 mod script_step;
 
 /// Deterministic audit-insert fault plus the existing detached-worker seam.

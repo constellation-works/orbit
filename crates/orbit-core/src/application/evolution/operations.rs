@@ -1,5 +1,4 @@
 //! Workspace capability-gap ledger and proposal suppression.
-mod pass;
 
 use crate::OrbitRuntime;
 use chrono::{DateTime, Duration, Utc};

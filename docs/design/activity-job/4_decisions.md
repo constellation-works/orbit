@@ -1727,7 +1727,7 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 
 **Recorded:** 2026-10-29 · [ORB-19985], [ORB-19983], [ORB-19294]
 **Supersedes:** [The v2 shell activity surface is removed, not sandboxed](#the-v2-shell-activity-surface-is-removed-not-sandboxed), for `target: script:<name>` job steps only
-**Paths:** `crates/orbit-exec/src/build_sandbox/script.rs`, `crates/orbit-core/src/application/job/script_step.rs`, `crates/orbit-engine/src/activity_job/job_executor/script.rs`, `crates/orbit-runtime/src/audit/run/scripts.rs`
+**Paths:** `crates/orbit-exec/src/build_sandbox/script.rs`, `crates/orbit-core/src/application/job/scripts/step.rs`, `crates/orbit-engine/src/activity_job/job_executor/script.rs`, `crates/orbit-runtime/src/audit/run/scripts.rs`
 
 ### Context
 

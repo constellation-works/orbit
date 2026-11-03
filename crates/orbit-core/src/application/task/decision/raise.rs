@@ -17,7 +17,7 @@ use orbit_types::task::{
     TaskStatus, agent_decision_answers, normalize_agent_decision_topic,
 };
 
-use super::TaskRecordUpdateParams;
+use super::super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 
