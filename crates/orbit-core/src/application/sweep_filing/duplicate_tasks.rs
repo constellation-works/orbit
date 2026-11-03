@@ -49,9 +49,27 @@ pub(crate) trait DuplicateTaskLookup {
     /// instead of cloning the workspace's task list per assessment.
     fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError>;
 
+    /// Every task's envelope without body documents, for scans that first
+    /// select by status, tags, relations or timestamps and hydrate only
+    /// the selected tasks with [`Self::get_task`]. Defaults to the full
+    /// listing, which answers the same fields with bodies attached.
+    fn list_task_metadata(&self) -> Result<Rc<[Task]>, OrbitError> {
+        self.list_tasks()
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError>;
 
     fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError>;
+
+    /// The canonical text a material-coverage match searches for `task`:
+    /// its own fields plus its comments, canonicalized once. A snapshot
+    /// lookup memoizes it per task, so assessing many candidates against
+    /// the same workspace neither re-reads comments nor re-canonicalizes
+    /// bodies that cannot have changed during the action.
+    fn searchable_text(&self, task: &Task) -> Result<Rc<str>, OrbitError> {
+        let comments = self.get_task_comments(&task.id)?;
+        Ok(Rc::from(searchable_task_text(task, &comments)))
+    }
 }
 
 impl DuplicateTaskLookup for crate::OrbitRuntime {
@@ -61,6 +79,10 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 
     fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         crate::OrbitRuntime::list_tasks(self).map(Rc::from)
+    }
+
+    fn list_task_metadata(&self) -> Result<Rc<[Task]>, OrbitError> {
+        crate::OrbitRuntime::list_task_metadata(self).map(Rc::from)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
@@ -80,12 +102,19 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 /// re-hydrate the whole workspace for each of them. The snapshot fills
 /// lazily, so the open exact-key fast path still never lists broadly, and it is
 /// dropped with the action, so nothing it caches can outlive the reads it
-/// was taken from. Tag queries and direct task reads pass through: they are
-/// indexed or single-bundle reads and happen only on a hit.
+/// was taken from. Tag queries, direct task reads and each task's
+/// canonical searchable text are likewise served from the snapshot after
+/// their first read, so repeated candidates re-check the same evidence
+/// instead of re-hydrating it.
 pub(crate) struct SnapshotDuplicateLookup<'a, L: ?Sized> {
     inner: &'a L,
     tasks: OnceCell<Rc<[Task]>>,
+    metadata: OnceCell<Rc<[Task]>>,
     comments: RefCell<BTreeMap<String, Rc<[TaskComment]>>>,
+    searchable: RefCell<BTreeMap<String, Rc<str>>>,
+    by_id: RefCell<BTreeMap<String, Task>>,
+    by_tags: RefCell<BTreeMap<Vec<String>, Rc<[Task]>>>,
+    listed_by_id: OnceCell<BTreeMap<String, Task>>,
 }
 
 impl<'a, L: DuplicateTaskLookup + ?Sized> SnapshotDuplicateLookup<'a, L> {
@@ -93,14 +122,38 @@ impl<'a, L: DuplicateTaskLookup + ?Sized> SnapshotDuplicateLookup<'a, L> {
         Self {
             inner,
             tasks: OnceCell::new(),
+            metadata: OnceCell::new(),
             comments: RefCell::new(BTreeMap::new()),
+            searchable: RefCell::new(BTreeMap::new()),
+            by_id: RefCell::new(BTreeMap::new()),
+            by_tags: RefCell::new(BTreeMap::new()),
+            listed_by_id: OnceCell::new(),
         }
     }
 }
 
 impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for SnapshotDuplicateLookup<'_, L> {
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        self.inner.list_tasks_by_tags(tags)
+        if let Some(tasks) = self.by_tags.borrow().get(tags) {
+            return Ok(tasks.iter().cloned().collect());
+        }
+        // Once the full listing is hydrated it answers tag selections
+        // directly, with the store's all-tags-required semantics.
+        if let Some(tasks) = self.tasks.get() {
+            return Ok(tasks
+                .iter()
+                .filter(|task| {
+                    tags.iter()
+                        .all(|required| task.tags.iter().any(|tag| tag == required))
+                })
+                .cloned()
+                .collect());
+        }
+        let tasks: Rc<[Task]> = Rc::from(self.inner.list_tasks_by_tags(tags)?);
+        self.by_tags
+            .borrow_mut()
+            .insert(tags.to_vec(), Rc::clone(&tasks));
+        Ok(tasks.iter().cloned().collect())
     }
 
     fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
@@ -113,8 +166,41 @@ impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for SnapshotDuplicateL
         Ok(Rc::clone(self.tasks.get_or_init(|| tasks)))
     }
 
+    fn list_task_metadata(&self) -> Result<Rc<[Task]>, OrbitError> {
+        // The hydrated listing carries every envelope field in full, so
+        // it answers a selection without a second store pass.
+        if let Some(tasks) = self.tasks.get() {
+            return Ok(Rc::clone(tasks));
+        }
+        if let Some(tasks) = self.metadata.get() {
+            return Ok(Rc::clone(tasks));
+        }
+        let tasks = self.inner.list_task_metadata()?;
+        Ok(Rc::clone(self.metadata.get_or_init(|| tasks)))
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.inner.get_task(task_id)
+        if let Some(task) = self.by_id.borrow().get(task_id) {
+            return Ok(task.clone());
+        }
+        // A hydrated listing already read every bundle, so a keyed read
+        // would only repeat it.
+        if let Some(tasks) = self.tasks.get() {
+            let listed = self.listed_by_id.get_or_init(|| {
+                tasks
+                    .iter()
+                    .map(|task| (task.id.clone(), task.clone()))
+                    .collect()
+            });
+            if let Some(task) = listed.get(task_id) {
+                return Ok(task.clone());
+            }
+        }
+        let task = self.inner.get_task(task_id)?;
+        self.by_id
+            .borrow_mut()
+            .insert(task_id.to_string(), task.clone());
+        Ok(task)
     }
 
     fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
@@ -126,6 +212,18 @@ impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for SnapshotDuplicateL
             .borrow_mut()
             .insert(task_id.to_string(), Rc::clone(&comments));
         Ok(comments)
+    }
+
+    fn searchable_text(&self, task: &Task) -> Result<Rc<str>, OrbitError> {
+        if let Some(text) = self.searchable.borrow().get(&task.id) {
+            return Ok(Rc::clone(text));
+        }
+        let comments = self.get_task_comments(&task.id)?;
+        let text: Rc<str> = Rc::from(searchable_task_text(task, &comments));
+        self.searchable
+            .borrow_mut()
+            .insert(task.id.clone(), Rc::clone(&text));
+        Ok(text)
     }
 }
 
@@ -252,7 +350,30 @@ where
     }
 
     validate_candidate(candidate)?;
-    let all_tasks = lookup.list_tasks()?;
+    // Select covering candidates on envelope fields first. A workspace
+    // whose selected set is small hydrates only those bodies; a workspace
+    // where most tasks are selected reads the full listing once instead
+    // of paying a keyed bundle read per task.
+    let metadata = lookup.list_task_metadata()?;
+    let selected: Vec<&Task> = metadata
+        .iter()
+        .filter(|task| !task.status.is_terminal() || recently_completed(task))
+        .collect();
+    let all_tasks: Vec<Task> = if selected.len() <= 2048 {
+        selected
+            .iter()
+            .map(|task| lookup.get_task(&task.id))
+            .collect::<Result<_, _>>()?
+    } else {
+        let wanted: std::collections::BTreeSet<&str> =
+            selected.iter().map(|task| task.id.as_str()).collect();
+        lookup
+            .list_tasks()?
+            .iter()
+            .filter(|task| wanted.contains(task.id.as_str()))
+            .cloned()
+            .collect()
+    };
     let mut open_tasks = all_tasks
         .iter()
         .filter(|task| !task.status.is_terminal() || recently_completed(task))
@@ -260,13 +381,16 @@ where
     open_tasks.sort_by(|left, right| left.id.cmp(&right.id));
 
     for task in open_tasks {
-        let comments = lookup.get_task_comments(&task.id)?;
-        let searchable = searchable_task_text(task, &comments);
         let fingerprints = if !task.status.is_terminal() {
             &candidate.fingerprints
         } else {
             &candidate.completed_fingerprints
         };
+        // No fingerprint can match, so comments and text are not read.
+        if fingerprints.is_empty() {
+            continue;
+        }
+        let searchable = lookup.searchable_text(task)?;
         if let Some(fingerprint) = fingerprints
             .iter()
             .find(|fingerprint| fingerprint_matches(&searchable, fingerprint))

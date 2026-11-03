@@ -14,8 +14,9 @@ use super::fields::value_string;
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::full_revision;
-use crate::application::task::{TaskListFilter, TaskUpdateParams};
+use crate::application::task::TaskUpdateParams;
 
 const MAX_OWNERS: usize = 8;
 const MAX_ASSESSMENTS: usize = 32;
@@ -96,8 +97,12 @@ impl<'a> Assessor<'a> {
         }
     }
 
-    pub(super) fn assess(&mut self, cluster: &FailureCluster) -> Assessment {
-        let result = self.assess_inner(cluster);
+    pub(super) fn assess<L: DuplicateTaskLookup + ?Sized>(
+        &mut self,
+        cluster: &FailureCluster,
+        lookup: &L,
+    ) -> Assessment {
+        let result = self.assess_inner(cluster, lookup);
         match result {
             Ok(Some((owner, evidence))) => Assessment {
                 owner: Some(owner),
@@ -115,27 +120,26 @@ impl<'a> Assessor<'a> {
         }
     }
 
-    fn assess_inner(
+    fn assess_inner<L: DuplicateTaskLookup + ?Sized>(
         &mut self,
         cluster: &FailureCluster,
+        lookup: &L,
     ) -> AssessmentResult<Option<(String, Value)>> {
         let tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
-        let candidates = self
-            .runtime
-            .task_candidates(
-                &TaskListFilter {
-                    statuses: Some(vec![TaskStatus::Done]),
-                    tags: vec![tag],
-                    ..Default::default()
-                },
-                MAX_OWNERS,
-            )
-            .map_err(|_| "completed_owner_lookup_unavailable")?;
-        if candidates.total > MAX_OWNERS {
+        // The filing snapshot already answered this exact-tag query for
+        // the duplicate check, so the completed-owner selection reuses it
+        // instead of paying another store query per cluster.
+        let candidates: Vec<Task> = lookup
+            .list_tasks_by_tags(&[tag])
+            .map_err(|_| "completed_owner_lookup_unavailable")?
+            .into_iter()
+            .filter(|task| task.status == TaskStatus::Done)
+            .collect();
+        if candidates.len() > MAX_OWNERS {
             return Err("completed_owner_lookup_budget_exhausted".into());
         }
         let mut unresolved = Vec::new();
-        for candidate in candidates.items {
+        for candidate in candidates {
             if self.remaining == 0 {
                 return Err("assessment_budget_exhausted".into());
             }

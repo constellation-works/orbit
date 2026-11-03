@@ -23,6 +23,10 @@ pub(super) struct OperatorAssessment {
     pub(super) failed_covers: Vec<Value>,
 }
 
+/// An owner's latest transition into its current status: `(actor, at)`,
+/// with the whole decision absent when no such transition is recorded.
+type StatusDecision = Option<(Option<String>, DateTime<Utc>)>;
+
 enum CoverState {
     Open,
     Landed(String),
@@ -36,6 +40,9 @@ pub(super) struct OperatorCovers<'a> {
     now: DateTime<Utc>,
     suppression: Duration,
     covers: BTreeMap<String, CoverState>,
+    /// The status decision `(actor, at)` per assessed owner, read at most
+    /// once however many clusters name the same owner.
+    decisions: BTreeMap<String, StatusDecision>,
 }
 
 impl<'a> OperatorCovers<'a> {
@@ -56,7 +63,34 @@ impl<'a> OperatorCovers<'a> {
             now: runtime.ci_failure_time.unwrap_or_else(Utc::now),
             suppression: Duration::hours(hours as i64),
             covers: BTreeMap::new(),
+            decisions: BTreeMap::new(),
         })
+    }
+
+    /// The owner's latest transition into its current status, as
+    /// `(actor, at)` with an empty actor already filtered out.
+    fn decision(
+        &mut self,
+        owner_id: &str,
+        status: TaskStatus,
+    ) -> Result<StatusDecision, OrbitError> {
+        if let Some(decision) = self.decisions.get(owner_id) {
+            return Ok(decision.clone());
+        }
+        let history = self.runtime.get_task_history(owner_id)?;
+        let decision = history
+            .iter()
+            .rev()
+            .find(|event| event.to_status == Some(status))
+            .map(|event| {
+                (
+                    Some(event.by.clone()).filter(|actor| !actor.trim().is_empty()),
+                    event.at,
+                )
+            });
+        self.decisions
+            .insert(owner_id.to_string(), decision.clone());
+        Ok(decision)
     }
 
     pub(super) fn assess<L: DuplicateTaskLookup + ?Sized>(
@@ -122,16 +156,10 @@ impl<'a> OperatorCovers<'a> {
             failed_covers: Vec::new(),
         };
         for owner in owners.values() {
-            let history = self.runtime.get_task_history(&owner.id)?;
             // Later metadata edits must neither change provenance nor restart
             // the window taken from the status decision.
-            let decision = history
-                .iter()
-                .rev()
-                .find(|event| event.to_status == Some(owner.status));
-            let actor = decision
-                .map(|event| event.by.as_str())
-                .filter(|actor| !actor.trim().is_empty());
+            let decision = self.decision(&owner.id, owner.status)?;
+            let actor = decision.as_ref().and_then(|(actor, _)| actor.as_deref());
             let cause_known = cluster.compiler_cause.is_some()
                 || (!cluster.signature_is_step_fallback
                     && identities.for_task(owner)?.is_some_and(|record| {
@@ -143,7 +171,10 @@ impl<'a> OperatorCovers<'a> {
                 .filter(|relation| relation.relation_type == TaskRelationType::CoveredBy)
                 .collect::<Vec<_>>();
             if covers.is_empty() || !cause_known {
-                let archived_at = decision.map(|event| event.at).unwrap_or(owner.updated_at);
+                let archived_at = decision
+                    .as_ref()
+                    .map(|(_, at)| *at)
+                    .unwrap_or(owner.updated_at);
                 let reason = if !cause_known {
                     "archive_identity_unavailable"
                 } else {

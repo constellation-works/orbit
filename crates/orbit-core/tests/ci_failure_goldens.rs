@@ -2688,3 +2688,60 @@ fn ci_failure_branch_routing_ignores_a_sibling_token_in_an_external_ref() {
     let retained: Value = serde_json::from_slice(&artifact.content).unwrap();
     assert_eq!(retained["failure"], pr);
 }
+
+#[test]
+fn ci_filing_at_workspace_scale_files_once_and_repeats_without_duplicates() {
+    let (_root, runtime) = bare_runtime();
+    // A workspace far larger than the failure set: every cluster's
+    // coverage assessment scans these tasks, so this is the shape whose
+    // per-cluster re-hydration made filing cost grow with cluster count.
+    for i in 0..300 {
+        let task = add_titled(&runtime, &format!("Unrelated backlog task {i}"));
+        if i % 25 == 0 {
+            runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!("Unrelated progress note {i}.")),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        }
+    }
+    let checkout = "b".repeat(40);
+    let runs: Vec<Value> = (0..3)
+        .map(|i| {
+            failure(
+                &format!("error: scale probe failure {i} in subsystem{i}"),
+                i,
+                &checkout,
+            )
+        })
+        .collect();
+    let first = file(&runtime, runs.clone());
+    assert_eq!(first["clusters"], 3, "{first}");
+    assert_eq!(first["filed_count"], 3, "{first}");
+    // Identical evidence replayed: no second task per failure, and the
+    // already-filed owners are reported as the covering tasks.
+    let repeated = file(&runtime, runs);
+    assert_eq!(repeated["filed_count"], 0, "{repeated}");
+    assert_eq!(
+        repeated["skipped_existing"].as_array().unwrap().len(),
+        3,
+        "{repeated}"
+    );
+    let filed_ids: Vec<&str> = first["filed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["task_id"].as_str())
+        .collect();
+    for entry in repeated["skipped_existing"].as_array().unwrap() {
+        assert!(
+            filed_ids.contains(&entry["task_id"].as_str().unwrap()),
+            "{repeated}"
+        );
+    }
+}
