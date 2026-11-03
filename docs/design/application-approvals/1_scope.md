@@ -31,7 +31,7 @@ owner-only witness file, so a modified row alone grants nothing. Every call is a
 with an `application` object. Inside an app-bound plugin call, the plugin's Orbit
 callbacks are admitted only when they exactly equal a listed completion callback. The
 contract is documented for users in the installed `orbit-setup` skill reference
-`applications.md`. The admission code is `crates/orbit-runtime/src/application_authority.rs`.
+`applications.md`. The admission code is `crates/orbit-runtime/src/application_consent/invocation.rs`.
 
 ## Problem
 
@@ -41,7 +41,7 @@ friction F2026-11-006 holds the evidence. Three facts about the current code cau
 
 1. **Admission matches the whole input exactly.** A direct call is admitted only when a
    consented scope has the same tool and a structurally equal input
-   (`admit_application_call`, `crates/orbit-runtime/src/application_authority.rs:395-404`).
+   (`admit_application_call`, `crates/orbit-runtime/src/application_consent/invocation.rs`).
    Every app approval embeds a value that does not exist at consent time: a proposal id
    and the payload digest the user reviewed (`office.proposal-accept {id, sha256}`), a
    draft id and digest (`gateway.http-send`), or a comment the user typed (send-back,

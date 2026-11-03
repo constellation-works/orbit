@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: "Decisions: a relayed click is no stronger than its relayer, identity fields bound to state, Operator-floored operations kept off application authority, no consent rewrite on migration"
 tags: [application-approvals, application-authority, security]
-paths: ["crates/orbit-runtime/src/application_authority.rs", "crates/orbit-common/src/governance/authorization/catalog/**"]
+paths: ["crates/orbit-runtime/src/application_consent/**", "crates/orbit-common/src/governance/authorization/catalog/**"]
 related_features: [plugins, human-decision-channel, state-compatibility]
 related_artifacts: [ORB-20852]
 ---
@@ -77,7 +77,7 @@ every new consentable tool.
 
 ### Consequences
 
-- `crates/orbit-runtime/src/application_authority.rs::validate_application_operation`
+- `crates/orbit-runtime/src/application_consent/validation.rs::validate_application_operation`
   (as extended) refuses `text` on identity fields at consent time.
 - Gateway draft ids are `token`-constrained, so Orbit relies on the gateway plugin for
   the draft digest (resolved question 3 in [1_scope.md](./1_scope.md#open-questions):
@@ -133,7 +133,7 @@ and treat a change to a catalogue floor as a change to what applications may do.
 ## Consent migration never rewrites authority
 
 **Recorded:** 2026-11-01 · [ORB-20852]
-**Code anchors:** `crates/orbit-runtime/src/application_authority.rs::verify_application_witness`
+**Code anchors:** `crates/orbit-runtime/src/application_consent/invocation.rs::verify_application_witness`
 
 ### Context
 

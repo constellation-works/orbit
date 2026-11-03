@@ -114,7 +114,7 @@ source scan, enforces the runtime direction.
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
 | Config loading and runtime assembly | `crates/orbit-core/src/composition.rs` | [ORB-10886] |
-| Context assembly | `crates/orbit-runtime/src/context.rs` | — |
+| Context assembly | `crates/orbit-runtime/src/context/state.rs` | — |
 | Resolved-config consumption | `crates/orbit-runtime/src/builder.rs` | [ORB-10885], [ORB-10886] |
 | Config layering (owning crate) | `crates/orbit-config/src/` | [ORB-10885] |
 | Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |

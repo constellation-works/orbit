@@ -5,17 +5,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::RuntimeKernel;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     APPLICATION_BACKLOG_TRANSITION_SOURCES, APPLICATION_DIRECT_TASK_STATUSES,
-    APPLICATION_TASK_SHOW_FIELDS, APPLICATION_TRANSITION_TASK_STATUSES,
+    APPLICATION_EXACT_TASK_STATUSES, APPLICATION_TASK_SHOW_FIELDS,
+    APPLICATION_TRANSITION_TASK_STATUSES, application_operation_ceiling,
+    application_operator_floored,
 };
 use orbit_types::tool::{
     APPLICATION_CONSENT_SCHEMA_V2, ApplicationConsentRequest, ApplicationConstraint,
     ApplicationOperation, ApplicationScope, ApplicationTaskPredicate,
 };
 use serde_json::Value;
+use std::path::Path;
 
 /// Largest serialized operation a schema v2 consent may carry.
 const OPERATION_BUDGET_BYTES: usize = 8 * 1024;
@@ -521,5 +525,155 @@ fn in_range(len: usize, min: usize, max: usize, what: &str) -> Result<(), String
         Ok(())
     } else {
         Err(format!("{what} must number {min}..={max}"))
+    }
+}
+
+impl RuntimeKernel {
+    /// Check one consented operation against the live plugin install or the
+    /// built-in ceiling. Consent and every admission run it, so a stale
+    /// plugin digest refuses later calls.
+    pub(super) fn validate_application_operation(
+        &self,
+        operation: &ApplicationOperation,
+        role: OperationRole<'_>,
+    ) -> Result<(), OrbitError> {
+        let keys: Vec<&str> = match (&operation.input, &operation.fields) {
+            (Some(input), None) => input
+                .as_object()
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "application operation input must be an exact JSON object".into(),
+                    )
+                })?
+                .keys()
+                .map(String::as_str)
+                .collect(),
+            (None, Some(fields)) => fields.keys().map(String::as_str).collect(),
+            _ => {
+                return Err(OrbitError::InvalidInput(
+                    "application operation needs exactly one of `input` or `fields`".into(),
+                ));
+            }
+        };
+        match self.tool_registry().plugin_binding(&operation.tool) {
+            Some(binding) => {
+                let expected = operation.plugin.as_ref().ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "plugin consent must name its installed manifest digest".into(),
+                    )
+                })?;
+                if binding.provenance.name != expected.name
+                    || binding.provenance.manifest_digest != expected.manifest_digest
+                {
+                    return Err(OrbitError::CapabilityDenied(
+                        "plugin digest consent is stale".into(),
+                    ));
+                }
+                let installed = self
+                    .stores()
+                    .plugins()
+                    .get_plugin(&expected.name)?
+                    .ok_or_else(|| {
+                        OrbitError::CapabilityDenied("consented plugin is not installed".into())
+                    })?;
+                crate::plugin::grants::verify_install_path(&self.global_root(), &installed)
+                    .map_err(OrbitError::CapabilityDenied)?;
+                let loaded =
+                    orbit_tools::plugin::load_plugin_dir(Path::new(&installed.install_path))
+                        .map_err(|_| {
+                            OrbitError::CapabilityDenied(
+                                "consented plugin manifest cannot be verified".into(),
+                            )
+                        })?;
+                if !installed.enabled || loaded.manifest_digest != expected.manifest_digest {
+                    return Err(OrbitError::CapabilityDenied(
+                        "plugin digest consent is stale or plugin disabled".into(),
+                    ));
+                }
+                if let Some(fields) = &operation.fields {
+                    let declared: Vec<String> = self
+                        .tool_registry()
+                        .get_schema(&operation.tool)
+                        .map(|schema| schema.parameters.into_iter().map(|p| p.name).collect())
+                        .unwrap_or_default();
+                    validate_constrained_fields(operation, fields, role, None, &declared)?;
+                }
+            }
+            None if operation.plugin.is_none() => {
+                // The catalogue's Operator floors outrank any consent.
+                if application_operator_floored(&operation.tool, keys.iter().copied()) {
+                    return Err(OrbitError::CapabilityDenied(format!(
+                        "`{}` with these inputs requires a host operator and is never application authority",
+                        operation.tool
+                    )));
+                }
+                let ceiling = application_operation_ceiling(&operation.tool).ok_or_else(|| {
+                    OrbitError::CapabilityDenied(
+                        "this built-in operation does not support application consent".into(),
+                    )
+                })?;
+                match (&operation.input, &operation.fields) {
+                    (Some(input), _) => {
+                        if ceiling.exact_fields.is_empty() {
+                            return Err(OrbitError::InvalidInput(format!(
+                                "`{}` admits only constrained application operations",
+                                operation.tool
+                            )));
+                        }
+                        if keys.iter().any(|key| !ceiling.exact_fields.contains(key))
+                            || input
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .is_none_or(str::is_empty)
+                        {
+                            return Err(OrbitError::InvalidInput("application task decisions admit only id, status/answer, note, comment and workspace".into()));
+                        }
+                        if operation.tool == "orbit.task.update"
+                            && input.get("status").is_some_and(|status| {
+                                !status
+                                    .as_str()
+                                    .is_some_and(|s| APPLICATION_EXACT_TASK_STATUSES.contains(&s))
+                            })
+                        {
+                            return Err(OrbitError::InvalidInput("application task updates support approval, completion or dismissal statuses only".into()));
+                        }
+                    }
+                    (None, Some(fields)) => {
+                        let admitted = match role {
+                            OperationRole::Entry => ceiling.constrained_entry,
+                            OperationRole::Callback { .. } => ceiling.constrained_callback,
+                        };
+                        if !admitted {
+                            return Err(OrbitError::InvalidInput(format!(
+                                "`{}` exceeds the application ceiling as a constrained {}",
+                                operation.tool,
+                                match role {
+                                    OperationRole::Entry => "entry",
+                                    OperationRole::Callback { .. } => "callback",
+                                }
+                            )));
+                        }
+                        validate_constrained_fields(
+                            operation,
+                            fields,
+                            role,
+                            Some(ceiling.constrained_fields),
+                            &[],
+                        )?;
+                    }
+                    (None, None) => {
+                        return Err(OrbitError::InvalidInput(
+                            "application operation needs exactly one of `input` or `fields`".into(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(OrbitError::CapabilityDenied(
+                    "this built-in operation does not support application consent".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 }
