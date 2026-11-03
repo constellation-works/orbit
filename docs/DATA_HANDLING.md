@@ -44,7 +44,7 @@ data-handling review:
 | Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Lease tokens (lease listener user only) | `~orbit-lease/.orbit/lease-tokens.db` (SQLite) | Exists only where root provisioned it for the listener user. Holds each token's SHA-256, never the secret, with its scope and an audit of mints, revocations, refused verifications and other lease listener refusals; listener rows carry the client address and request method and path. |
-| Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
+| Worktrees | `<repo>/.orbit/state/worktrees/` | Active and failed runs can retain uncommitted candidates; preserve them until the worktree GC safety checks permit removal. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
 | Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. Operator settings for shipped auto-tasks live in `auto_tasks/.orbit-auto-task-settings.json`. |
@@ -189,8 +189,9 @@ project security reporting.
   [state-and-backup](./runbooks/state-and-backup.md) runbook covers WAL-safe
   backups and what is regenerable.
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
-  audit history in `orbit.db` is kept until you delete it. Nothing ages out to
-  a remote.
+  audit history in `orbit.db` can be removed by `orbit gc audit --apply` or the
+  opt-in `store-gc` routine according to `retention.audit_days` (60 days by
+  default). Nothing ages out to a remote.
 - **Air-gapped use works** apart from explicit update downloads,
   whatever your agent CLIs need, and any assistance policy you enable. Install the binary
   by hand and Orbit initiates no further connections.
