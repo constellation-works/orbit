@@ -875,8 +875,10 @@ impl OrbitRuntime {
     /// crew's performance on the task's tier and type (read from `tags` and
     /// `context_files`); this covers task add, `task update --crew ""` and
     /// [`Self::rerate_task_crew`]. The recorded source stays the pool's.
-    /// `None` means this workspace can name no crew at all, so the field stays
-    /// unset and dispatch resolves one from configuration as it always has.
+    /// Pool draws skip this host's live provider limits before image filtering
+    /// and weighting. A wholly limited pool leaves the crew unset for admission
+    /// to retry, without falling through to another pool or the default.
+    /// `None` also means this workspace can name no crew at all.
     pub(crate) fn creation_crew_assignment(
         &self,
         complexity: Option<TaskComplexity>,
@@ -896,7 +898,9 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
-            let candidates = self.creation_image_filtered(tags, candidates)?;
+            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+                return Ok(None);
+            };
             let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
@@ -910,7 +914,9 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
         {
             let source = route.crew_source();
-            let candidates = self.creation_image_filtered(tags, candidates)?;
+            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+                return Ok(None);
+            };
             let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
@@ -925,7 +931,9 @@ impl OrbitRuntime {
                 self.creation_complexity_pool_candidates(Some(complexity), &pools, &task_os)?
         {
             let source = format!("pool:{complexity}");
-            let candidates = self.creation_image_filtered(tags, candidates)?;
+            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+                return Ok(None);
+            };
             let candidates =
                 self.creation_weighted(candidates, Some(complexity), tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
@@ -990,26 +998,31 @@ impl OrbitRuntime {
         }
     }
 
-    /// A creation-seam pool draw's members for a `verify-mock-ui` task:
-    /// only the image-capable ones while the pool has one (§5.3), so the
-    /// crew the task is created with can use the self-check. The recorded
-    /// source stays the pool's; admission re-applies the filter and is
-    /// where an unfiltered fallback records `implementer_without_vision`
-    /// on the run. Other tasks draw unchanged.
-    fn creation_image_filtered(
+    /// A creation draw's positive-weight members without this host's limited
+    /// providers, or `None` when none remain. Then prefer image-capable members
+    /// for `verify-mock-ui` (§5.3), falling back only among available members.
+    /// Admission re-applies these filters and records an image fallback as
+    /// `implementer_without_vision` on the run; the task keeps its pool source.
+    fn creation_pool_filtered(
         &self,
         tags: &[String],
-        candidates: Vec<CrewCandidate>,
-    ) -> Result<Vec<CrewCandidate>, OrbitError> {
+        mut candidates: Vec<CrewCandidate>,
+    ) -> Result<Option<Vec<CrewCandidate>>, OrbitError> {
+        let gate = self.provider_limit_gate(chrono::Utc::now());
+        candidates
+            .retain(|candidate| candidate.weight > 0 && gate.limit_for(&candidate.crew).is_none());
+        if candidates.is_empty() {
+            return Ok(None);
+        }
         if !orbit_types::task::has_verify_mock_ui_tag(tags) {
-            return Ok(candidates);
+            return Ok(Some(candidates));
         }
         let (capable, _) = self.partition_image_reading(candidates.clone())?;
-        Ok(if capable.is_empty() {
+        Ok(Some(if capable.is_empty() {
             candidates
         } else {
             capable
-        })
+        }))
     }
 
     /// A creation-seam pool draw's members, weighed by usage pressure

@@ -48,7 +48,8 @@ pub(in crate::application) trait TaskJobPort {
 
     /// The crew a task is created or re-rated with: `explicit` verbatim,
     /// else the purpose pool its tags name, then its complexity pool, then
-    /// the default crew; `None` when the workspace names no crew. `random`
+    /// the default crew; `None` when the workspace names no crew or every
+    /// drawable member of the selected pool is provider-limited. `random`
     /// supplies the draw's tickets.
     fn creation_crew(
         &self,
