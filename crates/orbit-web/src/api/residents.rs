@@ -26,6 +26,8 @@
 //!   requested right/workspace was already held, the widening is
 //!   `unchanged` with no request; a refused narrowing then returns
 //!   `unchanged_narrowing_refused` and audits that no widening applied.
+//!   If narrowing changes nothing, the outcome is `granted` or `unchanged`
+//!   according to whether widening applied.
 //! * `POST /api/residents/<id>/control` and `/relay` — the manager channel.
 //!
 //! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
@@ -363,11 +365,12 @@ pub(super) async fn create_resident(
 /// widens and narrows, so the server runs a mixed call as two core grant
 /// operations: it widens first (raising and answering the grant request
 /// when the widening changes authority) and then narrows. The outcome
-/// names both steps truthfully: `granted_and_narrowed` or
+/// names both steps truthfully: `granted_and_narrowed`, `granted`, or
 /// `granted_narrowing_refused` when the widening applied, and
-/// `unchanged_and_narrowed` or `unchanged_narrowing_refused` when every
+/// `unchanged_and_narrowed`, `unchanged`, or `unchanged_narrowing_refused` when every
 /// requested right/workspace was already held, so no widening was applied
-/// and no grant request was raised or answered.
+/// and no grant request was raised or answered. The plain `granted` and
+/// `unchanged` outcomes mean the narrowing step made no change.
 pub(super) async fn grant_resident(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -515,11 +518,12 @@ pub(super) async fn grant_resident(
                 dashboard_session(true),
             )?;
             match narrowed {
-                Ok(_) => Ok(json!({
-                    "outcome": if widening_applied {
-                        "granted_and_narrowed"
-                    } else {
-                        "unchanged_and_narrowed"
+                Ok(narrowed) => Ok(json!({
+                    "outcome": match (widening_applied, narrowed["outcome"] == "unchanged") {
+                        (true, true) => "granted",
+                        (false, true) => "unchanged",
+                        (true, false) => "granted_and_narrowed",
+                        (false, false) => "unchanged_and_narrowed",
                     },
                     "request": request,
                     "authority": shown["authority"],
