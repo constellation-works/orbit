@@ -46,7 +46,7 @@ back with `orbit auto-task show <name>` before enabling it.
 | `--tag` | Repeatable, and worth setting: it is how the minted tasks are found later. A provenance tag is added automatically. |
 | `--required-tools` | Repeatable exact canonical tool name. `--required-tool` is an alias. Scheduled fires and manual `mint` copy the normalized list onto each task. |
 | `--complexity` | Optional assessed complexity: `low`, `medium`, `hard`, or `xhard`. It is copied to every minted task. |
-| `--status` | Status the minted task enters. Defaults to `backlog`; use `proposed` when a human should approve each instance before it becomes shippable work. |
+| `--status` | Template status stored on the definition. The serialized default is `backlog`, but at mint a `backlog` template becomes `proposed` unless the normalized minted tags include `no-diff-expected`; explicit non-`backlog` statuses are preserved. Implementation mints therefore enter `proposed` and need approval before becoming shippable work. |
 | `--crew` | Crew override for minted tasks. |
 | `--dedupe` | `skip-if-open` (default) or `always`. `skip_if_open` is also accepted. The definition file, the JSON document, and `show` all print the canonical `skip_if_open` / `always` token. |
 
@@ -506,9 +506,9 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   `skipped`/`partial` outcomes in a row escalate to a dedicated task. Its
   diff is comment-only — everything outside comments and doc comments stays
   byte-identical — and a stale comment that reveals a real defect is filed
-  as a task (at most two per run) instead of being fixed in place. Unlike
-  `doc-duties` it declares no `context_files` and mints as `proposed`, so a
-  minted instance is no backlog whole-tree holder; pre-admission
+  as a task (at most two per run) instead of being fixed in place. Like
+  `doc-duties` it mints as `proposed`; unlike `doc-duties` it declares no
+  `context_files`, so a minted instance is no backlog whole-tree holder; pre-admission
   preparation (the task pilot, or an operator by hand) selects the batch
   and persists exactly its `file:` selectors before the task is approved
   to `backlog`, and the run reads them back and edits only those files. A clean batch is a
