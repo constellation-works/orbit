@@ -1,8 +1,8 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-11-01
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 feature: routines
 doc_role: vision
@@ -65,11 +65,11 @@ and validation evidence, not by drifting in.
    next due) over the dashboard HTTP API [ORB-10138], so a stopped sweep is visible remotely
    without box ssh. True cross-host *aggregation* (one surface querying every box's store)
    remains open; state *sync* is still explicitly not the answer.
-7. **Resident orchestrators on the clock.** The
-   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design proposes a
-   `resident_due` state kind, a seeded disabled `resident-cycle-<workspace>` routine and a weekly
-   `evolution-pass-<workspace>` routine. A resident is a state routine with a deterministic
-   observation, not a daemon, so it keeps the no-resident-daemon decision. Filed as [ORB-21244] and
+7. **Resident orchestrators on the clock.** Done: the
+   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design's
+   `resident_due` state kind, seeded disabled `resident-cycle-<workspace>` routine and weekly
+   `evolution-pass-<workspace>` routine are implemented. A resident is a state routine with a deterministic
+   observation, not a daemon, so it keeps the no-resident-daemon decision. Implemented by [ORB-21244] and
    [ORB-21249].
 
 ### Graduated
@@ -143,8 +143,8 @@ External:
 
 ## Task References
 
-- [ORB-21244] — resident-orchestrator slice 3: proposes the `resident_due` kind and cycle routine
-- [ORB-21249] — resident-orchestrator slice 8: proposes the evolution-pass routine
+- [ORB-21244] implemented resident-orchestrator slice 3: the `resident_due` kind and cycle routine.
+- [ORB-21249] implemented resident-orchestrator slice 8: the evolution-pass routine.
 - [ORB-10001] authored the routines design proposal (historical citation).
 - [ORB-10021] implemented routines v1 and its OS clock integration.
 - [ORB-10138] exposed routine and clock health through the dashboard API.

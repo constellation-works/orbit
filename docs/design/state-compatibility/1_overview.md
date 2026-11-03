@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Overview
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 stage: shipped
 next: "—"
@@ -83,6 +83,7 @@ answers in advance, and the older binary reads that answer.
 | Frozen feature ledgers absorbed by store v49 | `crates/orbit-store/src/driver/sqlite/migration/feature_ledgers/` | Done — [ORB-15823] |
 | Recovery authority's own ledger | `crates/orbit-runtime/src/recovery_authority/schema.rs` | Done — [ORB-15824] |
 | Older-client-safe handoff attribution, store v57 | `crates/orbit-store/src/driver/sqlite/migration/handoff_settlement.rs` | Done — [ORB-17530] |
+| Skipped-step checkpoint fence, layout v9 | `crates/orbit-store/src/workflow/layout/registry.rs` | Done — [ORB-21604] |
 
 The one-ledger-per-database work designed in [ORB-15729] is complete through
 [ORB-15821], [ORB-15822], [ORB-15823] and [ORB-15824]. The committed scope is
@@ -104,5 +105,6 @@ record owner approval of the whole design.
 - [ORB-15823] absorbed and froze automation, review and local-pull feature ledgers.
 - [ORB-15824] moved recovery authority onto its own versioned schema ledger.
 - [ORB-17530] preserved older-client handoff compatibility with a sidecar and read-compatible v57.
+- [ORB-21604] fenced older workspace writers from dropping skipped-step resume markers with breaking layout v9.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,7 +1,7 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-11-03
 last_validated: 2026-10-13
 status: Accepted
 feature: routines
@@ -295,5 +295,6 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
 - [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
 - [ORB-12718] made all .orbit definitions per-user checkout state rather than git-shared files.
 - [ORB-14173] allowed replica-local scheduled worktree GC.
+- [ORB-19294] scoped sandboxed, operator-granted script steps in jobs while keeping routine targets catalog-only.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
