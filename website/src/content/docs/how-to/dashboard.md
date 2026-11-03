@@ -1150,11 +1150,17 @@ The **Rework by cause** panel shows where each orchestrator's rework went.
 
 The **Implementers** tab ranks each crew and model separately. It credits
 weighted landed work and first-pass accepts, and counts review rejects,
-reviewer repairs, and crew-caused rework. A review reject is counted once;
-regressions the reviewer missed count against Reviewers. Regressions that
-escaped because there was no test do not change the score; they appear as
-unscored context in the detail column. Each task counts once per crew and
-model that started an implementation run in the window.
+reviewer repairs, crew-caused rework, and escaped regressions. A review
+reject is counted once; regressions the reviewer missed count against
+Reviewers. Regressions that escaped because there was no test are scored as
+escaped regressions at weight −0.5, each at its severity weight (critical 8,
+high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review
+reject. Their expected count is size-adjusted: the fleet rate for the same
+tier and expected-size bucket (the fleet median lines changed for the task's
+tier and type, never the row's own diff). A defect a pre-landing review
+already rejected or repaired counts once, as that verdict, not again as an
+escaped regression. Each task counts once per crew and model that started an
+implementation run in the window.
 
 Cost per weighted landed task, median completed run time and tasks by tier
 appear under **Shown, not scored** in the detail column. Cost uses recorded
