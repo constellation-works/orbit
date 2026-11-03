@@ -1,20 +1,15 @@
 //! `RuntimeHost` implementation for `OrbitRuntime`.
 //!
-//! Most methods delegate to a sibling helper grouped by concern (`claims`,
-//! `validation`, `recovery`, `invocation` and the other modules declared in
-//! `mod.rs`), or adapt a type on the way through, with the trait signature
-//! unchanged. Rust allows one trait impl per type, so this file cannot be
-//! split into multiple impl blocks.
+//! Each method delegates to a sibling helper grouped by concern (`claims`,
+//! `validation`, `recovery`, `invocation`, `host_metadata` and the other
+//! modules declared in `mod.rs`), or adapts a type on the way through, with the
+//! trait signature unchanged. Rust allows one trait impl per type, so this file
+//! cannot be split into multiple impl blocks.
 //!
-//! Three bodies hold logic rather than delegating. They stay here as residual
-//! exceptions to that pattern:
-//!
-//! - `requires_claude_worker_credential` is a platform policy
-//!   (`cfg!(target_os = "macos")`).
-//! - `orbit_workspace_selector` trims the logical workspace id and maps an
-//!   empty selector to `None`.
-//! - `refresh_persistence_after_cli_provider` runs a store lookup with `?`
-//!   and then a refresh call.
+//! Residual size: this file stays above the ~800-line guideline because the
+//! single `impl RuntimeHost for OrbitRuntime` block must hold every trait
+//! method. It is a forwarding and adaptation layer only. An assembly macro
+//! would lower the line count without changing that structure, so none is used.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -50,8 +45,8 @@ use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task
 use crate::runtime::engine::paths::current_repo_root;
 
 use super::{
-    activity_tools, agent, auto_task, checkpoints, claims, crew, executors, invocation, recovery,
-    task_automation, validation,
+    activity_tools, agent, auto_task, checkpoints, claims, crew, executors, host_metadata,
+    invocation, recovery, task_automation, validation,
 };
 
 impl RuntimeHost for OrbitRuntime {
@@ -511,7 +506,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn requires_claude_worker_credential(&self) -> bool {
-        cfg!(target_os = "macos")
+        host_metadata::requires_claude_worker_credential()
     }
 
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
@@ -533,15 +528,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn orbit_workspace_selector(&self) -> Option<String> {
-        self.workspace_runtime_binding()
-            .map(|binding| binding.logical_workspace_id.trim())
-            .filter(|selector| !selector.is_empty())
-            .map(ToOwned::to_owned)
+        host_metadata::orbit_workspace_selector(self)
     }
 
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
-        self.sqlite_store()?
-            .refresh_file_connections(&self.context.persistence().audit_db)
+        host_metadata::refresh_persistence_after_cli_provider(self)
     }
 
     fn record_event(&self, event: OrbitEvent) -> Result<(), OrbitError> {
