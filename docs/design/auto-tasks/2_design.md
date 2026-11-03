@@ -745,9 +745,11 @@ records the reason and force flag the request sent. The row is `denied` when ope
 authority is missing, `failure` for a core refusal (including the 409, whose message
 it keeps), and `success` otherwise.
 
-The dashboard's `GET /api/auto-tasks` lists workspace task metadata once per
-request and groups it by definition provenance tag. It reads no task bodies on
-the indexed path and uses each group's newest instance for `last_minted_*`.
+The dashboard's `GET /api/auto-tasks` lists task metadata once per request,
+after one index freshness pass, selecting from the index only the tasks that
+carry a listed definition's provenance tag, and groups them by that tag. It
+reads no task bodies, and no envelopes of other tasks, on the indexed path, and
+uses each group's newest instance for `last_minted_*`.
 Both duplicate flags use the scheduler's shared listed-set rule: done,
 archived, rejected and someday instances do not count as open. Delivery-schedule
 automation diagnostics reuse the same open-instance result. The projection is

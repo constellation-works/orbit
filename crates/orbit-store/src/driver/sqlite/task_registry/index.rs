@@ -504,6 +504,7 @@ impl TaskRegistryStore {
     ) -> Result<Vec<String>, OrbitError> {
         let filter = TaskIndexFilter {
             tags: normalize_task_tags(filter.tags.clone()),
+            any_tags: normalize_task_tags(filter.any_tags.clone()),
             ..filter.clone()
         };
         self.indexed_task_selection(partition_id, &filter, false, None)

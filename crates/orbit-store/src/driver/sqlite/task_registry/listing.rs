@@ -259,6 +259,19 @@ fn index_filter_sql(partition_id: &str, filter: &TaskIndexFilter) -> (String, Ve
         );
         values.push(Value::Text(tag.clone()));
     }
+    if !filter.any_tags.is_empty() {
+        // An uncorrelated list through `idx_task_bundle_tags_workspace_tag`
+        // reads only the tagged rows; a correlated `EXISTS` probes every
+        // workspace row instead, which costs more than the whole selection.
+        sql.push_str(
+            " AND task_id IN (SELECT t.task_id FROM task_bundle_tags t
+                WHERE t.workspace_id = ? AND t.tag IN (",
+        );
+        push_placeholders(&mut sql, filter.any_tags.len());
+        sql.push_str("))");
+        values.push(Value::Text(partition_id.to_owned()));
+        values.extend(filter.any_tags.iter().cloned().map(Value::Text));
+    }
     if let Some(parent_id) = &filter.parent_id {
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM task_bundle_relations r

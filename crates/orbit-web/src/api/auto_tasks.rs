@@ -559,8 +559,10 @@ fn list_json(
 ) -> Result<Value, orbit_core::OrbitError> {
     let now = Utc::now();
     let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
-    // One freshness pass for the request, with no task-body hydration. The
-    // metadata listing is newest first, exactly as the per-tag listing was.
+    // One freshness pass for the request, with no task-body hydration, that
+    // reads only the tasks carrying a listed definition's tag: the rest of
+    // the workspace never leaves the index [ORB-21824]. The metadata listing
+    // is newest first, exactly as the per-tag listing was.
     let tags = listing
         .rows
         .iter()
@@ -569,7 +571,7 @@ fn list_json(
     let tasks = if tags.is_empty() {
         Ok(Vec::new())
     } else {
-        runtime.list_task_metadata()
+        runtime.list_task_metadata_with_any_tag(&tags.keys().cloned().collect())
     };
     let mut instances = tags;
     for task in tasks.as_ref().map_or(&[][..], Vec::as_slice) {

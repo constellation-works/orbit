@@ -8,7 +8,9 @@ use orbit_types::task::{
 
 use orbit_store::RegisteredTaskResolution;
 
-use super::listing::{list_task_metadata_in, metadata_task};
+use super::listing::{
+    TaskListFilter, list_task_metadata_in, list_task_metadata_matching, metadata_task,
+};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
@@ -276,6 +278,39 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         list_task_metadata_in(self.stores().tasks())
+    }
+
+    /// [`Self::list_task_metadata`] narrowed to the tasks carrying at least
+    /// one of `tags` (matched case-insensitively, as tag filters are), in the
+    /// same newest-first order. The store selects them from its index after
+    /// the same single freshness pass, so the cost follows the tagged tasks,
+    /// not the workspace. An empty `tags` selects nothing.
+    pub fn list_task_metadata_with_any_tag(
+        &self,
+        tags: &BTreeSet<String>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        if tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        let filter = TaskListFilter {
+            any_tags: tags.iter().cloned().collect(),
+            ..TaskListFilter::default()
+        };
+        if self.worker_invocation().is_some() {
+            let mut tasks = super::metadata::collect_owner_metadata(self, None)?;
+            let normalized = orbit_types::task::normalize_task_tags(filter.any_tags);
+            tasks.retain(|task| {
+                task.tags
+                    .iter()
+                    .any(|tag| normalized.contains(&tag.trim().to_lowercase()))
+            });
+            return Ok(tasks);
+        }
+
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        list_task_metadata_matching(self.stores().tasks(), &filter)
     }
 
     /// [`Self::list_task_metadata`] for the listed `ids` only: one keyed read
