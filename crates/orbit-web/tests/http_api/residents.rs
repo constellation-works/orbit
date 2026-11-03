@@ -141,6 +141,41 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
 }
 
 #[test]
+fn dashboard_mixed_grant_reports_unchanged_narrowing() {
+    isolated(
+        "residents::dashboard_mixed_grant_reports_unchanged_narrowing",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            let id = create(&server, "Report unchanged narrowing.");
+            let path = format!("/api/residents/{id}/grant{WS}");
+            let body = json!({"add": ["dispatch"], "workspaces": ["fixture"],
+                          "remove": ["promote"], "quote": "Dispatch in fixture."});
+
+            let applied = json_ok(server.send("POST", &path, body.clone()));
+            assert_eq!(applied["outcome"], "granted", "{applied}");
+            let before = json_ok(server.get(&format!("/api/residents/{id}{WS}")));
+            assert_eq!(before["authority"]["revision"], 1, "{before}");
+            assert_eq!(before["authority"]["granted"].as_array().unwrap().len(), 1);
+            assert!(
+                before["authority"]["narrowed"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let unchanged = json_ok(server.send("POST", &path, body));
+            assert_eq!(unchanged["outcome"], "unchanged", "{unchanged}");
+            assert!(unchanged["request"].is_null(), "{unchanged}");
+            let after = json_ok(server.get(&format!("/api/residents/{id}{WS}")));
+            assert_eq!(after["authority"], before["authority"], "{after}");
+            assert_eq!(after["effective_authority"], before["effective_authority"]);
+        },
+    );
+}
+
+#[test]
 fn dashboard_grant_with_add_and_deadline_records_two_changes() {
     isolated(
         "residents::dashboard_grant_with_add_and_deadline_records_two_changes",
