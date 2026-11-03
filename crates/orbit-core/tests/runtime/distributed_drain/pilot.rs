@@ -193,6 +193,17 @@ fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
                 "evidence": "Only the operator can repair the owner-side definition.",
             }),
         );
+        pair.wire
+            .owner
+            .update_task_as_human(
+                held_task,
+                orbit_core::application::task::TaskUpdateParams {
+                    tags: Some(vec!["no-pilot".into()]),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
         let first = pair.pass(&drain);
         assert!(first["error"].is_null(), "{first}");
         assert!(!pair.owner_has_claim_for_task(held_task));
