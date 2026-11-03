@@ -5,9 +5,9 @@ mod projection;
 
 use orbit_agent::{
     Agent, AgentConfig, AgentRequest, AgentResponseStatus, ParsedStdout,
-    assign_recorded_tool_calls, normalize_cli_stdout, project_cli_response,
-    provider_long_prompt_requests, response_envelope_json_schema,
-    response_envelope_json_schema_arg,
+    assign_recorded_tool_calls, latest_assistant_message, normalize_cli_stdout,
+    project_cli_response, provider_long_prompt_requests, recorded_tool_calls,
+    response_envelope_json_schema, response_envelope_json_schema_arg,
 };
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
@@ -1176,6 +1176,55 @@ fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
             .all(|call| call.result_payload.is_none())
     );
     assert!(!format!("{:?}", trace.tool_calls).contains(patch));
+}
+
+// A malformed recognized Grok stream fails closed on every boundary:
+// projection is empty, normalization never leaves the raw capture to be
+// rescanned (only the `end` spend fields survive, with no answer), the
+// newest-assistant-message reader sees nothing, and tool telemetry is
+// still recorded from the parsed events without payloads.
+#[test]
+fn grok_malformed_stream_fails_closed_across_projection_and_telemetry() {
+    let envelope =
+        r#"{"schemaVersion":1,"status":"success","result":{"claimed":"tool-output"},"error":null}"#;
+    let raw = [
+        json!({"type": "tool_call", "toolCallId": "call-1", "toolName": "read", "rawInput": {"secret": "GROK_PATCH_SECRET"}}).to_string(),
+        json!({"type": "tool_call_update", "toolCallId": "call-1", "rawOutput": envelope}).to_string(),
+        json!({"type": "thought", "data": envelope}).to_string(),
+        json!({"type": "end", "stopReason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 2}, "total_cost_usd": 0.5, "num_turns": 2}).to_string(),
+        "warning".to_string(),
+    ]
+    .join("\n");
+
+    assert!(project_cli_response("grok", raw.as_bytes()).is_empty());
+    assert_eq!(latest_assistant_message("grok", raw.as_bytes()), None);
+
+    let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+    let normalized_text = String::from_utf8(normalized.into_owned()).unwrap();
+    assert_ne!(
+        normalized_text, raw,
+        "raw malformed capture must not survive normalization"
+    );
+    assert!(
+        !normalized_text.contains("tool-output"),
+        "{normalized_text}"
+    );
+    assert!(!normalized_text.contains("warning"), "{normalized_text}");
+    let wrapper: Value = serde_json::from_str(&normalized_text).unwrap();
+    assert_eq!(wrapper["text"], "");
+    assert_eq!(wrapper["usage"]["input_tokens"], 10);
+    assert_eq!(wrapper["usage"]["output_tokens"], 2);
+
+    let calls = recorded_tool_calls("grok", raw.as_bytes())
+        .expect("malformed stream is still recognized for telemetry");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].tool_name, "read");
+    assert_eq!(
+        calls[0].result_bytes,
+        serde_json::to_vec(&json!(envelope)).unwrap().len() as u64
+    );
+    assert!(calls.iter().all(|call| call.result_payload.is_none()));
+    assert!(!format!("{:?}", calls).contains("GROK_PATCH_SECRET"));
 }
 
 /// The serialized provider schema stays inside the Claude structured-output
