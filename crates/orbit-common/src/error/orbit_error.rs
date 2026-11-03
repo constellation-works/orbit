@@ -16,6 +16,9 @@ use super::{
 pub enum OrbitError {
     #[error("policy denied: {0}")]
     PolicyDenied(String),
+    /// A plugin callback selected a checkout its backend sandbox does not cover.
+    #[error("{0}")]
+    CallbackWorkspaceOutsideSandbox(String),
     #[error(
         "{message}",
         message = not_found_message(*kind, id, guidance.as_deref())
@@ -362,7 +365,7 @@ pub enum OrbitError {
     /// read-only or denies access. Classified from the native error (the
     /// `io::ErrorKind` or errno, or SQLite's result code) where it is
     /// translated, so passive callers that fail open never read message text.
-    /// Displays and reports exactly as the `layer` variant it stands in for.
+    /// Displays as the `layer` variant, with the `storage_access_denied` wire code.
     #[error("{layer}: {message}")]
     StorageAccessDenied {
         layer: StorageLayer,

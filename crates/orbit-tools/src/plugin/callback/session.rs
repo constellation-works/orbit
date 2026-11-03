@@ -77,6 +77,10 @@ pub struct PluginCallbackSession {
 /// The plugin a resolved callback belongs to, and what that session may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCallbackIdentity {
+    /// Workspace the host used to render the backend sandbox, when recorded.
+    pub workspace_root: Option<PathBuf>,
+    /// The host actually spawned this backend without filesystem confinement.
+    pub unconfined: bool,
     /// Application authority minted by the host for this child, if any.
     pub application: Option<Box<orbit_types::tool::ApplicationInvocation>>,
     /// This session's plugin identity, exactly like the identity behind a
@@ -103,6 +107,10 @@ impl PluginCallbackIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SessionRecord {
     #[serde(default)]
+    pub(super) workspace_root: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) unconfined: bool,
+    #[serde(default)]
     pub(super) application: Option<Box<orbit_types::tool::ApplicationInvocation>>,
     pub(super) schema_version: u32,
     pub(super) plugin: String,
@@ -121,6 +129,24 @@ pub(super) struct SessionRecord {
 }
 
 impl PluginCallbackSession {
+    /// Record the workspace used to render this backend's sandbox before spawn.
+    /// Older records omit this binding and cannot preflight explicit selectors.
+    pub fn bind_workspace_root(
+        &mut self,
+        root: Option<&Path>,
+        unconfined: bool,
+    ) -> Result<(), OrbitError> {
+        self.record.unconfined = unconfined;
+        self.record.workspace_root =
+            root.map(|root| std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()));
+        if session_bytes(&self.record)?.len() > MAX_SESSION_BYTES {
+            return Err(OrbitError::InvalidInput(
+                "callback workspace binding exceeds the session byte limit".into(),
+            ));
+        }
+        rewrite_session_in_place(&self.path, &self.record)
+    }
+
     /// Bind completion authority before spawning a child. The app credential
     /// is never delivered: this reference works only inside this host record.
     pub fn bind_application(
@@ -184,6 +210,8 @@ impl PluginCallbackSession {
             let token = random_token()?;
             let path = dir.join(&token);
             let record = SessionRecord {
+                workspace_root: None,
+                unconfined: false,
                 application: None,
                 schema_version: SESSION_SCHEMA_VERSION,
                 plugin: provenance.name.clone(),

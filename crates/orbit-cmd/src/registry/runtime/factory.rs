@@ -716,11 +716,13 @@ impl RegisteredRuntimeFactory {
     pub fn bind_cli_tool_workspace(
         runtime: &OrbitRuntime,
         input: &mut Value,
+        tool: &str,
     ) -> Result<Option<OrbitRuntime>, OrbitError> {
         let Some(selector) = cli_workspace_selector(input)? else {
             return Ok(None);
         };
         let global_root = runtime.global_root();
+        super::refuse_cli_callback_workspace(&global_root, tool, &selector)?;
         let identity = inspect_machine_identity(&global_root)?;
         let registry = load_registry_for_selector_resolution(
             &workspace_registry::registry_path_for(&global_root),

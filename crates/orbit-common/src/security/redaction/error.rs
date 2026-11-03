@@ -76,6 +76,9 @@ pub fn redact_all_and_home_error(error: OrbitError) -> OrbitError {
 fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitError {
     match error {
         OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact(&m)),
+        OrbitError::CallbackWorkspaceOutsideSandbox(m) => {
+            OrbitError::CallbackWorkspaceOutsideSandbox(redact(&m))
+        }
         OrbitError::NotFound { kind, id, guidance } => OrbitError::NotFound {
             kind,
             id: redact(&id),

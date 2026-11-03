@@ -766,9 +766,26 @@ a read a refused command offered requests the serving tool instead:
 Cross-host callbacks through `orbit tool run` are unsupported. A `network` grant and `ssh` in
 `requires.programs` do not grant access to the host’s SSH credentials.
 
-**Workspace addressing.** A callback addresses a workspace with the same `workspace` selector as any `orbit tool run`, and the session does not narrow it. The session carries a tool ceiling, not a workspace ceiling, so a callback may name any workspace the local registry lists (by name, `ws_*` ID or checkout path), not only its plugin's own. Narrowing callbacks to the plugin's own workspace is not implemented. A `hm_*/ws_*` selector is decided by the host it names:
+**Workspace addressing.** A CLI callback uses the same `workspace` selectors as any
+`orbit tool run` (name, `ws_*` ID or checkout path), but a confined backend only covers the
+workspace the host bound its backend to. The host records that root in the callback
+credential for both exec and MCP backends, along with whether the effective profile
+is unconfined. Backends the host spawned with the `unsandboxed` grant retain
+cross-workspace local calls. A selector for another local checkout is
+refused before runtime bootstrap or any selected store open, with
+`callback_workspace_outside_sandbox`. The error names the selector and explains the
+sandbox limit; a `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and
+code. Changing cwd does not change the host-recorded binding. Sessions minted before
+that binding was recorded must restart their backend before using an explicit
+workspace selector: preflight cannot prove which checkout their sandbox covers.
+This preflight refusal precedes
+the persistent CLI audit guard; same-workspace callbacks still pass through the
+recorded allowlist, session ceiling and normal audit. The host-routed decision and
+application callbacks below retain their separate route.
 
-- This machine's own ID runs locally.
+A `hm_*/ws_*` selector is decided by the host it names:
+
+- This machine's own ID runs locally, subject to the same checkout preflight.
 - For `orbit tool run`, a host registered with `orbit host add` is refused before any SSH attempt with `policy_denied`. The error names the selector and explains that cross-host callbacks are not supported from confined plugins. A `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and refusal; the same warning reaches stderr. This is a preflight refusal, before the runtime’s persistent CLI audit guard opens. Local callbacks still use the recorded allowlist and session ceiling.
 - A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
 

@@ -22,9 +22,11 @@ use orbit_registry::{MachineIdentityState, inspect_machine_identity, workspace_r
 
 use crate::workspace_catalog::attach as attach_workspace_catalog;
 
+mod callback_workspace;
 mod factory;
 mod selection;
 
+pub use callback_workspace::refuse_cli_callback_workspace;
 pub use factory::{
     ConfigLayerStamp, RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceBinding,
     ResolvedWorkspaceSelection, workspace_runtime_binding,
