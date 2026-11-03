@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "Roles, mandate and authority, resident lifecycle and fires, the bounded cycle, the manager channel, notices, escalation, widening metrics, migration and pilot, and the evolution loop"
 tags: [resident-orchestrator]
-paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request.rs"]
+paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request/**"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance, granted-tools]
 related_artifacts: [ORB-21229, ORB-21263]
 ---
@@ -717,7 +717,7 @@ Proposals that the slices confirm:
 | Concern | Proposed home |
 |---|---|
 | Mandate, authority, checkpoint and evolution shapes | `crates/orbit-types/src/workflow/resident/` and `crates/orbit-types/src/record/evolution.rs` |
-| `resident_authority` gate | `DecisionGate` in `crates/orbit-types/src/task/decision/request.rs` |
+| `resident_authority` gate | `DecisionGate` in `crates/orbit-types/src/task/decision/request/gates.rs` |
 | `resident_due` kind and observation | `StateTriggerKind` in `crates/orbit-types/src/workflow/automation/members.rs`; observation beside the existing rules in `crates/orbit-core/src/application/automation/members/member_host/observation.rs` |
 | Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/application/resident/` |
 | Cycle job and activities | a new `resident_cycle_pipeline` job under `crates/orbit-core/assets/jobs/` and `resident_*` activities under `crates/orbit-core/assets/activities/` |
