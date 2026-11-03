@@ -17,7 +17,7 @@ Friction curation assigned one friction to two live tasks; the duplicate cannot 
 
 ## Resolution
 
-Wait for one to settle, then reject the duplicate; do not reject an in-progress task.
+Inspect the tasks and their evidence before treating either as a duplicate. In this occurrence the operator identified two distinct defects, kept both tasks, and retargeted one friction relation; the curation was then retried.
 
 ## Fix task
 
