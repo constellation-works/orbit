@@ -113,7 +113,7 @@ toolsets it enables. `orbit tool list` shows each tool's toolset.
 | Toolset | Tools |
 |---|---|
 | `core` (always on) | Workspace discovery: `orbit.workspace.list` |
-| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `block_triage` and `orbit.task.artifact.get` |
+| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `block_triage`, `orbit.task.artifact.get` and `orbit.attention` |
 | `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put` and `orbit.friction.*` |
 | `task-repair` | The delivery repair verbs: `orbit.task.requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
 | `decisions` | `orbit.decision.list`, `show` and `raise` |
