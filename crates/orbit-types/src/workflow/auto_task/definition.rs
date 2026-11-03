@@ -388,8 +388,9 @@ pub struct AutoTaskTemplate {
     /// Crew override, when the chore should route to a specific crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Status the created task enters (defaults to `backlog`). Auto-tasks are
-    /// operator-defined chores, so they skip the proposed→approved gate.
+    /// Requested initial status (serialized default: `backlog`). At mint
+    /// time, `backlog` becomes `proposed` unless the normalized task tags
+    /// include `no-diff-expected`; explicit non-backlog statuses are preserved.
     #[serde(default = "default_status")]
     pub status: TaskStatus,
 }

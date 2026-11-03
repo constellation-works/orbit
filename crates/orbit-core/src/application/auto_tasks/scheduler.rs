@@ -435,8 +435,19 @@ pub(crate) fn template_params(
     definition: &AutoTaskDefinition,
 ) -> TaskAddParams {
     let template = &definition.template;
-    let mut tags = template.tags.clone();
+    let mut tags = orbit_types::task::normalize_task_tags(template.tags.clone());
     tags.push(auto_task_tag(&definition.name));
+    // Workspace forks keep their old body across upgrades. Apply the pilot
+    // gate here as well as in bundled YAML, using the tags task creation
+    // will persist. No-diff chores retain their existing admission path;
+    // explicit non-backlog statuses remain operator overrides.
+    let status = if template.status == TaskStatus::Backlog
+        && !tags.iter().any(|tag| tag == "no-diff-expected")
+    {
+        TaskStatus::Proposed
+    } else {
+        template.status
+    };
 
     TaskAddParams {
         title: template.title.clone(),
@@ -453,7 +464,7 @@ pub(crate) fn template_params(
             .complexity
             .unwrap_or(orbit_types::task::TaskComplexity::Unassessed),
         task_type: Some(template.task_type),
-        status: Some(template.status),
+        status: Some(status),
         // A template without a crew mints an unassigned task, which draws
         // from the complexity pool for its complexity; so does one still
         // naming the retired `system` crew [ORB-15663].

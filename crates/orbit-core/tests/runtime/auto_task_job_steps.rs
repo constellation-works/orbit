@@ -650,6 +650,22 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         record.minted = true;
         record.status = AutoTaskStepStatus::Queued;
         RuntimeHost::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
+        // Implementation mints now await approval. Keep the continuation
+        // admission checks below focused on an approved child.
+        assert_eq!(
+            runtime.get_task(&task_id).unwrap().status,
+            TaskStatus::Proposed
+        );
+        runtime
+            .update_task_as_human(
+                &task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                },
+                "fixture-operator".into(),
+            )
+            .expect("approve the minted child before resume admission");
         let history = runtime.get_task_history(&task_id).unwrap();
         let original = runtime
             .read_run_state(&source.run_id)
