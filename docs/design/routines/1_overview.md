@@ -1,8 +1,8 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-10-19
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Implemented
 stage: shipped
 next: "—"
@@ -42,7 +42,7 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
 `dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
-`resident_cycle`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
+`resident_cycle`, `evolution_pass`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
 `task_publication` and `ux-rules`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). All other defaults are `enabled: false`;
@@ -67,7 +67,7 @@ See [State routines and task-pilot configuration](./2_design.md#11-state-routine
 for the loadable YAML, eligibility/freshness controls and preview commands.
 `finding_verification` uses `finding_unverified`, `pilot_warning_triage` uses
 `pilot_warnings_held`, and `resident_cycle` uses `resident_due`
-([resident orchestrator](../resident-orchestrator/2_design.md#51-slice-3-as-implemented)); the retired `block_escalated` and failed-run triage's
+([resident orchestrator](../resident-orchestrator/2_design.md#51-slice-3-as-implemented)), added by [ORB-21244]; [ORB-21249] added the disabled weekly `evolution_pass` cron routine (Monday 05:17 host-local time); the retired `block_escalated` and failed-run triage's
 `execution_failed` kinds are retained for compatibility, and a routine that uses
 `block_escalated` loads inert (final recovery decides blocked tasks).
 Delivery routine configuration and evidence requirements are in
@@ -149,6 +149,7 @@ fragmentation this feature exists to end.
 | Per-user definitions, seeded through init/sync | `crates/orbit-core/src/application/routines/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
 | Replica-local cron GC | `crates/orbit-core/src/application/routines/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
 | Hourly performance refresh and weekly publication defaults | `crates/orbit-core/assets/routines/crew_performance_refresh.yaml`, `crates/orbit-core/assets/routines/task_publication.yaml` | Done — [ORB-17816], [ORB-18378] |
+| Resident cycle and weekly evolution-pass defaults | `crates/orbit-core/assets/routines/resident_cycle.yaml`, `crates/orbit-core/assets/routines/evolution_pass.yaml` | Done — [ORB-21244], [ORB-21249] |
 
 ---
 
@@ -174,5 +175,7 @@ fragmentation this feature exists to end.
 - [ORB-16354] enabled replica-local store GC.
 - [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
+- [ORB-21244] added the `resident_due` state trigger and the seeded `resident_cycle` routine.
+- [ORB-21249] added the seeded disabled weekly `evolution_pass` routine and manager digest.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
