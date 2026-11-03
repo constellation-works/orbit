@@ -89,7 +89,7 @@ every new consentable tool.
 ## Operator-floored operations stay off application authority
 
 **Recorded:** 2026-11-01 · [ORB-20852]
-**Code anchors:** `crates/orbit-common/src/governance/authorization/catalog.rs::APPLICATION_BUILTIN_OPERATIONS` (to become the ceiling table), `crates/orbit-runtime/src/tool_exec.rs::authorize_registered_tool`
+**Code anchors:** `crates/orbit-common/src/governance/authorization/catalog/application.rs::APPLICATION_OPERATION_CEILINGS` (recorded as `catalog.rs::APPLICATION_BUILTIN_OPERATIONS`, to become the ceiling table), `crates/orbit-runtime/src/tool_exec.rs::authorize_registered_tool`
 
 ### Context
 

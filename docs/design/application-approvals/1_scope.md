@@ -49,7 +49,7 @@ friction F2026-11-006 holds the evidence. Three facts about the current code cau
    operator, and that consent would itself be the approval.
 2. **Callbacks are limited to two exact writes.** Only `orbit.task.update` and
    `orbit.decision.answer` may be consented
-   (`APPLICATION_BUILTIN_OPERATIONS`, `crates/orbit-common/src/governance/authorization/catalog/application.rs`).
+   (`APPLICATION_OPERATION_CEILINGS` in `crates/orbit-common/src/governance/authorization/catalog/application.rs`, formerly `APPLICATION_BUILTIN_OPERATIONS`).
    `orbit.task.update` admits only `id`, `status`, `comment` and `workspace`, with
    `status` limited to `backlog`, `done`, `rejected` or `archived`
    (`application_authority.rs:270-296`). `office.proposal-accept` reads the task and its
@@ -157,7 +157,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
   records why.
 - **No unattended-execution controls.** Routine toggles, trigger edits and unconditional
   mints stay on the operator surfaces: the dashboard (`routine.toggle`, `auto_task.mint`
-  rows in `catalog.rs`) and the CLI.
+  rows in `catalog/types.rs`, listed in `catalog/operations.rs`) and the CLI.
 - **No application MCP sessions or Windows support.** Both still fail closed.
 - **No Office-specific code in Orbit core.** Constraints name tags, statuses, artifact
   paths and JSON pointers. The office profile is data the operator consents to.
