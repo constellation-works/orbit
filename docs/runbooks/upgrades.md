@@ -841,6 +841,15 @@ signed release)`.
 
 ## Understand the version ledgers
 
+Workspace layout version 9 fences older clients because they cannot preserve
+skipped-step checkpoint markers. Older writers drop the marker, and older
+readers restore a skipped step's null as an output on resume, changing
+downstream template behavior. The layout fence protects the workspace; the
+marker field itself is not necessarily rejected by older binaries. Before any
+host opens or migrates a shared workspace to version 9, update every host that
+can access it and keep older clients stopped. Follow the coordinated rollout
+in [Workspaces on multiple hosts](../../crates/orbit-core/assets/skills/orbit-setup/references/multi-host.md#upgrading-a-workspace-together).
+
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 
 At the implementation level, the store-schema ledger applies inside

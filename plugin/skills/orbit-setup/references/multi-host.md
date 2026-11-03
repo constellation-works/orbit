@@ -50,10 +50,13 @@ Git. Copy any local edits across deliberately.
 
 ## Upgrading a workspace together
 
-In version 0.43.0, layout version 8 stores script output files and parallel
-script-branch checkpoints as durable run artifacts. Once a workspace has been
-upgraded to version 8, older Orbit binaries refuse to open it. Before any host
-opens or migrates that workspace to version 8, update the Orbit binary on every
+Layout version 9 fences older Orbit clients that cannot preserve skipped-step
+checkpoint markers. Older writers drop the marker, and older readers restore a
+skipped step's null as an output on resume, changing downstream template
+behavior. The layout fence protects the workspace; the marker field itself is
+not necessarily rejected by older binaries. Layout version 8 also protects
+script output files and parallel script-branch checkpoints. Before any host
+opens or migrates a workspace to version 9, update the Orbit binary on every
 host that can access it, including replicas. Plan one coordinated rollout.
 
 `orbit update` run inside an initialized workspace immediately runs
@@ -79,7 +82,7 @@ from outside the workspace, then migrate once:
    reports nothing pending.
 3. After every host is on a compatible binary, use `orbit migrate` to inspect
    pending changes and apply them with `orbit migrate --confirm` when needed.
-   Do not let an older host open a workspace after it reaches layout version 8.
+   Do not let an older host open a workspace after it reaches layout version 9.
 4. Run `orbit doctor` on each host and `orbit migrate` to confirm the workspace
    opens cleanly and no migration remains pending. Reconnect clients only after
    all hosts pass these checks.
