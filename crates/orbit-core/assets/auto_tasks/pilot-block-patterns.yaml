@@ -286,7 +286,7 @@ template:
   - orbit.task.update
   priority: medium
   complexity: medium
-  status: backlog
+  status: proposed
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-10-31T00:00:00Z

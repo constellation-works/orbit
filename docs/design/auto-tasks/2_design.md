@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-10-29
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -40,10 +40,17 @@ provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).
+At mint time, `backlog` becomes `proposed` unless the normalized minted tags
+include `no-diff-expected`; explicit non-backlog statuses are preserved.
+This applies to bundled and workspace-forked definitions without re-seeding.
+No-diff tasks retain their configured or default status and pilot path.
+The creation history records the effective initial status under `system`,
+and the task's `auto-task:<name>` tag identifies its source definition.
+See [the initial-status decision](4_decisions.md#implementation-auto-tasks-enter-proposed-at-mint-time).
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
-`comment-hygiene` (§4e) is the deliberate exception: its batch is known only
+`comment-hygiene` (§4e) has a selector-free template: its batch is known only
 after selection, so it mints selector-free as `proposed` and its footprint
 is prepared before admission — the task pilot or an operator persists the
 selected selectors and the task is approved to `backlog` — rather than

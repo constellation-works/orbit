@@ -1,13 +1,13 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
 type: design
-summary: Decision log for the auto-task primitive, including its move from a routine-fired job to a direct clock-tick evaluator.
+summary: Decision log for auto-task mint status, workspace-owned definitions, and direct clock-tick evaluation.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
@@ -19,6 +19,40 @@ related_artifacts: [ORB-12237, ORB-12698, ORB-12718]
 This document preserves the feature's non-obvious decisions and their reasoning.
 
 ---
+
+## Implementation auto-tasks enter proposed at mint time
+
+**Recorded:** 2026-11-03 · [ORB-21785] · **Status:** Accepted
+
+### Context
+
+Implementation chores minted straight into `backlog` bypassed the automatic
+task pilot's duplicate, conflict and footprint assessment. Changing bundled
+YAML alone would leave existing workspace-forked bodies minting into backlog.
+
+### Decision
+
+The shared template-to-task mapping changes `backlog` to `proposed` when the
+minted tags, after normal task-tag normalization, lack `no-diff-expected`.
+This applies to manual, scheduled and job-step mints, including persisted
+workspace forks, without rewriting the owner's definitions. Explicit
+non-backlog statuses remain deliberate overrides. Bundled implementation
+templates declare `proposed` to match their effective mint status.
+
+The template's serialized default remains `backlog`: a template tagged
+`no-diff-expected`, including `host-health` which omits `status`, keeps its
+configured or default status and existing no-diff pilot path. The creation
+history records the effective status under `system`; the task's
+`auto-task:<name>` tag identifies its source definition.
+
+### Consequences
+
+- New implementation mints receive the normal proposed-task assessment; a
+  drain with `--approve-proposed` can approve them through its existing path.
+- Already-minted tasks are unchanged. Existing workspace forks need no
+  re-seeding, and proposed instances still participate in `skip_if_open`.
+- Explicit non-backlog overrides and no-diff tasks retain their behavior;
+  this rule does not change task creation outside auto-task minting.
 
 ## Broker managed auto-task writes to the host definition root
 

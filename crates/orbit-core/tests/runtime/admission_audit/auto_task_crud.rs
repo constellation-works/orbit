@@ -51,6 +51,143 @@ fn task_count(runtime: &OrbitRuntime) -> usize {
 }
 
 #[test]
+fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "implementation_mints_enter_proposed_including_legacy_workspace_forks",
+    ) {
+        return;
+    }
+
+    use orbit_core::{AutoTaskDefinition, AutoTaskTemplatePatch, AutoTaskUpdateParams};
+    use orbit_types::task::TaskStatus;
+
+    let runtime = runtime();
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    fs::create_dir_all(&definitions).expect("definition directory");
+    // Give the bundled doc-duties selectors real fixture targets.
+    let repo = &runtime.paths().repo_root;
+    fs::create_dir_all(repo.join("docs")).expect("docs fixture");
+    for path in ["README.md", "CONTRIBUTING.md"] {
+        fs::write(repo.join(path), "fixture").expect("context fixture");
+    }
+
+    for source in [
+        include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
+        include_str!("../../../assets/auto_tasks/pilot-block-patterns.yaml"),
+        include_str!("../../../assets/auto_tasks/host-health.yaml"),
+    ] {
+        let definition: AutoTaskDefinition = serde_yaml::from_str(source).expect("bundled body");
+        let no_diff = definition
+            .template
+            .tags
+            .iter()
+            .any(|tag| tag == "no-diff-expected");
+        fs::write(
+            definitions.join(format!("{}.yaml", definition.name)),
+            source,
+        )
+        .expect("materialize bundled body");
+        let expected = if no_diff {
+            definition.template.status
+        } else {
+            TaskStatus::Proposed
+        };
+        let task = runtime
+            .auto_task_mint(&definition.name)
+            .expect("mint shipped definition");
+        assert_eq!(
+            task.status, expected,
+            "minted status for {}",
+            definition.name
+        );
+        let history = runtime.get_task_history(&task.id).expect("mint history");
+        let created = history
+            .iter()
+            .find(|entry| entry.event == "created")
+            .expect("creation history");
+        assert_eq!(created.by, "system");
+        assert_eq!(created.to_status, Some(expected));
+        assert!(task.tags.contains(&auto_task_tag(&definition.name)));
+        assert_eq!(
+            task.tags.iter().any(|tag| tag == "no-diff-expected"),
+            no_diff
+        );
+
+        // A persisted workspace fork from an older binary keeps backlog in
+        // its body. Minting must still send implementation work to the pilot.
+        runtime
+            .auto_task_update(
+                &definition.name,
+                AutoTaskUpdateParams {
+                    template: Some(AutoTaskTemplatePatch {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .expect("fork with legacy backlog status");
+        assert_eq!(
+            runtime
+                .auto_task_show(&definition.name)
+                .expect("show fork")
+                .expect("fork exists")
+                .template
+                .status,
+            TaskStatus::Backlog
+        );
+        let forked = runtime
+            .auto_task_mint(&definition.name)
+            .expect("mint workspace fork");
+        assert_eq!(
+            forked.status,
+            if no_diff {
+                TaskStatus::Backlog
+            } else {
+                TaskStatus::Proposed
+            }
+        );
+        assert_eq!(
+            runtime.get_task(&forked.id).expect("persisted mint").status,
+            forked.status
+        );
+        assert!(
+            runtime
+                .open_auto_task_instance(&definition)
+                .expect("open mint lookup")
+                .is_some()
+        );
+    }
+
+    // Decide from the normalized tags the minted task actually stores, and
+    // preserve deliberate non-backlog statuses for either kind of chore.
+    for (name, tags, status) in [
+        (
+            "normalized-no-diff",
+            vec![" No-Diff-Expected ".into()],
+            TaskStatus::Backlog,
+        ),
+        ("paused-implementation", vec![], TaskStatus::Someday),
+        (
+            "proposed-no-diff",
+            vec!["no-diff-expected".into()],
+            TaskStatus::Proposed,
+        ),
+    ] {
+        let mut params = interval_params(name, 60);
+        params.template.tags = tags;
+        params.template.status = status;
+        runtime.auto_task_add(params).expect("custom definition");
+        let task = runtime.auto_task_mint(name).expect("custom mint");
+        assert_eq!(task.status, status, "status override for {name}");
+        if name == "normalized-no-diff" {
+            assert!(task.tags.iter().any(|tag| tag == "no-diff-expected"));
+        }
+    }
+}
+
+#[test]
 fn show_and_mint_reject_absolute_and_traversal_lookups() {
     if !crate::admission_audit::isolate(
         module_path!(),
