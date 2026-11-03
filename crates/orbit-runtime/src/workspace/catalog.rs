@@ -1,10 +1,9 @@
 //! Registry-neutral seam for reads that span more than one workspace.
 //!
-//! Core owns no workspace catalog: `orbit-registry` sits above it in the crate
-//! graph. A federated read therefore needs a higher composition layer to answer
-//! two questions — *which checkouts does this scope cover* and *open a runtime
-//! for one of them* — while Core keeps ownership of fan-out, fusion,
-//! attribution, and degradation notes [ORB-11027].
+//! The runtime crate stays registry-neutral: its catalog seam lets the
+//! composition layer (`orbit-cmd`) resolve which checkouts a federated scope
+//! covers and open a runtime for each one. Core keeps ownership of fan-out,
+//! fusion, attribution, and degradation notes [ORB-11027].
 //!
 //! The seam mirrors [`RuntimeKernel::with_coordination_write_owner`]: a
 //! standalone runtime constructed without a catalog still works, and simply
