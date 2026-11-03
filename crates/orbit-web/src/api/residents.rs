@@ -16,7 +16,11 @@
 //!   session is never the native-terminal operator: a widening raises the
 //!   `resident_authority` request with the operator's words and the operator
 //!   answers it `grant` in the same action, so the change is recorded as
-//!   `via: decision:<id>` like any human answer.
+//!   `via: decision:<id>` like any human answer. A mixed widen+narrow call
+//!   applies the widening first; when the narrowing is then refused, the
+//!   response is `granted_narrowing_refused` with `narrowing_error` and the
+//!   widened authority, and the audit row records that partial outcome as a
+//!   failure, so neither claims the widening was refused.
 //! * `POST /api/residents/<id>/control` and `/relay` — the manager channel.
 //!
 //! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
@@ -274,7 +278,14 @@ async fn resident_write(
     };
     let writer = Arc::clone(&runtime);
     let result = blocking(operation, move || write(writer)).await;
-    let failure = result.as_ref().err().map(|_| "refused");
+    let failure: Option<String> = match &result {
+        Err(_) => Some("refused".to_string()),
+        Ok(value) if value["outcome"] == "granted_narrowing_refused" => Some(format!(
+            "Widening applied; narrowing refused: {}",
+            value["narrowing_error"].as_str().unwrap_or_default()
+        )),
+        Ok(_) => None,
+    };
     record_operation_audit(
         &runtime,
         &workspace,
@@ -284,7 +295,7 @@ async fn resident_write(
         &arguments,
         Some(&caller),
         None,
-        failure,
+        failure.as_deref(),
         started,
     )
     .await;
@@ -472,22 +483,33 @@ pub(super) async fn grant_resident(
             if let Some(deadline) = non_blank(body.deadline.as_deref()) {
                 narrow_input.insert("deadline".into(), json!(deadline));
             }
-            runtime.run_tool_with_session(
+            // The widening above is already recorded; a refused narrowing
+            // must not report the whole call as refused.
+            let narrowed = runtime.run_tool_with_session(
                 "orbit.resident.grant",
                 Value::Object(narrow_input),
                 dashboard_session(true),
-            )?;
+            );
             let shown = runtime.run_tool_with_session(
                 "orbit.resident.show",
                 json!({"task_id": id}),
                 dashboard_session(true),
             )?;
-            Ok(json!({
-                "outcome": "granted_and_narrowed",
-                "request": request,
-                "authority": shown["authority"],
-                "effective_authority": shown["effective_authority"],
-            }))
+            match narrowed {
+                Ok(_) => Ok(json!({
+                    "outcome": "granted_and_narrowed",
+                    "request": request,
+                    "authority": shown["authority"],
+                    "effective_authority": shown["effective_authority"],
+                })),
+                Err(error) => Ok(json!({
+                    "outcome": "granted_narrowing_refused",
+                    "narrowing_error": error.to_string(),
+                    "request": request,
+                    "authority": shown["authority"],
+                    "effective_authority": shown["effective_authority"],
+                })),
+            }
         },
     )
     .await
