@@ -33,7 +33,7 @@ contract and limits are in [automation-triggers/2_design.md](../automation-trigg
    the host tick fans out over every registered owner checkout's `auto_tasks/`,
    mirroring routine discovery, with no routine in between. The current contract is in
    [routines/2_design.md §3](../routines/2_design.md#3-clock-tick).
-2. **Dispatch coupling.** A minted implementation task lands in `proposed` (only `no-diff-expected` mints keep their configured or default status) and needs approval before the orchestrator triages/ships it from `backlog`. Should a definition optionally auto-dispatch its
+2. **Dispatch coupling.** A minted implementation task with a `backlog` template status lands in `proposed` unless its normalized tags include `no-diff-expected`; in that case it stays in `backlog`. Explicit non-`backlog` template statuses are preserved regardless of tags. Proposed tasks need approval before the orchestrator triages/ships them from `backlog`. Should a definition optionally auto-dispatch its
    task (e.g. straight into `workflow_ship`) under a crew, or does that
    re-introduce the "periodic work is code" coupling auto-tasks removed?
 3. **Retention / expiry.** Should a definition support a `max_open` or a
