@@ -1503,6 +1503,89 @@ fn a_fixture_auto_drain_worker_does_not_outlive_the_test() {
     );
 }
 
+/// Exercise teardown without cancellation: the workspace may disappear before
+/// a fixture's cleanup can reach its detached worker (ORB-21762).
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted() {
+    if crate::workflow_gate::wait_if_requested() {
+        return;
+    }
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted",
+    ) {
+        return;
+    }
+    for teardown in ["complete", "cwd", "fixture"] {
+        let gate = crate::workflow_gate::WorkflowGate::new();
+        let workspace = McpWorkspace::init();
+        let jobs = workspace.home.join(".orbit/resources/jobs");
+        std::fs::write(
+            jobs.join("workspace_auto_pipeline.yaml"),
+            json!({"schemaVersion":2,"kind":"Job","metadata":{"name":"workspace_auto_pipeline"},
+                "spec":{"state":"enabled","kind":"workflow","steps":[gate.step("hold")]}})
+            .to_string(),
+        )
+        .unwrap();
+        let mut client = workspace.serve_with_args(&["--operator"]);
+        let receipt = client.call_tool_ok(
+            "orbit_workflow_auto",
+            json!({"workspace":workspace.work,"action":"start","for_seconds":86_400}),
+        );
+        let run_id = receipt["run_id"].as_str().unwrap().to_owned();
+        let mut cleanup = DrainCleanup {
+            workspace: &workspace,
+            run_id: run_id.clone(),
+            armed: true,
+        };
+        let pid = fixture_worker_pid(&workspace, &run_id);
+        let worker = DeletedCwdWorkerCleanup(
+            orbit_common::process::signal::BoundProcess::bind(pid, None)
+                .unwrap()
+                .expect("live fixture worker"),
+        );
+        gate.wait_ready();
+        assert!(cwd_is_in_fixture(&workspace, pid));
+        drop(client);
+        cleanup.armed = false;
+        drop(cleanup);
+        if teardown == "fixture" {
+            drop(workspace);
+        } else if teardown == "cwd" {
+            // Keep the registry and run record: cwd deletion alone must stop
+            // the worker, independently of store errors or missing run rows.
+            std::fs::remove_dir_all(&workspace.work).unwrap();
+        } else {
+            gate.release();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while worker.0.is_alive().unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "detached worker {pid} survived fixture teardown ({teardown})"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Retain a bound identity before deleting the registry so even the failing
+/// pre-fix regression cannot leak a worker or signal a reused PID.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DeletedCwdWorkerCleanup(orbit_common::process::signal::BoundProcess);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for DeletedCwdWorkerCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.signal(libc::SIGTERM);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.0.is_alive().unwrap_or(false) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.0.signal(libc::SIGKILL);
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn fixture_worker_pid(workspace: &McpWorkspace, run_id: &str) -> u32 {
     let mut pid = None;
