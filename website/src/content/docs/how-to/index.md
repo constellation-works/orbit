@@ -13,6 +13,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
 ## Day to day
 
 <div class="orbit-card-grid">
+  <a class="orbit-card" href="./attention/">
+    <h3>Find What Needs Attention</h3>
+    <p>Find operator waits across workspaces and hosts, filter them, and follow changes.</p>
+  </a>
   <a class="orbit-card" href="./dashboard/">
     <h3>Use the Dashboard</h3>
     <p>Approve and ship tasks, follow runs, start a drain, and reach a remote host over SSH.</p>
