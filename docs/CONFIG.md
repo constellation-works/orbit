@@ -1419,9 +1419,12 @@ settlement for a claimed leaf; the held run itself has no generic resume path. R
 existing `succeeded` status for a held underlying run.
 
 Missing pinned identity fields, including the PR head, and contradictory merge
-evidence produce typed `delivery_evidence_stale` holds. Forge reads refused for
-a credential, permission or other permanent reason, failed candidate checks,
-and unlisted refusals remain failures. Transport failures after a merge,
+evidence produce typed `delivery_evidence_stale` holds. A permanent failure to
+read required-check evidence in auto-fix, including a credential or permission
+refusal, holds as `delivery_check_evidence_inconclusive` before or after a
+completion mutation; no repair agent runs and no merge is admitted on that
+evidence. Permanent forge-read failures at other boundaries, failed candidate
+checks, and unlisted refusals remain failures. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
 also remain failures, except that a transient auto-fix required-check read
 holds as `delivery_check_evidence_inconclusive` when completion mutation

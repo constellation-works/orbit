@@ -21,6 +21,9 @@ mod generation_fixture;
 mod git_repo;
 #[path = "../support/isolated_test.rs"]
 mod isolated_test;
+#[cfg(unix)]
+#[path = "../support/workflow_gate.rs"]
+mod workflow_gate;
 
 mod attention_replica;
 mod mcp_roundtrip;

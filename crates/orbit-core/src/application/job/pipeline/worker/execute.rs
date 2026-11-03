@@ -8,6 +8,9 @@ impl OrbitRuntime {
         // [ORB-18166] Before anything can be killed mid-run, so a terminating
         // signal's sender reaches the supervisor's exit record.
         super::exit::capture_terminating_signal_senders();
+        // A detached worker can outlive its submitting fixture or removed
+        // checkout even while blocked inside a step, not only while polling.
+        let _cwd_guard = super::cwd::WorkerCwdGuard::start(run_id)?;
         self.preflight_pipeline_worker_store()?;
         upgrade_handover::bind_worker_run(run_id);
         if upgrade_handover::adopts_run(run_id) {
