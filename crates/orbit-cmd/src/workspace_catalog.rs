@@ -1,10 +1,10 @@
 //! Registry-backed resolution for Core's federated-search scope.
 //!
-//! Core owns the fan-out, fusion, and attribution; it deliberately owns no
-//! workspace catalog, because `orbit-registry` sits above it in the crate
-//! graph. This module is the composition point that closes that gap: it turns
-//! a [`WorkspaceScope`] into registered checkouts and opens a runtime for one
-//! [ORB-11027].
+//! Core owns federated-search fan-out, fusion, and attribution, and receives a
+//! [`WorkspaceCatalog`] as part of runtime composition. This module implements
+//! that interface with the machine's workspace registry and registered runtime
+//! factory; `orbit-cmd` attaches it to composed runtimes. Core also directly
+//! depends on Registry for its registry-backed application operations.
 //!
 //! It adds no dependency edge — `orbit-cmd` already joins Core to Registry.
 
