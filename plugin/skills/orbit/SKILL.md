@@ -90,9 +90,12 @@ starting `proposed`, `someday`, or `blocked` work also needs authorization.
 `done` is reachable only from `review` and needs completion evidence. The
 lifecycle table does not reopen `done` or `archived`; file a regression as a
 new task with a `regression_from` relation. Only an operator's
-`orbit task update <id> --status <status> --force` restores them, and
-`orbit task archive <id>` is that table's move to `archived` (`done` and
-`rejected` are not sources). `rejected` returns to `backlog` or
+`orbit task update <id> --status <status> --force` restores them.
+`orbit task archive <id>` and the UI archive action are not table moves:
+they archive a task in any status, including `done` and `rejected`,
+through internal authority. The transition table governs `task update
+--status` instead, which refuses an off-table move to `archived`.
+`rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents
 have no lifecycle force override. A task assigned to a human crew
 (`[crews.<name>] kind = "human"`) is operator work: the operator's own
