@@ -1,22 +1,17 @@
-//! Trusted observe/finalize integration. The assignment lock fences a cycle
-//! change against a comment append and serializes admission with manager
-//! control; no agent-facing tool can set this state.
-
-#[cfg(feature = "test-support")]
-pub(crate) mod test_support;
-
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::ResidentLiveCycle;
 
-use super::ResidentMandateState;
+use super::super::ResidentMandateState;
+#[cfg(feature = "test-support")]
+use super::test_support;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
-pub(super) const CYCLE_CHANGED: &str = "resident_cycle_changed";
+pub(in crate::application::resident) const CYCLE_CHANGED: &str = "resident_cycle_changed";
 
-pub(super) fn live_cycle_from_history(
+pub(in crate::application::resident) fn live_cycle_from_history(
     history: &[TaskHistoryEntry],
 ) -> Result<Option<ResidentLiveCycle>, OrbitError> {
     let Some(entry) = history

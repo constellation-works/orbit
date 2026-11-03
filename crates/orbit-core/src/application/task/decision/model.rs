@@ -27,9 +27,9 @@ use orbit_types::task::{
     ModelAnswerConfirmation, TaskHistoryEntry, TaskStatus,
 };
 
-use super::TaskRecordUpdateParams;
-use super::decision::{decision_comment, ensure_request_answerable};
-use super::params::TaskUpdateParams;
+use super::super::TaskRecordUpdateParams;
+use super::super::params::TaskUpdateParams;
+use super::answering::{decision_comment, ensure_request_answerable};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 

@@ -80,7 +80,7 @@ fn outputs_root(runtime: &OrbitRuntime) -> PathBuf {
 }
 
 fn run_dir(runtime: &OrbitRuntime, run_id: &str) -> PathBuf {
-    outputs_root(runtime).join(super::script_step::path_segment(run_id))
+    outputs_root(runtime).join(super::execution::path_segment(run_id))
 }
 
 /// Whether `set_id` has the shape [`script_output_set_id`] gives, so a

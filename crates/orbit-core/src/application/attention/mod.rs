@@ -3,6 +3,7 @@
 //! live with the operation in `orbit_common::governance::attention`, so the
 //! federated aggregator applies the same rules once over every host.
 mod host;
+mod notice_sources;
 mod provider_sources;
 mod runtime_sources;
 mod sources;

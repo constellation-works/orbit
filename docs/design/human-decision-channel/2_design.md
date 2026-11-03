@@ -46,7 +46,7 @@ the mechanisms below are built inside them.
    verdicts, proposed approve/reject (digest), review approve. A proposed approval
    from a decision request is screened by the task-pilot preparation and
    admission checks before promotion
-   (`crates/orbit-core/src/application/task/decision.rs::ensure_proposal_admissible`):
+   (`crates/orbit-core/src/application/task/decision/answering.rs::ensure_proposal_admissible`):
    while a pilot admission hold or a `verified_no_diff` finding stands, or the
    task has no prepared footprint (empty `context_files` without the
    `no-diff-expected` disposition, or an unassessed complexity), the answer is
@@ -679,7 +679,7 @@ writer label is never a human label, and the channel's delegated-human authority
 or precedent answer.
 
 As implemented ([ORB-21092]), the apply step is an internal entry point
-(`apply_model_decision_answer` in `decision_model.rs`) whose only caller is the
+(`apply_model_decision_answer` in `decision/model.rs`) whose only caller is the
 self-answer step of an enabled category (§11.4). It
 refuses, writing nothing, a request that is not open, an answer it does not
 allow, a tier other than `routine` or `reversible`, a `model_answer_review`

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use orbit_engine::ScriptStepRequest;
 use orbit_types::workflow::activity_job::{ScriptGrant, ScriptGrantLimits};
 
-use crate::application::job::script_step::{script_env, script_launcher_env_from};
+use crate::application::job::scripts::execution::{script_env, script_launcher_env_from};
 
 fn env_value<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
     env.iter()

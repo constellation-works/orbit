@@ -29,6 +29,7 @@
 
 mod activity;
 mod admission;
+mod candidate_assignment;
 mod candidates;
 mod claims;
 mod draw;

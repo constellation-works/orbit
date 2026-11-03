@@ -2,7 +2,7 @@ mod agent;
 mod crew_pools;
 mod exec;
 mod pipeline;
-mod script_step;
+mod scripts;
 
 /// Deterministic audit-insert fault plus the existing detached-worker seam.
 /// The child and automation admission APIs are crate-private, so this fixture

@@ -1,27 +1,4 @@
-//! Listing, showing and answering human decision requests.
-//!
-//! Requests are raised on held work by block triage and pilot admission,
-//! and on proposed and review tasks by the decision digest in
-//! `decision_channel` (see `orbit_types::task::DecisionRequest`). They
-//! live in task history, so listing scans task histories — the shape the
-//! block readout already has.
-//!
-//! [`OrbitRuntime::answer_decision_request_as_human`] is the core apply
-//! step every answering surface shares: the operator CLI, the dashboard,
-//! and later the delegated channel that submits a human's answer to core.
-//! It refuses a stale answer (superseded, expired, or an answer outside
-//! the request's allowed set) with the design's named refusals and writes
-//! nothing. The request is judged on a fresh read under the task's write
-//! lock, which the gate's effect and the `decision_answered` record share,
-//! so a task edit cannot land between the check and the effect. An allowed
-//! pilot answer that cannot resolve the current duplicate or already-landed
-//! hold is refused the same way, before any comment. Every other allowed answer lands through the human funnel
-//! (`update_task_as_human`, or the guarded approval / `reject_task` for
-//! approvals) and only then records `decision_answered`, which is what
-//! makes the request read `answered`. A proposed approval is screened
-//! first (`ensure_proposal_admissible`): work a pilot hold or a missing
-//! prepared footprint would keep out of the backlog is refused the same
-//! way, before any write.
+//! Apply and validate a human decision answer.
 
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
@@ -30,179 +7,14 @@ use orbit_types::task::{
     DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionVerdict, ReadinessGap,
     ReadinessStage, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
 };
-use serde_json::{Value, json};
 
-use super::TaskRecordUpdateParams;
-use super::params::{TaskAddParams, TaskUpdateParams};
-use super::transitions::DeferredApprovalEffects;
+use super::super::TaskRecordUpdateParams;
+use super::super::params::{TaskAddParams, TaskUpdateParams};
+use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
 
-/// Decision requests readable in a workspace scan, with corrupt bundles
-/// identified separately so a partial result never looks complete.
-#[derive(Debug, Default)]
-pub struct DecisionRequestListing {
-    /// Matching requests, oldest first.
-    pub requests: Vec<DecisionRequest>,
-    /// Per-task bundle corruption encountered during the scan.
-    pub warnings: Vec<String>,
-}
-
-/// JSON for one request as the decision surfaces serve it: the stored
-/// record with its effective (derived) state.
-pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
-    serde_json::to_value(request).unwrap_or_else(|_| {
-        json!({
-            "id": request.id,
-            "task_id": request.task_id,
-            "gate": request.gate.as_str(),
-            "risk_tier": request.risk_tier,
-            "category": request.category,
-            "state": request.state.as_str(),
-        })
-    })
-}
-
-/// The compact `open_decisions[]` entry `orbit.task.show` carries: the
-/// request id, its gate, the answer ids a surface may offer, expiry, and the
-/// decision card: the short `summary`, the `human_action` of a request only a
-/// person outside Orbit can resolve, and `options` (each answer's id, label,
-/// consequence and whether it is the `recommended` one) so a surface renders
-/// one button per option without a second read.
-pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
-    let recommended = request.recommended.as_deref();
-    let mut entry = json!({
-        "id": request.id,
-        "gate": request.gate.as_str(),
-        "risk_tier": request.risk_tier,
-        "category": request.category,
-        "answers": request
-            .answers
-            .iter()
-            .map(|answer| answer.id.clone())
-            .collect::<Vec<_>>(),
-        "options": request
-            .answers
-            .iter()
-            .map(|answer| {
-                json!({
-                    "id": answer.id,
-                    "label": answer.label,
-                    "consequence": answer.consequence,
-                    "risk_tier": answer.risk_tier,
-                    "recommended": recommended == Some(answer.id.as_str()),
-                })
-            })
-            .collect::<Vec<_>>(),
-        "expires_at": request.expires_at.to_rfc3339(),
-    });
-    if let Some(summary) = &request.summary {
-        entry["summary"] = json!(summary);
-    }
-    if let Some(action) = &request.human_action {
-        entry["human_action"] = json!(action);
-    }
-    if let Some(topic) = &request.topic {
-        entry["topic"] = json!(topic);
-    }
-    entry
-}
-
 impl OrbitRuntime {
-    /// Decision requests across the workspace, oldest first. Open requests
-    /// only unless `include_closed`; `gate` and `task_id` narrow the list.
-    /// Strict: any unreadable bundle fails the call. Listing surfaces use
-    /// [`Self::list_decision_requests_with_warnings`] for partial results.
-    pub fn list_decision_requests(
-        &self,
-        gate: Option<DecisionGate>,
-        task_id: Option<&str>,
-        include_closed: bool,
-    ) -> Result<Vec<DecisionRequest>, OrbitError> {
-        Ok(self
-            .scan_decision_requests(gate, task_id, include_closed, false)?
-            .requests)
-    }
-
-    /// List readable requests and warn for corrupt bundles in a workspace
-    /// scan. An explicit `task_id` stays strict, as do non-corruption errors.
-    pub fn list_decision_requests_with_warnings(
-        &self,
-        gate: Option<DecisionGate>,
-        task_id: Option<&str>,
-        include_closed: bool,
-    ) -> Result<DecisionRequestListing, OrbitError> {
-        self.scan_decision_requests(gate, task_id, include_closed, task_id.is_none())
-    }
-
-    fn scan_decision_requests(
-        &self,
-        gate: Option<DecisionGate>,
-        task_id: Option<&str>,
-        include_closed: bool,
-        tolerate_corrupt: bool,
-    ) -> Result<DecisionRequestListing, OrbitError> {
-        let ids: Vec<String> = match task_id {
-            Some(task_id) => vec![task_id.to_string()],
-            None => self
-                .list_task_metadata()?
-                .into_iter()
-                .map(|task| task.id)
-                .collect(),
-        };
-        let mut listing = DecisionRequestListing::default();
-        for id in &ids {
-            let read = self.get_task_decision_requests(id);
-            let requests = if tolerate_corrupt {
-                let Some(requests) =
-                    super::listing::task_bundle_scan_result(read, &mut listing.warnings)?
-                else {
-                    continue;
-                };
-                requests
-            } else {
-                read?
-            };
-            for request in requests {
-                if gate.is_some_and(|gate| gate != request.gate) {
-                    continue;
-                }
-                if !include_closed && request.state != DecisionRequestState::Open {
-                    continue;
-                }
-                listing.requests.push(request);
-            }
-        }
-        listing
-            .requests
-            .sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
-        Ok(listing)
-    }
-
-    /// One decision request by id, with its effective state, or `None`
-    /// when no task in the workspace carries it.
-    pub fn get_decision_request(
-        &self,
-        request_id: &str,
-    ) -> Result<Option<DecisionRequest>, OrbitError> {
-        Ok(self
-            .list_decision_requests(None, None, true)?
-            .into_iter()
-            .find(|request| request.id == request_id))
-    }
-
-    /// The task's open decision requests in the compact show form: id,
-    /// gate, answer ids and expiry per request.
-    pub fn open_decisions_json(&self, task_id: &str) -> Result<Value, OrbitError> {
-        Ok(Value::Array(
-            self.get_task_decision_requests(task_id)?
-                .iter()
-                .filter(|request| request.state == DecisionRequestState::Open)
-                .map(open_decision_json)
-                .collect(),
-        ))
-    }
-
     /// Apply `answer_id` to the open request `request_id` as the human
     /// `actor_label`, returning the request as it then reads (`answered`).
     ///
@@ -842,7 +654,7 @@ impl OrbitRuntime {
 /// Refuse an answer to `request` as it reads now: one that is not open
 /// (expired, answered or superseded) or whose answer it does not allow.
 /// Nothing is written.
-pub(super) fn ensure_request_answerable(
+pub(in crate::application::task) fn ensure_request_answerable(
     request: &DecisionRequest,
     answer_id: &str,
 ) -> Result<(), OrbitError> {
@@ -924,7 +736,7 @@ struct TriageEdit {
 }
 
 /// The human comment an applied answer records beside its own effect.
-pub(super) fn decision_comment(
+pub(in crate::application::task) fn decision_comment(
     request: &DecisionRequest,
     answer_id: &str,
     label: &str,

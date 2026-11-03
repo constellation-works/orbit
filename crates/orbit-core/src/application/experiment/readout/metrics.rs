@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use orbit_store::contracts::ExperimentRecord;
 
-use crate::application::experiment::readout::outcomes::{
+use crate::application::experiment::readout::model::{
     Better, CostSource, Kind, MetricSpec, Outcome, ReviewableDenominator, TaskOutcome,
 };
 use crate::application::experiment::readout::stats::Cell;
@@ -383,5 +383,211 @@ fn ratio_difference(
                 .collect(),
         },
         by_complexity,
+    }
+}
+
+use super::outcomes::REGRESSION_WINDOW_DAYS;
+use crate::OrbitRuntime;
+use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
+use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
+use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+/// The task history event of an auto-fix started outside the run.
+const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
+
+/// The head and blocker an out-of-run auto-fix start names.
+#[derive(Deserialize)]
+struct OutOfRunStart {
+    pr_number: String,
+    head_sha: String,
+    blocker: PrAutoFixBlocker,
+}
+
+/// When the task last moved to done.
+pub(super) fn landing(history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Done))
+        .map(|entry| entry.at)
+}
+
+/// `regression_from` filings per landed culprit, filed within the window
+/// after it landed, whatever their escape class.
+pub(super) fn regressions(
+    tasks: &[Task],
+    landed_at: &BTreeMap<String, DateTime<Utc>>,
+) -> BTreeMap<String, u64> {
+    let window = Duration::days(REGRESSION_WINDOW_DAYS);
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for task in tasks {
+        let culprits: BTreeSet<String> = task
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::RegressionFrom)
+            .map(|relation| relation.target.to_string())
+            .collect();
+        for culprit in culprits {
+            if let Some(at) = landed_at.get(&culprit)
+                && task.created_at >= *at
+                && task.created_at <= *at + window
+            {
+                *counts.entry(culprit).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// Distinct pull-request heads the task's auto-fix history saw fail a
+/// required check.
+pub(super) fn failed_check_heads(history: &[TaskHistoryEntry]) -> usize {
+    let mut heads = BTreeSet::new();
+    for entry in history {
+        let Some(note) = entry.note.as_deref() else {
+            continue;
+        };
+        let (pr, head, blocker) = if entry.event == PR_AUTO_FIX_ADMITTED_EVENT {
+            let Ok(attempt) = serde_json::from_str::<PrAutoFixAttempt>(note) else {
+                continue;
+            };
+            (attempt.pr_number, attempt.head_sha, attempt.blocker)
+        } else if entry.event == AUTO_FIX_OUT_OF_RUN_EVENT {
+            let Ok(start) = serde_json::from_str::<OutOfRunStart>(note) else {
+                continue;
+            };
+            (start.pr_number, start.head_sha, start.blocker)
+        } else {
+            continue;
+        };
+        if blocker == PrAutoFixBlocker::FailedChecks {
+            heads.insert((pr, head));
+        }
+    }
+    heads.len()
+}
+
+/// One task's visual review outcomes (§12.3), each `None` when its record
+/// is absent.
+pub(super) struct VisualOutcomes {
+    pub(super) landed_mismatches: Option<f64>,
+    pub(super) repairs: Option<f64>,
+    pub(super) verified_rate: Option<f64>,
+}
+
+impl OrbitRuntime {
+    pub(super) fn visual_outcomes(&self, task_id: &str) -> Result<VisualOutcomes, OrbitError> {
+        use orbit_types::task::{
+            VisualPass, VisualResolution, VisualReviewRecord, VisualVerdictKind,
+            visual_severity_weight,
+        };
+        let read = |pass: VisualPass| -> Result<Option<VisualReviewRecord>, OrbitError> {
+            Ok(self
+                .get_task_artifact(task_id, &pass.review_artifact())?
+                .and_then(|artifact| serde_json::from_slice(&artifact.content).ok()))
+        };
+        let capture = self
+            .get_task_artifact(task_id, &VisualPass::Measure.capture_artifact())?
+            .and_then(|artifact| {
+                serde_json::from_slice::<orbit_types::task::VisualCaptureRecord>(&artifact.content)
+                    .ok()
+            });
+        let landed = match self.get_task(task_id)?.job_run_id {
+            Some(run) => crate::application::visual_delivery::visual_measurement_landed_revision(
+                self, task_id, &run,
+            )?,
+            None => None,
+        };
+        let settle = self
+            .get_task_artifact(task_id, &VisualPass::Measure.settle_artifact())?
+            .and_then(|artifact| {
+                serde_json::from_slice::<orbit_types::task::VisualSettleRecord>(&artifact.content)
+                    .ok()
+            });
+        let landed_mismatches = read(VisualPass::Measure)?
+            .filter(|record| {
+                landed.as_deref() == Some(record.candidate_sha.as_str())
+                    && record.task_id == task_id
+                    && record.purpose == orbit_types::task::VISUAL_MEASURE_PURPOSE
+                    && record.outcome == "reviewed"
+                    && record.not_established.is_empty()
+                    && record.budget.not_shown.is_empty()
+                    && record.invalid_evidence_dropped == 0
+                    && record.over_max_findings_dropped == 0
+                    && record
+                        .findings
+                        .iter()
+                        .all(|finding| finding.verdict.verdict != VisualVerdictKind::Unverified)
+                    && settle.as_ref().is_some_and(|settle| {
+                        settle.candidate_sha == record.candidate_sha
+                            && settle.outcome == orbit_types::task::VisualSettleOutcome::Established
+                            && settle.refusals.is_empty()
+                            && settle.not_established.is_empty()
+                    })
+                    && capture.as_ref().is_some_and(|capture| {
+                        capture.outcome == orbit_types::task::VisualCaptureOutcome::Captured
+                            && capture.candidate_sha == record.candidate_sha
+                            && capture.task_id == task_id
+                            && capture.not_established.is_empty()
+                            && capture.over_budget.is_empty()
+                            && !capture.mocks.is_empty()
+                            && capture.mocks.iter().all(|mock| {
+                                record
+                                    .budget
+                                    .shown
+                                    .iter()
+                                    .any(|shown| shown.mock == mock.artifact)
+                            })
+                            && capture.mocks.iter().all(|mock| {
+                                mock.error.is_none()
+                                    && mock
+                                        .capture
+                                        .as_ref()
+                                        .is_some_and(|image| image.commit == record.candidate_sha)
+                            })
+                    })
+            })
+            .map(|record| {
+                record
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
+                    .map(|finding| visual_severity_weight(finding.severity_of_record()))
+                    .sum()
+            });
+        let delivery = read(VisualPass::Delivery)?;
+        let repairs = delivery.as_ref().map(|record| {
+            record
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding.resolution == Some(VisualResolution::Fixed)
+                        || finding.follow_up.is_some()
+                })
+                .count() as f64
+        });
+        let verified_rate = delivery.as_ref().and_then(|record| {
+            let (confirmed, rejected) = record
+                .findings
+                .iter()
+                .filter(|finding| finding.source == "comparison")
+                .fold(
+                    (0u32, 0u32),
+                    |(confirmed, rejected), finding| match finding.verdict.verdict {
+                        VisualVerdictKind::Confirmed => (confirmed + 1, rejected),
+                        VisualVerdictKind::Rejected => (confirmed, rejected + 1),
+                        VisualVerdictKind::Unverified => (confirmed, rejected),
+                    },
+                );
+            (confirmed + rejected > 0)
+                .then(|| f64::from(confirmed) / f64::from(confirmed + rejected))
+        });
+        Ok(VisualOutcomes {
+            landed_mismatches,
+            repairs,
+            verified_rate,
+        })
     }
 }
