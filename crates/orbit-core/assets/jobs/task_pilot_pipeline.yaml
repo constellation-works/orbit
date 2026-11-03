@@ -119,6 +119,12 @@
 #   run start checks the claim against the routine's live attempt and its
 #   action key. Any other run whose task ids mix crews is still refused,
 #   including an explicit run and one whose input merely carries a claim.
+# - A drain pilot whose tasks' crews changed after the drain selected a
+#   homogeneous bundle gets the same repartitioning [ORB-21839]: run start
+#   verifies the named drain is a live `--approve-proposed` drain that
+#   dispatched this exact run, then prepare partitions by live crew. A
+#   forged or ended drain's record, or a run it never dispatched, is
+#   refused like any other mixed bundle.
 
 schemaVersion: 2
 kind: Job

@@ -13,6 +13,8 @@ use serde_json::Value;
 const PILOT_JOB: &str = "task_pilot_pipeline";
 /// The ship dispatcher turns selected task ids into singleton gate runs.
 const AUTO_DISPATCH_JOB: &str = "task_auto_pipeline";
+/// The drain that may dispatch a pilot for repartitioning [ORB-21839].
+const DRAIN_JOB: &str = "workspace_auto_pipeline";
 
 /// Recheck the server-issued claim at the deterministic prepare/apply boundary.
 ///
@@ -96,13 +98,18 @@ pub(crate) fn require_claim_owner(
 /// another trigger kind, or a live claim carried by a different run or job
 /// keeps the one-bundle-one-crew refusal. Any failure to prove the claim fails
 /// closed to [`BundleCrews::Unanimous`]; prepare reports a bad claim on its
-/// own.
+/// own. A pilot a live `--approve-proposed` drain dispatched may also mix,
+/// under [`verified_drain_pilot`], when crews changed after selection
+/// [ORB-21839].
 pub(crate) fn bundle_crews(runtime: &OrbitRuntime, run: &JobRun, input: &Value) -> BundleCrews {
     if run.job_id == AUTO_DISPATCH_JOB {
         return BundleCrews::AutoDispatchSingletons;
     }
     if run.job_id != PILOT_JOB {
         return BundleCrews::Unanimous;
+    }
+    if verified_drain_pilot(runtime, run, input) {
+        return BundleCrews::DrainPartitions;
     }
     let Ok(Some(active)) = claim(runtime, input) else {
         return BundleCrews::Unanimous;
@@ -120,4 +127,57 @@ pub(crate) fn bundle_crews(runtime: &OrbitRuntime, run: &JobRun, input: &Value) 
     } else {
         BundleCrews::Unanimous
     }
+}
+
+/// Whether `run` is a pilot a live `--approve-proposed` drain dispatched.
+///
+/// The `drain_promotion` value in run input is caller-shaped and proves
+/// nothing by itself [ORB-21839]: the named run must be a live auto drain
+/// started with `approve_proposed`, and its recorded child dispatches must
+/// name this exact pilot run. A missing, forged, stale (ended drain) or
+/// undispatched record fails closed to `Unanimous`. When this passes and
+/// the tasks' live crews have diverged since selection, prepare
+/// re-partitions by live crew before any pilot worker runs, so no task is
+/// assessed under a crew an operator has since replaced and no stale
+/// assessment is promoted: the pilot assessment is made fresh in this run.
+fn verified_drain_pilot(runtime: &OrbitRuntime, run: &JobRun, input: &Value) -> bool {
+    if input.get("promotion_authorized").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    let Some(drain_id) = input
+        .get("drain_promotion")
+        .and_then(|record| record.get("run_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return false;
+    };
+    let Ok(Some(drain)) = runtime.stores().jobs().get_job_run(drain_id) else {
+        return false;
+    };
+    if drain.job_id != DRAIN_JOB || drain.state.is_terminal() {
+        return false;
+    }
+    if drain
+        .input
+        .as_ref()
+        .and_then(|input| input.get("approve_proposed"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    runtime
+        .stores()
+        .jobs()
+        .read_run_state(drain_id)
+        .ok()
+        .flatten()
+        .is_some_and(|state| {
+            state
+                .child_dispatches
+                .iter()
+                .any(|child| child.child_run_id == run.run_id && child.job_name == PILOT_JOB)
+        })
 }

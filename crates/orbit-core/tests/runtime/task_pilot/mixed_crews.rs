@@ -7,11 +7,11 @@ use std::os::unix::fs::PermissionsExt;
 
 use orbit_common::OrbitError;
 use orbit_core::application::automation::pin_attempt_source;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_store::contracts::KeyedJobRunAdmission;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::TaskComplexity;
-use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, JobRunState};
+use orbit_types::workflow::{ChildDispatch, ExecutorDef, ExecutorSandboxKind, JobRunState};
 use serde_json::json;
 
 use super::*;
@@ -524,11 +524,161 @@ fn a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run() {
     );
 }
 
+/// [ORB-21839] A drain selected two same-crew tasks, then an operator
+/// reassigned both to different crews before the child started. The
+/// persisted child is the deterministic checkpoint: no worker runs until
+/// the edits land, so no sleep or timing orders the race.
+fn drain_pilot_repartitions_after_crew_edits_before_start() {
+    let workspace = workspace();
+    let calls = install_provider(&workspace);
+    let first = task(&workspace, "first drain sibling", "fixture");
+    let second = task(&workspace, "second drain sibling", "fixture");
+    workspace.install_pilot_job();
+    let drain = workspace
+        .jobs
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"approve_proposed": true})),
+            None,
+        )
+        .unwrap();
+    let mut drain_state = PipelineState::new(
+        drain.run_id.clone(),
+        "workspace_auto_pipeline".into(),
+        json!({}),
+    );
+    workspace
+        .runtime
+        .write_run_state(&drain.run_id, &drain_state)
+        .unwrap();
+    workspace
+        .jobs
+        .mark_job_run_running(&drain.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let pilot_input = json!({
+        "task_ids": [first.id, second.id],
+        "workspace_path": workspace.repo,
+        "base_branch": "main",
+        "promotion_authorized": true,
+        "drain_promotion": {"run_id": drain.run_id},
+    });
+    let pilot = workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(pilot_input),
+            None,
+        )
+        .unwrap();
+    workspace
+        .runtime
+        .write_run_state(
+            &pilot.run_id,
+            &PipelineState::new(
+                pilot.run_id.clone(),
+                "task_pilot_pipeline".into(),
+                json!({}),
+            ),
+        )
+        .unwrap();
+    drain_state.record_child_dispatch(ChildDispatch::submitted(
+        pilot.run_id.clone(),
+        "task_pilot_pipeline".into(),
+        "invoke_detached".into(),
+        false,
+        false,
+        Utc::now(),
+    ));
+    workspace
+        .runtime
+        .write_run_state(&drain.run_id, &drain_state)
+        .unwrap();
+    // Checkpoint: the child is persisted but not started. Crew edits via
+    // the task API are the operator's authoritative reassignment.
+    for (task, crew) in [(&first, "haiku"), (&second, "sol")] {
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    crew: Some(Some(crew.into())),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+    }
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&pilot.run_id)
+        .unwrap_or_else(|error| panic!("stale drain selection must replan, not fail: {error}"));
+    let run = workspace.runtime.show_job_run(&pilot.run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Success, "{run:?}");
+    let pipeline = workspace
+        .runtime
+        .read_run_state(&pilot.run_id)
+        .unwrap()
+        .unwrap()
+        .pipeline;
+    let prepared = &pipeline["prepare"];
+    assert_eq!(prepared["partition_count"], 2, "{prepared}");
+    assert_eq!(
+        prepared["partitions"],
+        json!([
+            {"partition_index": 0, "task_ids": [first.id]},
+            {"partition_index": 1, "task_ids": [second.id]},
+        ]),
+        "{prepared}"
+    );
+    assert_eq!(pipeline["apply"]["applied_count"], 2, "{pipeline}");
+    assert_eq!(
+        std::fs::read_to_string(calls).unwrap().lines().count(),
+        2,
+        "each live-crew partition is assessed once"
+    );
+}
+
+/// [ORB-21839] A forged `drain_promotion` record is not authority: a mixed
+/// bundle naming a drain that never dispatched it stays refused.
+fn forged_drain_promotion_refuses_mixed_crews() {
+    let workspace = workspace();
+    let calls = install_provider(&workspace);
+    let haiku = task(&workspace, "haiku forged sibling", "haiku");
+    let sol = task(&workspace, "sol forged sibling", "sol");
+    workspace.install_pilot_job();
+    let pilot = workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({
+                "task_ids": [haiku.id, sol.id],
+                "workspace_path": workspace.repo,
+                "base_branch": "main",
+                "promotion_authorized": true,
+                "drain_promotion": {"run_id": "jrun-forged-drain"},
+            })),
+            None,
+        )
+        .unwrap();
+    let _ = workspace.runtime.execute_pipeline_run_worker(&pilot.run_id);
+    let run = workspace.runtime.show_job_run(&pilot.run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Failed, "{run:?}");
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "");
+}
+
 crate::scenario_table!(
     mixed_crew_task_pilot_bundles_scenarios,
     a_preparation_pass_assesses_two_crews_as_separate_partitions,
     an_operator_mixed_crew_bundle_is_still_refused,
     auto_dispatch_runs_partition_mixed_crew_tasks_into_singleton_bundles,
     a_non_pilot_job_refuses_mixed_crews_under_any_unproven_claim,
-    a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run
+    a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run,
+    drain_pilot_repartitions_after_crew_edits_before_start,
+    forged_drain_promotion_refuses_mixed_crews
 );
