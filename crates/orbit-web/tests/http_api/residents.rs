@@ -270,6 +270,94 @@ fn dashboard_mixed_grant_reports_applied_widening_when_deadline_is_refused() {
 }
 
 #[test]
+fn dashboard_mixed_grant_with_already_held_widening_reports_unchanged_when_deadline_is_refused() {
+    isolated(
+        "residents::dashboard_mixed_grant_with_already_held_widening_reports_unchanged_when_deadline_is_refused",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            let mut draft = mandate("Already-held widening with a refused deadline.");
+            draft["deadline"] = json!("2030-01-01T00:00:00Z");
+            let created = json_ok(server.send(
+                "POST",
+                &format!("/api/residents{WS}"),
+                json!({"mandate": draft}),
+            ));
+            let id = created["task_id"].as_str().unwrap().to_string();
+            let granted = json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{id}/grant{WS}"),
+                json!({"add": ["dispatch"], "workspaces": ["fixture"],
+                       "quote": "Dispatch in fixture."}),
+            ));
+            assert_eq!(granted["outcome"], "granted", "{granted}");
+            let before = fixture.runtime.show_resident_mandate(&id).unwrap();
+            assert_eq!(before["authority"]["revision"], 1, "{before}");
+            assert_eq!(before["mandate"]["deadline"], "2030-01-01T00:00:00Z");
+
+            for deadline in ["2031-01-01T00:00:00Z", "2030-01-01T00:00:00Z"] {
+                let result = json_ok(server.send(
+                    "POST",
+                    &format!("/api/residents/{id}/grant{WS}"),
+                    json!({"add": ["dispatch"], "workspaces": ["fixture"],
+                           "quote": "Dispatch in fixture.", "deadline": deadline}),
+                ));
+                assert_eq!(result["outcome"], "unchanged_narrowing_refused", "{result}");
+                assert!(
+                    result["narrowing_error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("only shortens the mandate"),
+                    "{result}"
+                );
+                assert!(
+                    result["request"].is_null(),
+                    "an unchanged widening raises and answers no request: {result}"
+                );
+                assert_eq!(
+                    result["effective_authority"],
+                    json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
+                    "{result}"
+                );
+                let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+                assert_eq!(shown["authority"], before["authority"], "{shown}");
+                assert_eq!(shown["mandate"]["deadline"], "2030-01-01T00:00:00Z");
+            }
+
+            let events = fixture
+                .runtime
+                .list_audit_events_with_kind(
+                    None,
+                    None,
+                    Some("resident.grant".into()),
+                    Some(AuditEventStatus::Failure),
+                    None,
+                    50,
+                )
+                .unwrap();
+            let messages: Vec<&str> = events
+                .iter()
+                .filter(|event| {
+                    event.command == "dashboard.operations"
+                        && event.target_id.as_deref() == Some(id.as_str())
+                })
+                .filter_map(|event| event.error_message.as_deref())
+                .collect();
+            assert_eq!(messages.len(), 2, "{messages:?}");
+            for message in messages {
+                assert!(
+                    message.contains("No widening applied; narrowing refused"),
+                    "{message}"
+                );
+                assert!(!message.contains("Widening applied"), "{message}");
+            }
+        },
+    );
+}
+
+#[test]
 fn invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing() {
     isolated(
         "residents::invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing",

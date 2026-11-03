@@ -16,11 +16,16 @@
 //!   session is never the native-terminal operator: a widening raises the
 //!   `resident_authority` request with the operator's words and the operator
 //!   answers it `grant` in the same action, so the change is recorded as
-//!   `via: decision:<id>` like any human answer. A mixed widen+narrow call
-//!   applies the widening first; when the narrowing is then refused, the
-//!   response is `granted_narrowing_refused` with `narrowing_error` and the
-//!   widened authority, and the audit row records that partial outcome as a
-//!   failure, so neither claims the widening was refused.
+//!   `via: decision:<id>` like any human answer. The dashboard form sends
+//!   one mixed widen+narrow POST; the server runs it as two core grant
+//!   operations, widening first and then narrowing. When the widening
+//!   applied and the narrowing is then refused, the response is
+//!   `granted_narrowing_refused` with `narrowing_error` and the widened
+//!   authority, and the audit row records that partial outcome as a
+//!   failure, so neither claims the widening was refused. When every
+//!   requested right/workspace was already held, the widening is
+//!   `unchanged` with no request; a refused narrowing then returns
+//!   `unchanged_narrowing_refused` and audits that no widening applied.
 //! * `POST /api/residents/<id>/control` and `/relay` — the manager channel.
 //!
 //! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
@@ -284,6 +289,10 @@ async fn resident_write(
             "Widening applied; narrowing refused: {}",
             value["narrowing_error"].as_str().unwrap_or_default()
         )),
+        Ok(value) if value["outcome"] == "unchanged_narrowing_refused" => Some(format!(
+            "No widening applied; narrowing refused: {}",
+            value["narrowing_error"].as_str().unwrap_or_default()
+        )),
         Ok(_) => None,
     };
     record_operation_audit(
@@ -349,9 +358,16 @@ pub(super) async fn create_resident(
 }
 
 /// `POST /api/residents/<id>/grant` — narrow, widen as an answered
-/// request, or both as two recorded changes. Core refuses one call that
-/// both widens and narrows, so a mixed dashboard call widens first and
-/// then narrows; the dashboard form also keeps them separate.
+/// request, or both. The dashboard form sends a widening with a deadline
+/// as one mixed POST to this handler. Core refuses one call that both
+/// widens and narrows, so the server runs a mixed call as two core grant
+/// operations: it widens first (raising and answering the grant request
+/// when the widening changes authority) and then narrows. The outcome
+/// names both steps truthfully: `granted_and_narrowed` or
+/// `granted_narrowing_refused` when the widening applied, and
+/// `unchanged_and_narrowed` or `unchanged_narrowing_refused` when every
+/// requested right/workspace was already held, so no widening was applied
+/// and no grant request was raised or answered.
 pub(super) async fn grant_resident(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -455,6 +471,9 @@ pub(super) async fn grant_resident(
                 Value::Object(widen_input),
                 session,
             )?;
+            // `unchanged` means every requested right/workspace was
+            // already held: nothing widened and no request exists.
+            let widening_applied = raised["outcome"] != "unchanged";
             let request = if raised["outcome"] == "requested" {
                 let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
                     OrbitError::Execution("the grant request carries no id".to_string())
@@ -497,13 +516,21 @@ pub(super) async fn grant_resident(
             )?;
             match narrowed {
                 Ok(_) => Ok(json!({
-                    "outcome": "granted_and_narrowed",
+                    "outcome": if widening_applied {
+                        "granted_and_narrowed"
+                    } else {
+                        "unchanged_and_narrowed"
+                    },
                     "request": request,
                     "authority": shown["authority"],
                     "effective_authority": shown["effective_authority"],
                 })),
                 Err(error) => Ok(json!({
-                    "outcome": "granted_narrowing_refused",
+                    "outcome": if widening_applied {
+                        "granted_narrowing_refused"
+                    } else {
+                        "unchanged_narrowing_refused"
+                    },
                     "narrowing_error": error.to_string(),
                     "request": request,
                     "authority": shown["authority"],
