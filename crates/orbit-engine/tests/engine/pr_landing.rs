@@ -6679,6 +6679,7 @@ PYVIEW
                         empty) exit 0 ;;
                         truncated) printf '{"data":{"repository":{"pullRequest":{"headR'; exit 0 ;;
                         fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+                        tls) echo 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' >&2; exit 1 ;;
                         success) ;;
                         *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
                     esac

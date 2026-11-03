@@ -66,6 +66,36 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// [ORB-21766] A transient required-checks read failure routed through
+/// [`observation_failure`] that it deliberately kept — because a completion
+/// mutation happened in this invocation or is recorded in durable history —
+/// still holds auto-fix as inconclusive check evidence. The required-checks
+/// read is read-only: holding does not claim nothing changed on the forge
+/// (unlike [`DeliveryRefusal::ForgeObservationUnavailable`]), and the next
+/// auto-fix pass re-reads the PR status, reconciling any earlier mutation
+/// from the forge. Every outcome `observation_failure` already decided
+/// (a resumable read-only observation, a forge hold, a typed refusal, or a
+/// non-transient failure) is returned unchanged.
+pub(super) fn checked_required_check_observation_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    mutated: bool,
+    deadline_ms: Option<u64>,
+    error: OrbitError,
+) -> OrbitError {
+    let error = observation_failure(host, input, mutated, deadline_ms, error);
+    let is_transient = error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.class == PrivateVcsFailureClass::TransientObservation);
+    if !is_transient {
+        return error;
+    }
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+        message: error.to_string(),
+    }
+}
+
 /// [ORB-19430] The diagnostic of a run held because completion's read-only
 /// forge observation kept failing with a transport error; `cause` is the
 /// failure's original text.
