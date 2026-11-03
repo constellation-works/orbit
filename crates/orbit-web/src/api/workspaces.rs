@@ -608,7 +608,7 @@ fn all_tasks_json(
     // runtime and store); the fold below runs in pinned entry order, so
     // totals, candidates and `unavailable` keep their serial order.
     let entries = pinned.entries();
-    let selections = (0..entries.len()).map(|index| {
+    let selections = fan_out(entries.len(), |index| {
         let entry = &entries[index];
         if !entry.active {
             return Err("workspace is unavailable".to_string());

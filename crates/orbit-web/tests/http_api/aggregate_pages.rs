@@ -375,6 +375,58 @@ fn aggregate_fan_out_preserves_row_order_and_payloads_across_polls() {
     );
 }
 
+/// Regression check for ORB-21847: `/api/tasks/all` selects each pinned
+/// workspace's candidate keys concurrently. The server child holds every
+/// selection until `parties` of them are in flight together; a serialised
+/// scan waits out that bound and is reported unavailable, so the aggregate
+/// response shows the regression. A single-CPU host runs one fan-out worker,
+/// so one party is the most overlap that host can produce.
+#[test]
+fn aggregate_task_candidates_select_workspaces_concurrently() {
+    isolated(
+        "aggregate_pages::aggregate_task_candidates_select_workspaces_concurrently",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let names = ["overlap0", "overlap1"];
+            let roots = names
+                .iter()
+                .map(|name| seed_workspace(&global, tmp.path(), name))
+                .collect::<Vec<_>>();
+            let bindings = names
+                .iter()
+                .zip(&roots)
+                .map(|(name, (_, repo))| (*name, repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global, &bindings);
+            let parties = std::thread::available_parallelism()
+                .map_or(1, |parallelism| parallelism.get())
+                .min(names.len())
+                .to_string();
+            let server = spawn_server(
+                tmp.path(),
+                false,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[(
+                    "ORBIT_HTTP_SELECTION_BARRIER",
+                    std::ffi::OsStr::new(&parties),
+                )],
+            );
+            let response = json_ok(server.get("/api/tasks/all"));
+            assert_eq!(
+                response["unavailable"],
+                serde_json::json!([]),
+                "each workspace's candidate selection must overlap the others; a serialised scan waits out the barrier and is reported unavailable"
+            );
+            assert_eq!(response["total"], names.len());
+        },
+    );
+}
+
 #[test]
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(

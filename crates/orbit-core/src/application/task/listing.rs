@@ -296,6 +296,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        super::candidate_checkpoint::notify_candidate_selection()?;
         if !self.coordination_task_reads_visible() {
             return Ok(Some(Default::default()));
         }

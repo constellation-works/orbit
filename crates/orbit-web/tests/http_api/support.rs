@@ -2,6 +2,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -661,6 +662,9 @@ pub(super) fn serve_fixture() {
             )
             .init();
     }
+    if let Ok(parties) = std::env::var("ORBIT_HTTP_SELECTION_BARRIER") {
+        install_selection_barrier(parties.parse().expect("selection barrier parties"));
+    }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
     // Ordinary fixtures launch a harmless stub; replay fixtures execute only
     // their disposable sleep job through the real worker.
@@ -750,6 +754,29 @@ pub(super) fn serve_fixture() {
     } else {
         orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
     }
+}
+
+/// Holds each observed workspace task-candidate selection until `parties` of
+/// them are in flight together. A scan that waits out the bound instead fails,
+/// which marks its workspace unavailable in the aggregate response.
+fn install_selection_barrier(parties: usize) {
+    let gate = Arc::new((Mutex::new(0_usize), Condvar::new()));
+    orbit_core::test_support::install_candidate_selection_checkpoint(move || {
+        let (entered, arrived) = &*gate;
+        let mut count = entered.lock().unwrap_or_else(PoisonError::into_inner);
+        *count += 1;
+        arrived.notify_all();
+        let (count, _) = arrived
+            .wait_timeout_while(count, Duration::from_secs(5), |count| *count < parties)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *count < parties {
+            return Err(orbit_core::OrbitError::Execution(format!(
+                "only {} of {parties} workspace selections were in flight; the per-workspace scans are serialised",
+                *count
+            )));
+        }
+        Ok(())
+    });
 }
 
 pub(super) fn execute_replay_worker() {

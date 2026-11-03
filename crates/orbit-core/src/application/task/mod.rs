@@ -8,6 +8,7 @@ pub use backlog_forecast::BacklogForecastHistory;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) mod batch_prepare;
+pub(crate) mod candidate_checkpoint;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
