@@ -21,13 +21,13 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
-use super::TaskRecordUpdateParams;
-use super::decision_rules::{
+use super::super::TaskRecordUpdateParams;
+use super::super::params::TaskUpdateParams;
+use super::rules::{
     ConsolidationAnswer, CorpusDecisionDocument, CorpusDigest, CorpusRuleDependency,
     consolidate_decision_corpus, corpus_config_digest, corpus_content_digest,
     match_auto_decision_rule, parse_decision_rules, set_rule_auto_in_markdown,
 };
-use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::tag_instructions::{list_blob_paths_at, read_blob_at};
 use crate::application::task::TaskRecords;

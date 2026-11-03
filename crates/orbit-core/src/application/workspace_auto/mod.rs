@@ -11,6 +11,8 @@ mod drains;
 mod job_port;
 mod limiters;
 mod mode;
+mod pilot_coordination;
+mod projection;
 mod readiness;
 mod readiness_hosts;
 mod task_port;

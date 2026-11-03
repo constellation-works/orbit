@@ -47,6 +47,7 @@
 //! verified-no-diff holds (`no_diff`).
 
 mod admission;
+mod admission_holds;
 mod apply;
 mod assessment;
 mod attachment_budget;

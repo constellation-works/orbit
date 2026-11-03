@@ -16,7 +16,7 @@ use orbit_types::identity::lower_hex;
 
 const RULES_HEADING: &str = "## Rules";
 const REVIEW_WINDOW_DAYS: i64 = 90;
-const OPERATOR_AUTO: &str = "operator";
+pub(super) const OPERATOR_AUTO: &str = "operator";
 
 /// Status of one curated rule. Document frontmatter status is a different field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl CorpusRuleStatus {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Current => "current",
             Self::Stale => "stale",
@@ -527,7 +527,7 @@ fn topic_file_and_rule(topic: &str) -> Option<(String, String)> {
     (valid_slug(stem) && valid_slug(rule)).then(|| (stem.to_string(), rule.to_string()))
 }
 
-fn valid_slug(value: &str) -> bool {
+pub(super) fn valid_slug(value: &str) -> bool {
     let mut chars = value.chars();
     matches!(chars.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
         && value
@@ -658,7 +658,7 @@ fn dependency_name_ok(kind: &str, name: &str) -> bool {
     }
 }
 
-fn rules_section(markdown: &str) -> Option<&str> {
+pub(super) fn rules_section(markdown: &str) -> Option<&str> {
     let start = markdown.find(RULES_HEADING)? + RULES_HEADING.len();
     let body = &markdown[start..];
     let mut offset = 0;
@@ -672,7 +672,7 @@ fn rules_section(markdown: &str) -> Option<&str> {
 }
 
 // Byte spans are derived from the original lines, including their line endings.
-fn rule_fences(section: &str) -> Vec<(usize, usize, CorpusDecisionRule)> {
+pub(super) fn rule_fences(section: &str) -> Vec<(usize, usize, CorpusDecisionRule)> {
     let mut fences = Vec::new();
     let mut offset = 0;
     let mut opening = None;
@@ -701,129 +701,13 @@ fn rule_fences(section: &str) -> Vec<(usize, usize, CorpusDecisionRule)> {
     fences
 }
 
-fn fence_is_unclosed(section: &str, start: usize, end: usize) -> bool {
+pub(super) fn fence_is_unclosed(section: &str, start: usize, end: usize) -> bool {
     section[start..end]
         .trim_end_matches(['\r', '\n'])
         .lines()
         .last()
         .map(|line| line.trim() != "```")
         .unwrap_or(true)
-}
-
-fn rewrite_rules_section(markdown: &str, rules: &[CorpusDecisionRule]) -> String {
-    let Some(section) = rules_section(markdown) else {
-        let mut out = markdown.trim_end().to_string();
-        out.push_str("\n\n## Rules\n\n");
-        out.push_str(&render_rules(rules));
-        return out;
-    };
-    let section_start = section.as_ptr() as usize - markdown.as_ptr() as usize;
-    let mut out = markdown[..section_start].to_string();
-    let mut cursor = 0;
-    let mut used = 0;
-    let newline = if markdown.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    for (start, end, original) in rule_fences(section) {
-        out.push_str(&section[cursor..start]);
-        if let Some(rule) = rules.get(used) {
-            if *rule == original {
-                out.push_str(&section[start..end]);
-                if fence_is_unclosed(section, start, end) {
-                    if !out.ends_with('\n') {
-                        out.push_str(newline);
-                    }
-                    out.push_str("```");
-                    out.push_str(newline);
-                }
-            } else {
-                let rendered = render_rules(std::slice::from_ref(rule));
-                out.push_str(
-                    rendered
-                        .trim_end_matches('\n')
-                        .replace('\n', newline)
-                        .as_str(),
-                );
-                out.push_str(newline);
-            }
-            used += 1;
-        }
-        cursor = end;
-    }
-    out.push_str(&section[cursor..]);
-    if used < rules.len() {
-        if !out.ends_with('\n') {
-            out.push_str(newline);
-        }
-        out.push_str(newline);
-        out.push_str(&render_rules(&rules[used..]).replace('\n', newline));
-    }
-    out.push_str(&markdown[section_start + section.len()..]);
-    out
-}
-
-fn render_rules(rules: &[CorpusDecisionRule]) -> String {
-    let mut out = String::new();
-    for rule in rules {
-        out.push_str("```yaml\n");
-        out.push_str(&render_rule(rule));
-        out.push_str("```\n\n");
-    }
-    out
-}
-
-fn render_rule(rule: &CorpusDecisionRule) -> String {
-    let mut out = String::new();
-    push_scalar(&mut out, "id", &rule.id);
-    push_scalar(&mut out, "question", &rule.question);
-    push_scalar(&mut out, "answer", &rule.answer);
-    push_scalar(&mut out, "why", &rule.why);
-    out.push_str("citations:\n");
-    if rule.citations.is_empty() {
-        out.push_str("  []\n");
-    } else {
-        for citation in &rule.citations {
-            out.push_str(&format!("  - task: {}\n", yaml_quote(&citation.task)));
-            out.push_str(&format!("    date: {}\n", yaml_quote(&citation.date)));
-            out.push_str(&format!("    option: {}\n", yaml_quote(&citation.option)));
-        }
-    }
-    out.push_str("depends_on:\n");
-    if rule.depends_on.is_empty() {
-        out.push_str("  []\n");
-    } else {
-        for dependency in &rule.depends_on {
-            out.push_str(&format!("  - kind: {}\n", yaml_quote(&dependency.kind)));
-            out.push_str(&format!("    name: {}\n", yaml_quote(&dependency.name)));
-            out.push_str(&format!("    digest: {}\n", yaml_quote(&dependency.digest)));
-        }
-    }
-    push_scalar(&mut out, "status", rule.status.as_str());
-    push_scalar(&mut out, "review_by", &rule.review_by);
-    out.push_str(&format!(
-        "auto: {}\n",
-        if rule.auto { "true" } else { "false" }
-    ));
-    if rule.auto
-        && let Some(actor) = &rule.auto_set_by
-    {
-        push_scalar(&mut out, "auto_set_by", actor);
-    }
-    out
-}
-
-fn push_scalar(out: &mut String, key: &str, value: &str) {
-    out.push_str(key);
-    out.push_str(": ");
-    out.push_str(&yaml_quote(value));
-    out.push('\n');
-}
-
-fn yaml_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 fn new_topic_document(stem: &str) -> String {
@@ -843,84 +727,5 @@ fn new_topic_document(stem: &str) -> String {
     )
 }
 
-/// Replace `auto` on the rule `rule_ref` (`stem` or `stem/id`) inside `markdown`.
-/// Returns the rewritten document and the rule. `auto_set_by` is `operator`
-/// only when `auto` is true; turning auto off clears it.
-pub fn set_rule_auto_in_markdown(
-    markdown: &str,
-    rule_ref: &str,
-    auto: bool,
-) -> Option<(String, CorpusDecisionRule)> {
-    let (stem_hint, rule_id) = rule_ref.split_once('/').unwrap_or((rule_ref, rule_ref));
-    if !valid_slug(rule_id) || (rule_ref.contains('/') && !valid_slug(stem_hint)) {
-        return None;
-    }
-    let section = rules_section(markdown)?;
-    let (start, end, mut rule) = rule_fences(section)
-        .into_iter()
-        .find(|(_, _, rule)| rule.id == rule_id)?;
-    if rule.status != CorpusRuleStatus::Current {
-        return None;
-    }
-    rule.auto = auto;
-    rule.auto_set_by = auto.then(|| OPERATOR_AUTO.to_string());
-    let fence = &section[start..end];
-    let newline = if fence.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut replacement = String::new();
-    let mut found_auto = false;
-    let mut found_actor = false;
-    let mut found_closing = false;
-    for line in fence.split_inclusive('\n') {
-        let content = line.trim_end_matches(['\r', '\n']);
-        let ending = &line[content.len()..];
-        if content.starts_with("auto:") {
-            replacement.push_str(if auto { "auto: true" } else { "auto: false" });
-            replacement.push_str(ending);
-            found_auto = true;
-        } else if content.starts_with("auto_set_by:") {
-            if auto {
-                replacement.push_str("auto_set_by: \"operator\"");
-                replacement.push_str(ending);
-            }
-            found_actor = true;
-        } else if content.trim() == "```" {
-            if !found_auto {
-                replacement.push_str(if auto { "auto: true" } else { "auto: false" });
-                replacement.push_str(newline);
-            }
-            if auto && !found_actor {
-                replacement.push_str("auto_set_by: \"operator\"");
-                replacement.push_str(newline);
-            }
-            replacement.push_str(line);
-            found_closing = true;
-        } else {
-            replacement.push_str(line);
-        }
-    }
-    if !found_closing {
-        if !replacement.ends_with('\n') {
-            replacement.push_str(newline);
-        }
-        if !found_auto {
-            replacement.push_str(if auto { "auto: true" } else { "auto: false" });
-            replacement.push_str(newline);
-        }
-        if auto && !found_actor {
-            replacement.push_str("auto_set_by: \"operator\"");
-            replacement.push_str(newline);
-        }
-        replacement.push_str("```");
-        replacement.push_str(newline);
-    }
-    // Refuse forms we cannot safely edit as top-level lines (e.g. flow YAML).
-    let replacement_rule = rule_fences(&replacement).into_iter().next()?.2;
-    if replacement_rule != rule {
-        return None;
-    }
-    let section_start = section.as_ptr() as usize - markdown.as_ptr() as usize;
-    let mut out = markdown[..section_start + start].to_string();
-    out.push_str(&replacement);
-    out.push_str(&markdown[section_start + end..]);
-    Some((out, rule))
-}
+use super::rendering::rewrite_rules_section;
+pub use super::rendering::set_rule_auto_in_markdown;

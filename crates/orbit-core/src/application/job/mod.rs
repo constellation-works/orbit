@@ -1,3 +1,5 @@
+pub(crate) mod scripts;
+pub(crate) use scripts::{attach as script_attach, outputs as script_outputs, step as script_step};
 mod activity_tool_requirements;
 mod admission_port;
 mod agent;
@@ -23,11 +25,6 @@ mod review_hook;
 mod run;
 mod run_stage;
 mod run_worktree;
-pub(crate) mod script_attach;
-pub(crate) mod script_grant_request;
-pub(crate) mod script_inputs;
-pub(crate) mod script_outputs;
-pub(crate) mod script_step;
 mod task_port;
 mod triage_submit;
 mod upgrade_resume;
