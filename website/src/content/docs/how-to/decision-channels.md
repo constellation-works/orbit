@@ -244,8 +244,17 @@ orbit decision assist status
 ```
 
 The table shows each category's effective state (`enabled`, `disabled`,
-`demoted`, or `suspended`), threshold, policy, rolling window, readout and,
-for a demotion, its evidence. With no enablements it reports that none exist.
+`demoted`, or `suspended`), threshold, policy, agreed/total rolling window,
+readout and, when ended, the reason, actor and time. With no enablements it
+reports that none exist. The table does not show the demotion evidence. To
+inspect it, use structured JSON:
+
+```bash
+orbit decision assist status --json
+```
+
+For a demoted category, `ended.demotion` contains the trigger, outcome and
+veto counts, and request IDs from the window.
 
 These three commands have no MCP tool.
 
