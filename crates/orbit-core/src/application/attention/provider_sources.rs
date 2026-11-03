@@ -60,25 +60,20 @@ fn workspace_remote(runtime: &OrbitRuntime) -> Option<String> {
     }
 }
 
-/// Current head SHA of the base branch: local branch, then its upstream
-/// remote branch, then HEAD. Empty when no git head can be resolved.
+/// Current head SHA of the base branch, from the fetched remote-tracking
+/// ref `refs/remotes/origin/<base_branch>`. The caller only reaches here
+/// when an origin remote is configured, so that ref is the authoritative
+/// observation of the branch head: a local development branch can lag
+/// behind it and must not shadow it. Empty when the remote-tracking ref
+/// has not been fetched; the caller degrades explicitly instead of
+/// treating a local or checked-out head as the current base head.
 fn base_head_sha(runtime: &OrbitRuntime, base_branch: &str) -> String {
     let Ok(repo) = git2::Repository::open(runtime.paths().repo_root.as_path()) else {
         return String::new();
     };
-    for reference in [
-        format!("refs/heads/{base_branch}"),
-        format!("refs/remotes/origin/{base_branch}"),
-    ] {
-        if let Ok(reference) = repo.find_reference(&reference)
-            && let Some(oid) = reference.target()
-        {
-            return oid.to_string();
-        }
-    }
-    repo.head()
+    repo.find_reference(&format!("refs/remotes/origin/{base_branch}"))
         .ok()
-        .and_then(|head| head.target())
+        .and_then(|reference| reference.target())
         .map(|oid| oid.to_string())
         .unwrap_or_default()
 }
@@ -215,6 +210,21 @@ pub(super) fn read_ci_attention(
     }
     let base_branch = runtime.workspace_base_branch().to_string();
     let head_sha = base_head_sha(runtime, &base_branch);
+    if head_sha.is_empty() {
+        // No fetched remote-tracking head: freshness is unknown, so no
+        // run can be shown to be on the current base head. Degrade
+        // explicitly rather than treating any reported head as current.
+        degraded(
+            candidates,
+            format!(
+                "Current head of base branch '{base_branch}' is unavailable; fetch the branch and retry"
+            ),
+        );
+        candidates
+            .timings
+            .insert("ci_red".into(), started.elapsed().as_micros());
+        return;
+    }
     // Cache per workspace, keyed by the freshness inputs.
     let cache_key = workspace.id.clone();
     let cached_runs = {

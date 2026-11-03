@@ -107,6 +107,9 @@ impl Fixture {
         .unwrap()
         .trim()
         .to_string();
+        // The fetched remote-tracking ref starts at the local head; a
+        // scenario advances it to model a fetched base moving ahead.
+        git(&repo, &["update-ref", "refs/remotes/origin/main", &head]);
         // Fake `gh` first on PATH for this isolated scenario process.
         let bin = root.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -140,6 +143,41 @@ impl Fixture {
             head,
             state,
         }
+    }
+
+    /// Advance only the remote-tracking base ref to a new commit on top
+    /// of the current head, leaving the local base branch behind.
+    fn advance_remote_head(&self) -> String {
+        let output = std::process::Command::new("git")
+            .args([
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                "HEAD",
+                "-m",
+                "advance remote base",
+            ])
+            .current_dir(&self.repo)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git commit-tree: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let advanced = String::from_utf8(output.stdout).unwrap().trim().to_string();
+        git(
+            &self.repo,
+            &["update-ref", "refs/remotes/origin/main", &advanced],
+        );
+        advanced
+    }
+
+    fn delete_remote_head(&self) {
+        git(
+            &self.repo,
+            &["update-ref", "-d", "refs/remotes/origin/main"],
+        );
     }
 
     fn set_runs(&self, runs: Value) {
@@ -449,6 +487,65 @@ fn replica_direct_reads_identify_owner_only_sources_without_provider_call() {
     );
 }
 
+fn ci_red_reports_remote_head_when_local_behind() {
+    let fixture = Fixture::new(true);
+    let remote_head = fixture.advance_remote_head();
+    assert_ne!(remote_head, fixture.head);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(43, "failure", &now, &remote_head)]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["refs"]["run_id"], "43");
+    assert_eq!(items[0]["detail"]["reported_head_sha"], remote_head);
+}
+
+fn ci_red_ignores_retained_failure_on_stale_local_head() {
+    let fixture = Fixture::new(true);
+    fixture.advance_remote_head();
+    let now = chrono::Utc::now().to_rfc3339();
+    // Retained failure on the stale local head is not current.
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "stale local head must not be reported as current: {response}"
+    );
+}
+
+fn ci_red_advancing_remote_head_invalidates_cache() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let first = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert_eq!(first["items"].as_array().unwrap().len(), 1, "{first}");
+    let remote_head = fixture.advance_remote_head();
+    fixture.set_runs(json!([fixture.run(43, "failure", &now, &remote_head)]));
+    let second = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = second["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{second}");
+    assert_eq!(items[0]["refs"]["run_id"], "43", "{second}");
+}
+
+fn ci_red_unavailable_base_head_degrades() {
+    let fixture = Fixture::new(true);
+    fixture.delete_remote_head();
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "unavailable head must not be treated as a known current head: {response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded
+            .iter()
+            .any(|d| d["kind"] == "ci_red" && d["code"] == "source_unavailable"),
+        "{response}"
+    );
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -458,6 +555,10 @@ crate::scenario_table!(
     ci_red_missing_auth_degrades_without_failing,
     ci_red_stale_head_and_success_are_not_red,
     ci_red_folds_into_existing_repair_task,
+    ci_red_reports_remote_head_when_local_behind,
+    ci_red_ignores_retained_failure_on_stale_local_head,
+    ci_red_advancing_remote_head_invalidates_cache,
+    ci_red_unavailable_base_head_degrades,
     ci_red_timeout_degrades,
     friction_untriaged_lists_only_open,
 );
