@@ -193,9 +193,12 @@ refusals (credentials, permissions) and red candidate checks still fail. A
 provider read that errors or times out for a permanent or other non-transient
 reason, including a non-transport subprocess timeout, remains a failure;
 eligible transient transport failures may use the read-only recovery below.
-Transport failures that outlast it, or that it cannot take,
-hold as `delivery_forge_observation_unavailable` unless a completion mutation
-started. Resolve the decision before a new delivery attempt; apart from
+Transport failures that outlast it, or that it cannot take, hold as
+`delivery_forge_observation_unavailable` only before a completion mutation
+starts. After completion mutation provenance, a transient auto-fix required-check
+read holds as `delivery_check_evidence_inconclusive`; failures at other
+post-mutation observation boundaries remain failures. Resolve the decision
+before a new delivery attempt; apart from
 `delivery_forge_observation_unavailable`, which `orbit job resume` continues
 once the forge answers, these holds do not add a generic checkpoint-resume path.
 
@@ -773,10 +776,13 @@ forge changed, and `orbit job resume <run>` reads the forge again and continues
 completion from its checkpoints once it answers. The same hold ends a run whose
 job has no final recovery, a read after the completion budget expired, and a
 read that repair, reservation or source-repair provenance kept from the
-authenticated retry. A transport failure after a merge, auto-merge or rebase
-request, in that run or recorded in the task's history, and a credential or
-permission refusal still fail. `gh`'s `error connecting to api.github.com`
-counts as a transport failure.
+authenticated retry. A transient required-check read in auto-fix after a
+completion mutation in this run or recorded in task history instead holds as
+`delivery_check_evidence_inconclusive`, allowing the next auto-fix pass to
+reread PR status and reconcile the mutation. Transport failures at other
+observation boundaries after a merge, auto-merge or rebase request still fail,
+as do credential or permission refusals. `gh`'s
+`error connecting to api.github.com` counts as a transport failure.
 
 Changed task meaning, policy, candidate, review repairs, publication, ownership,
 lease or a dirty checkout refuses reuse, blocks the task with the refusal as

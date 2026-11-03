@@ -1403,7 +1403,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
 | `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
-| `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. The required-checks read itself retries an empty, truncated or `unexpected end of JSON input` response a bounded number of times (never past the completion deadline) before holding. A failed job's log read that the forge throttled for the authenticated account first waits for the forge's reset (or a bounded backoff when none is reported), at most three times per job and never past the completion deadline; each wait is recorded in the task history as `pr_auto_fix_read_deferred`, and a resumed completion honors it. |
+| `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. When completion mutation provenance exists in this invocation or task history, a transient required-checks read failure is held as `delivery_check_evidence_inconclusive`; the next auto-fix pass rereads PR status and reconciles any earlier mutation. The required-checks read itself retries an empty, truncated or `unexpected end of JSON input` response a bounded number of times (never past the completion deadline) before holding. A failed job's log read that the forge throttled for the authenticated account first waits for the forge's reset (or a bounded backoff when none is reported), at most three times per job and never past the completion deadline; each wait is recorded in the task history as `pr_auto_fix_read_deferred`, and a resumed completion honors it. |
 | `delivery_forge_observation_unavailable` | Completion's read-only forge reads (PR status, required checks, merge policy, prerequisite evidence) kept failing with a transport error before any completion mutation: after the one authenticated completion retry, when the run has no final recovery, past the completion budget, or after repair provenance that rules the retry out. Nothing changed on the forge and the task stays in review; `orbit job resume` reads the forge again and continues completion from its checkpoints. |
 | `delivery_origin_unavailable` | `worktree_setup` could not reach origin during pre-admission base fetch while every task being admitted was still in backlog, including a fetch-lock wait whose bounded origin probe confirms a transport outage. The run is held without changing those tasks; a later admission retries after origin recovers. If any task is already in progress, the outage follows ordinary run failure handling (or claim settlement for a claimed leaf) instead of a hold with no generic resume path. Authentication, permission and missing-ref refusals remain failures. |
 
@@ -1420,9 +1420,12 @@ existing `succeeded` status for a held underlying run.
 
 Missing pinned identity fields, including the PR head, and contradictory merge
 evidence produce typed `delivery_evidence_stale` holds. Forge reads refused for
-a credential, permission or other permanent reason, transport failures after a
-merge, auto-merge or rebase request (in that run or recorded in the task's
-history), failed candidate checks, and unlisted refusals remain failures. In particular,
+a credential, permission or other permanent reason, failed candidate checks,
+and unlisted refusals remain failures. Transport failures after a merge,
+auto-merge or rebase request (in that run or recorded in the task's history)
+also remain failures, except that a transient auto-fix required-check read
+holds as `delivery_check_evidence_inconclusive` when completion mutation
+provenance is present in the invocation or task history. In particular,
 `delivery_evidence_stale` text alone does not establish a hold. Completion's
 ordinary conflict-recovery path also retains its existing failure and repair
 semantics. Resolve the named refusal before starting a new delivery attempt;
