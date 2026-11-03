@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Auto-concurrency"
-last_validated: 2026-10-31
+last_validated: 2026-11-03
 ---
 
 # Glossary: Auto-concurrency
