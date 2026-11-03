@@ -62,6 +62,8 @@ impl AttentionKind {
         "run_failed",
         "run_stuck",
         "claim_stale",
+        "ci_red",
+        "friction_untriaged",
         "notice_open",
         "resident_stalled",
     ];
@@ -77,6 +79,8 @@ impl AttentionKind {
         "run_failed",
         "run_stuck",
         "claim_stale",
+        "ci_red",
+        "friction_untriaged",
         "host_unhealthy",
         "notice_open",
         "resident_stalled",

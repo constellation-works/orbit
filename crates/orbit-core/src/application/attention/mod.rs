@@ -3,6 +3,7 @@
 //! live with the operation in `orbit_common::governance::attention`, so the
 //! federated aggregator applies the same rules once over every host.
 mod host;
+mod provider_sources;
 mod runtime_sources;
 mod sources;
 
@@ -225,6 +226,16 @@ pub fn attention_query(
             &filter,
             now,
             operator,
+            &mut candidates,
+        );
+        provider_sources::read_ci_attention(
+            selected,
+            &workspace,
+            &host,
+            &filter,
+            now,
+            selected.context.settings().attention_settings(),
+            session_context,
             &mut candidates,
         );
         if reads_host_health {

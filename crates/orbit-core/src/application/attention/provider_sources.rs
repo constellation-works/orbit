@@ -1,0 +1,408 @@
+//! Provider and record sources: `ci_red` from the provider read behind
+//! `github.run.list`, cached per workspace and bounded by the source timeout.
+use super::sources::{AttentionCandidates, attention_reason};
+use crate::OrbitRuntime;
+use chrono::{DateTime, Utc};
+use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
+use orbit_config::AttentionSettings;
+use orbit_types::tool::{
+    AttentionDegraded, AttentionHost, AttentionItem, AttentionKind, AttentionNext,
+    AttentionSeverity, AttentionTask, AttentionWorkspace, ToolSessionContext,
+};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+struct CachedRuns {
+    fetched_at: Instant,
+    base_branch: String,
+    head_sha: String,
+    runs: Vec<Value>,
+}
+
+fn ci_cache() -> &'static Mutex<HashMap<String, CachedRuns>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CachedRuns>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn value_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn parse_time(value: &Value) -> Option<DateTime<Utc>> {
+    value
+        .as_str()
+        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+        .map(|time| time.with_timezone(&Utc))
+}
+
+/// The workspace's git remote, when one is recognisable. A workspace with
+/// no remote (or no repository) contributes no `ci_red` and no degradation.
+fn workspace_remote(runtime: &OrbitRuntime) -> Option<String> {
+    let repo = git2::Repository::open(runtime.paths().repo_root.as_path()).ok()?;
+    let remote = repo.config().ok()?.get_string("remote.origin.url").ok()?;
+    let remote = remote.trim().to_string();
+    if remote.is_empty() {
+        return None;
+    }
+    // Recognisable: a URL, an scp-like remote, or a path-like remote.
+    if remote.contains("://") || remote.contains('@') || remote.contains('/') {
+        Some(remote)
+    } else {
+        None
+    }
+}
+
+/// Current head SHA of the base branch: local branch, then its upstream
+/// remote branch, then HEAD. Empty when no git head can be resolved.
+fn base_head_sha(runtime: &OrbitRuntime, base_branch: &str) -> String {
+    let Ok(repo) = git2::Repository::open(runtime.paths().repo_root.as_path()) else {
+        return String::new();
+    };
+    for reference in [
+        format!("refs/heads/{base_branch}"),
+        format!("refs/remotes/origin/{base_branch}"),
+    ] {
+        if let Ok(reference) = repo.find_reference(&reference)
+            && let Some(oid) = reference.target()
+        {
+            return oid.to_string();
+        }
+    }
+    repo.head()
+        .ok()
+        .and_then(|head| head.target())
+        .map(|oid| oid.to_string())
+        .unwrap_or_default()
+}
+
+fn call_provider(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    base_branch: &str,
+    timeout: Duration,
+) -> Result<Vec<Value>, String> {
+    // Bound the whole provider read by the source timeout: run it on a
+    // worker and stop waiting at the deadline. The underlying `gh` call
+    // has its own 15s ceiling and finishes on its own afterwards.
+    let runtime = runtime.clone();
+    let session = session.clone();
+    let branch = base_branch.to_string();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let spawned = std::thread::Builder::new()
+        .name("attention-ci-read".into())
+        .spawn(move || {
+            let result = (|| -> Result<Vec<Value>, String> {
+                let auth = runtime
+                    .execute_tool_command_with_session_context(
+                        "github.auth.status",
+                        json!({}),
+                        None,
+                        None,
+                        session.clone(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if auth["available"] != json!(true) || auth["authenticated"] != json!(true) {
+                    return Err("GitHub authentication missing".to_string());
+                }
+                let listed = runtime
+                    .execute_tool_command_with_session_context(
+                        "github.run.list",
+                        json!({"branch": branch, "limit": 100}),
+                        None,
+                        None,
+                        session,
+                    )
+                    .map_err(|error| error.to_string())?;
+                Ok(listed["runs"].as_array().cloned().unwrap_or_default())
+            })();
+            let _ = sender.send(result);
+        });
+    match spawned {
+        Ok(_) => match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => Err("GitHub provider read timed out".to_string()),
+        },
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn find_repair_task(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Option<(String, Option<AttentionTask>)> {
+    use orbit_types::task::CiFailureIdentity;
+    let tasks = runtime.observe_task_metadata().ok()?;
+    for task in &tasks {
+        if task.status.is_terminal() {
+            continue;
+        }
+        let Ok(history) = runtime.get_task_history(&task.id) else {
+            continue;
+        };
+        let Ok(Some(identity)) = CiFailureIdentity::from_history(&history) else {
+            continue;
+        };
+        if identity
+            .sources
+            .iter()
+            .any(|source| source.run_id == run_id)
+        {
+            return Some((
+                task.id.clone(),
+                Some(AttentionTask {
+                    status: task.status,
+                    tags: task.tags.clone(),
+                    crew: task.crew.clone(),
+                    orchestrator: task.orchestrator.clone(),
+                    title: task.title.clone(),
+                }),
+            ));
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn read_ci_attention(
+    runtime: &OrbitRuntime,
+    workspace: &AttentionWorkspace,
+    host: &AttentionHost,
+    filter: &AttentionFilter,
+    now: DateTime<Utc>,
+    settings: &AttentionSettings,
+    session: &ToolSessionContext,
+    candidates: &mut AttentionCandidates,
+) {
+    if !filter.selected(AttentionKind::CiRed) {
+        return;
+    }
+    let started = Instant::now();
+    let degraded = |candidates: &mut AttentionCandidates, message: String| {
+        candidates.degraded.push(AttentionDegraded {
+            scope: format!("workspace:{}", workspace.id),
+            kind: AttentionKind::CiRed.as_str().into(),
+            code: "source_unavailable".into(),
+            message,
+        });
+    };
+    if workspace_remote(runtime).is_none() {
+        return;
+    }
+    let base_branch = runtime.workspace_base_branch().to_string();
+    let head_sha = base_head_sha(runtime, &base_branch);
+    // Cache per workspace, keyed by the freshness inputs.
+    let cache_key = workspace.id.clone();
+    let cached_runs = {
+        let cache = ci_cache().lock().unwrap_or_else(|p| p.into_inner());
+        cache.get(&cache_key).and_then(|entry| {
+            if entry.base_branch == base_branch
+                && entry.head_sha == head_sha
+                && entry.fetched_at.elapsed()
+                    < Duration::from_secs(u64::from(settings.ci_cache_seconds))
+            {
+                Some(entry.runs.clone())
+            } else {
+                None
+            }
+        })
+    };
+    let runs = match cached_runs {
+        Some(runs) => runs,
+        None => {
+            let timeout = Duration::from_secs(u64::from(settings.source_timeout_seconds).max(1));
+            match call_provider(runtime, session, &base_branch, timeout) {
+                Ok(runs) => {
+                    if let Ok(mut cache) = ci_cache().lock() {
+                        cache.insert(
+                            cache_key,
+                            CachedRuns {
+                                fetched_at: Instant::now(),
+                                base_branch: base_branch.clone(),
+                                head_sha: head_sha.clone(),
+                                runs: runs.clone(),
+                            },
+                        );
+                    }
+                    runs
+                }
+                Err(message) => {
+                    degraded(candidates, message);
+                    candidates
+                        .timings
+                        .insert("ci_red".into(), started.elapsed().as_micros());
+                    return;
+                }
+            }
+        }
+    };
+    // Freshness: only runs on the current base-branch head count. Pending
+    // or unknown observations are neither green nor evidence that an older
+    // red head is current.
+    let mut newest_by_workflow: BTreeMap<String, Value> = BTreeMap::new();
+    for run in &runs {
+        if value_string(&run["head_branch"]) != base_branch {
+            continue;
+        }
+        if !head_sha.is_empty() {
+            let reported = value_string(&run["reported_head_sha"]);
+            if reported.is_empty() || reported != head_sha {
+                continue;
+            }
+        }
+        if value_string(&run["status"]) != "completed" {
+            continue;
+        }
+        let conclusion = value_string(&run["conclusion"]);
+        if conclusion.is_empty() {
+            continue;
+        }
+        let workflow = value_string(&run["workflow"]);
+        let key = if workflow.is_empty() {
+            value_string(&run["run_id"])
+        } else {
+            workflow.clone()
+        };
+        let run_time = parse_time(&run["updated_at"])
+            .or_else(|| parse_time(&run["created_at"]))
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        match newest_by_workflow.get(&key) {
+            Some(existing) => {
+                let existing_time = parse_time(&existing["updated_at"])
+                    .or_else(|| parse_time(&existing["created_at"]))
+                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+                if run_time > existing_time {
+                    newest_by_workflow.insert(key, run.clone());
+                }
+            }
+            None => {
+                newest_by_workflow.insert(key, run.clone());
+            }
+        }
+    }
+    for (workflow_key, run) in newest_by_workflow {
+        let conclusion = value_string(&run["conclusion"]);
+        if conclusion != "failure" && conclusion != "timed_out" {
+            continue;
+        }
+        let run_id = value_string(&run["run_id"]);
+        // `since` is the failing run's `updated_at`, the nearest
+        // completion-time proxy the provider projection supplies.
+        let Some(since) = parse_time(&run["updated_at"]).or_else(|| parse_time(&run["created_at"]))
+        else {
+            continue;
+        };
+        let age = (now - since).num_seconds().max(0) as u64;
+        let critical = settings.age_bump_hours.len() >= 2
+            && age >= u64::from(settings.age_bump_hours[1]) * 3600;
+        let severity = if critical {
+            AttentionSeverity::Critical
+        } else {
+            AttentionSeverity::High
+        };
+        let workflow = if workflow_key.is_empty() {
+            run_id.clone()
+        } else {
+            workflow_key.clone()
+        };
+        let repair = if run_id.is_empty() {
+            None
+        } else {
+            find_repair_task(runtime, &run_id)
+        };
+        let (next, refs_task, task_meta) = if let Some((task_id, task_meta)) = &repair {
+            (
+                AttentionNext {
+                    summary: "Inspect the CI repair task".into(),
+                    tool: Some("orbit.task.show".into()),
+                    input: Some(json!({"id": task_id, "workspace": workspace.id})),
+                    command: format!(
+                        "orbit --workspace '{}' task show {}",
+                        workspace.id.replace('\'', "'\\''"),
+                        task_id
+                    ),
+                    needs: Vec::new(),
+                    also: Vec::new(),
+                },
+                Some(task_id.clone()),
+                task_meta.clone(),
+            )
+        } else {
+            (
+                AttentionNext {
+                    summary: "Inspect the failing run".into(),
+                    tool: Some("github.run.view".into()),
+                    input: Some(json!({"run": run_id})),
+                    command: format!(
+                        "orbit tool run github.run.view --input '{{\"run\":\"{run_id}\"}}'"
+                    ),
+                    needs: Vec::new(),
+                    also: Vec::new(),
+                },
+                None,
+                None,
+            )
+        };
+        let mut refs = json!({"run_id": run_id});
+        if let Some(task_id) = refs_task {
+            refs["task_id"] = json!(task_id);
+        }
+        let title = value_string(&run["title"]);
+        let reason = if title.is_empty() {
+            format!("CI workflow {workflow} failed on {base_branch}")
+        } else {
+            title
+        };
+        let mut item = AttentionItem {
+            id: format!(
+                "att_ci_red_{}",
+                cursor::attention_digest(
+                    json!([
+                        AttentionKind::CiRed,
+                        host.machine_id,
+                        workspace.id,
+                        workflow
+                    ])
+                    .to_string()
+                    .as_bytes()
+                )
+            ),
+            kind: AttentionKind::CiRed,
+            severity,
+            workspace: workspace.clone(),
+            host: host.clone(),
+            refs,
+            task: task_meta,
+            since: Some(since),
+            age_seconds: Some(age),
+            expires_at: None,
+            reason: attention_reason(&reason),
+            detail: json!({
+                "workflow": workflow,
+                "conclusion": conclusion,
+                "branch": base_branch,
+                "reported_head_sha": value_string(&run["reported_head_sha"]),
+                "url": run["url"],
+                "since_source": "updated_at",
+                "since_is_proxy": true,
+            }),
+            next,
+            fingerprint: String::new(),
+        };
+        item.fingerprint = cursor::attention_fingerprint(
+            &item,
+            json!({"workflow": workflow, "run_id": run_id, "conclusion": conclusion}),
+        );
+        candidates.items.push(item);
+    }
+    candidates
+        .timings
+        .insert("ci_red".into(), started.elapsed().as_micros());
+}

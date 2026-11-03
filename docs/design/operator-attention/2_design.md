@@ -17,7 +17,7 @@ related_artifacts: [ORB-21164, ORB-21171]
 # Operator Attention — Design
 
 This document describes how `orbit attention` fits together and where it lands in the code.
-The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; federation and `host_unhealthy` in slice 4. Slice 2 implements the runtime sources; provider sources remain a later slice. The prescriptive contracts live in the specs:
+The task-level feed, local scopes, filters, cursor and shared configuration are implemented in slice 1; federation and `host_unhealthy` in slice 4. Slice 2 implements the runtime sources; slice 3 implements the provider and record sources (`ci_red`, `friction_untriaged`). The prescriptive contracts live in the specs:
 [attention-item](./specs/attention-item.md) (kinds, schema, severity),
 [attention-filters](./specs/attention-filters.md),
 [attention-cursor](./specs/attention-cursor.md) and
@@ -81,7 +81,7 @@ needed, which the slice verifies before it merges.
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | the planned `attention.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
-| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for task-level kinds, `runtime_sources.rs` for runs and claims, `host.rs` for local `host_unhealthy`) |
+| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for task-level and friction kinds, `runtime_sources.rs` for runs and claims, `provider_sources.rs` for `ci_red`, `host.rs` for local `host_unhealthy`) |
 | Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
 | Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
@@ -154,6 +154,10 @@ References below; each is a proposed `ws_orbit` task tagged `operator-attention`
    documented per platform (the probe and its limitations are described below). Consumes the shared §5 settings from slice 1. Depends on slice 1.
 3. **Provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
    read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
+   The provider read stays behind `github.run.list` (Orbit stays generic); freshness binds to the
+   current base-branch head, pending or unknown observations are not green, and `since` is the
+   failing run's `updated_at` labelled as an onset-time proxy (`detail.since_source`), because the
+   provider projection supplies no exact completion timestamp.
 4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
    fan-out and merge, unreachable hosts as items, session-binding refusal, the
    federated-mcp doc amendment, and the local doctor / drain-probe sources for

@@ -45,6 +45,7 @@ mod agent_sandbox_mask;
 mod application_authority;
 mod artifact_tools;
 mod attention_observation;
+mod attention_provider;
 mod audit_commit_report;
 mod auto_task_job_steps;
 mod auto_task_update;
