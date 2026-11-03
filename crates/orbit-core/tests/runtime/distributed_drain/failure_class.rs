@@ -1,6 +1,6 @@
 //! [ORB-14257] A launched claimed leaf's settlement carries a typed failure
-//! class, and the owner blocks the task only for the candidate's own failure
-//! or the task's; every other class releases it, within a per-task budget.
+//! class. External prerequisites hold the task for an operator while retaining
+//! release evidence; transient failures still release within a per-task budget.
 
 use orbit_core::application::job::JobRunCancelOutcome;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1087,13 +1087,17 @@ fn a_settlement_naming_another_leaf_run_records_no_evidence() {
 /// to the owner — releases the claim and suppresses the host for the drain's
 /// window, whatever crew a task names: the drain asks the owner for nothing
 /// more, and the owner holds every task from that drain even when its
-/// request was built before the release reached it. Another drain may still
-/// take the released task.
-fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
+/// request was built before the release reached it. Other drains may take
+/// unrelated work; only an operator can requeue the held task.
+fn host_failures_hold_the_task_and_suppress_the_host_for_the_window() {
     for (error, class) in [
         (
             "[validation_environment] required validation 'make ci-fast' could not run: \
              python3 lacks tomllib",
+            "environment",
+        ),
+        (
+            "[validation_route_unavailable] required check needs the owner validation lane",
             "environment",
         ),
         (
@@ -1102,7 +1106,50 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
             "owner_route",
         ),
     ] {
-        let (pair, drain, _) = released(&[Some("sol"), Some("luna")], error, class, |_, _| {});
+        let (pair, drain, leaf, task) = claimed_on(&[Some("sol"), Some("luna")]);
+        leaf_completed(&pair, &leaf, prepared());
+        let pass = fail_and_settle(&pair, &drain, &leaf, error);
+        assert_eq!(pair.owner_status(&task), "blocked", "{class}: {pass}");
+        let settlement = settlement_of(&pair, &leaf);
+        assert_eq!(settlement["Release"]["failure"]["class"], class);
+        assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
+        assert!(
+            pair.wire
+                .owner
+                .blocked_recovery_view(Utc::now())
+                .unwrap()
+                .is_empty(),
+            "operator prerequisites must not spend another recovery agent"
+        );
+        let attention = pair
+            .wire
+            .owner
+            .execute_tool_command_dispatch_with_session_context(
+                "orbit.attention",
+                json!({"kind": "blocked"}),
+                None,
+                None,
+                orbit_core::adapter::command::ToolEntryPoint::Mcp,
+                ToolSessionContext {
+                    effective_capabilities: [orbit_types::tool::McpCapability::Operator].into(),
+                    ..Default::default()
+                },
+            )
+            .map(|outcome| outcome.value)
+            .expect("blocked attention");
+        let item = attention["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["refs"]["task_id"] == task)
+            .unwrap_or_else(|| panic!("held task needs operator attention: {attention:#}"));
+        let reason = settlement["Release"]["failure"]["reason"].as_str().unwrap();
+        assert!(
+            item["reason"]
+                .as_str()
+                .is_some_and(|summary| summary.contains(reason)),
+            "attention preserves the leaf reason: {item}"
+        );
         let window = window(&pair, &drain);
         let suppressed = window
             .host_suppressed
@@ -1149,16 +1196,18 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
             held_reason(&pair.tasks[1]).is_some_and(|reason| reason.contains("host is suppressed")),
             "{class}: the other crew's task is held from this drain too: {same:#}"
         );
-        assert!(
-            held_reason(&pair.tasks[0]).is_some_and(|reason| reason.contains(class)),
-            "{class}: the hold names the release's class: {same:#}"
-        );
-
         let other = replay_pull(&pair, &format!("another-drain-{class}"), true);
         assert_eq!(
-            other["receipt"]["claim"]["task_id"], pair.tasks[0],
-            "{class}: another drain may still claim the released task: {other:#}"
+            other["receipt"]["claim"]["task_id"], pair.tasks[1],
+            "{class}: another drain gets unrelated work, never the held task: {other:#}"
         );
+        assert_eq!(pair.owner_status(&task), "blocked");
+        pair.wire
+            .owner
+            .requeue_blocked_task(&task, "operator resolved the prerequisite", false)
+            .expect("operator requeues the held candidate");
+        let resumed = replay_pull(&pair, &format!("operator-requeued-{class}"), true);
+        assert_eq!(resumed["receipt"]["claim"]["task_id"], task, "{resumed:#}");
     }
 }
 
@@ -1737,8 +1786,8 @@ fn a_discarded_candidate_is_not_resumed() {
 }
 
 /// [ORB-14257] A worker step whose call to the owner never reached it fails
-/// typed as an owner-route failure, and the leaf it ends releases its claim
-/// as `owner_route` — not as a failure of its candidate.
+/// typed as an owner-route failure. Its `owner_route` release evidence
+/// holds the task for an operator without blaming the candidate.
 fn a_lost_owner_route_fails_the_step_as_owner_route() {
     struct Unreachable;
     impl OwnerCoordinator for Unreachable {
@@ -1773,7 +1822,7 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
     fail_and_settle(&pair, &drain, &leaf, &message);
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "owner_route", "{failure}");
-    assert_eq!(pair.owner_status(&task), "backlog");
+    assert_eq!(pair.owner_status(&task), "blocked");
 }
 
 /// [ORB-15088] An owner that times out waiting on a task lock answers
@@ -2062,7 +2111,7 @@ crate::scenario_table!(
     hydration_observes_stored_runs_without_reconciliation,
     hydration_continuation_visits_every_selected_claim_at_limit_one,
     a_settlement_naming_another_leaf_run_records_no_evidence,
-    host_failures_release_the_claim_and_suppress_the_host_for_the_window,
+    host_failures_hold_the_task_and_suppress_the_host_for_the_window,
     a_baseline_red_failure_releases_the_claim_without_excluding_the_crew
 );
 

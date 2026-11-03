@@ -84,9 +84,9 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
     assert_eq!(pair.owner_status(&claim.task_id), "backlog");
 }
 
-/// A host that cannot spawn a claimed leaf returns its task and stops pulling
+/// A host that cannot spawn a claimed leaf holds its task and stops pulling
 /// immediately, rather than blocking several tasks to trip the breaker.
-fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host() {
+fn a_launch_failure_cancels_the_leaf_holds_the_task_and_suppresses_the_host() {
     let pair = Pair::new(3);
     let drain = pair.start_drain();
     let failed = pair.pass(&drain);
@@ -109,13 +109,13 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
         settles[0]["settlement"]["Release"]["failure"]["class"],
         "environment"
     );
-    assert_eq!(
-        pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
-        "revoked"
-    );
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
+    let claimed = pair.claimed_task(&leaf);
+    assert_eq!(pair.owner_status(&claimed), "blocked");
     assert!(
         pair.tasks
             .iter()
+            .filter(|task| **task != claimed)
             .all(|task| pair.owner_status(task) == "backlog")
     );
     let suppressed = pair.pass(&drain);
@@ -224,7 +224,7 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
     let leaves = pair.leaf_runs();
     assert_eq!(leaves.len(), 1, "one leaf for the one claim: {leaves:?}");
     assert_eq!(claims[0]["bound_run"]["run_id"], leaves[0].as_str());
-    assert_eq!(claims[0]["claim"]["phase"], "revoked");
+    assert_eq!(claims[0]["claim"]["phase"], "failed");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert_eq!(settles.len(), 1, "{settles:?}");
     assert!(
@@ -234,7 +234,7 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
         "the bound leaf reached its launch: {settles:?}"
     );
     let claimed = claims[0]["claim"]["task_id"].as_str().unwrap();
-    assert_eq!(pair.owner_status(claimed), "backlog");
+    assert_eq!(pair.owner_status(claimed), "blocked");
     assert_eq!(pair.run_state(&leaves[0]), JobRunState::Cancelled);
     assert_eq!(
         settles[0]["settlement"]["Release"]["failure"]["class"],
@@ -260,8 +260,8 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
     assert!(error_of(&lost).contains("dropped"), "{lost}");
     assert_eq!(
         pair.owner_status(&task),
-        "backlog",
-        "the owner applied the release"
+        "blocked",
+        "the owner applied the prerequisite hold"
     );
     assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
     let applied = pair.owner_task(&task);
@@ -288,7 +288,7 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .wire
         .call("", "orbit.drain.claim.settle", settles[0].clone())
         .expect("a replayed settlement answers with the recorded outcome");
-    assert_eq!(replay["phase"], "revoked", "{replay}");
+    assert_eq!(replay["phase"], "failed", "{replay}");
     let after = pair.owner_task(&task);
     for field in ["status", "execution_summary", "comments", "history"] {
         assert_eq!(after[field], applied[field], "{field} changed on replay");
@@ -300,8 +300,8 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(
-        blocked, 0,
-        "a launch failure never blocks the task: {after:#}"
+        blocked, 1,
+        "the launch prerequisite blocks exactly once: {after:#}"
     );
 }
 
@@ -1226,7 +1226,7 @@ fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
     another_session_machine_cannot_bind_or_settle_a_followers_claim,
-    a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host,
+    a_launch_failure_cancels_the_leaf_holds_the_task_and_suppresses_the_host,
     operator_cancelled_claimed_leaf_returns_to_backlog_with_reason,
     lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once,
     a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,

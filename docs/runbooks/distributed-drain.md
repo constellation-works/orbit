@@ -1027,10 +1027,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - If the coordinator is missing or gone, the call fails as
   `owner_route_unavailable` and the agent ends its step on that code. The
   run skips step and final recovery, and the leaf releases its claim with the
-  `owner_route` class (below): the task goes back to `backlog` on the owner
-  and the drain requests no more work for the rest of its window. Check that
+  `owner_route` class (below): the owner blocks the task for an operator
+  decision and the drain requests no more work for the rest of its window. Check that
   the follower's binary and launch pass `ORBIT_PLUGIN_BROKER` to the agent's
-  `orbit` before starting a new drain.
+  `orbit`, then explicitly requeue the held task before starting a new drain.
 - The before-PR reviewer's `review-*` reads (`review-manifest.json`, its
   prior review evidence and the evidence the owner's hold names) and its
   `review-report.json` write take the same route and are also checked against
@@ -1112,21 +1112,25 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   that was cancelled before it launched releases its claim instead: the task
   goes back to `backlog` on the owner with a comment naming the drain. A
   pre-spawn launch failure also cancels the queued leaf and releases its claim
-  with class `environment`, suppressing further pulls on that host for the
-  window. If a child was spawned before registration or observer handoff
+  with class `environment`, holding the task for an operator and suppressing further
+  pulls on that host for the window. If a child was spawned before registration or observer handoff
   failed, the supervisor stops and reaps it when possible; launch intent stays
   recorded until the run is reconciled. A pending run alone does not establish
   that the worker never executed, so this case is not released as unlaunched.
   A launched leaf that ends without its handoff settles with a typed failure
-  class. Only `candidate` (the work failed) and `task_input` (final recovery
+  class. `candidate` (the work failed) and `task_input` (final recovery
   rejected or archived the task) move the task to `blocked` on the owner, with
-  a summary naming the leaf run, its failed step and that step's error. Every
-  other class releases the claim: the task goes back to `backlog` with a
+  a summary naming the leaf run, its failed step and that step's error.
+  External prerequisites, `environment` (missing validation tools or
+  `validation_route_unavailable`) and `owner_route` (the leaf cannot reach its
+  owner), keep release evidence but also block the task immediately. Read the
+  leaf error in `orbit attention`, resolve the prerequisite and explicitly
+  requeue the task. No automatic blocked-task recovery runs and no release
+  budget is spent on these holds. The remaining classes release the claim: the task goes back to `backlog` with a
   comment naming the class and the reason. These classes are
   `operator_cancel` (`orbit run cancel <leaf-run>` or the dashboard's cancel,
   with its reason; `--block` fails the claim and blocks the task instead), `provider` (the CLI failed authentication or its model was
-  at capacity), `environment` (validation lacked a tool), `owner_route` (the
-  leaf could not reach the owner), `baseline_red` (required validation fails
+  at capacity), `baseline_red` (required validation fails
   on the base exactly as on the candidate; the owner holds the task until the
   base passes. When the follower has already recorded that command passing
   on the base branch's current tip, the release carries no hold and keeps
@@ -1177,7 +1181,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   case (forge releases, and busy-owner releases within the task's allowance of three,
   aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
-  take it. When the leaf had
+  take it unless it is blocked for an external prerequisite. When the leaf had
   committed a candidate, the release or block names it, and the task's next
   claim continues it rather than starting over, unless the task's spec
   changed or `orbit task update --discard-candidate` discarded it since. A

@@ -721,7 +721,8 @@ owns delivery:
   [runbook](../../runbooks/distributed-drain.md)).
   A confirmed pre-spawn launch error records a typed `environment` release through the shared
   settlement recorder, cancelling the queued leaf before delivery. A failed cancellation is
-  retried before the release is sent. This host failure suppresses the drain's remaining window.
+  retried before the release is sent. This host failure suppresses the drain's remaining window
+  and holds the affected task for an operator decision.
   A launch error after spawn retains `Launching` for reconciliation even when the supervisor
   kills and reaps the child: it may already have executed, so it cannot be treated as unlaunched.
   The exception is a provider that could not be used [ORB-13941]: the CLI runner stamps a failure
@@ -758,8 +759,8 @@ owns delivery:
   typed `owner_route_unavailable` and ends its step on that `error.code` [ORB-14260]. The runner
   stamps `[owner_route_unavailable]`, step and final recovery are skipped (nothing inside the
   sandbox can open the route), and the leaf settles as the `owner_route` class below. The code
-  grants nothing an agent could abuse: declaring it only withholds repair and returns the task
-  to the owner's backlog.
+  grants nothing an agent could abuse: declaring it withholds repair and holds the task
+  for an operator decision.
 - *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a
   `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
   `candidate` (the default: the candidate's implementation, checks or review failed) and
@@ -770,13 +771,16 @@ owns delivery:
   task for that decision, without spending release budget or automatically retrying it. Failure
   scans count this designed hold separately. The flag defaults to false for older records, and
   older readers ignore the additive field; the wire enum vocabulary is unchanged.
-  Every other class settles as `Release` and returns it to `backlog`: `operator_cancel` (an
+  External-prerequisite classes `owner_route` and `environment` also settle as `Release`,
+  retaining crew/host suppression evidence, but the owner immediately blocks their tasks for
+  an operator decision. This includes `validation_route_unavailable` in the `environment`
+  family. The leaf error appears immediately in `orbit attention`; blocked-task recovery does
+  not launch another agent. Only operator recovery requeues the task; these holds do not spend
+  release budget.
+  The remaining classes settle as `Release` and return to `backlog`: `operator_cancel` (an
   operator cancelled the launched leaf, with the cancel's reason; a cancel with `--block` settles
   as `Fail` and blocks the task [ORB-14274]), `provider` (the
-  `provider_unavailable` case above), `environment` (`[validation_environment]`, a required
-  command that lacked a tool), `owner_route` (`[owner_route_unavailable]`, which the worker
-  route stamps on a call to the owner that never reached it — unreachable, owner unavailable,
-  stale route or failed negotiation), `baseline_red` (the `[baseline_red]` failure with its hold,
+  `provider_unavailable` case above), `baseline_red` (the `[baseline_red]` failure with its hold,
   from `claim_validate`), `transient` (`[transient_failure]`, which `claim_validate` raises for a
   required command still network-inconclusive after its reruns on a base that is not red, which
   the worker route stamps on an owner call that lost only to the owner's lock-wait deadline
@@ -812,7 +816,7 @@ owns delivery:
   the crew. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
-  from that drain run. A busy owner is not: a leaf whose owner call lost to the owner's own
+  from that drain run. Other drains may claim unrelated work but cannot claim the blocked task. A busy owner is not: a leaf whose owner call lost to the owner's own
   lock-wait deadline — an owner `lock_busy` answer, or an owner `orbit` that exited on its locked
   store before it answered the session — releases as `transient` with `failure.owner_busy`. That
   release excludes no crew, holds neither the task nor the host on the owner, and is outside the
@@ -1666,7 +1670,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
 | Owner's own drain admission pass times out on a task or database lock | The pass is deferred, not failed: it admits nothing, releases any `enforce` gap-fit reservations it wrote for its wave (any it cannot release expire with their TTL), records `lock_busy` and the lock error (naming the holder) as the drain's last pass, and the next pass retries after the poll interval. Ten consecutive deferred passes fail the drain with that error; a completed pass resets the count; any other admission error fails the drain as before |
 | Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
-| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search, task listing, task show and artifact get read the claimed workspace ([ORB-19270]); federated search, a task outside that workspace, another task's `review-*` artifact (on the remote route), an artifact put or friction for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
+| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search, task listing, task show and artifact get read the claimed workspace ([ORB-19270]); federated search, a task outside that workspace, another task's `review-*` artifact (on the remote route), an artifact put or friction for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled with release evidence and an operator block |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |

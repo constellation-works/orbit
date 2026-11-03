@@ -856,7 +856,11 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let cleared = recorded_pass(&pair.follower, &restarted);
     assert_eq!(cleared.admission_refusal, None, "{cleared:?}");
     assert_eq!(pulls(&pair), 4);
-    assert_eq!(backlog(&pair), 1);
+    assert_eq!(
+        backlog(&pair),
+        0,
+        "the launch prerequisite holds the final task"
+    );
     assert_eq!(pair.owner_claims().len(), 4);
 }
 
@@ -1479,7 +1483,7 @@ model = \"gpt-sol\"
         "the alias crew is not admitted: {claims:#?}"
     );
     // This test binary cannot re-exec a worker, so the admitted sol leaf's
-    // launch fails and the owner releases that task. The claim phase is the
+    // launch fails and the owner holds that task. The claim phase is the
     // launch failure, which is how an admitted crew shows up here.
     assert!(
         launch_refused(&pass),
@@ -1487,8 +1491,8 @@ model = \"gpt-sol\"
     );
     assert_eq!(
         phase(&sol),
-        Some("revoked"),
-        "the other provider is admitted, then its launch fails: {claims:#?}"
+        Some("failed"),
+        "the other provider is admitted, then its launch prerequisite holds it: {claims:#?}"
     );
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert!(
@@ -1503,8 +1507,8 @@ model = \"gpt-sol\"
     assert_eq!(pair.owner_status(&opus), "backlog");
     assert_eq!(
         pair.owner_status(&sol),
-        "backlog",
-        "the launch refusal releases the admitted task"
+        "blocked",
+        "the launch prerequisite holds the admitted task"
     );
 
     let window = crew_window(&pair, &drain);

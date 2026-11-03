@@ -304,7 +304,7 @@ for a pull drain as for a local one.
    (`run_context.run_id`) released for an `environment`, `transient` (unless it carries a forge hold), `owner_route` or `provider`
    failure, or by an operator cancel, and every task when that run released one for an
    `environment` or `owner_route` failure — the host itself is suppressed for the window; another
-   drain may take them [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
+   drain may take unrelated work. The failed task itself remains blocked until operator recovery. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
    owner's own lock-wait deadline) holds neither the task nor the host, and does not count
    against the task's release budget, for the task's first three such releases within the
    budget window; the owner ignores the mark on any other class and records every later busy
@@ -542,7 +542,7 @@ store schema are implementation choices; their atomic behavior is required:
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail | Persist failure evidence and its typed `candidate` or `task_input` class (or an `operator_cancel` whose operator asked to block the task), keep the failure's committed candidate for the next claim, block the task, invalidate execution authority, release only this reservation atomically |
-| Release | Executor gives back unfinished work it did not fail: never launched, or a launched leaf whose typed failure class does not block (`operator_cancel`, `provider` including a model at capacity, `environment`, `owner_route`, `baseline_red`, `transient`, `base_conflict`). Revoke the claim, return the task to `backlog`, release only this reservation atomically. A blocking class, or any typed failure class after two such releases of the task within 24 hours, blocks the task instead, with one comment listing every counted reason |
+| Release | Executor gives back unfinished work it did not fail: never launched, or a launched leaf whose typed failure class does not block (`operator_cancel`, `provider` including a model at capacity, `environment`, `owner_route`, `baseline_red`, `transient`, `base_conflict`). Revoke the claim, return the task to `backlog`, release only this reservation atomically. An external-prerequisite class (`owner_route` or `environment`, including `validation_route_unavailable`) immediately blocks the task for an operator, preserving its release record for host suppression without spending release budget. The leaf error appears immediately in attention and no blocked-task recovery agent runs. A blocking class also blocks the task. Any budgeted failure class after two such releases within 24 hours blocks the task with one comment listing every counted reason |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
 A before-landing review refusal whose diagnostic carries the pending-decision marker adds

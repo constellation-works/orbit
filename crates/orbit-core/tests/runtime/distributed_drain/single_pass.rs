@@ -430,7 +430,13 @@ fn a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new()
         .iter()
         .filter(|task| pair.owner_status(task) == "backlog")
         .count();
-    assert_eq!(backlog, 3, "the unlaunched claim returns to backlog");
+    assert_eq!(
+        backlog, 2,
+        "the launch prerequisite holds only the claimed task"
+    );
+    let claims = pair.owner_claims();
+    let task = claims[0]["claim"]["task_id"].as_str().unwrap();
+    assert_eq!(pair.owner_status(task), "blocked");
 }
 
 /// An old zero-window checkpoint has no `pull_single_pass` field. The public

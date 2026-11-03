@@ -116,7 +116,8 @@ pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> b
 ///
 /// No repair of the candidate can install a tool, so step and final recovery
 /// skip it, the failure handoff keeps the candidate for `orbit job resume`
-/// without opening a `[BLOCKED]` PR, and a pull drain releases the claim.
+/// without opening a `[BLOCKED]` PR. A pull drain retains release evidence
+/// while its owner holds the task for an operator decision.
 pub const VALIDATION_ENVIRONMENT_ERROR_CODE: &str = "validation_environment";
 
 /// The bracketed marker form of [`VALIDATION_ENVIRONMENT_ERROR_CODE`].
@@ -143,7 +144,7 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
 /// It is a kind of [`VALIDATION_ENVIRONMENT_ERROR_CODE`]: no repair of the
 /// candidate changes the lane's sandbox, so step and final recovery skip it,
 /// the failure handoff keeps the candidate, and a pull drain releases the
-/// claim as an `environment` failure instead of blocking the task.
+/// claim as an `environment` failure, which the owner holds for an operator.
 pub const VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "validation_route_unavailable";
 
 /// The bracketed marker form of [`VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE`].
@@ -233,11 +234,10 @@ pub fn is_owner_busy(message: Option<&str>) -> bool {
 /// Why a claimed leaf ended without its typed handoff, as its settlement
 /// carries it to the owner [ORB-14257].
 ///
-/// The owner blocks the task only for [`Self::Candidate`] and
-/// [`Self::TaskInput`]: the work or the task itself needs a human. Every
-/// other class is the executing host's, the base's or the moment's, so the
-/// claim is released to the backlog instead, within a per-task release budget
-/// that counts every typed release.
+/// Candidate and task-input failures fail the claim. External prerequisites
+/// ([`Self::requires_operator_decision`]) retain release evidence for host
+/// suppression but also block the task immediately. Other classes release to
+/// backlog within a per-task budget.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimFailureClass {
@@ -285,20 +285,28 @@ impl ClaimFailureClass {
         }
     }
 
-    /// Whether the owner blocks the task for it rather than releasing it.
+    /// Whether the leaf fails its claim instead of sending release evidence.
     #[must_use]
     pub const fn blocks(self) -> bool {
         matches!(self, Self::Candidate | Self::TaskInput)
     }
 
+    /// Whether a prerequisite outside the worker's reach needs an operator
+    /// before another attempt. Keep release evidence for these classes so
+    /// the failed host remains suppressed even while the task is blocked.
+    #[must_use]
+    pub const fn requires_operator_decision(self) -> bool {
+        matches!(self, Self::Environment | Self::OwnerRoute)
+    }
+
     /// Whether a release of this class counts against the task's release
-    /// budget. Every typed release counts; the third within the window blocks
-    /// the task until a human decides what should change. A `provider`
+    /// budget. Releases that do not already require an operator count; the
+    /// third blocks the task until a human decides what should change. A `provider`
     /// release for a usage limit is the exception the release itself carries,
     /// since a limit says nothing about the task [ORB-14695].
     #[must_use]
     pub const fn budgeted(self) -> bool {
-        !self.blocks()
+        !self.blocks() && !self.requires_operator_decision()
     }
 
     /// Whether the owner withholds the released task from the same drain for
