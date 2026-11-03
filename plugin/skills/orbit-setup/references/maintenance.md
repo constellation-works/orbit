@@ -457,11 +457,14 @@ runtime opens, so most upgrades need nothing. The bare command and `--dry-run`
 are the only way to *see* what is pending without applying it, which is what you
 want before upgrading a machine that matters.
 
-In version 0.43.0, layout version 8 stores script output files and parallel
-script-branch checkpoints as durable run artifacts. An older Orbit binary
-refuses a workspace after it has been upgraded to that layout. For a workspace
+Layout version 9 fences older Orbit clients that cannot preserve skipped-step
+checkpoint markers: older writers drop the marker, and older readers restore a
+skipped step's null as an output on resume, changing downstream template
+behavior. The layout fence protects the workspace; the marker field itself is
+not necessarily rejected by older binaries. Layout version 8 also protects
+script output files and parallel script-branch checkpoints. For a workspace
 used from multiple hosts, update every host that can open it before any host
-opens or migrates it to version 8; do this as one coordinated rollout and keep
+opens or migrates it to version 9; do this as one coordinated rollout and keep
 old clients stopped. See [Upgrading a workspace together](multi-host.md#upgrading-a-workspace-together)
 for the host-by-host order. On each host, `orbit --version` confirms the
 installed binary, while `orbit update --check` only reports available releases
