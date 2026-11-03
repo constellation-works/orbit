@@ -11,6 +11,7 @@ mod codebase;
 mod config;
 mod cost;
 mod crews;
+mod dashboard_chrome;
 mod decisions;
 mod denials;
 mod diagnostics;

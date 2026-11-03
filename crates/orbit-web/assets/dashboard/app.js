@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
@@ -1550,6 +1550,16 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   const aggregate = isAggregateView();
   const entered = lastRefreshTab !== activeTab;
   const slowReads = tasksSlowReadsDue(explicit);
+  const routinePeek = slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate);
+  const failurePeek = slowReads && metricsJobFailurePeekDue(entered)
+    && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate);
+  // Keep each fact's cadence, but carry the simultaneous chrome reads in one
+  // response. Explicit refresh uses fresh direct reads, as do change notices.
+  const combineChrome = activeTab === "tasks" || activeTab === "knowledge" || activeTab === "run-detail"
+    || (activeTab === "jobs" && activeJobsSubtab === "catalogue")
+    || (activeTab === "analytics" && activeAnalyticsSubtab === "metrics");
+  const chrome = combineChrome && poll && !explicit && !aggregate && getWorkspace() && (routinePeek || failurePeek)
+    ? fetchDashboardChrome({ routines: routinePeek, failures: failurePeek, since: summaryReadWindow() }) : null;
 
   // The health strip is global; refresh on every tick alongside the active tab,
   // except that the Tasks page reads it on its slow cadence (tasksSlowReadsDue).
@@ -1560,21 +1570,21 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // The chips also read every 5 s on their own (initHostResources), so the
   // Tasks page's tick leaves them to that.
   if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources({ shareRecent: poll && !explicit }).catch(error => console.error(error));
-  void fetchAndRenderNoticeBanner({ shareRecent: poll && !explicit }).catch(error => console.error(error));
+  void fetchAndRenderNoticeBanner({ shareRecent: poll && !explicit, read: chrome?.notices }).catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   if (slowReads) void peekDoctor().catch(error => console.error(error));
   // Routines and Jobs already read this status in their active-panel request.
-  if (slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate)) {
-    void peekRoutineFailures().catch(error => console.error(error));
+  if (routinePeek) {
+    void peekRoutineFailures(chrome?.routines).catch(error => console.error(error));
   }
   // The Jobs catalogue reads the same failure streaks in its own request.
   // Metrics reuses the last scoped count so the selected trend still fits
   // in the ten-request refresh. A failed Metrics read is retried next time.
   const onMetrics = activeTab === "analytics" && activeAnalyticsSubtab === "metrics" && !aggregate;
-  if (slowReads && metricsJobFailurePeekDue(entered) && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate)) {
+  if (failurePeek) {
     const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
-    void peekJobFailures()
+    void peekJobFailures(chrome?.failures)
       .then(ok => { if (onMetrics) retainJobFailureMetricsRead(scope, ok); })
       .catch(error => {
         if (onMetrics) retainJobFailureMetricsRead(scope, false);
@@ -1590,7 +1600,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   if (aggregate) {
     renderAggregatePlaceholders();
   } else if (slowReads) {
-    add("Health summary", fetchAndRenderSummary());
+    add("Health summary", fetchAndRenderSummary(chrome?.summary));
   }
   const includeRunningRuns = activeTab === "tasks" && !aggregate && activeStatuses.has("in-progress");
   const activeRunsPath = `${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`;
@@ -1667,7 +1677,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   }
 
   if (activeTab === "jobs") {
-    add(`Jobs › ${activeJobsSubtab}`, activeJobsSubtab === "history" ? fetchAndRenderRuns() : fetchAndRenderJobs());
+    add(`Jobs › ${activeJobsSubtab}`, activeJobsSubtab === "history" ? fetchAndRenderRuns() : fetchAndRenderJobs({ routinesRead: chrome?.routines }));
     return jobs;
   }
 
@@ -1939,12 +1949,16 @@ function fetchAndRenderRunLogs() {
   });
 }
 
-function fetchAndRenderSummary() {
+function summaryReadWindow() {
   // Tools follows Analytics' shared window, independently of an Events
   // drill-down's cutoff. The summary endpoint requires a bounded window.
   const toolsOpen = activeTab === "analytics" && activeAnalyticsSubtab === "reliability" && activeReliabilityView === "tools";
-  const since = (toolsOpen ? toolsWindowFor().window : effectiveAuditWindow()) || "24h";
-  return requestPanel("audit-summary-body", since, () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
+  return (toolsOpen ? toolsWindowFor().window : effectiveAuditWindow()) || "24h";
+}
+
+function fetchAndRenderSummary(read = null) {
+  const since = summaryReadWindow();
+  return requestPanel("audit-summary-body", since, () => read || fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
     renderAuditSummary(data, auditContext());
   });

@@ -239,6 +239,20 @@ async function waitForHeldCompletions(count = 1) {
   assert.equal(heldCompletions.length, count, 'held completions request arrived');
 }
 function payloadFor(url) {
+  if (url.pathname === '/api/dashboard/chrome') {
+    const component = path => {
+      const target = new URL(path, url);
+      target.searchParams.set('workspace', url.searchParams.get('workspace'));
+      return { status: 200, body: JSON.stringify(payloadFor(target)) };
+    };
+    return {
+      notices: component('/api/notices'),
+      summary: component('/api/audit/summary?since=' + url.searchParams.get('since')),
+      routines: url.searchParams.get('routines') === 'true' ? component('/api/routines') : null,
+      failures: url.searchParams.get('failures') === 'true' ? component('/api/jobs/failure-streaks') : null,
+    };
+  }
+
   switch (url.pathname) {
     case '/api/workspaces': return [
       { id: 'ws_fixture', name: 'Fixture A', status: 'active', is_default: true },

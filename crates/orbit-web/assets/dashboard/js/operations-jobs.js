@@ -71,7 +71,7 @@ export function updateJobFailureBadges(failing) {
 // last scoped count between arrivals. A reply from an earlier host or
 // workspace visit must not restore a stale count. Returns false only when
 // this visit's read failed, so the caller can retry it.
-export async function peekJobFailures() {
+export async function peekJobFailures(read = null) {
   if (isAggregateView() || !selectedWorkspace()) {
     updateJobFailureBadges([]);
     return true;
@@ -79,7 +79,7 @@ export async function peekJobFailures() {
   const visit = captureWorkspaceVisit();
   const request = ++jobFailureRequest;
   try {
-    const payload = await fetchJson("/api/jobs/failure-streaks");
+    const payload = await (read || fetchJson("/api/jobs/failure-streaks"));
     if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges(payload?.failing);
     return true;
   } catch (_) {
@@ -369,7 +369,7 @@ export function renderJobs(payload) {
   $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
 }
 
-export function fetchAndRenderJobs() {
+export function fetchAndRenderJobs({ routinesRead = null } = {}) {
   const live = operationsState.context.getJobsSubtab?.() === "live";
   const bodyId = live ? "jobs-live-body" : "jobs-body";
   const countId = live ? "jobs-live-count" : "jobs-count";
@@ -378,7 +378,10 @@ export function fetchAndRenderJobs() {
   }
   return requestPanel(bodyId, "jobs",
     () => Promise.all([
-      fetchJson(withInactivePlugins("/api/routines")),
+      // The chrome peek and catalogue use the same payload unless this view
+      // explicitly requests the wider plugin-off inventory.
+      routinesRead && withInactivePlugins("/api/routines") === "/api/routines"
+        ? routinesRead : fetchJson(withInactivePlugins("/api/routines")),
       fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
       // The streak read must not take the catalogue down with it.
       live ? null : fetchJson("/api/jobs/failure-streaks").catch(() => null),

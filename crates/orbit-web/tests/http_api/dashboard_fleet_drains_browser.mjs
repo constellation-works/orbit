@@ -46,12 +46,30 @@ const initializer = `
   const row = (id, phase, eligible) => ({ workspace_id: id, workspace_name: workspaces.find(w => w.id === id).name,
     phase, slots_used: 2, slots_ceiling: 4, eligible_count: eligible,
     top_wait_reason: 'context_lock_conflict', holds: ['codex usage limit', 'claude authentication failed'] });
-  globalThis.fetch = async (input, options = {}) => {
+  globalThis.fetch = async (input, options = {}, record = true) => {
     const url = new URL(input, location.href);
-    globalThis.fleetRequests.push(url.pathname + url.search);
+    if (record) globalThis.fleetRequests.push(url.pathname + url.search);
     const host = url.pathname.startsWith('/api/on/') ? url.pathname.split('/')[3] : 'owner';
     const api = url.pathname.replace(/^\\/api\\/on\\/[^/]+/, '/api');
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+    if (api === '/api/dashboard/chrome') {
+      const component = async name => {
+        const target = new URL(url);
+        const [suffix, query] = name.split('?');
+        target.pathname = url.pathname.replace('/dashboard/chrome', suffix);
+        if (query) new URLSearchParams(query).forEach((value, key) => target.searchParams.set(key, value));
+        target.searchParams.delete('routines');
+        target.searchParams.delete('failures');
+        const response = await globalThis.fetch(target.href, options, false);
+        return { status: response.status, body: await response.text() };
+      };
+      return json({
+        notices: await component('/notices'),
+        summary: await component('/audit/summary?since=' + url.searchParams.get('since')),
+        routines: url.searchParams.get('routines') === 'true' ? await component('/routines') : null,
+        failures: url.searchParams.get('failures') === 'true' ? await component('/jobs/failure-streaks') : null,
+      });
+    }
     if (api === '/api/hosts') {
       const hosts = [
         { name: 'owner', machine_id: 'owner-id', local: true },
@@ -387,20 +405,20 @@ async function assertFleetCadenceWithConnectedStream(browser, port) {
 
 // One refreshDashboard cycle. Host-resource reads stay out of the count: the
 // dashboard also polls them on a separate 5s timer.
-async function measurePoll(page) {
-  const measured = await page.evaluate(async () => {
-    const start = globalThis.fleetRequests.length;
-    document.getElementById('refresh-btn').click();
-    const deadline = performance.now() + 3000;
-    let sawFetching = false;
-    while (performance.now() < deadline) {
-      const text = document.getElementById('meta-text')?.textContent || '';
-      if (text.startsWith('fetching')) sawFetching = true;
-      if (sawFetching && !text.startsWith('fetching')) break;
-      await new Promise(resolve => setTimeout(resolve, 0));
+async function measurePoll(page, slow = false) {
+  const measured = await page.evaluate(async slow => {
+    const now = Date.now;
+    if (slow) {
+      Date.now = () => now() + 300001;
     }
+    const start = globalThis.fleetRequests.length;
+    const request = globalThis.__fleetPoll({ poll: true });
+    const sawFetching = document.getElementById('meta-text')?.textContent.startsWith('fetching');
+    await request;
+    await globalThis.waitForDashboardFetches();
+    Date.now = now;
     return { sawFetching, requests: globalThis.fleetRequests.slice(start) };
-  });
+  }, slow);
   assert.equal(measured.sawFetching, true, 'a poll cycle started');
   return measured.requests.filter(url => !url.includes('/host/resources'));
 }
@@ -445,7 +463,8 @@ async function assertJobFailureBadges(browser, port) {
     assert.ok(counted.length > 0 && counted.length <= 10, `tokens poll issued ${counted.length}: ${counted.join(', ')}`);
     assert.ok(!paths.includes('/api/jobs/failure-streaks'), `tokens poll repeats failure streaks: ${counted.join(', ')}`);
     assert.ok(paths.includes('/api/diagnostics/task_tokens'), 'tokens poll reads the selected trend');
-    for (const required of ['doctor', 'routines', 'audit/summary', 'job-runs', 'workflows/auto/readiness',
+    assert.ok(counted.some(value => value.includes('/dashboard/chrome?') && value.includes('routines=true')), 'routine facts arrive in the combined chrome read');
+    for (const required of ['doctor', 'job-runs', 'workflows/auto/readiness',
       'diagnostics/implement_one', 'diagnostics/completions', 'tasks/completion-by-complexity', 'diagnostics/defects']) {
       assert.ok(paths.includes(`/api/${required}`), `tokens poll retains ${required}: ${paths.join(', ')}`);
     }
@@ -524,7 +543,7 @@ async function assertPollBudget(browser, port) {
     assert.equal(await fleetReads(), 2, 'two registered hosts are read once at startup; the first panel poll does not read the fleet');
     const polls = [];
     const recordPoll = async (label) => {
-      const counted = await measurePoll(page);
+      const counted = await measurePoll(page, label === 'tasks');
       polls.push({ view: label, count: counted.length, requests: counted });
       // Keep the exact list even when the budget assertion fails.
       fs.writeFileSync(path.join(evidence, 'poll-requests.json'), JSON.stringify(polls, null, 2));
@@ -564,7 +583,8 @@ async function assertPollBudget(browser, port) {
           // still occur and count, including reads for visible chrome.
           await page.getByRole('tab', { name: trend, exact: true }).click();
           const paths = await recordPoll(`${label}/${trend}`);
-          for (const required of ['doctor', 'routines', 'audit/summary', 'job-runs', 'workflows/auto/readiness',
+          assert.ok(paths.includes('/api/dashboard/chrome'), 'routine and summary facts arrive in the combined chrome read');
+          for (const required of ['doctor', 'job-runs', 'workflows/auto/readiness',
             'diagnostics/implement_one', 'diagnostics/completions', 'tasks/completion-by-complexity', 'diagnostics/defects']) {
             assert.ok(paths.includes(`/api/${required}`), `${trend} retains ${required}`);
           }
@@ -774,7 +794,8 @@ const server = http.createServer((req, res) => {
   const served = url.pathname === '/fixture.mjs' ? { data: initializer, type: 'text/javascript' } : dashboardFile(url.pathname);
   if (!served) { res.writeHead(404); res.end(); return; }
   const data = url.pathname === '/' ? served.data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g,
-    '<script type="module" src="/fixture.mjs"></script>') : served.data;
+    '<script type="module" src="/fixture.mjs"></script>') : url.pathname === '/app.js'
+      ? served.data.toString() + '\nglobalThis.__fleetPoll = refreshDashboard;' : served.data;
   res.setHeader('content-type', served.type); res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
