@@ -3,6 +3,7 @@ type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
 last_validated: 2026-10-24
+last_updated: 2026-11-03
 ---
 
 # Spec: Artifact Write Redaction
@@ -98,3 +99,10 @@ Original and redacted values are not recorded. Tests should inspect these rows t
 - General-purpose schema validation in the sanitizer; existing typed parsers keep reporting shape errors.
 - Auto-publish, commit, or remote cleanup behavior after a secret has already entered history.
 - Automatic sweeps of existing authored records or git history rewriting; see the forward-only decision recorded for [ORB-10591].
+
+## Task References
+
+- **[ORB-10591]** — Document the artifact-write redaction boundary, add structural SSH identifier coverage, and return field-level redaction details.
+- [ORB-11097] — Delivered: Withdraw orbit.session_log.* from the public agent tool surface.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

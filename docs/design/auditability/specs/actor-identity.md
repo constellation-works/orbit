@@ -3,6 +3,7 @@ type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
 last_validated: 2026-10-29
+last_updated: 2026-11-03
 ---
 
 # Spec: Canonical Audit Actor Identity
@@ -123,3 +124,9 @@ both makes the normalization auditable rather than implicit.
 The dashboard summary emits `actor_split`, and `orbit-web`'s
 `audit_event_to_json` exposes `actor`, `actor_kind`, `actor_vendor`, `actor_family`, and
 `actor_model` next to the untouched `role`.
+
+## Task References
+
+- [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

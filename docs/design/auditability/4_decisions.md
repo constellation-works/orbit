@@ -3,7 +3,7 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-11-03
 last_validated: 2026-10-15
 status: Draft
 feature: auditability
@@ -661,5 +661,16 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 - [ORB-10680] — moved hub friction records into the host-global SQLite store to bound scan memory.
 - [ORB-10890] — record an explicitly-untrusted self-reported actor beside the trusted `role` so unauthenticated MCP traffic is attributable-but-labelled.
 - [ORB-19680] — price prompt-size tiers per request from captured per-request usage, never from invocation totals.
+- [ORB-00067] — Preserved driving-agent attribution on workflow task transitions.
+- [ORB-00089] — Wired runtime identity into activity-job tool contexts.
+- [ORB-00091] — Removed system attribution from agent-driven automation transitions.
+- [ORB-00191] — Added dashboard parity before retiring the metrics CLI.
+- [ORB-10257] — Added workspace ownership, presence and execution-profile projections.
+- [ORB-10348] — Expanded deprecation review to stale codebase artifact references.
+- [ORB-10365] — Preserved learning scope tags on updates and retired obsolete records.
+- [ORB-10458] — Carried per-task implementer identity into workflow commit authorship.
+- [ORB-10598] — Retitled the four non-identifying friction records after deployment.
+- [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
+- [ORB-11284] — Correlated provider completions by invocation ancestry.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

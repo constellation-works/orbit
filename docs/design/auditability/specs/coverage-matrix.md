@@ -1,6 +1,7 @@
 ---
 type: design
 summary: "Spec: Audit Coverage Matrix"
+last_updated: 2026-11-03
 last_validated: 2026-11-03
 ---
 
@@ -51,7 +52,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - Some deterministic automation actions rely on enclosing job context rather than dedicated targeted audit rows.
 - CLI backend tool allowlists are recorded as harness-delegated advisories, not enforced Orbit denials.
 - Command audit stdout/stderr fields exist but are not broadly populated.
-- Friction report submissions have no active producer for the live `orbit.friction.reported` JSONL event; the CLI and web formatters retain only its renderer.
+- Friction report submissions have no active producer for the live `orbit.friction.reported` JSONL event; the CLI and web formatters retain only its renderer. [ORB-21797] tracks restoring this required projection.
 
 ## Review Checklist
 
@@ -67,3 +68,10 @@ When reviewing a change that mutates code or state, ask:
 ## Agent Signature
 
 Last revised by codex for [ORB-10262].
+
+## Task References
+
+- **[ORB-10262]** — Historical capability/placement preflight work, no longer part of the v1 MCP execution path.
+- [ORB-21797] — Tracks restoring the missing friction live-tracing projection.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

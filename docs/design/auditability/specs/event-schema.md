@@ -2,6 +2,7 @@
 type: design
 summary: Spec: Audit Event Schema
 last_validated: 2026-11-03
+last_updated: 2026-11-03
 ---
 
 # Spec: Audit Event Schema
@@ -110,3 +111,9 @@ Required invariants:
 ## Agent Signature
 
 Last revised by codex / gpt-5.5 for [T20260508-8].
+
+## Task References
+
+- **[T20260508-8]** — Record backend: cli subprocess cwd in v2 audit and live tracing.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
