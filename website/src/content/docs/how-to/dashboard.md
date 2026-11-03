@@ -171,8 +171,9 @@ prove that a particular task or run succeeded.
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
-| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Jobs**, and **Residents**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, **Jobs**, and **Residents**. |
 | **[Leases](#leases)** | Read-only path holders, waiters and recent landing notices for the selected workspace. |
+| **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
@@ -204,6 +205,17 @@ or expansions, including holders inherited from a directory lease. Recent
 landing notices appear alongside them. The view is read-only and does not
 aggregate **All workspaces**. Request, renew, expand or release leases with the
 CLI or MCP tools instead; see [Hold paths with leases](../path-leases/).
+
+## Notices
+
+**Notices** shows open fleet notices in the selected workspaces, followed by
+notices closed or expired in the last 24 hours. A banner also shows open
+incident and maintenance notices, with each notice's kind, title, scope, age,
+and expiry. Its **Notices** link opens this view. The banner hides when no open
+incident or maintenance notices remain and clears when the selected workspace
+changes.
+For posting, closing, and scope rules, see [Post and retire fleet
+notices](fleet-notices.md).
 
 ## Tasks
 
@@ -1376,7 +1388,7 @@ appears in the timeline with actor `dashboard`.
 ## Automation
 
 **Automation** has these views: **Routines** (with the host scheduler clock),
-**Auto-tasks**, **Jobs**, and [**Residents**](#residents). Its controls need a single active workspace and
+**Auto-tasks**, **Scripts**, **Jobs**, and [**Residents**](#residents). Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
 [Schedule Recurring Work](../recurring-work/).
@@ -1452,6 +1464,17 @@ run ID. It is disabled on **Delivery** rows, which need a task or a window:
 use **ship** or the [auto-drain](#auto-drain). **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
+
+### Scripts
+
+**Scripts** lists workspace scripts with their state (`granted`, `stale`,
+`ungranted`, `revoked`, `orphaned`, or `witness refused`), current and granted
+digests, requested and granted capabilities, and any open grant request. When
+a diff is shown, it is labeled **Diff since the granted bytes** when a grant
+exists, or **Files to grant** before the first grant. An operator can grant
+the displayed digest with **Grant `<digest>`**; the action is bound to the
+digest reviewed on this page. See [Script steps](../../reference/activity-job-yaml/#script-steps)
+for how a job uses a granted workspace script.
 
 ### Residents
 
