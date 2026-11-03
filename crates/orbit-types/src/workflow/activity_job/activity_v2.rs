@@ -172,6 +172,15 @@ pub struct AgentLoopSpec {
     /// asset; the exception must be explicit, not incidental.
     #[serde(default = "default_require_completion_envelope")]
     pub require_completion_envelope: bool,
+    /// Bounded continuation of an implementer that declares its authorized
+    /// work unfinished with the typed `implementation_incomplete` signal
+    /// [ORB-21837]. Absent, such a declaration fails the step as any other
+    /// declared failure. Present, the runner may start a fresh invocation in
+    /// the same worktree, with the same crew, tools and sandbox, inside the
+    /// unspent part of this activity's wall-clock budget; it never extends
+    /// that budget or changes what the step's success means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_continuation: Option<IncompleteContinuationPolicy>,
     /// Program allowlist enforced before `proc.spawn` executes a request.
     /// An empty `Some(vec![])` denies every program (fail-closed).
     ///
@@ -214,6 +223,18 @@ pub struct AgentLoopSpec {
     /// image-input run on it is refused before launch. Never persisted.
     #[serde(skip)]
     pub crew_vision_disabled: bool,
+}
+
+/// Bounds on [`AgentLoopSpec::incomplete_continuation`] [ORB-21837].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IncompleteContinuationPolicy {
+    /// Most continuation invocations one step dispatch may start after its
+    /// first. Zero admits none.
+    pub max_rounds: u32,
+    /// Unspent wall-clock budget, in seconds, a continuation needs before it
+    /// may start. A smaller remainder keeps the declared failure.
+    pub min_remaining_seconds: u64,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].

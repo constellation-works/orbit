@@ -198,6 +198,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name,

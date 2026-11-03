@@ -141,6 +141,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     }
 }
 

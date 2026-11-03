@@ -34,6 +34,25 @@ spec:
       # `interrupted_review` when the earlier run was stopped mid-review.
       resume_candidate:
         type: [object, "null"]
+      # Engine-owned context for a bounded implementation continuation,
+      # set only by the runner, on a fresh invocation in the
+      # same worktree after this activity's previous invocation declared
+      # `implementation_incomplete` with its `remaining_work`.
+      implementation_continuation:
+        type: object
+        properties:
+          round:
+            type: integer
+          max_rounds:
+            type: integer
+          remaining_budget_seconds:
+            type: integer
+          remaining_work:
+            type: array
+            items:
+              type: string
+          previous_error:
+            type: [string, "null"]
       # Engine-owned context for the phase resumed by final recovery.
       final_recovery_resume:
         type: object
@@ -188,6 +207,14 @@ spec:
               type: string
             candidate_evidence:
               type: string
+      # The typed unfinished-work signal, read only with `status: "failed"`
+      # and `error.code: "implementation_incomplete"` and no `blocker`: one to
+      # 32 non-empty strings naming the authorized work left (see
+      # "Implementation continuation" in the instruction).
+      remaining_work:
+        type: array
+        items:
+          type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -224,8 +251,9 @@ spec:
     minimum runtime applies: a valid no-op, already-landed or invalid-finding
     handoff under Handoff is a complete outcome, not unfinished work.
 
-    If the input carries `final_recovery_resume`, `resume_candidate` or
-    `claimed`, read the matching section after the Procedure before step 1.
+    If the input carries `final_recovery_resume`, `resume_candidate`,
+    `implementation_continuation` or `claimed`, read the matching section
+    after the Procedure before step 1.
 
     Tools
 
@@ -499,6 +527,28 @@ spec:
     Then rerun the checks, and say in the summary that you repaired a
     resumed candidate.
 
+    Implementation continuation
+
+    Finish the task in one session when you can. If you must end the
+    session while authorized work remains and no legitimate stop condition
+    applies, leave the partial candidate uncommitted and return
+    `status: "failed"`, `error.code: "implementation_incomplete"`, a short
+    `error.message`, and `result.remaining_work`: a list of the concrete
+    items still to do. Never pair that code with `result.blocker`; a real
+    blocker returns the blocker alone. Orbit may then start a fresh
+    session in the same worktree, under the same crew, tools and budget,
+    while enough of this activity's wall-clock budget remains; otherwise
+    the run fails as declared. No other code or wording asks for this.
+
+    When `input.implementation_continuation` is set, you are that fresh
+    session: the worktree holds your earlier partial candidate as
+    uncommitted changes. Keep it, apply the terminal-task guard and
+    re-read the task, then finish `remaining_work` and the rest of the
+    task and validate the whole candidate as the Procedure requires.
+    `remaining_budget_seconds` is all the time this session has. Report
+    the whole delivery, both sessions, in the execution summary. The step
+    succeeds only when this session hands off a complete deliverable.
+
     Claimed mode
 
     When `input.claimed` is true, the pipeline delivers your output to the
@@ -705,3 +755,8 @@ spec:
     - podman
   on_denial: terminate
   wall_clock_timeout_seconds: 10800
+  # An `implementation_incomplete` declaration gets at most two
+  # fresh sessions, each only while 15 minutes of the 3-hour budget remain.
+  incomplete_continuation:
+    max_rounds: 2
+    min_remaining_seconds: 900

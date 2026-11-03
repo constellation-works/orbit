@@ -14,7 +14,7 @@ use crate::context::RuntimeHost;
 
 use crate::activity_job::audit_writer::V2AuditWriter;
 
-pub(crate) use preparation::run_cli_backend_for_step;
+pub(crate) use preparation::dispatch_cli_invocation;
 
 #[derive(Clone, Copy)]
 struct CliDispatchContext<'a> {

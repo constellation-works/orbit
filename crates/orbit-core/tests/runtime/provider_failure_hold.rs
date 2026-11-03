@@ -888,6 +888,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     };
     let asset = json!({
         "schemaVersion": 2,

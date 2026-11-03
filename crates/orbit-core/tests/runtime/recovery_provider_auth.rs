@@ -182,6 +182,7 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
         trusted_host_execution: false,
         crew_env: vec![],
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     };
     let outcome = orbit_engine::activity_job::cli_runner::run_cli_backend(
         &fx.runtime,
