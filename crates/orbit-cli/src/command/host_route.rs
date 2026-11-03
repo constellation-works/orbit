@@ -46,19 +46,29 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
     }
     let global_root = orbit_core::runtime::resolve_global_root()?;
     // Plugin callbacks cannot use the host's SSH credentials. Refuse before
-    // any delivery (including id-routed tools with an explicit workspace),
-    // using the same root that authenticates local callback sessions.
+    // discovery as well as delivery, using the same root that authenticates
+    // local callback sessions. Resolving --host can itself attempt SSH.
     if let Commands::Tool(tool) = &cli.command
         && let ToolSubcommand::Run(args) = &tool.command
         && let Some(selector) = workspace_value(cli)?
-        && hosts::selector_remote_host(&global_root, &selector)?.is_some()
     {
-        let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
-        orbit_core::adapter::command::refuse_plugin_child_remote_callback(
-            &callback_root,
-            &args.name,
-            &selector,
-        )?;
+        let destination = if let Some(host) = host.as_deref()
+            && hosts::host_ssh_target(&global_root, host)?.is_some()
+        {
+            Some(format!("--host {host} --workspace {selector}"))
+        } else if hosts::selector_remote_host(&global_root, &selector)?.is_some() {
+            Some(selector)
+        } else {
+            None
+        };
+        if let Some(destination) = destination {
+            let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+            orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                &callback_root,
+                &args.name,
+                &destination,
+            )?;
+        }
     }
     if let Commands::Tool(tool) = &cli.command
         && let ToolSubcommand::Run(args) = &tool.command
@@ -141,7 +151,20 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
     }
     match hosts::route_task_id(&global_root, &task_id)? {
         TaskIdRoute::Local => Ok(Preflight::Local),
-        TaskIdRoute::Remote(holder) => deliver(cli, &global_root, &holder, None),
+        TaskIdRoute::Remote(holder) => {
+            if let Commands::Tool(tool) = &cli.command
+                && let ToolSubcommand::Run(args) = &tool.command
+            {
+                let callback_root =
+                    orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+                orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                    &callback_root,
+                    &args.name,
+                    &task_id,
+                )?;
+            }
+            deliver(cli, &global_root, &holder, None)
+        }
     }
 }
 

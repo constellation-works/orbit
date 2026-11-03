@@ -765,6 +765,11 @@ a read a refused command offered requests the serving tool instead:
 
 Cross-host callbacks through `orbit tool run` are unsupported. A `network` grant and `ssh` in
 `requires.programs` do not grant access to the host’s SSH credentials.
+This includes a registered remote host addressed through `--host <host> --workspace <name>`
+and an id-only tool call whose task prefix belongs to that host (without an explicit
+workspace or root). Both are refused with `policy_denied` before SSH discovery or delivery.
+The error names the destination; a plugin-attributed `WARN` records the tool, destination
+(in the `workspace` field) and refusal in `orbit.jsonl`, as for a direct remote selector.
 
 **Workspace addressing.** A CLI callback uses the same `workspace` selectors as any
 `orbit tool run` (name, `ws_*` ID or checkout path), but a confined backend only covers the
