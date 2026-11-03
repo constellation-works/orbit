@@ -1,13 +1,13 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-11-01
+last_updated: 2026-11-03
 last_validated: 2026-10-23
 ---
 
 # MCP behavioral evidence
 
-This matrix records behavior of agent-visible and operator-only MCP tools. The `tools/list` snapshot in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` contains the 26 names of the default toolset; the opt-in `leases`, `experiments`, `analytics` and `decision-channel` toolsets bring a `--toolset all` server to 42 (S-toolsets). The QA inventory's `mcp:` surface mappings follow that agent snapshot; the operator scenarios and their required tests remain in the inventory even where a tool is no longer agent-advertised. S-governed proves session-specific advertisement and unchanged direct-call refusals. The matrix is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
+This matrix records behavior of agent-visible and operator-only MCP tools. The `tools/list` snapshot in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` contains the 27 names of the default toolset. `mcp_toolsets.rs` assigns builtins across task access and repair, decisions, runs, dispatch, automation, codebase, search, UI, command execution, agent invocation, leases, notices, resident operations, experiments and analytics; the complete server surface depends on the selected role and toolsets. The QA inventory's `mcp:` surface mappings follow that agent snapshot; the operator scenarios and their required tests remain in the inventory even where a tool is no longer agent-advertised. S-governed proves session-specific advertisement and unchanged direct-call refusals. The matrix is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
 
 `S` means the production Orbit binary over real stdio and disposable stores. `W` means the MCP transport kernel over an in-memory wire or loopback fixture. `I` means registered runtime tools or application integration with temporary stores. Application-only evidence is labeled explicitly. A dash means this review has no named evidence for that dimension; it does not mean that behavior is unsupported. Persistence means an asserted durable readback or byte-preserving refusal, not merely a successful response.
 
@@ -16,13 +16,18 @@ This matrix records behavior of agent-visible and operator-only MCP tools. The `
 | orbit_agent_invoke | S-agent | S-agent-denial | — | S-agent-denial | Synthetic CLI response; real providers untested |
 | orbit_agents_scorecard | I-agents | I-agents | — | — | Tool and CLI success plus unknown-role refusal; dashboard API prints the same payload; no stdio proof |
 | orbit_agents_show | I-agents | I-agents | — | — | Tool detail, ambiguous-crew `row_model` selection and refusal; CLI prints the same payload; no stdio proof |
+| orbit_attention | — | — | — | — | No named behavior evidence mapped in this matrix |
 | orbit_auto_task_add | S-auto-crud | — | S-auto-crud | — | Definition creation read back after server restart; unknown `required_tools` and owner routing untested |
 | orbit_auto_task_list | S-auto-crud | S-replica | S-auto-crud | — | Ordinary list read after restart |
 | orbit_auto_task_mint | S-auto-crud | — | S-auto-crud | — | Creates a proposed task without dispatch; scheduler cursor and persisted-requirement recheck untested |
 | orbit_auto_task_update | S-auto-crud | S-auto-crud | S-auto-crud | S-auto-crud | Updated description and `enabled` read after restart; wrong workspace preserves bytes; stale checked toggle refused |
+| orbit_automation_explain | — | — | — | — | No named behavior evidence mapped in this matrix |
 | orbit_codebase_analytics | I-codebase | — | — | — | Tool rankings equal the CLI payload; refusals untested; no stdio proof |
 | orbit_codebase_related | I-related | — | — | — | Registered tool omits `window` and answers over 30d; a malformed undeclared `rollup` or `nature` does not fail the call. CLI and dashboard still cover landed-diff ranking; no stdio proof |
 | orbit_codebase_show | I-codebase | — | — | — | Registered-tool calls over link-dimension fixtures plus CLI; refusals untested; no stdio proof |
+| orbit_decision_list | — | — | — | — | No named behavior evidence mapped in this matrix |
+| orbit_decision_raise | — | — | — | — | No named behavior evidence mapped in this matrix |
+| orbit_decision_show | — | — | — | — | No named behavior evidence mapped in this matrix |
 | orbit_command_exec | I-command | I-command-denial | I-command-audit | I-command-denial | Local safe argv fixtures; claim-holder refusal and remote command effects untested |
 | orbit_friction_add | S-records | S-replica | S-records | S-replica | Disposable records |
 | orbit_friction_update | S-records | — | S-records | S-selector | `rehome_to` move has no stdio proof; CLI coverage is `friction_cli_triage_stats_and_rehome_preserve_workspace_ownership`. Missing-record refusal untested |
@@ -54,6 +59,7 @@ This matrix records behavior of agent-visible and operator-only MCP tools. The `
 | orbit_workflow_run_show | S-resume, I-runs | I-runs | S-resume, I-runs | I-runs | Retry lineage read after server restart; unavailable evidence fixtures |
 | orbit_workflow_ship | — | S-governed, I-runs | — | S-governed, I-runs | Refusals only; dispatch, in-flight guard and provider/GitHub delivery untested |
 | orbit_workspace_list | S-federated | S-selector | — | S-federated, S-replica | Production stdio proves local machine-qualified routing and crews rows; live SSH destinations untested |
+| orbit_visual_capture | — | — | — | — | No named behavior evidence mapped in this matrix |
 
 Named proofs are below. Suite totals are supporting execution evidence; the named assertion determines what each row claims. Schema snapshots and parser tests do not count as a successful business operation.
 
