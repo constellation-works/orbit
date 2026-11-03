@@ -52,11 +52,46 @@ pub fn is_blob_hash(value: &str) -> bool {
 /// Call `f` with every blob hash token in `text`: a maximal run of hex digits
 /// exactly 64 long. Writers clearing markers and the sweep marking references
 /// share this tokenizer, so they never disagree on what names a blob.
+///
+/// The sweep runs this over every remaining audit payload, run step and run
+/// state, gigabytes of mostly prose, so it skips instead of visiting each
+/// character: a 64-digit run must cover the last byte of any 64-byte window
+/// it starts in, so a window whose last byte is not a hex digit is passed
+/// over whole. Hex digits are ASCII and never occur inside a multi-byte UTF-8
+/// sequence, so working on bytes splits exactly where `char`s would.
 pub fn for_each_blob_hash(text: &str, mut f: impl FnMut(&str)) {
-    for token in text.split(|ch: char| !ch.is_ascii_hexdigit()) {
-        if is_blob_hash(token) {
-            f(token);
+    const LEN: usize = 64;
+    let bytes = text.as_bytes();
+    // Invariant: `start` is 0 or follows a byte that is not a hex digit, so a
+    // run beginning at `start` is maximal on its left.
+    let mut start = 0;
+    while start + LEN <= bytes.len() {
+        let last = start + LEN - 1;
+        if !bytes[last].is_ascii_hexdigit() {
+            start = last + 1;
+            continue;
         }
+        // Walk back from `last` to the beginning of its run.
+        let mut run_start = last;
+        while run_start > start && bytes[run_start - 1].is_ascii_hexdigit() {
+            run_start -= 1;
+        }
+        if run_start > start {
+            start = run_start;
+            continue;
+        }
+        // `start..=last` are all hex digits; find where the run ends.
+        let mut end = last + 1;
+        while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
+            end += 1;
+        }
+        if end - start == LEN {
+            // Every byte is ASCII, so the slice is on char boundaries.
+            if let Some(token) = text.get(start..end).filter(|token| is_blob_hash(token)) {
+                f(token);
+            }
+        }
+        start = end + 1;
     }
 }
 
