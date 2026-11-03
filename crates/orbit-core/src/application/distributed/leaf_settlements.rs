@@ -60,6 +60,103 @@ pub struct LeafSettlement {
     pub reason: Option<String>,
     /// The leaf's own run record: job, build and failing step.
     pub run_evidence: LeafRunEvidenceView,
+    /// How a failure scan accounts for this settlement [ORB-21840]. Derived
+    /// from the typed fields above only, never from `reason`; it changes
+    /// nothing about the claim or its task.
+    pub accounting: SettlementAccounting,
+}
+
+/// What a settlement counts as in failure accounting [ORB-21840]: a failure,
+/// or one of the designed waits and cancellations the owner's own run
+/// history does not record as failed. Anything not proven to be one of those
+/// counts as a failure, with the reason saying why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettlementOutcome {
+    /// Counts in the failure rate.
+    Failure,
+    /// A before-landing review refusal awaiting a recorded decision: the
+    /// claim still fails and blocks the task, and the pull request stays
+    /// open and unmerged, but nothing broke.
+    ReviewDecisionHold,
+    /// A review released for evidence its host could not produce.
+    EvidenceHold,
+    /// An operator cancelled the launched leaf.
+    OperatorCancel,
+    /// A required check failed on the base as well. It keeps its existing
+    /// accounting: it counts as a failure.
+    BaselineRed,
+    /// Settled before the owner recorded settlements, with no typed class
+    /// to read. Counted as a failure; the evidence is unknown.
+    Unrecorded,
+}
+
+/// A settlement's [`SettlementOutcome`], whether it counts as a failure, and
+/// the typed evidence that decided it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SettlementAccounting {
+    pub outcome: SettlementOutcome,
+    pub counts_as_failure: bool,
+    /// A stable token naming the evidence: for example
+    /// `before_landing_review_awaits_decision`, or
+    /// `review_decision_pending_without_candidate_failure` when the pending
+    /// flag sits on a settlement that cannot be that hold.
+    pub reason: &'static str,
+}
+
+impl SettlementAccounting {
+    const fn of(outcome: SettlementOutcome, reason: &'static str) -> Self {
+        let counts_as_failure = matches!(
+            outcome,
+            SettlementOutcome::Failure
+                | SettlementOutcome::BaselineRed
+                | SettlementOutcome::Unrecorded
+        );
+        Self {
+            outcome,
+            counts_as_failure,
+            reason,
+        }
+    }
+
+    /// The accounting of a projected settlement, from its typed fields.
+    fn derive(settlement: &LeafSettlement) -> Self {
+        use SettlementOutcome as Outcome;
+        let class = settlement.failure_class;
+        if class == Some(ClaimFailureClass::OperatorCancel) {
+            return Self::of(Outcome::OperatorCancel, "operator_cancel");
+        }
+        if settlement.review_decision_pending {
+            // The flag the follower set from the review gate's typed
+            // before-landing standing. Only a failed candidate settlement can
+            // be that hold; anything else is malformed and stays a failure.
+            return if settlement.kind == Some(ClaimSettlementKind::Fail)
+                && class == Some(ClaimFailureClass::Candidate)
+            {
+                Self::of(
+                    Outcome::ReviewDecisionHold,
+                    "before_landing_review_awaits_decision",
+                )
+            } else {
+                Self::of(
+                    Outcome::Failure,
+                    "review_decision_pending_without_candidate_failure",
+                )
+            };
+        }
+        match settlement.evidence {
+            "evidence_hold" if settlement.kind != Some(ClaimSettlementKind::Fail) => {
+                Self::of(Outcome::EvidenceHold, "evidence_hold")
+            }
+            "baseline_red" => Self::of(Outcome::BaselineRed, "baseline_red"),
+            "unrecorded" => Self::of(Outcome::Unrecorded, "unrecorded"),
+            _ if settlement.kind.is_none() => Self::of(Outcome::Failure, "legacy_release_class"),
+            _ if class == Some(ClaimFailureClass::Candidate) => {
+                Self::of(Outcome::Failure, "candidate_failure")
+            }
+            _ => Self::of(Outcome::Failure, "settlement_failure"),
+        }
+    }
 }
 
 /// What the owner holds of a settled leaf's own run record [ORB-20906]: its
@@ -136,6 +233,7 @@ impl LeafSettlement {
             failed_step_id: None,
             reason: None,
             run_evidence: LeafRunEvidenceView::of(inspection.leaf_run_evidence.take()),
+            accounting: SettlementAccounting::of(SettlementOutcome::Unrecorded, "unrecorded"),
         };
         if let Some(record) = inspection.settlement {
             settlement.settled_at = record.settled_at;
@@ -147,6 +245,7 @@ impl LeafSettlement {
             settlement.crew_model = record.crew_model;
             settlement.failed_step_id = record.failed_step_id;
             settlement.reason = Some(record.reason);
+            settlement.accounting = SettlementAccounting::derive(&settlement);
             return Some(settlement);
         }
         if !SETTLEMENT_EVENTS.contains(&inspection.last_event.as_str()) {
@@ -173,6 +272,7 @@ impl LeafSettlement {
             event if event == BASELINE_RED_HOLD_EVENT => settlement.evidence = "baseline_red",
             _ => {}
         }
+        settlement.accounting = SettlementAccounting::derive(&settlement);
         Some(settlement)
     }
 }

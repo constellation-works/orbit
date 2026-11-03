@@ -17,10 +17,16 @@ before the owner recorded settlements read as unrecorded unless their release ke
 review_decision_pending marks a before-landing review refusal awaiting a recorded decision: \
 the claim still fails and blocks the task, but failure scans count it separately. Older records \
 without the flag read as false.\n\
+accounting is how a failure scan counts the settlement, read from its typed fields and never from \
+its reason: {\"outcome\",\"counts_as_failure\",\"reason\"}. outcome is failure, \
+review_decision_hold (the pending decision above), evidence_hold, operator_cancel, baseline_red or \
+unrecorded; only failure, baseline_red and unrecorded count as failures. reason names the deciding \
+evidence, such as review_decision_pending_without_candidate_failure for a flag on a settlement that \
+cannot be that hold. Accounting changes nothing about the claim or its task.\n\
 JSON shape: {\"settlements\":[{\"task_id\",\"claim_id\",\"machine_id\",\"machine_name\",\
 \"drain_run_id\",\"leaf_run_id\",\"phase\",\"last_event\",\"settled_at\",\"kind\",\"evidence\",\
 \"failure_class\",\"review_decision_pending\",\"crew\",\"crew_model\",\"failed_step_id\",\"reason\",\
-\"run_evidence\"}]}\n\
+\"run_evidence\",\"accounting\"}]}\n\
 run_evidence is the leaf's own run record: {\"provenance\",\"recorded_at\",\"job_id\",\"build\",\
 \"build_state\",\"root_cause\",\"root_cause_state\"}. provenance is settlement (the follower sent it \
 with the settlement), hydrated (an operator read it from the follower with `orbit run \

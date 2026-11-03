@@ -72,10 +72,18 @@ template:
     `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. Add
     follower leaf failures from `orbit run settlements`: each settlement whose `settled_at`
     falls in the window is one occurrence in its `leaf_run_id` on its host, attributed to the
-    claimed pipeline job. `evidence_hold` releases, `operator_cancel`, and settlements with
-    `review_decision_pending: true` are designed outcomes, not failures. Report pending-decision
-    review refusals separately even though their `kind` stays `fail` and `failure_class` stays
-    `candidate`; a missing flag on an older record reads as false. A follower settlement
+    claimed pipeline job. Account for each settlement by its typed `accounting` field, never by
+    matching its `reason` text: a settlement counts as a failure only when
+    `accounting.counts_as_failure` is true (`failure`, `baseline_red`, and the explicit
+    `unrecorded` legacy outcome). `review_decision_hold` (a before-landing review refusal awaiting
+    a recorded decision: its `kind` stays `fail`, `failure_class` stays `candidate`, its claim
+    still blocks the task and its pull request stays open), `evidence_hold` and `operator_cancel`
+    are designed outcomes: count them per outcome in the job's `held_7d` counter, not as
+    failures. A `failure` whose `accounting.reason` is
+    `review_decision_pending_without_candidate_failure` carries the flag on a settlement that
+    cannot be that hold: keep it counted and name the reason. A record from a build without
+    `accounting` falls back to `kind`, `evidence`, `failure_class` and `review_decision_pending`
+    (a missing flag reads as false) and is reported as such. A follower settlement
     duplicates an owner history run only when all three match: the settlement's `machine_id`
     equals the history row's `executed_on.machine_id`, the settlement's `leaf_run_id` equals
     the history row's `run_id`, and the history row's `task_ids` lists the settlement's
@@ -89,7 +97,8 @@ template:
     it; count the occurrence once, at the root. A `pipeline_success_guard` root whose child
     dispatch is `held` is a designed hold: neither it nor the parents folded into it count.
     Report raw and folded counts per job, so the dashboard's raw rate can be reconciled with
-    the folded one.
+    the folded one, and the held counts beside them: `occurrences_raw_7d` is every counted run
+    and settlement before holds are set aside, and equals `failed_raw_7d + held_7d`.
 
     Compare with the prior pass's report: per-job rate delta, 7-day and 30-day.
 
@@ -242,7 +251,9 @@ template:
 
     ```json
     {"schema_version": 2, "scan_start": "<RFC 3339>", "head": "<sha>",
-     "jobs": [{"job": "...", "runs_7d": 0, "failed_raw_7d": 0, "failed_folded_7d": 0,
+     "jobs": [{"job": "...", "runs_7d": 0, "occurrences_raw_7d": 0, "failed_raw_7d": 0,
+               "failed_folded_7d": 0, "held_7d": 0,
+               "held_by_outcome_7d": {"review_decision_hold": 0, "evidence_hold": 0, "operator_cancel": 0},
                "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0}],
      "prior_cursor": "<RFC 3339 or null>",
      "classes": [{"job": "...", "signature": "...", "occurrences_7d": 0, "new_since_cursor": 0,
@@ -264,8 +275,8 @@ template:
     classes with their disposition, the fix-effectiveness verdicts, filed and commented ids,
     deferred classes, and anything unreadable.
   acceptance_criteria:
-  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw and folded failed counts and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2; the count uses each deduplicated root run's finished_at against the prior cursor, includes its run id and timestamp, and is null with a reason when the needed timestamps are unavailable.
-  - Follower leaf settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
+  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw occurrences, raw and folded failed counts, a separate held counter by accounting outcome, and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2; the count uses each deduplicated root run's finished_at against the prior cursor, includes its run id and timestamp, and is null with a reason when the needed timestamps are unavailable.
+  - Follower leaf settlements were counted as failures only when their typed `accounting.counts_as_failure` is true, with designed holds and cancellations in `held_7d` by outcome, so `occurrences_raw_7d` equals `failed_raw_7d + held_7d`; settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
   - Failures were clustered by normalized signature with review refusals split by escalation category, and the Pareto set covers at least 80% of each qualifying job's folded failures plus every class with at least 3 occurrences across 2 runs in 7 days.
   - Every Pareto class carries a category and a disposition in the report, and no class was dismissed by kind alone as designed refusal, provider, agent-declared, CI flake or operator resume.
   - Open tasks covering a Pareto class received one comment with 7-day counts and new-since-cursor counts, and at most 5 new tasks were filed, ranked by folded failures per week they would prevent.

@@ -74,7 +74,9 @@ pub use leaf_hydration::{
     DEFAULT_LEAF_HYDRATION_LIMIT, FollowerRunObserver, LeafHydrationOutcome, LeafHydrationReport,
     LeafHydrationRequest, LeafHydrationRow, MAX_LEAF_HYDRATION_LIMIT,
 };
-pub use leaf_settlements::{LeafRunEvidenceView, LeafSettlement};
+pub use leaf_settlements::{
+    LeafRunEvidenceView, LeafSettlement, SettlementAccounting, SettlementOutcome,
+};
 pub(crate) use owner_repair::OwnerRepairDrain;
 pub use probe::{
     AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,

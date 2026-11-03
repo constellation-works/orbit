@@ -790,6 +790,15 @@ fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
         leaf.pair.owner_claim_for_leaf(&leaf.leaf)["claim"]["phase"],
         "failed"
     );
+    // [ORB-21840] A rejected candidate is no designed wait: it still counts.
+    let listed =
+        serde_json::to_value(leaf.pair.wire.owner.leaf_settlements(None, false).unwrap()).unwrap();
+    assert_eq!(listed[0]["review_decision_pending"], false, "{listed}");
+    assert_eq!(listed[0]["accounting"]["outcome"], "failure", "{listed}");
+    assert_eq!(
+        listed[0]["accounting"]["counts_as_failure"], true,
+        "{listed}"
+    );
 }
 
 /// A before-landing refusal awaits a recorded decision. Its settlement must
@@ -870,6 +879,17 @@ fn a_claimed_landing_review_refusal_records_its_pending_decision() {
         assert_eq!(json[0]["kind"], "fail", "{json}");
         assert_eq!(json[0]["failure_class"], "candidate", "{json}");
         assert_eq!(json[0]["review_decision_pending"], true, "{json}");
+        // [ORB-21840] Failure accounting reads the designed wait as a hold,
+        // while the claim above still fails and the task stays blocked.
+        assert_eq!(
+            json[0]["accounting"],
+            json!({
+                "outcome": "review_decision_hold",
+                "counts_as_failure": false,
+                "reason": "before_landing_review_awaits_decision",
+            }),
+            "{json}"
+        );
         assert!(
             !json[0]["reason"]
                 .as_str()
@@ -975,6 +995,13 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
         .find(|entry| entry.to_status.is_some() || entry.event.starts_with("review_"))
         .unwrap();
     assert_eq!(latest.event, "review_awaiting_evidence");
+    // [ORB-21840] The named evidence hold keeps its own accounting outcome.
+    let listed = serde_json::to_value(owner.leaf_settlements(None, false).unwrap()).unwrap();
+    assert_eq!(
+        listed[0]["accounting"],
+        json!({"outcome": "evidence_hold", "counts_as_failure": false, "reason": "evidence_hold"}),
+        "{listed}"
+    );
 
     // The owner: a Linux checkout whose `origin` is the one the leaf pushed to.
     let owner_repo = leaf.pair.owner_repo.clone();

@@ -519,7 +519,11 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   new-since-cursor occurrences), computes per-job raw and folded failure rates
   for 7 and 30 days with deltas, and stores them in `run-failure-report.json`.
   On an owner it also counts the failure and release settlements its followers'
-  claimed leaves sent (`orbit run settlements --no-reconcile`). It folds
+  claimed leaves sent (`orbit run settlements --no-reconcile`), counting a
+  settlement as a failure only when its typed `accounting.counts_as_failure`
+  is true and reporting designed holds (`review_decision_hold`,
+  `evidence_hold`, `operator_cancel`) in a separate `held_7d` counter, so raw
+  occurrences equal failures plus holds. It folds
   parent pipelines into their child by the recorded `root_cause` (a parent of
   a `held` child is no failure) and splits review refusals by escalation
   category. It accounts for the Pareto set — the top classes covering at least

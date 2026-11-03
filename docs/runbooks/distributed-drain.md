@@ -1452,6 +1452,16 @@ orbit run settlements --since 7d --no-reconcile --json
 Claims settled before the owner kept settlements read `unrecorded` unless
 their release kept a typed class; the task's history note carries the reason.
 
+Each settlement's `accounting` (`outcome`, `counts_as_failure`, `reason`) is how
+the scan counts it, derived from the typed kind, class and
+`review_decision_pending` flag, never from the reason text [ORB-21840].
+`review_decision_hold` (a failed `candidate` settlement awaiting a recorded
+landing decision), `evidence_hold` and `operator_cancel` are held, not failed;
+`failure`, `baseline_red` and legacy `unrecorded` count. The flag on any other
+settlement stays a `failure` with reason
+`review_decision_pending_without_candidate_failure`. Accounting is read-only:
+the claim stays failed and the task blocked.
+
 Each settlement also carries `run_evidence`, the leaf's own run record that the
 owner's run history never holds: its `job_id`, `build` and failing step
 (`root_cause`: `step`, `code`, bounded `message`). A follower sends them with the

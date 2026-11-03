@@ -769,7 +769,9 @@ owns delivery:
   `failure.review_decision_pending: true`, also kept on the settlement record and exposed by
   `orbit run settlements --json`. It remains `candidate` / `Fail`: the owner still blocks the
   task for that decision, without spending release budget or automatically retrying it. Failure
-  scans count this designed hold separately. The flag defaults to false for older records, and
+  scans count this designed hold separately, by the settlement's derived
+  `accounting.outcome: review_decision_hold` ([ORB-21840]); only a failed `candidate` settlement
+  qualifies, so the flag on any other settlement stays a counted failure. The flag defaults to false for older records, and
   older readers ignore the additive field; the wire enum vocabulary is unchanged.
   External-prerequisite classes `owner_route` and `environment` also settle as `Release`,
   retaining crew/host suppression evidence, but the owner immediately blocks their tasks for
