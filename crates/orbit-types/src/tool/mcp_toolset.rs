@@ -368,11 +368,6 @@ impl McpToolsetSelection {
         Ok(self)
     }
 
-    /// Parse one comma-separated selection, as `--toolset` takes it.
-    pub fn parse_list(raw: &str) -> Result<Self, McpToolsetError> {
-        Self::from_names(raw.split(','))
-    }
-
     /// This selection with every toolset `other` enables added. The role is
     /// kept.
     pub fn union(mut self, other: &Self) -> Self {

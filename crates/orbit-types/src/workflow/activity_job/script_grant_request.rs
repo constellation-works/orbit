@@ -124,13 +124,6 @@ pub struct ScriptGrantRequest {
     pub step_id: Option<String>,
 }
 
-impl ScriptGrantRequest {
-    /// The comparison key of the requested capability set.
-    pub fn capabilities_key(&self) -> String {
-        self.requested.key()
-    }
-}
-
 /// A line diff of one file, `-`/`+`/` ` prefixed, with a `--- a`/`+++ b`
 /// header and only changed lines plus up to two lines of context. Empty when
 /// both sides are equal.
