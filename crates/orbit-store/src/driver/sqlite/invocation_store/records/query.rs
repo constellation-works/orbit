@@ -202,6 +202,12 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
         // Outcomes are workspace-qualified. EXISTS preserves one row per
         // invocation even when an activity appears more than once in a job.
         // A later successful retry must not relabel an earlier attempt.
+        //
+        // The later-invocation probe is pinned to the (workspace, run)
+        // index. The store collects no planner statistics, so SQLite prefers
+        // the covering `idx_invocations_reliability_window` with only
+        // `workspace_id` bound, and walks every invocation of the workspace
+        // once per candidate: seconds on a review-scale store [ORB-21827].
         query.conditions.push(
             "EXISTS (SELECT 1 FROM job_runs jr
              WHERE jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
@@ -213,6 +219,7 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
                AND s.target_type = 'activity' AND s.target_id = i.activity_id AND s.state = 'success'
                AND julianday(i.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
                AND NOT EXISTS (SELECT 1 FROM invocations later
+                 INDEXED BY idx_invocations_workspace_job_run_id
                  WHERE later.workspace_id = i.workspace_id AND later.job_run_id = i.job_run_id
                    AND later.activity_id = i.activity_id
                    AND julianday(later.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
@@ -308,3 +315,7 @@ impl InvocationListQuery {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/query.rs"]
+mod tests;
