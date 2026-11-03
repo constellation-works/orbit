@@ -266,26 +266,43 @@ function authorityForm(payload, mandate) {
     el("div", { class: "resident-authority-column" }, [
       grantRights,
       field("Add workspaces", input("workspaces"), "Comma-separated."),
-      field("Deadline", input("deadline", { type: "datetime-local" }), "Optional."),
       field("Quote", quote, "Required to widen."),
       gated(payload, "resident_write", grant),
     ]),
     el("div", { class: "resident-authority-column" }, [
       narrowRights,
       field("Drop workspaces", input("drop_workspaces", { placeholder: list(effective.workspaces) })),
+      field("Deadline", input("deadline", { type: "datetime-local" }), "Shortens the mandate; applied as a separate narrow change."),
       gated(payload, "resident_write", narrow),
     ]),
   ]);
   form.addEventListener("submit", event => event.preventDefault());
   const path = `/api/residents/${encodeURIComponent(mandate.task_id)}/grant`;
-  grant.addEventListener("click", () => {
+  grant.addEventListener("click", async () => {
     const values = form.elements;
-    const body = { add: checkedRights(form, "add"), workspaces: csv(values.workspaces.value), quote: values.quote.value.trim() };
-    if (values.deadline.value) body.deadline = new Date(values.deadline.value).toISOString();
-    write(path, body, `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
+    const add = checkedRights(form, "add");
+    const workspaces = csv(values.workspaces.value);
+    const quoteValue = values.quote.value.trim();
+    const deadline = values.deadline.value ? new Date(values.deadline.value).toISOString() : null;
+    const hasWiden = add.length > 0 || workspaces.length > 0;
+    // Core refuses one call that both widens and narrows, so a deadline
+    // with a widening is two recorded changes, never a mixed call.
+    if (hasWiden && deadline) {
+      const widened = await write(path, { add, workspaces, quote: quoteValue }, `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
+      if (!widened) return;
+      await write(path, { deadline }, `Shortened the deadline for ${mandate.task_id}.`, [grant, narrow]);
+      return;
+    }
+    if (!hasWiden && deadline) {
+      await write(path, { deadline }, `Shortened the deadline for ${mandate.task_id}.`, [grant, narrow]);
+      return;
+    }
+    await write(path, { add, workspaces, quote: quoteValue }, `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
   });
   narrow.addEventListener("click", () => {
-    const body = { remove: checkedRights(form, "remove"), drop_workspaces: csv(form.elements.drop_workspaces.value) };
+    const values = form.elements;
+    const body = { remove: checkedRights(form, "remove"), drop_workspaces: csv(values.drop_workspaces.value) };
+    if (values.deadline.value) body.deadline = new Date(values.deadline.value).toISOString();
     write(path, body, `Narrowed ${mandate.task_id}.`, [grant, narrow]);
   });
   return el("details", { class: "resident-authority" }, [el("summary", { text: "Widen or narrow authority" }), form]);
