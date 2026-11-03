@@ -1559,7 +1559,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
   // The chips also read every 5 s on their own (initHostResources), so the
   // Tasks page's tick leaves them to that.
-  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources().catch(error => console.error(error));
+  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources({ shareRecent: poll && !explicit }).catch(error => console.error(error));
   void fetchAndRenderNoticeBanner().catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
