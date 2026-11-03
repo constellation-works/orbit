@@ -407,74 +407,115 @@ pub(super) fn all_job_runs_json(
     scope: &JobRunScope,
 ) -> Value {
     let pinned = state.pin();
-    let mut candidates = Vec::new();
+    let entries = pinned.entries();
+    // Per workspace, read only its bounded page (at most `limit` runs), its
+    // exact count and its page's task titles, in pinned entry order so
+    // totals and `unavailable` keep their serial order. The expensive
+    // projection — reading each candidate's pipeline state and lineage —
+    // is deferred until after the global merge below: only runs that
+    // survive `truncate(limit)` are projected, so a one-item page pays
+    // that cost for one run rather than for every workspace's candidate.
+    // Phase tracing on a 13-workspace fixture showed that discarded
+    // candidates' state reads, not the index-covered page or count,
+    // dominated the failed-runs tail.
+    let selections = (0..entries.len())
+        .map(|index| {
+            let entry = &entries[index];
+            if !entry.active {
+                return Err("workspace is unavailable".to_string());
+            }
+            let runtime = match pinned.runtime_for(&entry.id) {
+                Ok(runtime) => runtime,
+                Err(_) => return Err("failed to open workspace".to_string()),
+            };
+            let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
+                Ok((
+                    runs,
+                    workspace_job_run_count(&runtime, state_filter, scope)?,
+                ))
+            });
+            match page {
+                Ok((runs, count)) => match super::runs::task_titles(&runtime, &runs) {
+                    Ok(titles) => Ok((runtime, runs, count, titles)),
+                    Err(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidates: Vec<(JobRun, usize)> = Vec::new();
+    let mut projections: BTreeMap<
+        usize,
+        (
+            std::sync::Arc<OrbitRuntime>,
+            std::collections::BTreeMap<String, String>,
+        ),
+    > = BTreeMap::new();
     let mut unavailable = Vec::new();
     let mut total = 0_u64;
-
-    for entry in pinned.entries() {
-        if !entry.active {
-            unavailable.push(json!({
-                "workspace_id": entry.id,
-                "workspace_name": entry.name,
-                "error": "workspace is unavailable",
-            }));
-            continue;
-        }
-        let runtime = match pinned.runtime_for(&entry.id) {
-            Ok(runtime) => runtime,
-            Err(_) => {
-                unavailable.push(json!({
-                    "workspace_id": entry.id,
-                    "workspace_name": entry.name,
-                    "error": "failed to open workspace",
-                }));
-                continue;
-            }
-        };
-        let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
-            Ok((
-                runs,
-                workspace_job_run_count(&runtime, state_filter, scope)?,
-            ))
-        });
-        match page {
-            Ok((runs, count)) => {
-                let titles = match super::runs::task_titles(&runtime, &runs) {
-                    Ok(titles) => titles,
-                    Err(error) => {
-                        unavailable.push(json!({
-                            "workspace_id": entry.id,
-                            "workspace_name": entry.name,
-                            "error": error.to_string(),
-                        }));
-                        continue;
-                    }
-                };
+    for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
+        match selection {
+            Ok((runtime, runs, count, titles)) => {
                 total = total.saturating_add(count);
-                let values = super::runs::run_list_rows(&runtime, &runs, &titles);
-                candidates.extend(
-                    runs.into_iter()
-                        .zip(values)
-                        .map(|(run, value)| (run, entry.id.clone(), entry.name.clone(), value)),
-                );
+                projections.insert(index, (runtime, titles));
+                candidates.extend(runs.into_iter().map(|run| (run, index)));
             }
             Err(error) => unavailable.push(json!({
                 "workspace_id": entry.id,
                 "workspace_name": entry.name,
-                "error": error.to_string(),
+                "error": error,
             })),
         }
     }
 
-    candidates.sort_by(
-        |(left, left_workspace, _, _), (right, right_workspace, _, _)| {
-            run_timestamp(right)
-                .cmp(&run_timestamp(left))
-                .then_with(|| left_workspace.cmp(right_workspace))
-                .then_with(|| left.run_id.cmp(&right.run_id))
-        },
-    );
+    candidates.sort_by(|(left, left_index), (right, right_index)| {
+        run_timestamp(right)
+            .cmp(&run_timestamp(left))
+            .then_with(|| entries[*left_index].id.cmp(&entries[*right_index].id))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
     candidates.truncate(limit);
+
+    // Project only the surviving page, grouped by owning workspace so each
+    // workspace's pipeline states are read once for its returned runs.
+    let mut values: Vec<Option<Value>> = candidates.iter().map(|_| None).collect();
+    let mut positions_by_workspace: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (position, (_, index)) in candidates.iter().enumerate() {
+        positions_by_workspace
+            .entry(*index)
+            .or_default()
+            .push(position);
+    }
+    for (index, positions) in &positions_by_workspace {
+        let Some((runtime, titles)) = projections.get(index) else {
+            continue;
+        };
+        let runs = positions
+            .iter()
+            .map(|position| candidates[*position].0.clone())
+            .collect::<Vec<_>>();
+        let rows = super::runs::run_list_rows(runtime, &runs, titles);
+        for (position, value) in positions.iter().zip(rows) {
+            values[*position] = Some(value);
+        }
+    }
+    let mut candidates = candidates
+        .into_iter()
+        .zip(values)
+        .map(|((run, index), value)| {
+            (
+                run,
+                entries[index].id.clone(),
+                entries[index].name.clone(),
+                // `run_list_rows` returns one row per run; the fallback only
+                // covers a projection map miss, which cannot happen for a
+                // workspace that produced candidates.
+                value.unwrap_or_else(|| json!({})),
+            )
+        })
+        .collect::<Vec<_>>();
+
     let present: HashSet<(String, String)> = candidates
         .iter()
         .map(|(run, workspace_id, _, _)| (workspace_id.clone(), run.run_id.clone()))
@@ -567,7 +608,7 @@ fn all_tasks_json(
     // runtime and store); the fold below runs in pinned entry order, so
     // totals, candidates and `unavailable` keep their serial order.
     let entries = pinned.entries();
-    let selections = fan_out(entries.len(), |index| {
+    let selections = (0..entries.len()).map(|index| {
         let entry = &entries[index];
         if !entry.active {
             return Err("workspace is unavailable".to_string());
