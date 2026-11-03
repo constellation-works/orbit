@@ -3,17 +3,7 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-//! Provider CLI runtimes and audit contracts for Orbit.
-//!
-//! Provider adapters build command descriptors (program, arguments and stdin)
-//! that `orbit-engine` executes through `orbit-exec`. Response helpers project
-//! provider stdout into Orbit envelopes and diagnostics.
-//!
-//! [`loop_engine::audit`] retains the structured events and redacted blob sinks
-//! that the engine persists, including historical event variants.
-//!
-//! # Dependency direction
-//! `orbit-common` / `orbit-types` → `orbit-agent` → `orbit-engine`
+//! Provider CLI runtimes, response projections and audit contracts for Orbit.
 
 mod agent;
 pub mod loop_engine;
