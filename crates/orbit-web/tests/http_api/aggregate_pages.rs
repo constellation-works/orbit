@@ -536,6 +536,100 @@ fn aggregate_job_runs_total_sums_every_workspace_independent_of_page_size() {
     );
 }
 
+/// The failed-runs rail (`state=failed&limit=1`) over the review's
+/// 13-workspace topology: the exact failed total and the merged recency
+/// order survive the aggregate's fan-out and its bounded projection, an
+/// unavailable workspace stays named without contributing runs, and
+/// repeated polls of unchanged state return identical payloads.
+#[test]
+fn aggregate_failed_runs_over_thirteen_workspaces_keep_total_order_and_unavailable() {
+    isolated(
+        "aggregate_pages::aggregate_failed_runs_over_thirteen_workspaces_keep_total_order_and_unavailable",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global_root = tmp.path().join("global");
+            std::fs::create_dir_all(&global_root).expect("create global root");
+            let base = Utc::now() - chrono::Duration::hours(1);
+            let names = (0..13)
+                .map(|index| format!("ws{index:02}"))
+                .collect::<Vec<_>>();
+            let mut bindings = Vec::new();
+            for (index, name) in names.iter().enumerate() {
+                let (orbit_dir, repo_root) = seed_workspace(&global_root, tmp.path(), name);
+                let runtime =
+                    OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("workspace runtime");
+                for (slot, state) in [
+                    (0_i64, JobRunState::Failed),
+                    (1, JobRunState::Timeout),
+                    (2, JobRunState::Success),
+                ] {
+                    let mut run = seed_run(&runtime, &format!("jrun-{name}-{slot}"), "bulk", state);
+                    let at = base + chrono::Duration::minutes((index * 10) as i64 + slot);
+                    run.created_at = at;
+                    run.scheduled_at = at;
+                    run.started_at = Some(at);
+                    run.finished_at = Some(at);
+                    write_seeded_run(&runtime, &run);
+                }
+                bindings.push((name.clone(), repo_root));
+            }
+            let (broken_orbit, broken_repo) = seed_workspace(&global_root, tmp.path(), "broken");
+            std::fs::write(broken_orbit.join("config.toml"), "[invalid TOML")
+                .expect("break workspace config");
+            bindings.push(("broken".to_string(), broken_repo));
+            let registry_bindings = bindings
+                .iter()
+                .map(|(name, repo)| (name.as_str(), repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global_root, &registry_bindings);
+
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let page = |query: &str| json_ok(server.get(&format!("/api/job-runs/all?{query}")));
+            // Warm every workspace runtime before the measured-shape reads.
+            let _ = page("state=failed&limit=1");
+
+            let one = page("state=failed&limit=1");
+            assert_eq!(
+                one["total"], 26,
+                "exact failed count over 13 workspaces: {one:#}"
+            );
+            assert_eq!(one["truncated"], true);
+            assert_eq!(one["items"].as_array().expect("items").len(), 1);
+            assert_eq!(one["items"][0]["run_id"], "jrun-ws12-1");
+            assert_eq!(one["items"][0]["workspace_id"], "ws12");
+            let unavailable = one["unavailable"].as_array().expect("unavailable");
+            assert_eq!(unavailable.len(), 1, "{one:#}");
+            assert_eq!(unavailable[0]["workspace_id"], "broken");
+            assert!(unavailable[0]["error"].is_string());
+
+            let three = page("state=failed&limit=3");
+            let order = three["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .map(|row| row["run_id"].as_str().expect("run id").to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(order, ["jrun-ws12-1", "jrun-ws12-0", "jrun-ws11-1"]);
+            assert_eq!(three["total"], 26);
+            for _ in 0..3 {
+                assert_eq!(
+                    page("state=failed&limit=1"),
+                    one,
+                    "aggregate payload must be identical for the same store state"
+                );
+            }
+        },
+    );
+}
+
 #[test]
 fn aggregate_task_page_opens_only_the_returned_bundles() {
     isolated(
