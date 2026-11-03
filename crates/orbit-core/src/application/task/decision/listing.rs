@@ -65,7 +65,7 @@ impl NoRequestTasks {
             .collect()
     }
 
-    fn record(workspace: &str, proven: Vec<(String, String)>) {
+    fn record(workspace: &str, mut proven: Vec<(String, String)>) {
         if proven.is_empty() {
             return;
         }
@@ -74,6 +74,10 @@ impl NoRequestTasks {
         if held + proven.len() > Self::CAPACITY {
             entries.clear();
         }
+        // A single batch larger than the bound still fits after the clear,
+        // so keep only the first CAPACITY entries. Anything not retained is
+        // simply read in full on the next scan.
+        proven.truncate(Self::CAPACITY);
         entries
             .entry(workspace.to_string())
             .or_default()
