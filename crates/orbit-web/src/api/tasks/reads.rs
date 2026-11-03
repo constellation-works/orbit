@@ -6,6 +6,7 @@ use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::application::task::DashboardPageReads;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -149,8 +150,18 @@ fn task_list_page_json(
     if let Some(detail_id) = query.detail_id()
         && let Some(row) = page.items.iter().find(|row| row.task.id == detail_id)
     {
+        // The page's rows already read the workspace-wide triage, pilot
+        // preparation, pull-request links and delivery attention this detail
+        // shows; it borrows them rather than reading each again [ORB-21825].
+        let page_reads = projection.detail_page_reads();
         match dashboard_status_index(runtime, &row.task).and_then(|statuses| {
-            task_detail_json(runtime, row, &statuses, detail_riskiness.as_deref())
+            task_detail_json(
+                runtime,
+                row,
+                &statuses,
+                detail_riskiness.as_deref(),
+                &page_reads,
+            )
         }) {
             Ok(detail) => result["detail"] = detail,
             Err(error) => tracing::debug!(
@@ -210,8 +221,17 @@ pub(in crate::api) async fn get_task(
     let riskiness = cached_riskiness_model(&state, &runtime).await;
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
-        Ok(dashboard_status_index(&runtime, &row.task)
-            .and_then(|statuses| task_detail_json(&runtime, &row, &statuses, riskiness.as_deref())))
+        Ok(
+            dashboard_status_index(&runtime, &row.task).and_then(|statuses| {
+                task_detail_json(
+                    &runtime,
+                    &row,
+                    &statuses,
+                    riskiness.as_deref(),
+                    &DashboardPageReads::default(),
+                )
+            }),
+        )
     })
     .await
     {

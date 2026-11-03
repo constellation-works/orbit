@@ -553,6 +553,7 @@
         "contracts/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence",
         "driver/file/task_bundle/bundle_io/tests/write.rs::interrupted_bundle_publish_never_exposes_partial_final_directory",
         "driver/sqlite/invocation_store/records/tests/query.rs::succeeded_candidates_probe_later_invocations_by_run",
+        "driver/sqlite/job_run_store/tests/queries.rs::live_run_scans_seek_the_state_index_instead_of_walking_history",
         "driver/sqlite/job_run_store/tests/queries.rs::recency_pages_walk_an_index_instead_of_sorting_the_workspace",
         "driver/sqlite/migration/tests/feature_ledgers.rs::a_binary_without_absorption_keeps_writing_and_decides_features_from_their_records",
         "driver/sqlite/migration/tests/feature_ledgers.rs::absorbed_repair_releases_members_shelved_at_a_source_the_branch_left",

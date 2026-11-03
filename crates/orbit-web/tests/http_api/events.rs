@@ -371,6 +371,23 @@ fn active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint() {
             assert_eq!(span_run_count(&detail_reads[0]), 3);
             assert_eq!(detail["active_triage"], json!(expected), "detail bindings");
 
+            // ORB-21825: a list bundling that detail scanned the active runs
+            // once for its rows and again for the detail. The detail borrows
+            // the page's bindings, so the bundled request is one batch read.
+            let before = fixture.run_state_trace().len();
+            let bundled = json_ok(server.get(&format!("{list_path}&detail={}", task.id)));
+            let bundled_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                bundled_reads.len(),
+                1,
+                "a bundled detail reuses the page's active-run read: {bundled_reads:?}"
+            );
+            assert_eq!(
+                bundled["detail"]["active_triage"],
+                json!(expected),
+                "bundled detail bindings"
+            );
+
             let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
             assert_eq!(
                 connection
