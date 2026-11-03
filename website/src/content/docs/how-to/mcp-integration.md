@@ -177,8 +177,9 @@ orbit tool list --role agent                         # the role's tools and size
 ```
 
 `--role` replaces the global `machine.mcp.role` default for one server;
-`--toolset` and `machine.mcp.toolsets` add to the role. Without either, a
-server lists the default surface above, unchanged from before roles.
+`--toolset` replaces `machine.mcp.toolsets` for one server; the selected
+toolsets add to the role. With no configured role, a server lists the default
+surface above, unchanged from before roles, plus any selected toolsets.
 `orbit tool list --role <role>` prints the role's tool count and an
 approximate token size of its listed schemas.
 

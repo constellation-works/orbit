@@ -285,12 +285,16 @@ function authorityForm(payload, mandate) {
     const quoteValue = values.quote.value.trim();
     const deadline = values.deadline.value ? new Date(values.deadline.value).toISOString() : null;
     const hasWiden = add.length > 0 || workspaces.length > 0;
-    // Core refuses one call that both widens and narrows, so a deadline
-    // with a widening is two recorded changes, never a mixed call.
+    // A deadline with a widening goes through the single grant endpoint,
+    // which records two changes and reports a refused narrowing without
+    // hiding the applied widening.
     if (hasWiden && deadline) {
-      const widened = await write(path, { add, workspaces, quote: quoteValue }, `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
-      if (!widened) return;
-      await write(path, { deadline }, `Shortened the deadline for ${mandate.task_id}.`, [grant, narrow]);
+      await write(path, { add, workspaces, quote: quoteValue, deadline }, (result) => {
+        if (result?.outcome === "granted_narrowing_refused") {
+          return `Widened ${mandate.task_id}; recorded as your answered request. Narrowing refused: ${result.narrowing_error || "unknown reason"}`;
+        }
+        return `Widened ${mandate.task_id} and shortened its deadline; recorded as two changes.`;
+      }, [grant, narrow]);
       return;
     }
     if (!hasWiden && deadline) {

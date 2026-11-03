@@ -193,6 +193,83 @@ fn dashboard_grant_with_add_and_deadline_records_two_changes() {
 }
 
 #[test]
+fn dashboard_mixed_grant_reports_applied_widening_when_deadline_is_refused() {
+    isolated(
+        "residents::dashboard_mixed_grant_reports_applied_widening_when_deadline_is_refused",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            for (deadline, reason) in [
+                ("2031-01-01T00:00:00Z", "only shortens the mandate"),
+                ("2030-01-01T00:00:00Z", "only shortens the mandate"),
+                ("not-a-timestamp", "must be an RFC 3339 timestamp"),
+            ] {
+                let mut draft = mandate("Report the applied widening.");
+                draft["deadline"] = json!("2030-01-01T00:00:00Z");
+                let created = json_ok(server.send(
+                    "POST",
+                    &format!("/api/residents{WS}"),
+                    json!({"mandate": draft}),
+                ));
+                let id = created["task_id"].as_str().unwrap();
+                let result = json_ok(server.send(
+                    "POST",
+                    &format!("/api/residents/{id}/grant{WS}"),
+                    json!({"add": ["dispatch"], "workspaces": ["fixture"],
+                           "quote": "Dispatch in fixture.", "deadline": deadline}),
+                ));
+                assert_eq!(result["outcome"], "granted_narrowing_refused", "{result}");
+                assert!(
+                    result["narrowing_error"].as_str().unwrap().contains(reason),
+                    "{result}"
+                );
+                assert_eq!(
+                    result["effective_authority"],
+                    json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
+                    "{result}"
+                );
+                let shown = fixture.runtime.show_resident_mandate(id).unwrap();
+                assert_eq!(shown["effective_authority"], result["effective_authority"]);
+                assert_eq!(shown["mandate"]["deadline"], "2030-01-01T00:00:00Z");
+                assert_eq!(shown["authority"]["granted"].as_array().unwrap().len(), 1);
+                assert!(
+                    shown["authority"]["narrowed"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+                let events = fixture
+                    .runtime
+                    .list_audit_events_with_kind(
+                        None,
+                        None,
+                        Some("resident.grant".into()),
+                        Some(AuditEventStatus::Failure),
+                        None,
+                        50,
+                    )
+                    .unwrap();
+                let event = events
+                    .iter()
+                    .find(|event| {
+                        event.command == "dashboard.operations"
+                            && event.target_id.as_deref() == Some(id)
+                    })
+                    .expect("partial outcome is audited");
+                let message = event.error_message.as_deref().unwrap();
+                assert!(
+                    message.contains("Widening applied; narrowing refused"),
+                    "{message}"
+                );
+                assert!(message.contains(reason), "{message}");
+            }
+        },
+    );
+}
+
+#[test]
 fn invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing() {
     isolated(
         "residents::invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing",

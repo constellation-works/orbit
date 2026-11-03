@@ -185,6 +185,23 @@ pub(super) fn read_ci_attention(
         return;
     }
     let started = Instant::now();
+    // ci_red is derived only on the home owner: a replica must not read the
+    // provider, and its local CI state is not authoritative.
+    if !runtime.coordination_task_reads_visible() {
+        if !filter.candidate_read {
+            candidates.degraded.push(AttentionDegraded {
+                scope: format!("workspace:{}", workspace.id),
+                kind: AttentionKind::CiRed.as_str().into(),
+                code: "source_unavailable".into(),
+                message: "CI results on a replica are not authoritative; read the workspace owner"
+                    .into(),
+            });
+        }
+        candidates
+            .timings
+            .insert("ci_red".into(), started.elapsed().as_micros());
+        return;
+    }
     let degraded = |candidates: &mut AttentionCandidates, message: String| {
         candidates.degraded.push(AttentionDegraded {
             scope: format!("workspace:{}", workspace.id),
