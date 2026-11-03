@@ -353,7 +353,7 @@ Friction creation uses the shared `friction_write::project_committed_friction` p
 - [ORB-20572] — Excluded truncated provider traces from first-edit measurements.
 - [ORB-20668] — Reconciled audit warning, MCP correlation, snapshot and forecast contracts with code.
 - [ORB-20702] — Corrected the GPT-5.6 Sol price period and filled its historical gap.
-- [ORB-21797] — Tracks restoring the missing friction live-tracing projection.
+- [ORB-21797] — Restored the friction live-tracing projection.
 - [T20260427-52] — Collapsed duplicate agent and model inputs on tool invocation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

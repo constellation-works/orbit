@@ -7,7 +7,7 @@ last_updated: 2026-11-03
 last_validated: 2026-10-31
 status: Draft
 stage: building
-next: "Restore friction live tracing (ORB-21797)"
+next: "Develop tamper evidence and joined queries"
 feature: auditability
 doc_role: overview
 tags: ["auditability"]
@@ -119,7 +119,7 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 - **[ORB-00062]** — Surface first-class friction artifacts in the dashboard Knowledge tab and add triage endpoints.
 - **[ORB-10319]** — Historical MCP boundary consolidation; current composition is `orbit-mcp` framing, the CLI server, and direct Core audit dispatch.
 - **[ORB-10228]** — Established trusted MCP caller/process provenance and anti-spoofing.
-- [ORB-21797] — Tracks restoring the missing friction live-tracing projection.
+- [ORB-21797] — Restored the friction live-tracing projection.
 - [T20260510-13] — move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
