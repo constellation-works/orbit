@@ -17,9 +17,10 @@ use std::sync::Arc;
 use orbit_core::application::codebase::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
 
 use orbit_core::application::task::{
-    self, PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable,
-    link_pull_requests, mark_readiness_preparing, summary_status_transitions,
-    task_detail_with_dashboard_extras, task_pilot_warnings, tasks_in_pilot_preparation,
+    self, DashboardPageReads, PullRequestLinks, TaskOsReadout, TaskRow,
+    job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,
+    summary_status_transitions, task_detail_with_dashboard_extras, task_pilot_warnings,
+    tasks_in_pilot_preparation,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -144,13 +145,19 @@ pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// carries `active_triage` on both surfaces. A task assigned to a human crew
 /// carries `human_crew` (`{name, description}`) on both surfaces and on every
 /// dashboard write response.
+///
+/// `page` lends the workspace-wide reads a list page already made when the
+/// list bundles this detail ([`TaskListProjection::detail_page_reads`]), so
+/// the bundled request does not scan them twice; `GET /api/tasks/:id` passes
+/// the default.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
     riskiness: Option<&TaskRiskinessModel>,
+    page: &DashboardPageReads<'_>,
 ) -> Result<Value, OrbitError> {
-    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id)?;
+    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id, page)?;
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "riskiness".to_string(),
@@ -233,6 +240,19 @@ impl TaskListProjection {
     pub(crate) fn with_delivery_attention(mut self, map: BTreeMap<String, Value>) -> Self {
         self.delivery_attention = map;
         self
+    }
+
+    /// The reads this page made for its rows, lent to the detail it bundles.
+    /// Call after rendering the detail's own row: the active-triage map is
+    /// lent only once a row has read it successfully, and the detail reads
+    /// it itself otherwise.
+    pub(crate) fn detail_page_reads(&self) -> DashboardPageReads<'_> {
+        DashboardPageReads {
+            pull_request_links: Some(&self.pull_request_links),
+            active_triage: self.active_triage.get().and_then(|read| read.as_ref().ok()),
+            preparing: Some(&self.preparing),
+            delivery_attention: Some(&self.delivery_attention),
+        }
     }
 
     /// `runtime` is the one this projection was built from; it is read only

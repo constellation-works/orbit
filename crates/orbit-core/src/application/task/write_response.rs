@@ -28,6 +28,7 @@
 //! `final_recovery` or `owed_criteria` guidance: those stay on
 //! [`super::task_show_json`].
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
@@ -280,6 +281,24 @@ pub(crate) fn task_reference_status_index(
     Ok(status_by_id)
 }
 
+/// Workspace-wide reads a dashboard page already made for its rows, lent to
+/// the detail it bundles so one request reads each of them once. Every
+/// field left `None` is read by the detail itself, as a standalone detail
+/// does; a lent value must come from the same request and the same runtime.
+#[derive(Default)]
+pub struct DashboardPageReads<'a> {
+    /// The page's origin-remote reader for unlinked pull-request refs.
+    pub pull_request_links: Option<&'a PullRequestLinks>,
+    /// The page's [`active_task_triage_map`].
+    pub active_triage: Option<&'a BTreeMap<String, Value>>,
+    /// The page's [`tasks_in_pilot_preparation`], filled on first use.
+    pub preparing: Option<&'a OnceCell<BTreeSet<String>>>,
+    /// The page's delivery-attention map from the same rows
+    /// ([`OrbitRuntime::delivery_attention_map`]); a task without an entry
+    /// has no attention.
+    pub delivery_attention: Option<&'a BTreeMap<String, Value>>,
+}
+
 /// Linked pull requests, lifecycle transitions, run navigability and
 /// `readiness.preparing` and active triage/recovery bindings. These are dashboard controls, not part of
 /// the shared task record; the dashboard detail and its write
@@ -287,9 +306,21 @@ pub(crate) fn task_reference_status_index(
 pub fn with_dashboard_extras(
     runtime: &OrbitRuntime,
     task: &Task,
-    mut object: Map<String, Value>,
+    object: Map<String, Value>,
 ) -> Result<Value, OrbitError> {
-    link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
+    with_dashboard_extras_from(runtime, task, object, &DashboardPageReads::default())
+}
+
+fn with_dashboard_extras_from(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    mut object: Map<String, Value>,
+    page: &DashboardPageReads<'_>,
+) -> Result<Value, OrbitError> {
+    match page.pull_request_links {
+        Some(links) => link_pull_requests(&mut object, task, links),
+        None => link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime)),
+    }
     object.insert(
         "status_transitions".to_string(),
         dashboard_status_transitions(runtime, task)?,
@@ -306,12 +337,21 @@ pub fn with_dashboard_extras(
             task,
         )),
     );
-    if let Some(triage) = active_task_triage_map(runtime)?.remove(&task.id) {
+    let triage = match page.active_triage {
+        Some(map) => map.get(&task.id).cloned(),
+        None => active_task_triage_map(runtime)?.remove(&task.id),
+    };
+    if let Some(triage) = triage {
         object.insert("active_triage".to_string(), triage);
     }
     let mut value = Value::Object(object);
     if value.get("readiness").is_some() {
-        let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
+        let preparing = match page.preparing {
+            Some(cell) => cell
+                .get_or_init(|| tasks_in_pilot_preparation(runtime))
+                .contains(&task.id),
+            None => tasks_in_pilot_preparation(runtime).contains(&task.id),
+        };
         mark_readiness_preparing(&mut value, preparing);
     }
     Ok(value)
@@ -544,14 +584,23 @@ pub fn summary_status_transitions(task: &Task) -> Value {
 /// The dashboard detail record for `row`: the show record plus the
 /// dashboard extras. Kept beside the write projection so the detail
 /// and a mutation response enrich a record the same way.
+///
+/// `page` lends the reads a list page already made for its rows (see
+/// [`DashboardPageReads`]); a standalone detail passes the default and reads
+/// them itself. Either way the record is the same.
 pub fn task_detail_with_dashboard_extras(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
+    page: &DashboardPageReads<'_>,
 ) -> Result<Value, OrbitError> {
     let object = super::record_json::task_show_json(runtime, row, status_by_id)?;
-    let mut value = with_dashboard_extras(runtime, &row.task, object)?;
-    if let Some(attention) = runtime.delivery_attention(row)?
+    let mut value = with_dashboard_extras_from(runtime, &row.task, object, page)?;
+    let attention = match page.delivery_attention {
+        Some(map) => map.get(&row.task.id).cloned(),
+        None => runtime.delivery_attention(row)?,
+    };
+    if let Some(attention) = attention
         && let Some(object) = value.as_object_mut()
     {
         object.insert("delivery_attention".to_string(), attention);

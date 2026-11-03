@@ -532,6 +532,14 @@ pub(super) fn job_run_list_sql(
         && !query.active_only
     {
         " INDEXED BY idx_job_runs_ws_state_recency"
+    } else if live_states_only(query) {
+        // The live states are a handful of rows in any workspace, so their
+        // state index answers exactly and the sort covers only them. Left to
+        // the planner, `ORDER BY created_at` instead walks the workspace's
+        // whole history through `idx_job_runs_workspace_created` and drops
+        // every finished run: ~18 ms per call on a 41k-run workspace, paid
+        // three times by each task detail's active-triage scan [ORB-21825].
+        " INDEXED BY idx_job_runs_ws_state"
     } else {
         ""
     };
@@ -544,6 +552,24 @@ pub(super) fn job_run_list_sql(
         params.push(Box::new(limit as i64));
     }
     (sql, params)
+}
+
+/// Whether `query`'s state predicates admit only live runs (`pending`,
+/// `running`, `retrying`). A finished state, including `skipped`, can hold
+/// most of a workspace's history, where the state index is no cheaper than
+/// the created-at walk.
+fn live_states_only(query: &JobRunQuery) -> bool {
+    let live = |state: &JobRunState| {
+        matches!(
+            state,
+            JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
+        )
+    };
+    let constrained = query.state.is_some() || !query.states.is_empty() || query.active_only;
+    constrained
+        && !query.terminal_only
+        && query.state.as_ref().is_none_or(live)
+        && query.states.iter().all(live)
 }
 
 /// Columns [`row_to_job_run`] reads, in its order.
