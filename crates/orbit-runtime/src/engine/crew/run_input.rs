@@ -159,8 +159,8 @@ impl RuntimeKernel {
     /// missing fixture ids are skipped so fake implementer ids do not fail
     /// resolution. Distinct crews — including a mix of set and unset — fail
     /// closed instead of inheriting `workflow.default_crew`. Authenticated
-    /// preparation and auto-dispatch runs are exceptions: each keeps the
-    /// first task's crew, then partitions tasks before agent work.
+    /// preparation, drain-pilot, and auto-dispatch runs are exceptions: each
+    /// keeps the first task's crew, then partitions tasks before agent work.
     fn task_crew_from_run_input(
         &self,
         input: &Value,
@@ -195,8 +195,9 @@ impl RuntimeKernel {
                 Some(existing) if existing == &crew => {}
                 // The live preparation attempt's run keeps the first task's
                 // crew while prepare splits its claim by crew before pilot
-                // workers run. The auto-dispatch run also keeps the first
-                // task's crew; its backlog action emits singleton gate
+                // workers run. A verified drain pilot similarly partitions by
+                // live crew. The auto-dispatch run also keeps the first task's
+                // crew; its backlog action emits singleton gate
                 // bundles before any task worker starts. Every other bundle,
                 // including one whose input merely carries a claim, fails
                 // closed below [ORB-16860].

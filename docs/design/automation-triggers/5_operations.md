@@ -895,10 +895,13 @@ dispatches one pipeline run carrying every member's task id as an explicit
 admission. Task-pilot preparation admits every due crew in that batch
 ([ORB-16839]): prepare partitions the run by each task's stored crew and then
 into groups of at most five, so two crews are assessed in that one run as
-separate partitions instead of one rejected bundle. Run start admits the mix
-only for the run the live attempt admitted, checked against that attempt and
-its action key [ORB-16860]. The supported `orbit run task-pilot` command groups
-explicit ids by stored crew and submits one homogeneous run per crew. A
+separate partitions instead of one rejected bundle. Run start admits a mixed
+pilot bundle for the run the live preparation attempt admitted, checked against
+that attempt and its action key [ORB-16860], or for a pilot dispatched by a live
+`--approve-proposed` drain. The latter must be recorded as a child dispatch of
+that drain; a forged record or an ended drain is refused. The supported
+`orbit run task-pilot` command groups explicit ids by stored crew and submits one
+homogeneous run per crew. A
 hand-assembled direct `orbit run job task_pilot_pipeline` with mixed crews, or
 any other job whose input merely carries a claim, is still refused at run
 start.
