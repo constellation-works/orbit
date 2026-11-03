@@ -201,6 +201,24 @@ pub use visual_review::{
     DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings, visual_review_layer,
 };
 
+/// Build a resolver for a finite factor with a setting-specific lower bound.
+pub(crate) fn finite_factor_admission(
+    default: f64,
+    minimum: f64,
+    key: &'static str,
+) -> impl Fn(Option<f64>) -> Result<f64, OrbitError> {
+    move |raw| {
+        let value = raw.unwrap_or(default);
+        if value.is_finite() && value >= minimum {
+            Ok(value)
+        } else {
+            Err(OrbitError::InvalidInput(format!(
+                "{key} must be a finite number of at least {minimum}, got {value}"
+            )))
+        }
+    }
+}
+
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 
 /// Read the `[machine]` table from the global `config.toml` at `global_root`.

@@ -194,8 +194,6 @@ pub const DEFAULT_USAGE_PRESSURE_CAP: f64 = 8.0;
 pub const DEFAULT_USAGE_PRESSURE_STRENGTH: f64 = 1.0;
 
 const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
-const USAGE_PRESSURE_CAP_KEY: &str = "workflow.usage_pressure_cap";
-const USAGE_PRESSURE_STRENGTH_KEY: &str = "workflow.usage_pressure_strength";
 
 /// How a task's automatic crew draw weighs its pool members
 /// (`workflow.crew_selection`).
@@ -434,30 +432,6 @@ pub(crate) fn admit_crew_selection(raw: Option<String>) -> Result<String, OrbitE
                 CrewSelection::CHOICES.join(", ")
             ))
         })
-}
-
-/// Admit `workflow.usage_pressure_cap`: a finite number of at least 1.
-pub(crate) fn admit_usage_pressure_cap(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let cap = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_CAP);
-    if cap.is_finite() && cap >= 1.0 {
-        Ok(cap)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{USAGE_PRESSURE_CAP_KEY} must be a finite number of at least 1, got {cap}"
-        )))
-    }
-}
-
-/// Admit `workflow.usage_pressure_strength`: a finite number of at least 0.
-pub(crate) fn admit_usage_pressure_strength(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let strength = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_STRENGTH);
-    if strength.is_finite() && strength >= 0.0 {
-        Ok(strength)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{USAGE_PRESSURE_STRENGTH_KEY} must be a finite number of at least 0, got {strength}"
-        )))
-    }
 }
 
 /// Admit `workflow.provider_limit_explicit_crews`, `wait` when unset.

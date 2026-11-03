@@ -20,6 +20,5 @@ pub use target::ProviderLimitTarget;
 
 pub(crate) use budget::{admit_budgets, validate_budget_crews};
 pub(crate) use policy::{
-    admit_crew_selection, admit_explicit_crews, admit_overrides, admit_usage_pressure_cap,
-    admit_usage_pressure_strength, validate_override_crews,
+    admit_crew_selection, admit_explicit_crews, admit_overrides, validate_override_crews,
 };

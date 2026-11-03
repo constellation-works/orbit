@@ -101,30 +101,6 @@ pub(crate) fn admit_crew_performance(raw: Option<String>) -> Result<String, Orbi
         })
 }
 
-/// Admit `workflow.crew_performance_strength`: a finite number of at least 0.
-pub(crate) fn admit_crew_performance_strength(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let strength = raw.unwrap_or(DEFAULT_CREW_PERFORMANCE_STRENGTH);
-    if strength.is_finite() && strength >= 0.0 {
-        Ok(strength)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{CREW_PERFORMANCE_STRENGTH_KEY} must be a finite number of at least 0, got {strength}"
-        )))
-    }
-}
-
-/// Admit `workflow.crew_performance_cap`: a finite number of at least 1.
-pub(crate) fn admit_crew_performance_cap(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let cap = raw.unwrap_or(DEFAULT_CREW_PERFORMANCE_CAP);
-    if cap.is_finite() && cap >= 1.0 {
-        Ok(cap)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{CREW_PERFORMANCE_CAP_KEY} must be a finite number of at least 1, got {cap}"
-        )))
-    }
-}
-
 /// How task crew draws weigh crew performance (`workflow.crew_performance`,
 /// `workflow.crew_performance_strength`, `workflow.crew_performance_cap`).
 #[derive(Debug, Clone, Copy, PartialEq)]
