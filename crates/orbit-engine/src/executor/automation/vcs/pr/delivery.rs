@@ -191,13 +191,13 @@ impl DeliveryPin {
         })
     }
 
-    /// Explain whether red required checks describe the current candidate/base.
+    /// Report measured local ancestry beside a blocked completion.
     ///
-    /// GitHub runs required checks on a merge of the head into the base as it
-    /// stood when the check started. Once the base advances past that point the
-    /// red result describes a merge ref nobody is proposing any more — the
-    /// exact confusion F2026-09-102 recorded, where rebasing onto the current
-    /// base turned the same suite green. The answer is best effort: it needs a
+    /// Local candidate/base ancestry alone does not establish which merge
+    /// commit CI tested: a branch can stay behind while CI tests a merge
+    /// with the current base, and checks can be rerun. Without CI run or
+    /// tested merge-commit provenance, this note states only the measured
+    /// ancestry and that uncertainty. The answer is best effort: it needs a
     /// readable local checkout, and a refusal is never withheld because the
     /// diagnosis was unavailable.
     pub(in crate::executor::automation::vcs) fn base_advance_note(
@@ -217,13 +217,15 @@ impl DeliveryPin {
         Some(if freshness.commits_behind == 0 {
             format!(
                 " The published candidate {candidate_sha} is current with base '{base}' \
-                 ({base_sha}), so this is a failure at the current candidate and base."
+                 ({base_sha}) as measured locally; no CI run or tested merge-commit \
+                 provenance was read, so this alone does not establish which merge CI tested."
             )
         } else {
             format!(
                 " The published candidate {candidate_sha} is {} commits behind base '{base}' \
-                 ({base_sha}), so any red required check ran against a stale merge ref; refresh \
-                 the candidate before judging it.",
+                 ({base_sha}) as measured locally; no CI run or tested merge-commit \
+                 provenance was read, so this alone does not establish that red required \
+                 checks ran against a stale merge ref.",
                 freshness.commits_behind
             )
         })

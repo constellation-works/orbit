@@ -272,7 +272,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     let mut attempt = 1;
     let mut gap_recorded = false;
     loop {
-        match lookup::find_pr_by_head(host, &context.workspace_path, head) {
+        match lookup::find_pr_by_head(host, &context.workspace_path, head, base) {
             Ok(Some((pr_number, pr_url, pr))) => {
                 if !gap_recorded {
                     record_gap(None)?;
@@ -396,7 +396,7 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     body: &str,
 ) -> Result<(String, Option<String>, bool), OrbitError> {
     let body = bound_pr_body(body.to_string(), &[]);
-    if let Some((number, url, _)) = lookup::find_pr_by_head(host, workspace_path, head)? {
+    if let Some((number, url, _)) = lookup::find_pr_by_head(host, workspace_path, head, base)? {
         return Ok((number, url, false));
     }
     tracing::info!(
