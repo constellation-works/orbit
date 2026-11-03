@@ -175,6 +175,9 @@ a broken config restores its notices without visiting another view. The operator
 `POST /api/notices` and `POST /api/notices/<id>/close`, which call the same core post and close as the tools and require an
 operator session. The banner shows while an incident or maintenance notice is in that read, on
 every view, with title, scope, age and time to expiry and a link to the Notices view.
+The banner and Notices view share an in-flight read. Scheduled polls may reuse a completed read for
+up to 15 seconds to stay within the dashboard request budget; an explicit **Refresh** starts a
+fresh read.
 
 ## Attention kind
 

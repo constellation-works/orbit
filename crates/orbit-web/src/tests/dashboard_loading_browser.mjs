@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--pilot-admission|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--pilot-admission|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed|--notice-refresh]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -7,7 +7,7 @@ import { assertDashboardNavigationRepairs } from './dashboard_navigation_repairs
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
-import { assertNoticeBannerRevision, assertNoticeBannerScope } from './dashboard_notice_banner_browser.mjs';
+import { assertNoticeBannerRefresh, assertNoticeBannerRevision, assertNoticeBannerScope } from './dashboard_notice_banner_browser.mjs';
 import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear, assertFixPrReadinessRefresh, assertPinnedFixPr } from './dashboard_run_tasks_browser.mjs';
 import { assertPilotAdmission } from './dashboard_pilot_admission_browser.mjs';
 import { assertSkipPilot } from './dashboard_skip_pilot_browser.mjs';
@@ -24,6 +24,7 @@ const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
 const repairsOnly = process.argv[4] === '--review-repairs';
 const clockOnly = process.argv[4] === '--clock';
 const elapsedOnly = process.argv[4] === '--elapsed';
+const noticeRefreshOnly = process.argv[4] === '--notice-refresh';
 const elapsedScenario = `
 const reads = [];
 const task = {
@@ -1663,7 +1664,10 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  if (elapsedOnly) {
+  if (noticeRefreshOnly) {
+    await assertNoticeBannerRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+    console.log('Explicit notice refresh and scheduled-poll sharing browser checks passed.');
+  } else if (elapsedOnly) {
     await assertElapsedTaskClock(browser, `http://127.0.0.1:${server.address().port}`, evidence);
     console.log('Quiet-stream elapsed labels, cached repaint, focus preservation and hidden-tab coalescing passed.');
   } else if (repairsOnly) {
@@ -1684,6 +1688,7 @@ try {
   }
   if (process.argv[4] !== '--task-lookup' && !clockOnly) {
   if (!locksOnly && !authExclusionsOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerRevision(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertTaskLinkScopeHistory(browser, `http://127.0.0.1:${server.address().port}`, evidence);
