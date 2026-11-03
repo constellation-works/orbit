@@ -479,7 +479,7 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 ### 4.1 Placement, never permission
 
 The manifest declares where a tool appears (`mcp_scope`, CLI shape) and its execution
-kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog.rs`
+kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog/types.rs`
 set the capability floor:
 
 | Declaration | Governed row | Caller capabilities |

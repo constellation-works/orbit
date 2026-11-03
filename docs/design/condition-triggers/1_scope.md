@@ -73,7 +73,7 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
   `crates/orbit-config/src/registry/settings/machine.rs`, and
   `crates/orbit-runtime/src/host_resource/pressure.rs`).
 - **Authority.** The governed-operation catalog
-  (`crates/orbit-common/src/governance/authorization/catalog.rs`) marks routine and
+  (`crates/orbit-common/src/governance/authorization/catalog/types.rs`) marks routine and
   auto-task toggles and schedule edits from the dashboard as operator-only. The
   `orbit.auto_task.add` and `orbit.auto_task.update` tools can be granted to agents
   (`grants.rs`). Only the operator, or a registered channel's own plugin callback,

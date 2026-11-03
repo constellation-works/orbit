@@ -49,7 +49,7 @@ friction F2026-11-006 holds the evidence. Three facts about the current code cau
    operator, and that consent would itself be the approval.
 2. **Callbacks are limited to two exact writes.** Only `orbit.task.update` and
    `orbit.decision.answer` may be consented
-   (`APPLICATION_BUILTIN_OPERATIONS`, `crates/orbit-common/src/governance/authorization/catalog.rs:69`).
+   (`APPLICATION_BUILTIN_OPERATIONS`, `crates/orbit-common/src/governance/authorization/catalog/application.rs`).
    `orbit.task.update` admits only `id`, `status`, `comment` and `workspace`, with
    `status` limited to `backlog`, `done`, `rejected` or `archived`
    (`application_authority.rs:270-296`). `office.proposal-accept` reads the task and its

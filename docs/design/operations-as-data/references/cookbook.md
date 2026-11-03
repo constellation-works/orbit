@@ -91,7 +91,7 @@ For a noun with verbs `v₁…vₙ`, find:
 | Claimed-worker routing | `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>/` |
 | CLI audit metadata and runtime need | `crates/orbit-cli/src/command/operation/registry.rs` |
-| Governed operations | `crates/orbit-common/src/governance/authorization/catalog.rs` |
+| Governed operations | `crates/orbit-common/src/governance/authorization/catalog/operations.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**

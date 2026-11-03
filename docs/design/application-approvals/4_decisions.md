@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: "Decisions: a relayed click is no stronger than its relayer, identity fields bound to state, Operator-floored operations kept off application authority, no consent rewrite on migration"
 tags: [application-approvals, application-authority, security]
-paths: ["crates/orbit-runtime/src/application_authority.rs", "crates/orbit-common/src/governance/authorization/catalog.rs"]
+paths: ["crates/orbit-runtime/src/application_authority.rs", "crates/orbit-common/src/governance/authorization/catalog/**"]
 related_features: [plugins, human-decision-channel, state-compatibility]
 related_artifacts: [ORB-20852]
 ---

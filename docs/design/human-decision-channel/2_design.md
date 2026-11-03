@@ -257,7 +257,7 @@ unchanged; a confined child itself still cannot read the store.
 ### 3.3 The submission tool and the apply step
 
 One new governed operation, `orbit.decision.submit`, joins `GOVERNED_OPERATIONS`
-(`crates/orbit-common/src/governance/authorization/catalog.rs`) with a narrow
+(`crates/orbit-common/src/governance/authorization/catalog/operations.rs`) with a narrow
 row: callable by the registered plugin's callback session and by the operator CLI
 (for testing a channel), never by an agent session. Authorization alone grants
 nothing decision-shaped; the tool then checks, in order:

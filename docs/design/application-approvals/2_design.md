@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "Design: options compared, threat model, consent schema v2 with typed field constraints, admission algorithm, office action map, audit record, migration and implementation slices for bounded application approvals"
 tags: [application-approvals, application-authority, plugins, security]
-paths: ["crates/orbit-runtime/src/application_authority.rs", "crates/orbit-types/src/tool/application.rs", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-core/src/application/application_authority.rs", "crates/orbit-tools/src/plugin/callback/**"]
+paths: ["crates/orbit-runtime/src/application_authority.rs", "crates/orbit-types/src/tool/application.rs", "crates/orbit-common/src/governance/authorization/catalog/application.rs", "crates/orbit-core/src/application/application_authority.rs", "crates/orbit-tools/src/plugin/callback/**"]
 related_features: [plugins, human-decision-channel, auditability, state-compatibility]
 related_artifacts: [ORB-20852, ORB-20362, ORB-20363]
 ---
@@ -39,7 +39,7 @@ unless another file is named.
 2. **Operation validation** (`validate_application_operation`, :222-305). The input must
    be a JSON object. A plugin tool must name its installed, enabled manifest digest
    (:231-266). A built-in must be in `APPLICATION_BUILTIN_OPERATIONS`
-   (`crates/orbit-common/src/governance/authorization/catalog.rs:69`). Its keys and
+   (`crates/orbit-common/src/governance/authorization/catalog/application.rs`). Its keys and
    statuses are fixed lists (:270-296). Everything else is refused (:298-302). Admission
    runs this again on every call, so a stale plugin digest refuses later calls.
 3. **Admission** (`admit_application_call`, :310-412). Orbit resolves the invocation
@@ -276,7 +276,7 @@ Field rules:
 
 ### 4.4 Ceilings
 
-A closed table in `crates/orbit-common/src/governance/authorization/catalog.rs`
+A closed table in `crates/orbit-common/src/governance/authorization/catalog/application.rs`
 (`APPLICATION_OPERATION_CEILINGS`) replaces `APPLICATION_BUILTIN_OPERATIONS`. A consent
 may narrow a ceiling, never exceed it. Consent-time validation checks every scope
 against it, and admission checks again. Each row also keeps the v1 exact-form key list

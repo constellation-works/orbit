@@ -11,7 +11,7 @@ doc_role: scope
 type: design
 summary: "Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read."
 tags: [web-terminal, orbit-web, remote-access, security]
-paths: ["crates/orbit-web/**", "crates/orbit-exec/src/credential_paths.rs", "crates/orbit-common/src/governance/authorization/catalog.rs"]
+paths: ["crates/orbit-web/**", "crates/orbit-exec/src/credential_paths.rs", "crates/orbit-common/src/governance/authorization/catalog/operations.rs"]
 related_features: [remote-access, user-interface, policy-sandbox]
 ---
 
