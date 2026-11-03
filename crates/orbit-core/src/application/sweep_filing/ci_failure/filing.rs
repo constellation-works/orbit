@@ -460,6 +460,17 @@ where
     // comments are read at most once, however many clusters the run has.
     let lookup = SnapshotDuplicateLookup::new(lookup);
     let identities = CiTaskIdentities::new(runtime);
+    // Each cluster otherwise pays a store query per failure and legacy
+    // key for operator, exact and legacy coverage. Past this many keys
+    // one hydrated listing is cheaper, and the snapshot then answers
+    // every tag selection from it.
+    let tag_queries: usize = clusters
+        .iter()
+        .map(|cluster| 2 + cluster.legacy_keys.len())
+        .sum();
+    if tag_queries >= 16 {
+        lookup.list_tasks()?;
+    }
     let mut operator_covers = super::operator_cover::OperatorCovers::new(runtime)?;
     let operator_assessments = clusters
         .iter()
@@ -504,7 +515,7 @@ where
             if existing.is_some() {
                 return Ok(existing);
             }
-            let assessment = assessor.assess(cluster);
+            let assessment = assessor.assess(cluster, &lookup);
             if !assessment.evidence.is_null() {
                 repair_assessments.push(assessment.evidence.clone());
             }
