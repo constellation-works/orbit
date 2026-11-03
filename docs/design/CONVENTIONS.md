@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-11-01
-last_validated: 2026-10-25
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Accepted
 ---
 
@@ -296,5 +296,23 @@ Retired features are removed from this table along with their folder.
 | Usage Pressure | [docs/design/usage-pressure/](./usage-pressure/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
 | Visual Review | [docs/design/visual-review/](./visual-review/) | claude |
+| Backlog Forecast | [docs/design/backlog-forecast/](./backlog-forecast/) | claude |
+| Condition Triggers | [docs/design/condition-triggers/](./condition-triggers/) | claude |
+| Conflict Budget | [docs/design/conflict-budget/](./conflict-budget/) | claude |
+| Crew Ladder | [docs/design/crew-ladder/](./crew-ladder/) | claude |
+| Decision Assistance | [docs/design/decision-assistance/](./decision-assistance/) | codex |
+| Distributions | [docs/design/distributions/](./distributions/) | claude |
+| Granted Tools | [docs/design/granted-tools/](./granted-tools/) | claude |
+| Human Decision Channel | [docs/design/human-decision-channel/](./human-decision-channel/) | claude |
+| Mid-Run Steering | [docs/design/mid-run-steering/](./mid-run-steering/) | codex |
+| Operator Attention | [docs/design/operator-attention/](./operator-attention/) | claude |
+| Owner Failover | [docs/design/owner-failover/](./owner-failover/) | claude |
+| Plugins | [docs/design/plugins/](./plugins/) | claude |
+| Scheduled Tasks | [docs/design/scheduled-tasks/](./scheduled-tasks/) | claude |
+| Script Steps | [docs/design/script-steps/](./script-steps/) | claude |
+| Task Risk | [docs/design/task-risk/](./task-risk/) | codex |
+| UX Rules | [docs/design/ux-rules/](./ux-rules/) | claude |
+| Web Terminal | [docs/design/web-terminal/](./web-terminal/) | claude |
+| Workspace Agent Corpus | [docs/design/workspace-agent-corpus/](./workspace-agent-corpus/) | Orbit |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.

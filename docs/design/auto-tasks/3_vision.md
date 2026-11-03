@@ -2,7 +2,7 @@
 title: Auto-tasks — Vision
 owner: claude
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -80,7 +80,7 @@ task's provenance tag, and observability is the task and Operations auto-task su
 
 ### Orbit-internal
 - `docs/design/routines/` — scheduler substrate.
-- [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine) — the auto-task primitive decision.
+- [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates-one-generic-scheduler-routine) — the auto-task primitive decision.
 - [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) — provider-neutral run budgets (no turn caps).
 
 ### External

@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-31
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 stage: shipped
 next: "—"
@@ -87,8 +87,9 @@ review coverage remains uncovered.
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.
-This candidate belongs in a dedicated task PR to `agent-main`, left unmerged;
-publication does not approve the proposed runtime behavior.
+The design landed through a dedicated task PR to `agent-main`; publication
+did not approve the proposed runtime behavior. Delivery triggers and bounded
+state preparation have since shipped in [ORB-11330] and [ORB-11331].
 
 ## Task References
 
