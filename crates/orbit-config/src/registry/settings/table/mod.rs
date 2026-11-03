@@ -288,12 +288,17 @@ macro_rules! define_config_settings {
     (@tier) => { ConfigKeyTier::Standard };
 }
 
-// The key list is split across two modules. They are `.rs` files declared with
-// `mod`: the CodeQL Rust extractor expands `macro_rules` only from `.rs`
+// The key list is split at setting-family boundaries across `.rs` modules:
+// The CodeQL Rust extractor expands `macro_rules` only from `.rs`
 // sources, and `include!` of a non-`.rs` file is outside its source set.
-// `keys_tail` defines `with_tail_keys!` and `keys_head` defines the assembler.
+// `keys_tail` retains `with_tail_keys!`; housekeeping and workflow fragments
+// preserve token order, and `keys_head` defines the assembler.
 // The parent calls the assembler so edition 2024 resolves the key tokens here,
 // beside `define_config_settings!`, and the generated items stay on `table::`.
+#[macro_use]
+mod keys_workflow;
+#[macro_use]
+mod keys_housekeeping;
 #[macro_use]
 mod keys_tail;
 #[macro_use]

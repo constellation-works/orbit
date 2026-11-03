@@ -123,7 +123,7 @@
     },
     "orbit-config": {
       "test_function_paths": [
-        "tests/crew_pools.rs::malformed_pools_name_the_setting_they_came_from",
+        "crew/tests/pools.rs::malformed_pools_name_the_setting_they_came_from",
         "tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values",
         "tests/retired_providers.rs::crew_naming_a_retired_provider_fails_with_named_refusal",
         "tests/retired_providers.rs::retired_provider_refusal_is_case_insensitive",
