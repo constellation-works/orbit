@@ -575,7 +575,7 @@ function stripNode() {
     ]),
     total ? bar : el("p", { class: "agents-strip-none", text: "No problem was recorded in this window." }),
     legend,
-    el("p", { id: "agents-strip-context", class: "agents-strip-reasons", role: "note", text: "Ownership counts include unscored context. Implementers’ escaped regressions do not affect scores." }),
+    el("p", { id: "agents-strip-context", class: "agents-strip-reasons", role: "note", text: "Ownership counts include unscored context; rankings use only each role’s scored terms." }),
   ];
   if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
   if (role === "implementers") {
@@ -984,7 +984,7 @@ function detailNode(rankedRow) {
 
 // The roles whose terms weigh regressions or findings by severity.
 const SEVERITY_ROLES = new Set(["reviewers"]);
-const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, or, with no verification verdict, once its task lands, at the highest severity rated on its own regression links, else low; a review gate finding counts at the reviewer's own. A regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
+const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one missed regression costs reviewers twice its weight, from −16 for critical to −0.5 for nit, and one escaped regression costs implementers half its weight, from −4 to −0.125. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, or, with no verification verdict, once its task lands, at the highest severity rated on its own regression links, else low; a review gate finding counts at the reviewer's own. A regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
 
 function howNode() {
   const list = el("dl", { class: "agents-how-terms" });
@@ -1003,7 +1003,7 @@ function howNode() {
     el("p", { text: role === "implementers"
       ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
       : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
-    ...(role === "implementers" ? [el("p", { text: "Escaped regressions are shown, not scored: diff size dominates regression risk, and linking is still sparse. Counts use severity weights: critical 8, high 4, medium 2, low 1, nit 0.25. Regression residual is severity-weighted actual minus expected, using fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. The residual stays unscored until linking matures." }),
+    ...(role === "implementers" ? [el("p", { text: "Escaped regressions are scored: regression links with escape no_test, mostly delivery-review findings, at their severity weights (critical 8, high 4, medium 2, low 1, nit 0.25), weighted −0.5. Change size dominates regression risk, so their expected count uses fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. A defect a pre-landing review already rejected or repaired counts once, as that verdict." }),
       el("p", { text: "Diff economy is the median landed-task ratio of lines changed to the fleet median for that tier and type. Above 1 means larger diffs for comparable work. Missing data or a zero reference median is unavailable. It is shown, not scored; normalizing regressions by a crew's own diff would reward bloat. All tiers keeps the tier-mix score. A selected tier ranks its crew scores from the cell matrix, pulled toward 100 with 30 tasks of reference evidence, and hides rows without work in that tier. Detail evidence remains for all tiers." })] : []),
     ...ownUnitText(),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),

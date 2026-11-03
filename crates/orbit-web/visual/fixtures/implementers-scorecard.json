@@ -49,6 +49,13 @@
         "weight": -1,
         "group": "problem",
         "definition": "Crew-caused rework"
+      },
+      {
+        "key": "escaped_regressions",
+        "label": "Escaped regressions",
+        "weight": -0.5,
+        "group": "problem",
+        "definition": "Escaped regressions"
       }
     ],
     "rows": [
@@ -80,16 +87,6 @@
           "escaped_regressions": 4.166666666666667
         },
         "stats": [
-          {
-            "key": "escaped_regressions",
-            "label": "Escaped regressions (severity-weighted)",
-            "value": 1
-          },
-          {
-            "key": "regression_residual",
-            "label": "Regression residual (actual − expected)",
-            "value": 0
-          },
           {
             "key": "diff_economy",
             "label": "Diff economy (× fleet median)",
@@ -141,7 +138,8 @@
           "first_pass_accepts": 15.934426229508198,
           "review_rejects": 3.3442622950819674,
           "reviewer_repairs": 1.9672131147540983,
-          "crew_rework": 0.9836065573770492
+          "crew_rework": 0.9836065573770492,
+          "escaped_regressions": 1.0
         }
       }
     ]

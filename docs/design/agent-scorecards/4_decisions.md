@@ -1,13 +1,13 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 feature: agent-scorecards
 doc_role: decisions
 type: design
-summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy.
+summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy, escaped regressions scored against expected size.
 tags: [agent-scorecards, dashboard, analytics]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot.rs"]
 related_features: [user-interface, review-gate]
@@ -32,7 +32,7 @@ Every recorded problem has exactly one owning role, or none (**Not scored**). Th
 
 ### Consequences
 
-- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count while leaving the Implementers score unchanged.
+- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count; since [ORB-21789] they are also scored, except a defect a pre-landing review already charged.
 - An implementer is not charged for a defect review should have seen; the reviewer is. Orchestrator spec regressions narrow to escape `spec_ambiguous`.
 - Cost: a problem that really was shared is charged to one role only, so a weak implementer paired with a weak reviewer looks better than either deserves on its own tab. Reading roles together is required to see that.
 
@@ -101,9 +101,87 @@ Keep cost outside the score and keep the existing shrinkage and support rules.
   supported reference; until those tiers grow, their crews inherit the larger
   pool's rate and atypical difficulty can still affect their comparison.
 
+## Score escaped regressions against expected change size
+
+**Recorded:** 2026-11-03 · [ORB-21789] revisited [ORB-19629], which left escaped regressions unscored until roughly 100 linked regressions with sites and another backtest.
+
+**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers/performance.rs::TERMS`, `performance.rs::charged_by_pre_landing_review`, `crates/orbit-core/src/application/agents/roles/implementers/context.rs::append_diff_context`
+
+### Context
+
+`review.timing` is `off` in ws_orbit and `before_pr` is deprecated, so few
+tasks carry a pre-landing review settlement: in the 7 days to 2026-11-03,
+muse-wonder-full had 0 of 12 tasks reviewed, opus 3 of 90 and sol 19 of 161.
+Delivery review covers every landed task and files each finding as a fix task
+linked `regression_from` to its culprit. With escaped regressions unscored, the
+review terms saw almost nothing and the score was effectively landings minus
+rework: on hard work muse-wonder-full ranked third at 4.0 severity-weighted
+regressions per task, 31.6 over expected on 12 tasks.
+
+The rerun backtest read the ws_orbit owner store on 2026-11-03 at 06:55 UTC:
+1,760 typed `regression_from` links, **662 with sites** (sites start
+2026-10-28), 453 of those filed by `delivery-code-review`, and 543 against 306
+culprits with a recorded landed diff size. Delivery review is prompt: from the
+culprit's landing to the link's filing took a median of 0.2 hours, 7.4 at the
+90th percentile and 31 at the 95th. The cohort is the **814** tasks that landed
+with a recorded diff, crew and tier from 2026-10-28 02:14 to 2026-11-01 06:55
+UTC, so each had 48 hours of follow-up, excluding `no-diff-expected` and empty
+diffs. **192** of them had a linked regression with sites within 48 hours (359
+links). The outcome is whether a task had any such link, fitted by logistic
+regression with 5-fold cross-validation by task:
+
+| Predictors | Cross-validated AUC |
+|---|---:|
+| ln(1 + lines changed) | 0.769 |
+| Tier | 0.718 |
+| Size and tier | 0.777 |
+| Size, tier and crew | 0.763 |
+
+Crew did not improve on size and tier: the likelihood-ratio χ² was 13.4 on 8 df
+(p = 0.10), and it held out worse. On `no_test` links alone, the implementer-owned
+escape, p was 0.08. Crew added no more beyond tier alone (p = 0.11) or beyond the
+expected-size bucket the score uses (p = 0.11). A 24-hour follow-up (1,041
+tasks, 236 regressed) gave the same picture (crew p = 0.08). This reproduces
+the 2026-10-27 finding (AUC 0.737, no crew effect beyond size), whose scripts
+were never recovered, on four times the linked sample.
+
+### Decision
+
+The implementer score takes delivery-review evidence as **Escaped regressions**,
+a problem term weighted −0.5 per severity point: `no_test` regression links
+against the row's landed tasks, at their severity weights. A `medium` finding
+costs as much as a review reject. Its expected count is the size-adjusted one
+the residual already displayed: the fleet rate for the task's tier and
+expected-size bucket. Expected size is the fleet's median for the task's
+(tier, type) cell, never the row's own diff. So routing larger work to a crew
+does not lower its score, but writing a larger diff than comparable work does.
+
+A defect is counted once across review layers. When a link's `sites` name a
+path that a finding of the row's pre-landing `reject` (not a false reject) or
+`accept_with_fixes` cited or changed, that verdict already charged the defect
+and the link adds nothing. Other links on the same task still count, since they
+are defects the pre-landing review did not report.
+
+The alternative was a delivery-review review term: an accept credit for a task
+with no findings, and the delivery verdict replacing the pre-landing one. It was
+not chosen. Nothing in the scan records when delivery review has covered a task,
+so a clean credit would be paid before the review ran. Escape attribution
+already sends `review_missed`, `spec_ambiguous` and the unscored escapes to
+their owners.
+
+### Consequences
+
+- A crew whose work no pre-landing review sees is now scored on its delivery-review findings, and a crew whose diffs run larger than comparable work pays for the regressions that come with them.
+- `escaped_regressions` moves from the row's stats into its scored counts and expectations. The `regression_residual` stat is removed: the term's actual, expected count and contribution replace it. Diff economy stays shown, not scored.
+- By-type cells score the term against their (tier, type) cell rates, so crew-performance draws now respond to escaped regressions.
+- The `no_test` charge stays in the attribution strip's Implementers count even when a pre-landing verdict absorbed it.
+- Cost: crew differences in regression rate beyond size were not significant (p ≈ 0.1), so much of the term's spread is noise; shrinkage toward the fleet average and the −0.5 weight limit it. A sparse expected-size bucket served only by the row's own work sets its own expectation and cannot penalize it. Site matching depends on filers naming sites: a link without sites always counts, even when it repeats a pre-landing finding. The filer's severity stands until verification confirms or replaces it, and 95% of delivery-review findings arrived within 31 hours of landing, so the newest tasks can still pick up findings after they are first scored.
+
 ## Task References
 
 - ORB-17118 — the unit-landed orchestrator principle this decision extends.
 - ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
+- ORB-19629 — left escaped regressions unscored pending a larger linked sample and another backtest.
+- ORB-21789 — reran the backtest on 662 links with sites and scored escaped regressions against expected change size, counting a defect once across review layers.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

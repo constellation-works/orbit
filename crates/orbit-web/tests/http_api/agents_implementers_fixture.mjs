@@ -5,6 +5,7 @@ export const implementerTerms = [
   ['review_rejects', 'Review rejects', -1, 'problem'],
   ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem'],
   ['crew_rework', 'Crew-caused rework', -1, 'problem'],
+  ['escaped_regressions', 'Escaped regressions', -0.5, 'problem'],
 ].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label }));
 const costCoverage = (measured, unpriced, missing) => {
   const total = measured + unpriced + missing;
@@ -26,8 +27,6 @@ const row = (crew, model, rank, landed, cost) => {
     runs_without_model: 0, provisional: null, counts,
     per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
     stats: [
-      { key: 'escaped_regressions', label: 'Escaped regressions (severity-weighted)', value: counts.escaped_regressions },
-      { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: cost },
       ...coverage,
@@ -66,8 +65,6 @@ const radarRow = (crew, model, rank, counts, reviewedUnits) => {
     runs_without_model: 0, provisional: null, counts, reviewed_units: reviewedUnits,
     per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
     stats: [
-      { key: 'escaped_regressions', label: 'Escaped regressions (severity-weighted)', value: counts.escaped_regressions },
-      { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: 5 },
       ...costCoverage(units, 0, 0),
