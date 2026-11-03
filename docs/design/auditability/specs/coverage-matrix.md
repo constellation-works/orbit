@@ -72,6 +72,6 @@ Last revised by codex for [ORB-10262].
 ## Task References
 
 - **[ORB-10262]** — Historical capability/placement preflight work, no longer part of the v1 MCP execution path.
-- [ORB-21797] — Tracks restoring the missing friction live-tracing projection.
+- [ORB-21797] — Restored the friction live-tracing projection.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
