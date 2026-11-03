@@ -57,7 +57,7 @@ pub(crate) struct HostOperationalHold {
 impl HostOperationalHold {
     pub(crate) fn new(task: &Task, evidence: String) -> Self {
         Self {
-            material: validation_material(task),
+            material: host_operational_material(task),
             evidence,
         }
     }
@@ -437,6 +437,14 @@ fn validation_material(task: &Task) -> String {
     )
 }
 
+/// The `no-pilot` tag changes pilot policy, not the owner-side work a
+/// `host_operational` finding requires, so it cannot rescope that hold.
+fn host_operational_material(task: &Task) -> String {
+    let mut assessed = task.clone();
+    assessed.tags.retain(|tag| tag != "no-pilot");
+    validation_material(&assessed)
+}
+
 /// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
 /// re-scope that releases it.
 pub(super) fn criteria_digest(task: &Task) -> String {
@@ -541,12 +549,11 @@ impl OrbitRuntime {
         if let Some(hold) = self.unverified_finding_hold_in(task, history)? {
             return Ok(Some(PilotAdmissionHold::UnverifiedFinding(hold)));
         }
-        // [ORB-21238] An operator's `no-pilot` skip: dispatch proceeds without
-        // a new assessment, so no receipt holds the task. The unverified
-        // finding above is a review gate, not an assessment, and still holds.
-        if super::skip::skips_pilot(&task.tags) {
-            return Ok(None);
-        }
+        // [ORB-21238] An operator's `no-pilot` skip bypasses stale assessments
+        // and ordinary pilot findings. A current host-operational hold is
+        // checked below first because skipping a pilot cannot resolve the
+        // owner-side condition it recorded. The unverified finding above is a
+        // review gate, not an assessment, and still holds.
         let material = validation_material(task);
         let mut legacy_override = false;
         // Atomic pilot application persists the full assessment in a
@@ -585,6 +592,9 @@ impl OrbitRuntime {
                 receipt.operation_id,
                 history,
             )? {
+                if super::skip::skips_pilot(&task.tags) {
+                    return Ok(None);
+                }
                 return Ok(Some(PilotAdmissionHold::StaleAssessment(format!(
                     "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new assessment completes. {}",
                     super::skip::pilot_hold_remedies(task)
@@ -633,16 +643,19 @@ impl OrbitRuntime {
                     )),
                 };
                 if let Some(hold) = hold
-                    && hold.material == material
+                    && hold.material == host_operational_material(task)
                     && !operator_resolved(
                         &task_history,
                         HOST_OPERATIONAL_RESOLVED,
                         operation_id,
-                        ("material", &material),
+                        ("material", &hold.material),
                     )
                 {
                     return Ok(Some(PilotAdmissionHold::HostOperational(hold)));
                 }
+            }
+            if super::skip::skips_pilot(&task.tags) {
+                return Ok(None);
             }
             let operator_decision = operator_resolved(
                 &history()?,

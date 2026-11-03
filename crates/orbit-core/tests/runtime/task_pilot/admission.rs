@@ -1825,6 +1825,34 @@ fn no_pilot_admits_a_stale_assessment_until_the_tag_is_removed() {
     assert_workflow_admitted(&workspace, &task);
 }
 
+/// [ORB-21238] `no-pilot` bypasses stale assessments but cannot release a
+/// current owner-side operational hold without an evidenced operator decision.
+fn no_pilot_keeps_a_host_operational_hold_until_an_operator_decision() {
+    let workspace = Workspace::new();
+    let task = task_at_status(&workspace, TaskStatus::Proposed);
+    assess_disposition(&workspace, &task, None, "host_operational");
+    to_backlog(&workspace, &task);
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+
+    set_tags(&workspace, &task, &["no-pilot"]);
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    assert_eq!(event_count(&workspace, &task, "host_operational_held"), 1);
+
+    hu(
+        &workspace,
+        &task,
+        TaskUpdateParams {
+            comment: Some(
+                "task-pilot-admission: approve-anyway\nThe operator reviewed the owner-side evidence and accepts admission."
+                    .into(),
+            ),
+            ..Default::default()
+        },
+    );
+    assert_admission(&workspace, &task, None);
+    assert_event_by(&workspace, &task, "host_operational_resolved");
+}
+
 /// [ORB-21238] Only an operator adds `no-pilot` to an assessed task. The
 /// agent's write is refused whole, and the operator's records who skipped
 /// and the requirements it dispatches without assessment.
@@ -2019,6 +2047,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     no_pilot_skip_scenarios,
     no_pilot_admits_a_stale_assessment_until_the_tag_is_removed,
+    no_pilot_keeps_a_host_operational_hold_until_an_operator_decision,
     only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited,
     no_pilot_keeps_every_other_admission_rule
 );

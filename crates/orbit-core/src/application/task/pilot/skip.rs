@@ -1,10 +1,12 @@
 //! An operator's skip of the task pilot: the `no-pilot` tag [ORB-21238].
 //!
 //! Filed on a task, `no-pilot` keeps automatic preparation from assessing it.
-//! Admission also respects it: a task carrying the tag is not held by pilot
-//! assessment state (a stale assessment, or a hold its latest receipt
-//! recorded). Unverified review findings, readiness gaps, context locks,
-//! dependencies and delivery holds still apply.
+//! Admission also respects it: a task carrying the tag bypasses a stale
+//! assessment and ordinary findings its latest receipt recorded. A current
+//! `host_operational` hold still applies until a trusted operator decision or
+//! newer assessment resolves the owner-side condition. Unverified review
+//! findings, readiness gaps, context locks, dependencies and delivery holds
+//! still apply.
 //!
 //! Adding the tag to a task a pilot has assessed, or one a pilot is preparing,
 //! bypasses that gate, so it is an operator decision: any other writer is
