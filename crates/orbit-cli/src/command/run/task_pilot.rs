@@ -70,6 +70,9 @@ impl Execute for TaskPilotCommand {
             self.max_tasks,
             self.max_partition_size,
         )?;
+        if let Some(branch) = self.base_branch.as_deref() {
+            runtime.validate_task_pilot_base_branch(branch)?;
+        }
         // Refuse the whole explicit selection before submitting a run. Prepare
         // repeats this check against current state for every other caller and
         // for status changes after this read. Mixed stored crews are submitted

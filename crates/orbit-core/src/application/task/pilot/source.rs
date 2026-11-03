@@ -6,6 +6,8 @@
 //! and (under the shared fetch lock) the remote-tracking ref; the primary
 //! HEAD, index and working files are never aligned or otherwise modified.
 
+mod admission;
+
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

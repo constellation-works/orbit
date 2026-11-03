@@ -902,6 +902,23 @@ explicit ids by stored crew and submits one homogeneous run per crew. A
 hand-assembled direct `orbit run job task_pilot_pipeline` with mixed crews, or
 any other job whose input merely carries a claim, is still refused at run
 start.
+
+For CLI pilots, `--base-branch` names a branch on `origin` (or a local
+branch when there is no origin). A locally resolvable commit passed in its
+place is refused before any run is submitted or task changed. An exact
+remote branch takes precedence even when its name looks like a commit ID;
+preparation still fetches and pins that branch's head. If the origin check
+fails, correct the remote access and retry. To inspect a specific commit,
+keep the branch identity separate and pass the existing pipeline input:
+
+```bash
+orbit run job task_pilot_pipeline --input base_branch=agent-main \
+  --input source_revision=<FULL_COMMIT_ID>
+```
+
+`source_revision` must be a full commit ID available in the workspace's Git
+object store. It pins that exact commit independently of the branch head.
+
 A burst of *N* same-crew eligible tasks still yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
 members beyond the batch stay pending for the next admission. The attempt's

@@ -44,6 +44,7 @@ mod queued_drains;
 mod repair_skips;
 mod run_history;
 mod run_show_display;
+mod task_pilot_branch;
 mod wait;
 mod waiting_blockers;
 const STALE_RUNNING: &str = "jrun-20260920-0100";
