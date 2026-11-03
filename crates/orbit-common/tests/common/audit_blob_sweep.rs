@@ -192,3 +192,64 @@ fn interrupted_sweep_returns_quarantined_blobs() {
     assert_eq!(sweep.recover_quarantine().unwrap(), 1);
     assert_eq!(writer.read(&hash).unwrap(), b"moved aside");
 }
+
+/// The reference scan's tokenizer skips through prose a window at a time
+/// [ORB-21830]. A token it missed would let the sweep delete a blob a
+/// remaining row still names, so it must find exactly what splitting on every
+/// non-hex character finds: maximal runs of 64 hex digits, all lowercase.
+#[test]
+fn reference_tokenizer_finds_every_whole_64_digit_hash() {
+    fn by_split(text: &str) -> Vec<String> {
+        text.split(|ch: char| !ch.is_ascii_hexdigit())
+            .filter(|token| blob_sweep::is_blob_hash(token))
+            .map(str::to_owned)
+            .collect()
+    }
+    fn found(text: &str) -> Vec<String> {
+        let mut hashes = Vec::new();
+        blob_sweep::for_each_blob_hash(text, |hash| hashes.push(hash.to_owned()));
+        hashes
+    }
+    let a = "a".repeat(64);
+    let b = "0123456789abcdef".repeat(4);
+    let mut texts = vec![
+        String::new(),
+        a.clone(),
+        format!("{a}{b}"),
+        format!("{a} {b}"),
+        format!("x{a}"),
+        format!("{a}x"),
+        format!("é{a}ü {b}→"),
+        format!("{}{}", "f".repeat(63), " ".repeat(64)),
+        "f".repeat(65),
+        format!("{}B{}", "c".repeat(63), &a[1..]),
+        format!("{}A {b}", &a[1..]),
+        format!("{{\"output_ref\":\"{a}\",\"stdout_ref\":\"{b}\"}}"),
+        format!("deadbeef {} cafe {a}", "1".repeat(40)),
+    ];
+    // Every split of a hash against prose and other digits.
+    for cut in 0..=64 {
+        texts.push(format!("{}x{a}", &b[..cut]));
+        texts.push(format!("{}{} {b}", "9".repeat(cut), &a[..64 - cut]));
+        texts.push(format!("the run {} passed {}", &a[..cut], &b[cut..]));
+    }
+    // Deterministic mixes of digit runs, case changes and multi-byte chars.
+    let pieces = ["a", "f", "0", "9", "A", " ", "é", "x", &a[..32], &b[..60]];
+    let mut seed = 21_830u64;
+    for _ in 0..2_000 {
+        let mut text = String::new();
+        for _ in 0..40 {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            text.push_str(pieces[(seed >> 33) as usize % pieces.len()]);
+        }
+        texts.push(text);
+    }
+    for text in &texts {
+        assert_eq!(
+            found(text),
+            by_split(text),
+            "tokenizer disagreed on {text:?}"
+        );
+    }
+    assert_eq!(found(&format!("é{a}ü {b}→")), vec![a.clone(), b.clone()]);
+}
