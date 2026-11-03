@@ -24,8 +24,15 @@ use serde_json::{Map, Value};
 /// stream cannot be read as the envelope. `None` keeps the legacy path for
 /// direct Orbit envelopes and any other multi-document output.
 pub(crate) fn project_grok_response(stdout: &[u8]) -> Option<Vec<u8>> {
-    if let Some(events) = grok_streaming_events(stdout) {
-        return Some(grok_answer_text(&events).into_bytes());
+    match grok_streaming_events(stdout) {
+        GrokStream::Recognized(events) => {
+            return Some(grok_answer_text(&events).into_bytes());
+        }
+        // A recognized stream with a malformed line is untrusted: yield an
+        // empty answer so tool/reasoning payloads in the raw capture cannot
+        // be rediscovered as the completion envelope.
+        GrokStream::MalformedRecognized(_) => return Some(Vec::new()),
+        GrokStream::Unrecognized => {}
     }
 
     let wrapper = serde_json::from_slice::<Value>(stdout).ok()?;
@@ -47,15 +54,36 @@ pub(crate) fn project_grok_response(stdout: &[u8]) -> Option<Vec<u8>> {
 
 /// The json-wrapper document a `streaming-json` capture reduces to, so usage
 /// is the `end` event once. `None` leaves the capture unchanged: it is not a
-/// recognized stream, or the stream was cut off before `end`.
+/// recognized stream, or a clean stream was cut off before `end`. A malformed
+/// recognized stream reduces to an empty-text wrapper (plus any `end` spend
+/// fields) so the raw capture is never rescanned for an envelope.
 pub(crate) fn normalize_grok_stdout(stdout: &[u8]) -> Option<Vec<u8>> {
-    let events = grok_streaming_events(stdout)?;
+    let (events, malformed) = match grok_streaming_events(stdout) {
+        GrokStream::Recognized(events) => (events, false),
+        GrokStream::MalformedRecognized(events) => (events, true),
+        GrokStream::Unrecognized => return None,
+    };
     let end = events
         .iter()
         .rev()
-        .find(|event| event_type(event) == Some("end"))?;
+        .find(|event| event_type(event) == Some("end"));
+    if !malformed {
+        let end = end?;
+        let mut wrapper = Map::new();
+        wrapper.insert("text".to_string(), Value::String(grok_answer_text(&events)));
+        return finish_grok_wrapper(wrapper, end);
+    }
+    // Malformed recognized stream: never leave the raw capture for generic
+    // scanning. Keep only the `end` event's spend fields, with no answer.
     let mut wrapper = Map::new();
-    wrapper.insert("text".to_string(), Value::String(grok_answer_text(&events)));
+    wrapper.insert("text".to_string(), Value::String(String::new()));
+    if let Some(end) = end {
+        return finish_grok_wrapper(wrapper, end);
+    }
+    serde_json::to_vec(&Value::Object(wrapper)).ok()
+}
+
+fn finish_grok_wrapper(mut wrapper: Map<String, Value>, end: &Value) -> Option<Vec<u8>> {
     for key in [
         "stopReason",
         "usage",
@@ -74,7 +102,10 @@ pub(crate) fn normalize_grok_stdout(stdout: &[u8]) -> Option<Vec<u8>> {
 /// is not that stream, so a json wrapper keeps whatever the generic parser
 /// already recorded.
 pub(crate) fn recorded_grok_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrace>> {
-    let events = grok_streaming_events(stdout)?;
+    let events = match grok_streaming_events(stdout) {
+        GrokStream::Recognized(events) | GrokStream::MalformedRecognized(events) => events,
+        GrokStream::Unrecognized => return None,
+    };
     let mut calls: Vec<ToolCallTrace> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
     for event in &events {
@@ -118,21 +149,44 @@ pub(crate) fn recorded_grok_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrac
     Some(calls)
 }
 
-/// Recognized when more than one JSON object is present and at least one is
-/// an `end` event or a `tool_call` that carries `toolName`. A line that is
-/// not JSON makes the capture untrusted and returns `None`.
-fn grok_streaming_events(stdout: &[u8]) -> Option<Vec<Value>> {
+enum GrokStream {
+    /// More than one JSON object, at least one `end` or named `tool_call`,
+    /// and every non-empty line a JSON object.
+    Recognized(Vec<Value>),
+    /// At least one Grok event type was seen, but a non-empty line was not
+    /// a JSON object. The parsed events are kept for telemetry only.
+    MalformedRecognized(Vec<Value>),
+    Unrecognized,
+}
+
+const GROK_EVENT_TYPES: [&str; 6] = [
+    "text",
+    "thought",
+    "tool_call",
+    "tool_call_update",
+    "usage",
+    "end",
+];
+
+fn grok_streaming_events(stdout: &[u8]) -> GrokStream {
     let mut events = Vec::new();
     let mut recognized = false;
+    let mut saw_grok_type = false;
+    let mut malformed = false;
     for line in stdout.split(|byte| *byte == b'\n') {
         let line = line.trim_ascii();
         if line.is_empty() {
             continue;
         }
-        let value = serde_json::from_slice::<Value>(line).ok()?;
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            malformed = true;
+            continue;
+        };
         if !value.is_object() {
-            return None;
+            malformed = true;
+            continue;
         }
+        saw_grok_type |= matches!(event_type(&value), Some(t) if GROK_EVENT_TYPES.contains(&t));
         recognized |= match event_type(&value) {
             Some("end") => true,
             Some("tool_call") => value.get("toolName").and_then(Value::as_str).is_some(),
@@ -140,7 +194,17 @@ fn grok_streaming_events(stdout: &[u8]) -> Option<Vec<Value>> {
         };
         events.push(value);
     }
-    (events.len() > 1 && recognized).then_some(events)
+    if malformed {
+        if saw_grok_type {
+            return GrokStream::MalformedRecognized(events);
+        }
+        return GrokStream::Unrecognized;
+    }
+    if events.len() > 1 && recognized {
+        GrokStream::Recognized(events)
+    } else {
+        GrokStream::Unrecognized
+    }
 }
 
 fn grok_answer_text(events: &[Value]) -> String {

@@ -233,6 +233,63 @@ mod grok {
     }
 
     #[test]
+    fn grok_malformed_stream_cannot_promote_tool_or_reasoning_envelope() {
+        const TOOL_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{"claimed":"tool-output"},"error":null}"#;
+        // Tool-only stream (no assistant text) quoting a success envelope,
+        // plus reasoning quoting it, each with one non-JSON line appended.
+        let tool_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"}).to_string(),
+            serde_json::json!({"type": "tool_call_update", "toolCallId": "1", "rawOutput": TOOL_ENVELOPE}).to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        let thought_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"})
+                .to_string(),
+            serde_json::json!({"type": "thought", "data": TOOL_ENVELOPE}).to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        // Even a genuine text chunk is discarded once the stream is malformed.
+        let text_stream = [
+            serde_json::json!({"type": "text", "data": TOOL_ENVELOPE}).to_string(),
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"})
+                .to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        for (case, stdout) in [
+            ("tool rawOutput", tool_stream.as_str()),
+            ("thought", thought_stream.as_str()),
+            ("text with malformed line", text_stream.as_str()),
+        ] {
+            let response = projected(stdout);
+            assert!(
+                response.is_empty(),
+                "{case}: projected must be empty, got {response}"
+            );
+            let exec = exec_result(response.clone(), 0);
+            let parsed = ParsedStdout::parse(&exec.stdout);
+            assert!(
+                parsed.response_envelope_protocol_check().is_err(),
+                "{case}: tool/reasoning envelope must not satisfy completion"
+            );
+            assert!(
+                parsed.parse_and_validate(&exec).is_err(),
+                "{case}: tool/reasoning envelope must not provide the result"
+            );
+        }
+        // Control: the same tool-only stream without the malformed line also
+        // yields no completion (empty answer, no text events).
+        let clean_tool_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"}).to_string(),
+            serde_json::json!({"type": "tool_call_update", "toolCallId": "1", "rawOutput": TOOL_ENVELOPE}).to_string(),
+        ]
+        .join("\n");
+        assert!(projected(&clean_tool_stream).is_empty());
+    }
+
+    #[test]
     fn grok_final_failure_overrides_success_shaped_metadata() {
         let stdout = serde_json::json!({
             "text": FAILURE,
