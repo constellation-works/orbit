@@ -197,6 +197,13 @@ impl PluginChildFixture {
 
     /// `orbit --root <fixture> …`, configured as a backend descendant.
     fn command(&self, args: &[&str]) -> assert_cmd::Command {
+        let mut command = self.command_without_root();
+        command.arg("--root").arg(&self.root).args(args);
+        command
+    }
+
+    /// A descendant using HOME for its root, so id-only routing stays enabled.
+    fn command_without_root(&self) -> assert_cmd::Command {
         use std::os::fd::AsRawFd;
 
         let mut command = cargo_bin_cmd!("orbit");
@@ -219,10 +226,7 @@ impl PluginChildFixture {
             .env("ORBIT_PLUGIN", "graph")
             // A backend cannot widen its reach by claiming the allowlist is
             // wider; the recorded manifest is the only source that counts.
-            .env("ORBIT_ALLOWED_TOOLS", "orbit.task.list,orbit.search")
-            .arg("--root")
-            .arg(&self.root)
-            .args(args);
+            .env("ORBIT_ALLOWED_TOOLS", "orbit.task.list,orbit.search");
         command
     }
 
@@ -426,6 +430,32 @@ fn an_ordinary_caller_is_not_gated_by_the_cli_surface_guard() {
 /// with a warning retained in the operational log as well as the callback error.
 #[test]
 fn a_plugin_child_remote_selector_is_refused_before_ssh_with_a_warning() {
+    assert_remote_callback_refused(
+        &[],
+        "orbit.task.list",
+        r#"{"workspace":"hm_1111111111111111/ws_remote","limit":1}"#,
+        "hm_1111111111111111/ws_remote",
+    );
+}
+
+#[test]
+fn a_plugin_child_remote_host_flag_is_refused_before_ssh_with_a_warning() {
+    assert_remote_callback_refused(
+        // An overlapping local name gets past the local workspace guard,
+        // exposing the remote discovery attempt as well as the wrong error.
+        &["--host", "remote", "--workspace", "child-fixture-ws"],
+        "orbit.task.list",
+        "{}",
+        "--host remote --workspace child-fixture-ws",
+    );
+}
+
+#[test]
+fn a_plugin_child_remote_task_id_is_refused_before_ssh_with_a_warning() {
+    assert_remote_callback_refused(&[], "orbit.task.show", r#"{"id":"REM-1"}"#, "REM-1");
+}
+
+fn assert_remote_callback_refused(flags: &[&str], tool: &str, input: &str, destination: &str) {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = PluginChildFixture::new();
@@ -455,10 +485,10 @@ task_prefix = "REM"
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    let selector = "hm_1111111111111111/ws_remote";
-    let input = serde_json::json!({"workspace": selector, "limit": 1}).to_string();
     let output = fixture
-        .command(&["tool", "run", "orbit.task.list", "--input", &input])
+        .command_without_root()
+        .args(["tool", "run", tool, "--input", input])
+        .args(flags)
         .env("PATH", path)
         .env("SSH_SENTINEL", &sentinel)
         .env("RUST_LOG", "warn")
@@ -481,17 +511,17 @@ task_prefix = "REM"
     let message = error["error"].as_str().unwrap();
     assert!(
         message.contains("cross-host callbacks are not supported from confined plugins")
-            && message.contains(selector),
-        "callback must name cause and selector: {stderr}"
+            && message.contains(destination),
+        "callback must name cause and destination: {stderr}"
     );
     let log = std::fs::read_to_string(global.join("state/logs/orbit.jsonl")).unwrap();
     let warning = log
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find(|row| row["level"] == "WARN" && row["fields"]["workspace"] == selector)
+        .find(|row| row["level"] == "WARN" && row["fields"]["workspace"] == destination)
         .unwrap_or_else(|| panic!("missing callback warning: {log}"));
     assert_eq!(warning["fields"]["plugin"], "graph");
-    assert_eq!(warning["fields"]["tool"], "orbit.task.list");
+    assert_eq!(warning["fields"]["tool"], tool);
     assert_eq!(warning["fields"]["code"], "policy_denied");
     assert_eq!(warning["fields"]["message"], message);
 }

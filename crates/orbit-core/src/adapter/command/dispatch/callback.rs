@@ -123,7 +123,8 @@ pub fn refuse_plugin_child_cli_command(
 
 /// Refuse a plugin callback before the CLI delivers it to another host.
 ///
-/// The caller has already resolved `selector` to a registered remote host.
+/// The caller has resolved `destination` (a selector, explicit host/workspace
+/// address or task id) to a remote host using only the local registry.
 /// Callback sessions authorize local tools, not a federated SSH session with
 /// host credentials. Resolve the host-issued identity even if a descendant
 /// cleared its environment; a missing credential must not enable SSH either.
@@ -132,7 +133,7 @@ pub fn refuse_plugin_child_cli_command(
 pub fn refuse_plugin_child_remote_callback(
     global_root: &Path,
     tool: &str,
-    selector: &str,
+    destination: &str,
 ) -> Result<(), OrbitError> {
     let plugin = match resolve_plugin_callback_session(global_root)? {
         CallbackResolution::None => return Ok(()),
@@ -143,14 +144,14 @@ pub fn refuse_plugin_child_remote_callback(
         CallbackResolution::UnidentifiedPluginChild => None,
     };
     let message = format!(
-        "cross-host callbacks are not supported from confined plugins; workspace selector \
-         '{selector}' names another host. Use a workspace on this host"
+        "cross-host callbacks are not supported from confined plugins; destination \
+         '{destination}' names another host. Use a workspace on this host"
     );
     let error = OrbitError::PolicyDenied(message);
     tracing::warn!(
         plugin = plugin.as_deref().unwrap_or("unidentified"),
         tool,
-        workspace = selector,
+        workspace = destination,
         code = "policy_denied",
         "{error}"
     );
