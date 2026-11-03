@@ -319,6 +319,19 @@ fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
     assert_eq!(second.state, BatchState::Admitted, "{second:?}");
     let second_task = second.action_id.clone().expect("attempt 2 task");
     assert_ne!(second_task, review.id);
+    // Minted action tasks await approval. Approve this one so the executor
+    // starts it from backlog, as a drain does.
+    workspace
+        .runtime
+        .update_task_as_human(
+            &second_task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "fixture-operator".into(),
+        )
+        .expect("approve the minted attempt-2 action");
 
     let second_run = executor_run(&workspace, &second_task);
     let mut complete = evidence_template(&second);

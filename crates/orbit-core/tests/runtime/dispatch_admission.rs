@@ -407,6 +407,18 @@ fn doc_duties_mints_an_admissible_locking_context() {
         "a whole-tree lock starves on a busy drain [ORB-18264]: {:?}",
         minted.context_files
     );
+    // The shipped chore mints proposed and awaits approval. Approve it so the
+    // drain admits it from backlog, as an approved chore does.
+    runtime
+        .update_task_as_human(
+            &minted.id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "fixture-operator".into(),
+        )
+        .expect("approve the minted documentation chore");
     assert_eq!(
         admitted(&list_backlog_tasks(&runtime, json!({}))),
         vec![minted.id.clone()]

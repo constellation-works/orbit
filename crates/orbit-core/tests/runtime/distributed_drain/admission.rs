@@ -1076,6 +1076,18 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                 owner.run_tool("orbit.task.update", json!({
                     "id": task.id, "plan": "1. Implement the requirement.", "model": "codex",
                 })).unwrap();
+                // Minted implementation tasks await approval. Approve this one
+                // so owner-local backlog dispatch sees the requirement.
+                owner
+                    .update_task_as_human(
+                        &task.id,
+                        TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Backlog),
+                            ..Default::default()
+                        },
+                        "fixture-operator".into(),
+                    )
+                    .unwrap();
                 task.id
             } else {
                 backlog_task_with_input(
