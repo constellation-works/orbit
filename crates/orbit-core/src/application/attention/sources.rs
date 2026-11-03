@@ -350,7 +350,19 @@ fn derive_subject_kind(
             let mut next =
                 subject.tool_next("orbit.task.requeue", "Requeue after resolving the block");
             next.also.push(subject.show_next());
-            let source = episode.escalation.as_deref().unwrap_or(&episode.block_note);
+            // Put the leaf error before run metadata so the bounded reason
+            // shows what the operator needs to resolve.
+            let prerequisite = orbit_store::contracts::ClaimFailedNote::parse(&episode.block_note)
+                .filter(|note| {
+                    note.failure_class.is_some_and(
+                        orbit_types::workflow::ClaimFailureClass::requires_operator_decision,
+                    )
+                });
+            let source = prerequisite
+                .as_ref()
+                .map(|note| note.reason.as_str())
+                .or(episode.escalation.as_deref())
+                .unwrap_or(&episode.block_note);
             let mut item = subject.item(
                 kind,
                 episode.blocked_at,

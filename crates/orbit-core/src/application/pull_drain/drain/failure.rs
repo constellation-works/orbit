@@ -39,7 +39,8 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// [ORB-15573], a missing validation tool, an unreachable owner, a red base,
 /// an inconclusive or interrupted run) releases it, and the drain excludes
 /// the leaf's crew for its window when the failure
-/// [says so](ClaimFailure::excludes_crew).
+/// [says so](ClaimFailure::excludes_crew). External-prerequisite releases
+/// retain that evidence, but the owner holds their tasks for an operator.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
@@ -203,7 +204,11 @@ pub(crate) fn leaf_failure_settlement(
             (Some(hold), _, _) => baseline_red_release(record, run, hold, &failure),
             (None, _, Some(green)) => green,
             (None, Some(forge), None) => forge_hold_release(record, run, forge, &failure),
-            (None, None, None) => release_evidence(record, &release_reason(run, &failure)),
+            (None, None, None) => release_evidence(
+                record,
+                &release_reason(run, &failure),
+                failure.class.requires_operator_decision(),
+            ),
         };
         evidence.baseline_red = hold;
         evidence.forge_hold = forge;
@@ -727,7 +732,7 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
 /// back. Nothing is recorded as a failure — the work either never ran or was
 /// stopped on purpose.
 pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
-    ClaimMutation::Release(release_evidence(record, why))
+    ClaimMutation::Release(release_evidence(record, why, false))
 }
 
 /// [`release_settlement`] for a launched leaf an operator stopped: typed
@@ -754,19 +759,28 @@ pub(crate) fn operator_cancel_release(
         provider_refusal: false,
         owner_busy: false,
     };
-    let mut evidence = release_evidence(record, &format!("{why}{}", candidate_note(&failure)));
+    let mut evidence =
+        release_evidence(record, &format!("{why}{}", candidate_note(&failure)), false);
     evidence.failure = Some(failure);
     ClaimMutation::Release(evidence)
 }
 
-pub(super) fn release_evidence(record: &LocalPullAdmission, why: &str) -> ClaimEvidence {
+pub(super) fn release_evidence(
+    record: &LocalPullAdmission,
+    why: &str,
+    operator_hold: bool,
+) -> ClaimEvidence {
+    let disposition = if operator_hold {
+        "The owner holds this task for an operator decision before another attempt."
+    } else {
+        "The task is back in the backlog and can be pulled again."
+    };
     let drain = &record.request.run_context.run_id;
     let machine = &record.destination.execution_machine_id;
     ClaimEvidence {
         summary: Some(format!("released by follower drain {drain}: {why}")),
         comment: Some(format!(
-            "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
-             in the backlog and can be pulled again."
+            "Follower drain {drain} on {machine} released this claim: {why}. {disposition}"
         )),
         ..Default::default()
     }

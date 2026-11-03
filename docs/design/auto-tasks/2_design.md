@@ -293,8 +293,8 @@ evaluated after `skip_if_unchanged` on `Fire` only. The host's
 the block-episode candidate rule (`triage_candidacy` in
 `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`): the
 latest transition into `blocked` is one episode, and it qualifies when its
-final-recovery decision escalated, or when it has none and is older than the
-backstop's 72 hours, unless a human set or touched it or it was already
+claimed leaf requires an operator-resolved external prerequisite, its final-recovery
+decision escalated, or it has no decision and is older than the backstop's 72 hours, unless a human set or touched it or it was already
 triaged (final recovery decides blocked tasks now, but the rule still names the episodes nothing has settled). `None` skips like `Unchanged` — the slot is not consumed, the skip is
 recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
 naming how many blocked tasks were read, and the tick report says the same.

@@ -361,10 +361,15 @@ impl TaskCommitBoundary {
                         failure => failure.clone(),
                     };
                     // [ORB-14257] A typed failure releases only when its class
-                    // does not block and the task's release budget allows it. A
-                    // provider usage limit is not counted [ORB-14695].
+                    // does not need an operator and the task's release budget
+                    // allows it. A provider usage limit is not counted [ORB-14695].
                     let blocked = match &failure {
-                        Some(failure) if failure.class.blocks() => Some(None),
+                        Some(failure)
+                            if failure.class.blocks()
+                                || failure.class.requires_operator_decision() =>
+                        {
+                            Some(None)
+                        }
                         Some(failure) if failure.budgeted() => {
                             let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
                             (earlier.len() >= RELEASE_BUDGET).then(|| {
@@ -410,7 +415,16 @@ impl TaskCommitBoundary {
                     if let Some(budget_comment) = blocked {
                         let exhausted = budget_comment.is_some();
                         evidence = ClaimEvidence {
-                            comment: budget_comment.or_else(|| value.comment.clone()),
+                            // Older followers may still describe this release as
+                            // returning to backlog. The owner's hold is authoritative.
+                            comment: budget_comment.or_else(|| {
+                                if failure.as_ref().is_some_and(|failure|
+                                    failure.class.requires_operator_decision()) {
+                                    Some(format!("Task held for an operator decision before another attempt: {reason}"))
+                                } else {
+                                    value.comment.clone()
+                                }
+                            }),
                             ..ClaimEvidence::default()
                         };
                         state.claim.phase = ExecutionClaimPhase::Failed;

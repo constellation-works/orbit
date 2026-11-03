@@ -328,7 +328,7 @@ impl PullDrain<'_> {
                         match error {
                             WorkerLaunchError::NotStarted(error) => {
                                 let why = format!("leaf launch failed before spawning: {error}");
-                                let mut evidence = release_evidence(&record, &why);
+                                let mut evidence = release_evidence(&record, &why, true);
                                 evidence.failure = Some(ClaimFailure {
                                     class: ClaimFailureClass::Environment,
                                     review_decision_pending: false,

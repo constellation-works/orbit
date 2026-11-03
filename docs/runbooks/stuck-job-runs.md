@@ -63,7 +63,7 @@ The State: line above is `.run.state`, not a top-level `.state`;
 
 `.catalog_layers` always lists every reference.
 
-`.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run.
+`.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `environment` and `owner_route` retain release evidence but hold it for an operator decision, with the leaf error in attention; `operator_cancel`, `provider`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run.
 
 `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped.
 
@@ -1087,7 +1087,9 @@ The others leave the block for an operator `orbit task requeue`:
 Each publication (or, when nothing was published, each task) takes at most
 two such requeues; after that the task stays blocked for an operator. A
 claimed worker that could not reach its owner (`owner_route_unavailable`) is
-not blocked this way: final recovery skips it and its claim is released.
+held for an operator decision immediately: final recovery skips it, release
+evidence preserves host suppression, and the owner blocks the task rather
+than retrying it. Resolve the route and explicitly requeue the task.
 
 ## Explicit rework of a successful unmerged publication
 

@@ -685,8 +685,8 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "{report:#}"
     );
     assert_eq!(
-        report["task_status"], "backlog",
-        "the owner's answer decides: {report:#}"
+        report["task_status"], "blocked",
+        "the owner's prerequisite hold decides: {report:#}"
     );
     assert!(worktree.exists());
 }
@@ -886,6 +886,12 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
 
 /// Park an owner task in `someday`, as a human does.
 fn park(pair: &Pair, task: &str) {
+    if pair.owner_status(task) == "blocked" {
+        pair.wire
+            .owner
+            .requeue_blocked_task(task, "operator parks the failed launch", false)
+            .expect("resolve the prerequisite hold before parking");
+    }
     pair.wire
         .owner
         .update_task_as_human(

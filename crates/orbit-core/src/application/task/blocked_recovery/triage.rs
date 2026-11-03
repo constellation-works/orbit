@@ -33,6 +33,8 @@ pub const BLOCKED_TASK_TRIAGE_RESUMED_EVENT: &str = "blocked_task_triage_resumed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriageBasis {
+    /// A claimed leaf needs a prerequisite only an operator can resolve.
+    ExternalPrerequisite,
     /// Its recorded final-recovery decision is an escalation.
     Escalated,
     /// It has no decision, and the backstop will never make one.
@@ -142,7 +144,8 @@ impl TriageCandidacy {
 /// Classify `task`'s current block episode for triage at `now`.
 ///
 /// An episode qualifies when its newest recorded final-recovery decision is
-/// an escalation, or when it has none and is older than the backstop's
+/// an escalation, its claimed leaf requires an external prerequisite, or it
+/// has no decision and is older than the backstop's
 /// [`MAX_EPISODE_AGE_HOURS`]. It never qualifies once triaged, when a human
 /// set the block, nor after a human write — the backstop's rule.
 pub fn triage_candidacy(
@@ -185,7 +188,14 @@ pub fn triage_candidacy(
     // An in-pipeline escalation blocks the task with its own status entry,
     // which may be stamped after the decision it carries; that entry counts.
     let decision = FinalRecoveryRecord::newest_since(history, comments, blocked_at);
+    let operator_prerequisite = history[start]
+        .note
+        .as_deref()
+        .and_then(orbit_store::contracts::ClaimFailedNote::parse)
+        .and_then(|note| note.failure_class)
+        .is_some_and(orbit_types::workflow::ClaimFailureClass::requires_operator_decision);
     let basis = match &decision {
+        _ if operator_prerequisite => TriageBasis::ExternalPrerequisite,
         Some(record) if record.outcome == "escalated" => TriageBasis::Escalated,
         Some(record) => {
             return TriageCandidacy::NotEscalated {

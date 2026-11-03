@@ -797,8 +797,8 @@ Identify the failed step from `orbit run show`, then act:
   manifest), `stale_claim` (the owner released, failed, revoked or superseded
   the claim), `claimed_review_bridge_refused` (another activity, task, path or
   field), or `owner_route_unavailable` "could not reach this run's
-  coordinator" (no usable response; the run skips recovery and releases the
-  claim).
+  coordinator" (no usable response; the run skips recovery and preserves release
+  evidence while the owner holds the task for an operator decision).
   Preserve the exact call and inspect the task, run, claim and review ledger
   before recovery. Do not replay a stale, expired, settled or cancelled
   attempt. A transport loss has an unknown outcome and must use existing

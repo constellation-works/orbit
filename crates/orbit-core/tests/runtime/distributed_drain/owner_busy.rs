@@ -272,7 +272,11 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
             )
             .unwrap_or_else(|error| panic!("{class_name}: {error}"));
         let class = class_name;
-        assert_eq!(pair.owner_status(&claim.task_id), "backlog", "{class}");
+        assert_eq!(
+            pair.owner_status(&claim.task_id),
+            if held { "blocked" } else { "backlog" },
+            "{class}"
+        );
 
         let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
         request["request_id"] = json!(format!("after-the-{class}-release"));
@@ -283,7 +287,10 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
                 held.iter()
                     .any(|entry| entry["task_id"] == claim.task_id.as_str())
             });
-        assert_eq!(held_from_drain, held, "{class}: {answer:#}");
+        assert!(
+            !held_from_drain,
+            "blocked tasks are omitted from backlog admission: {class}: {answer:#}"
+        );
         assert_eq!(
             answer["receipt"]["claim"]["task_id"].is_string(),
             !held,
