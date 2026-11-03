@@ -641,6 +641,10 @@ pub(super) fn serve_fixture() {
             std::env::var_os("ORBIT_HTTP_RUN_STATE_TRACE")
                 .map(|path| (path, &["orbit.core.job_run_state"][..]))
         });
+    let trace = trace.or_else(|| {
+        std::env::var_os("ORBIT_HTTP_HOST_PROJECTION_TRACE")
+            .map(|path| (path, &["orbit.hosts.workspace_projection"][..]))
+    });
     if let Some((path, targets)) = trace {
         // Count task-store operations (with the codebase scan's per-task
         // computes and landed diffs) or stale-run scans across blocking threads.
