@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: active
-links: [ORB-20352, ORB-20357, ORB-20359, ORB-17664, ORB-20650, ORB-20736, ORB-20766]
+links: [ORB-20352, ORB-20357, ORB-20359, ORB-17664, ORB-20650, ORB-20736, ORB-20766, ORB-21875]
 ---
 
 # Host or workspace config makes every Orbit tool call fail
@@ -40,3 +40,13 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-31 02:38 | ORB-20359 | jrun-20261031-0235-c3 | host config rejects Orbit calls | final_recovery escalated, untriaged in ORB-21505 resume pass |
 
 Implementers are affected too: the run cannot write its execution summary, so applies_to covers both activities.
+
+### ORB-21875 owner scan, 2026-11-03
+
+Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 1 source occurrence on 1 task; route `setup`, disposition `counted`. Covering repair: ORB-20766. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
+
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-01T04:49:08.125638774Z | ORB-20736 | jrun-20261101-0435-c1 | human_only: repair owner host config then inspect foreign run; load task tool requirements; host plugin_enablement table rejected; Host table rejected; triage could not read blocking run on mac-mini-1. This pass also received job_run_not_found locally; diagnosis derives from durable task records.; source ORB-20736 history:blocked_task_triaged@2026-11-01T04:49:08.125638774Z | status_changed done at 2026-11-01T05:44:09.708706225Z |
