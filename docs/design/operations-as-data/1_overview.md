@@ -141,7 +141,7 @@ and again in the tool handler.
 | Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs) | [ORB-15937] |
 | Handler table, keyed on `WorkflowVerb` | [crates/orbit-core/src/adapter/tool_host/workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs) | [ORB-15941] |
 | Builtin ID routing, declared by `OperationSpec::id_route` or `Tool::declared_id_route` and resolved from registered definitions | [crates/orbit-tools/src/mcp/rules.rs](../../../crates/orbit-tools/src/mcp/rules.rs) | [ORB-15937] |
-| Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |
+| Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs) | [ORB-15932] |
 | Claimed-worker routing, keyed on the migrated nouns' verb enums | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932], [ORB-15935] |
 | Shared tool-input parsing and unknown-field refusal | [crates/orbit-common/src/protocol/tool_input.rs](../../../crates/orbit-common/src/protocol/tool_input.rs) | — |
 | Migration cookbook | [references/cookbook.md](./references/cookbook.md) | [ORB-10358] |
