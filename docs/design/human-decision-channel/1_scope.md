@@ -107,7 +107,7 @@ fingerprint). The plugin never writes the task; it submits a *decision submissio
 to one governed core tool, and core either applies it as the human or refuses it.
 [2_design.md](./2_design.md) §3 shows the fit with `CallerProvenance`
 (`crates/orbit-common/src/governance/authorization/caller.rs:18`) and
-`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:448`).
+`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog/operations.rs`).
 
 ### Email transport (plugin)
 

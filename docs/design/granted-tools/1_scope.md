@@ -76,7 +76,7 @@ denied ones.
 | `agent_implement` denies the seven tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
 | A requirement that the deny list covers fails implementer admission; non-implementers drop it with a note [ORB-15162] | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) (`admit_required_tools`, `resolve_activity_tool_denials`), [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs) (`drops_disallowed_requirements`) |
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
-| Field-level operator authorization: `orbit.auto_task.update` carrying `expected_enabled`, and `orbit.auto_task.mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`catalog.rs`](../../../crates/orbit-common/src/governance/authorization/catalog.rs) (`orbit.routine.control`, Operator-only) |
+| Field-level operator authorization: `orbit.auto_task.update` carrying `expected_enabled`, and `orbit.auto_task.mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`operations.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operations.rs) (`orbit.routine.control`, Operator-only) |
 | Every governed tool call passes one capability chokepoint; a session's capabilities, not its asserted mode, decide | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs), [`authorization.rs`](../../../crates/orbit-runtime/src/authorization.rs) (`authorize_tool_operation`) |
 | A claimed implementer is held when a requirement is in `CLAIMED_MODE_DENIED_TOOLS` or is a coordination tool outside the closed claimed-owner bridge | [`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs) (`claimed_required_tool_hold`), [`invocation.rs`](../../../crates/orbit-types/src/tool/invocation.rs) (`CLAIMED_MODE_DENIED_TOOLS`, `CLAIMED_OWNER_TOOLS`) |
 | An activity's system of record is its durable artifact; agent-loop output is advisory and the returned object is not persisted as the decision record | [`4_decisions.md`](../activity-job/4_decisions.md) (activity-job: "provider output is not the system of record") |
@@ -94,7 +94,7 @@ operator authority, following the field-level authorization pattern of
   input carries a `granted_tools` change, `authorize_registered_tool`
   additionally requires the dedicated governed operation
   `orbit.task.grant_tools`, `allowed: &[Operator]` in
-  [`catalog.rs`](../../../crates/orbit-common/src/governance/authorization/catalog.rs). MCP
+  [`operations.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operations.rs). MCP
   sessions resolve capabilities from the session only
   (`CapabilityEnforcement::McpSessionOnly`): hosting a server never lends
   operator authority.
