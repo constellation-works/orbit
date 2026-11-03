@@ -467,6 +467,111 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr(sand
         assert!(host.comments(TASK_ID).is_empty());
     }
 }
+fn pr_open_refuses_a_reused_pr_targeting_another_base(sandbox: &Path) {
+    for (case, live_base, omit_base) in rows_by_name! {
+        "retargeted" => (Some("other-base"), false);
+        "unknown" => (None, true)
+    } {
+        let (fx, host) = fx_host(sandbox);
+        fx.write_forge("pr-head", format!("{BRANCH}\n"));
+        if let Some(base) = live_base {
+            fx.write_forge("pr-base", format!("{base}\n"));
+        } else {
+            fx.write_forge("pr-base", format!("{BASE}\n"));
+            fx.write_forge("omit-pr-base", "");
+        }
+        let _ = omit_base;
+        let error = action_err(
+            &host,
+            "pr_open",
+            &fx.open_input(&fx.candidate, &fx.base_sha),
+        );
+        let message = error.to_string();
+        assert!(message.contains("pr reuse refused"), "{case}: {message}");
+        if live_base.is_some() {
+            assert!(message.contains("other-base"), "{case}: {message}");
+            assert!(message.contains(BASE), "{case}: {message}");
+        } else {
+            assert!(
+                message.contains("did not report baseRefName"),
+                "{case}: {message}"
+            );
+        }
+        assert!(
+            fx.forge_lines("created-prs").is_empty(),
+            "{case}: no duplicate PR"
+        );
+        assert!(
+            !fx.forge_calls().iter().any(|call| call == "pr create"),
+            "{case}: {message}"
+        );
+        assert_eq!(host.status(TASK_ID), TaskStatus::InProgress, "{case}");
+    }
+    // Matching-base reuse still succeeds without creating a second PR.
+    let (fx, host) = fx_host(sandbox);
+    fx.write_forge("pr-head", format!("{BRANCH}\n"));
+    fx.write_forge("pr-base", format!("{BASE}\n"));
+    let opened = open_ok(&fx, &host);
+    assert_eq!(opened["pr_created"], false);
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(opened["pr_number"], PR_NUMBER);
+    assert_eq!(opened["base"], BASE);
+    assert!(fx.forge_lines("created-prs").is_empty());
+}
+fn a_failure_handoff_refuses_a_reused_pr_targeting_another_base(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    fx.write_forge("pr-head", format!("{BRANCH}\n"));
+    fx.write_forge("pr-base", "other-base\n");
+    fx.write_repo("src/wip.txt", "blocked work\n");
+    let error = action_err(
+        &host,
+        "pr_failure_handoff",
+        &json!({
+            "failed_step_id": "validate", "error_code": "pipeline_step_failed",
+            "error_message": "required validation did not pass", "run_id": RUN_ID,
+            "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+            "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE, "base_sha": fx.base_sha}},
+        }),
+    );
+    let message = error.to_string();
+    assert!(message.contains("pr reuse refused"), "{message}");
+    assert!(message.contains("other-base"), "{message}");
+    assert!(fx.forge_lines("created-prs").is_empty(), "no duplicate PR");
+}
+fn blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance(sandbox: &Path) {
+    // Behind candidate: ancestry is measured, stale-merge is not asserted.
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    fx.advance_base();
+    fx.script_checks(&["failure"]);
+    let error = action_err(&host, "pr_complete", &fx.complete_input()).to_string();
+    assert!(error.contains("commits behind base"), "{error}");
+    assert!(
+        error.contains("does not establish that red required checks ran against a stale merge ref"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("so any red required check ran against a stale merge ref"),
+        "{error}"
+    );
+    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "behind");
+    // Current candidate: ancestry is measured, current-merge failure is not asserted.
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    fx.script_checks(&["failure"]);
+    let error = action_err(&host, "pr_complete", &fx.complete_input()).to_string();
+    assert!(error.contains("is current with base"), "{error}");
+    assert!(
+        error.contains("does not establish which merge CI tested"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("so this is a failure at the current candidate and base"),
+        "{error}"
+    );
+    assert_nothing_landed(&fx, &host, TaskStatus::Review, "current");
+}
 fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)", "success"]);
@@ -6508,7 +6613,8 @@ case "$1 ${2:-}" in
                 ;;
         esac
         if [ -f "$forge/pr-head" ]; then
-            printf '[{"number":%s,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")"
+            pr_list_base=$(cat "$forge/pr-base" 2>/dev/null || echo agent-main)
+            printf '[{"number":%s,"title":"Landing","headRefName":"%s","baseRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")" "$pr_list_base"
         else
             echo '[]'
         fi ;;
@@ -6548,10 +6654,13 @@ case "$1 ${2:-}" in
                 python3 - "$forge" "$number_json" "$url" <<'PYVIEW'
 import json, pathlib, sys
 forge = pathlib.Path(sys.argv[1])
-print(json.dumps({"number": json.loads(sys.argv[2]), "title": "Landing",
+view = {"number": json.loads(sys.argv[2]), "title": "Landing",
     "body": (forge / "pr-body").read_text() if (forge / "pr-body").exists() else "",
     "isDraft": (forge / "pr-draft").exists() or (forge / "draft-merge-state").exists(),
-    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}))
+    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}
+if not (forge / "omit-pr-base").exists():
+    view["baseRefName"] = (forge / "pr-base").read_text().strip() if (forge / "pr-base").exists() else "agent-main"
+print(json.dumps(view))
 PYVIEW
                 ;;
         esac ;;
@@ -6747,7 +6856,7 @@ test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
     metadata_lag_pins_and_repair => [previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins, previous_published_head_metadata_lag_after_in_run_conflict_repair],
     pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
-    pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase],
+    pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase, pr_open_refuses_a_reused_pr_targeting_another_base, a_failure_handoff_refuses_a_reused_pr_targeting_another_base],
     pr_lookup_retry_contracts => [pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling, pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens],
     pr_number_and_push_transports => [pr_open_preserves_provider_number_representations, fixture_push_guard_checks_all_effective_push_urls, fixture_push_refuses_non_file_transports_without_network],
     git_push_effective_destination_contracts => [git_push_publishes_to_effective_push_destination_not_fetch_remote, git_push_probes_composed_rewrite_destination_not_its_rewrite, git_push_refuses_self_pointing_effective_push_url],
@@ -6755,7 +6864,7 @@ test_groups! {
     base_race_candidate_identity => [a_base_race_refresh_refuses_a_changed_candidate_without_another_merge, an_already_merged_refresh_reconciles_without_another_merge_request],
     merge_refusal_bounds => [other_merge_refusals_fail_on_the_first_request, repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget],
     recovered_base_advances => [conflicting_base_advances_after_recovery_are_chased_until_the_bound, a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands],
-    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion],
+    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion, blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance],
     review_fix_revalidation => [a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges, a_failed_review_revalidation_rejects_and_preserves_both_commits, a_red_base_during_pr_revalidation_holds_the_task],
     review_repair_leases => [a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease, a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes],
     claimed_validation_failures => [identityless_diagnostics_hold_only_for_matching_completed_runs, a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs, a_claimed_candidate_that_cannot_reach_the_network_fails_transient, a_required_command_red_on_the_base_holds_the_task_without_a_pr],

@@ -24,7 +24,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_list(
             "--head",
             head,
             "--json",
-            "number,title,headRefName,author",
+            "number,title,headRefName,baseRefName,author",
         ],
     )
 }
@@ -89,7 +89,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_view(
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,title,body,isDraft,headRefName,files,commits,url".to_string(),
+        "number,title,body,isDraft,headRefName,baseRefName,files,commits,url".to_string(),
     ];
     let result = execute_with_transient_retry(
         "gh",
