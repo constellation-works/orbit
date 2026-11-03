@@ -17,21 +17,19 @@ function noticesPath() {
 }
 
 // One /api/notices read serves the banner, the rail count and the Notices
-// panel, which all render from the same payload. Concurrent callers join
-// the read in flight, and a completed read is reused for half the 30s
-// dashboard poll interval: every scheduled poll still reads fresh, while
-// a burst of refreshes (tab entry plus an explicit Refresh, or the banner
-// beside the Notices panel) shares one request instead of spending the
-// ten-request poll budget on a duplicate. A failed read is never reused,
-// and a host or workspace switch changes the key, so no payload crosses
-// scopes. Post/close mutations clear the shared read before refreshing.
+// panel, which all render from the same payload. Concurrent callers always
+// join the read in flight. Scheduled polls may also reuse a completed read
+// for half the 30s poll interval, so the banner and panel share one request
+// within the ten-request poll budget. Explicit refreshes always start a new
+// read. A failed read is never reused, and a host or workspace switch changes
+// the key, so no payload crosses scopes. Post/close mutations clear the read.
 const NOTICES_READ_SHARE_MS = 15_000;
 let noticesRead = null;
 
-function fetchNotices() {
+function fetchNotices({ shareRecent = false } = {}) {
   const key = `${getHostRevision()}:${getWorkspaceRevision()}:${noticesPath()}`;
   if (noticesRead?.key === key
-    && (noticesRead.pending || Date.now() - noticesRead.at < NOTICES_READ_SHARE_MS)) {
+    && (noticesRead.pending || (shareRecent && Date.now() - noticesRead.at < NOTICES_READ_SHARE_MS))) {
     return noticesRead.promise;
   }
   const read = { key, pending: true, at: 0, promise: null };
@@ -126,13 +124,13 @@ export function renderNoticeBanner(payload) {
   syncNodes(banner, rows);
 }
 
-export async function fetchAndRenderNoticeBanner() {
+export async function fetchAndRenderNoticeBanner({ shareRecent = false } = {}) {
   const banner = $("notice-banner");
   if (!banner) return;
   const revision = getWorkspaceRevision();
   let payload;
   try {
-    payload = await fetchNotices();
+    payload = await fetchNotices({ shareRecent });
   } catch (_) {
     // A failed read keeps the banner of its own visit. A failed read from a
     // visit the operator has left changes nothing.
@@ -247,12 +245,12 @@ function postForm(canWrite, onPost) {
   return form;
 }
 
-export async function fetchAndRenderNotices() {
+export async function fetchAndRenderNotices({ shareRecent = false } = {}) {
   const revision = getWorkspaceRevision();
   await requestPanel(
     "notices-body",
     `notices:${revision}:${isAggregateView() ? "all" : "one"}`,
-    () => fetchNotices(),
+    () => fetchNotices({ shareRecent }),
     (payload) => renderNotices(payload),
     "notices-count",
   );

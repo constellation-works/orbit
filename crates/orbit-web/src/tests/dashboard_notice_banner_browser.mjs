@@ -16,6 +16,108 @@ const noticesFor = workspace => (workspace === 'two'
   ? { open: [], banner: [], recent: [], can_write: false }
   : { open: [NOTICE], banner: [NOTICE], recent: [], can_write: false });
 
+export async function assertNoticeBannerRefresh(browser, origin, evidence) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  const apiRequests = [];
+  let noticeReads = 0;
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  try {
+    await page.route('**/api/**', async route => {
+      const url = new URL(route.request().url());
+      apiRequests.push(url.pathname + url.search);
+      let body = { items: [], total: 0, limit: 50 };
+      if (url.pathname === '/api/notices') {
+        noticeReads += 1;
+        const title = noticeReads === 1 ? ORIGINAL_TITLE : 'Fresh incident';
+        const notice = { ...NOTICE, title, revision: noticeReads };
+        body = { open: [notice], banner: [notice], recent: [], can_write: false };
+      } else if (url.pathname === '/api/workspaces') {
+        body = [{ id: 'one', name: 'one', status: 'active', is_default: true }];
+      } else if (url.pathname === '/api/crews') {
+        body = { default_crew: null, crews: [] };
+      } else if (url.pathname === '/api/routines') {
+        body = { routines: [], clock: {} };
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+
+    await page.goto(`${origin}/?workspace=one#notices`);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      const realTimeout = globalThis.setTimeout.bind(globalThis);
+      globalThis.__noticePollTimers = [];
+      globalThis.setTimeout = (fn, ms, ...args) => {
+        if (ms >= 30000 && new Error().stack?.includes('/js/polling.js')) {
+          globalThis.__noticePollTimers.push({ run: () => fn(...args), ms });
+          return 0;
+        }
+        return realTimeout(fn, ms, ...args);
+      };
+      const realNow = Date.now.bind(Date);
+      let now = realNow();
+      Date.now = () => now;
+      globalThis.__advanceNoticeClock = milliseconds => { now += milliseconds; };
+      await import('/app.js');
+    });
+    await page.waitForFunction(() => document.querySelector('.notice-banner-title')?.textContent === 'Original incident');
+    await page.waitForFunction(() => document.querySelector('.notice-title')?.textContent === 'Original incident');
+    await page.waitForFunction(() => globalThis.__noticePollTimers.length > 0);
+    check(noticeReads === 1, `initial banner and Notices panel must share one read, got ${noticeReads}`);
+    const capture = async state => {
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: width === 375 ? 1100 : 900 });
+        await page.screenshot({
+          path: path.join(evidence, `notice-refresh-${state}-dark-${width}.jpg`),
+          type: 'jpeg',
+          quality: 80,
+        });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    };
+    await capture('before');
+
+    apiRequests.length = 0;
+    const explicitNoticeResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/notices');
+    await page.locator('#refresh-btn').click();
+    await explicitNoticeResponse;
+    await page.waitForFunction(() => document.querySelector('.notice-banner-title')?.textContent === 'Fresh incident');
+    await page.waitForFunction(() => document.querySelector('.notice-title')?.textContent === 'Fresh incident');
+    check(noticeReads === 2, `explicit Refresh must issue exactly one fresh notices read, got ${noticeReads}`);
+    check(apiRequests.filter(request => request.startsWith('/api/notices')).length === 1,
+      `explicit Refresh must join its in-flight read between banner and panel, got ${JSON.stringify(apiRequests)}`);
+    const refreshedReads = noticeReads;
+    await capture('after');
+
+    await page.evaluate(() => globalThis.__advanceNoticeClock(15001));
+    apiRequests.length = 0;
+    const pollTimerCount = await page.evaluate(() => globalThis.__noticePollTimers.length);
+    const pollNoticeResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/notices');
+    await page.evaluate(() => globalThis.__noticePollTimers.at(-1)?.run());
+    await pollNoticeResponse;
+    await page.waitForFunction(count => globalThis.__noticePollTimers.length > count, pollTimerCount);
+    check(noticeReads === refreshedReads + 1, `scheduled poll should perform one fresh shared notice read, got ${noticeReads - refreshedReads}`);
+    const pollNoticeReads = apiRequests.filter(request => request.startsWith('/api/notices')).length;
+    check(pollNoticeReads === 1, `scheduled poll must share one notices read across banner and panel, got ${pollNoticeReads}`);
+    check(apiRequests.length <= 10, `scheduled Notices poll exceeded ten API requests: ${JSON.stringify(apiRequests)}`);
+    check(errors.length === 0, `Notice refresh checks raised page errors: ${errors.join('\n')}`);
+    fs.writeFileSync(path.join(evidence, 'notice-refresh-result.json'), JSON.stringify({
+      passed: true,
+      checks: [
+        'initial banner and Notices panel share one in-flight read',
+        'explicit Refresh reads and renders a fresh notice within 15 seconds',
+        'scheduled poll shares one fresh notice read and stays within ten API requests',
+      ],
+      scheduled_poll_api_requests: apiRequests.length,
+    }, null, 2));
+  } finally {
+    await context.close();
+  }
+}
+
 export async function assertNoticeBannerScope(browser, origin, evidence) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();

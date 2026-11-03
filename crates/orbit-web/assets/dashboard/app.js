@@ -1560,7 +1560,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // The chips also read every 5 s on their own (initHostResources), so the
   // Tasks page's tick leaves them to that.
   if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources({ shareRecent: poll && !explicit }).catch(error => console.error(error));
-  void fetchAndRenderNoticeBanner().catch(error => console.error(error));
+  void fetchAndRenderNoticeBanner({ shareRecent: poll && !explicit }).catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   if (slowReads) void peekDoctor().catch(error => console.error(error));
@@ -1685,7 +1685,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   }
 
   if (activeTab === "notices") {
-    add("Notices", fetchAndRenderNotices());
+    add("Notices", fetchAndRenderNotices({ shareRecent: poll && !explicit }));
     return jobs;
   }
 
