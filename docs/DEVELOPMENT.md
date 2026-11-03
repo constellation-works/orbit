@@ -945,6 +945,8 @@ Submitting a run (ship, resume, auto, job) spawns a detached worker by re-execut
 
 Install a substitute with `orbit_core::test_support::install_substitute_pipeline_worker` (`crate::test_support` inside `orbit-core`), enabling the orbit-core `test-support` feature from `[dev-dependencies]` only. It is process-wide and the last install wins, so it covers other threads (such as a dashboard's blocking pool); install one argv per test binary, as `crates/orbit-web/tests/http_api/support.rs` does. `{run_id}` in the argv becomes the run id. CLI tests that run the real `orbit` binary use its production entry point instead.
 
+Detached workers also monitor their actual working directory throughout admission, execution and resumed work. If that directory is deleted, they terminate themselves; on Unix, SIGTERM first reaches supervised children, with SIGKILL as a bounded fallback. This protects against a removed checkout or fixture whose cleanup never reached the worker, even with its registry still open. Fixtures still own cancellation and must wait for worker exit before ordinary teardown. The MCP `a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted` regression deliberately removes the cwd, both with an intact registry and by dropping the whole fixture.
+
 ### Tests that depend on host process visibility
 
 `orbit_common::process::identity` derives process-start tokens from `/proc` on Linux, libproc on macOS and `ps -o lstart=` elsewhere, keeping the UTC/C-locale `ps` format so persisted tokens stay compatible. When the probe is `Unavailable`, production takes its fail-safe branch: an owner it cannot verify is neither finalized nor signalled.
