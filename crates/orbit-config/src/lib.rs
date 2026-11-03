@@ -54,10 +54,11 @@
 //!   entries owner admission applies to selector overlaps.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
-//! - `crew_performance` — the ordered `workflow.crew_performance_types` list
+//! - `crew::performance` — the ordered `workflow.crew_performance_types` list
 //!   and the one task-type classification the scorecard and draw share.
-//! - `crew_ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
+//! - `crew::ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
 //!   first, and its standing-trial settings.
+//! - `crew::pools` — weighted pool grammar and admission.
 //! - `provider_limit` — provider/account admission policy, with threshold and draw
 //!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
 //! - `operation` — typed review preferences (`[review]` and
@@ -80,9 +81,7 @@
 mod aliases;
 /// Host-only bounded decision-assistance configuration.
 pub mod assistance;
-mod crew_ladder;
-mod crew_performance;
-mod crew_pools;
+mod crew;
 mod experiment_keys;
 mod human_crew_seed;
 mod layering;
@@ -106,6 +105,8 @@ mod unknown;
 mod visual_review;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
+
+use crew::{ladder as crew_ladder, performance as crew_performance, pools as crew_pools};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
