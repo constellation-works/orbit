@@ -170,6 +170,7 @@ mod recovery_provider_auth;
 mod regression_risk;
 mod resident_authority;
 mod resident_cycle;
+mod resident_digest;
 mod resident_metrics;
 mod resource_profiles;
 mod risk_history;

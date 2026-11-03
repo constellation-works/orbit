@@ -238,7 +238,7 @@ Any caller that can write the assignment may call `control`, because every actio
 
 An `active` mandate is stalled when it has not written a checkpoint for twice its heartbeat (or, never having checkpointed, for twice its heartbeat since the task was created), or when its last three checkpoints are all `incomplete`. A paused, taken-over, handed-off or ended mandate is not stalled.
 
-`orbit attention` lists each stalled mandate as a `resident_stalled` item whose next step is `orbit resident control <task id> wake --status-request`. `orbit resident show` and `list` report the same flag.
+`orbit attention` lists each stalled mandate as a `resident_stalled` item whose next step is `orbit resident control <task id> wake --status-request`. `orbit resident show`, `list` and `digest` report the same flag; the digest marks the resident's line with `(stalled)`.
 
 ## Evolution ledger
 
@@ -265,7 +265,7 @@ orbit resident digest --since 7d --top 10
 
 The digest is the manager's view of the bound workspace. Read it to see what a person needs to act on: what each resident is waiting on, which escalations are open, which decisions could still be vetoed, and which costs keep recurring. Its text output has these parts, in order:
 
-- **Residents**: one line per mandate, with its title, state, last checkpoint outcome and open request count. A mandate that [is stalled](#stalled-residents) is marked `(stalled)`.
+- **Residents**: one line per non-ended mandate, with its title, state, last checkpoint outcome and open request count. Ended mandates are omitted. A mandate that [is stalled](#stalled-residents) is marked `(stalled)`.
 - **Open escalations**: open decision requests that residents raised, and open grant requests, oldest first.
 - **Decisions awaiting veto**: reversible decisions from checkpoints in the window that no answer has reversed yet. `--json` gives each decision's ID. To veto one, relay the human's words with `--reverses` (see [Relay a human's words](#relay-a-humans-words)).
 - **Proposals awaiting approval**: proposed tasks linked to evolution records. The digest lists them and approves none of them.

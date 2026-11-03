@@ -104,16 +104,7 @@ impl OrbitRuntime {
             );
             resident["open_request_count"] = json!(open.len());
             resident["open_requests"] = json!(open);
-            let stalled = if let Ok(mandate) = &view.mandate {
-                self.resident_due(&view.task, mandate.clone(), &history, now)?
-                    .dead_cycle
-                    .is_some()
-                    || checkpoints
-                        .last()
-                        .is_some_and(|checkpoint| checkpoint.outcome == "incomplete")
-            } else {
-                false
-            };
+            let stalled = self.resident_stall_of(&view, now)?.is_some();
             resident["stalled"] = json!(stalled);
             residents.push(resident);
             for comment in &comments {
