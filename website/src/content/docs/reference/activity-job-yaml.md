@@ -1008,9 +1008,11 @@ ended run, an expired step or a guard that no longer holds keeps it in the
 backlog.
 
 Opening a workspace with this release moves it to workspace layout
-version 8. Version 7 records parked runs and step bindings that an earlier
+version 9. Version 7 records parked runs and step bindings that an earlier
 release would drop; version 8 adds the kept script output files and parallel
-script-branch checkpoints (see [Output files](#output-files)). Earlier Orbit
+script-branch checkpoints (see [Output files](#output-files)); version 9 adds
+the skipped-step checkpoint markers (see `when` under
+[Modifiers](#modifiers)). Earlier Orbit
 releases then refuse to open the workspace until
 they are upgraded, and while an earlier release still holds it, for example
 as a running MCP server, this release waits for that client to exit rather
