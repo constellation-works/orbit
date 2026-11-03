@@ -688,11 +688,11 @@ fn a_defect_both_review_layers_report_counts_once() {
             let both = landed_with_tags(&fixture, "jrun-both", "both", Vec::new());
             let solo = landed_with_tags(&fixture, "jrun-solo", "solo", Vec::new());
             // The pre-landing review rejected `both`'s candidate for a
-            // defect in src/a.rs.
+            // defect in src/a.rs, recording both its range and symbol identity.
             comment(
                 &fixture,
                 &both,
-                "before-landing review settled attempt `rv-both`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20",
+                "before-landing review settled attempt `rv-both`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20, symbol:src/a.rs#parse:fn",
             );
             // Delivery review then files that same defect, and a second
             // one in src/b.rs, against `both`; and the same src/a.rs defect
@@ -727,6 +727,102 @@ fn a_defect_both_review_layers_report_counts_once() {
                 solo["counts"]["escaped_regressions"], 2,
                 "with no pre-landing review the delivery-review finding counts: {solo}"
             );
+        },
+    );
+}
+
+#[test]
+fn same_file_regressions_require_defect_overlap_across_scorecard_consumers() {
+    isolated(
+        "agents_implementers::same_file_regressions_require_defect_overlap_across_scorecard_consumers",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            // A line citation cannot identify an opaque symbol without source
+            // mapping. Neither that uncertainty nor another symbol is overlap.
+            let cases: &[(&str, &str, &[&str], i64)] = &[
+                (
+                    "mixed",
+                    "src/a.rs:10-20",
+                    &["symbol:src/a.rs#unrelated_serializer:fn"],
+                    2,
+                ),
+                (
+                    "distinct",
+                    "symbol:src/a.rs#parse:fn",
+                    &["symbol:src/a.rs#unrelated_serializer:fn"],
+                    2,
+                ),
+                (
+                    "same",
+                    "symbol:src/a.rs#parse:fn",
+                    &["symbol:src/a.rs#parse:fn"],
+                    0,
+                ),
+                ("disjoint", "src/a.rs:10-20", &["file:src/a.rs:30-40"], 2),
+                ("overlap", "src/a.rs:10-20", &["file:src/a.rs:20-30"], 0),
+                ("single-line", "src/a.rs:15", &["file:src/a.rs:10-20"], 0),
+                ("imprecise", "src/a.rs", &["symbol:src/a.rs#parse:fn"], 2),
+                ("file", "src/a.rs:10-20", &["file:src/a.rs"], 0),
+                ("directory", "src/a.rs:10-20", &["dir:src"], 0),
+                ("sibling", "src/a.rs:10-20", &["dir:sr"], 2),
+                ("other-file", "src/a.rs:10-20", &["file:src/b.rs"], 2),
+                ("unsited", "src/a.rs:10-20", &[], 2),
+            ];
+            for (crew, cited, sites, _) in cases {
+                let id = landed_with_tags(&fixture, &format!("jrun-{crew}"), crew, Vec::new());
+                comment(
+                    &fixture,
+                    &id,
+                    &format!(
+                        "before-landing review settled attempt `rv-{crew}`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [medium, open] the parser drops a field\n  - Cited: {cited}"
+                    ),
+                );
+                sited_regression(
+                    &fixture,
+                    &id,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Medium,
+                    sites,
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            let matrix = json_ok(server.get(&format!(
+                "/api/agents/implementers/by-type?{WS}&window=30d&min_support=1"
+            )));
+            let export = fixture.runtime.agent_per_task_export(&query).unwrap();
+            let mean = cases.iter().map(|case| case.3 as f64).sum::<f64>() / cases.len() as f64;
+            for (crew, _, _, expected) in cases {
+                let headline = row(&card, crew);
+                assert_eq!(headline["counts"]["review_rejects"], 1, "{crew}");
+                assert_eq!(
+                    headline["counts"]["escaped_regressions"], *expected,
+                    "{crew}: {headline}"
+                );
+                let task = export["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|task| task["crew"] == *crew)
+                    .unwrap();
+                assert_eq!(task["counts"], headline["counts"], "{crew}: {task}");
+                let cell = matrix["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|cell| cell["crew"] == *crew && cell["type"] == "other")
+                    .unwrap();
+                // All other terms and task mixes are identical: only the
+                // severity-weighted escaped-regression residual changes raw.
+                let expected_raw = 100.0 - 0.5 * (*expected as f64 - mean) * 100.0;
+                // The public payload rounds scores to two decimal places.
+                let expected_raw = (expected_raw * 100.0).round() / 100.0;
+                assert_eq!(as_f64(&cell["raw"]), expected_raw, "{crew}: {cell}");
+            }
         },
     );
 }

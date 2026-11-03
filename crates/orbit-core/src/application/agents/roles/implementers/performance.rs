@@ -273,6 +273,69 @@ fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Opt
     })
 }
 
+/// The location evidence retained by a regression site or review citation.
+struct DefectLocation<'a> {
+    path: &'a str,
+    scope: DefectScope<'a>,
+}
+
+enum DefectScope<'a> {
+    File,
+    Directory,
+    Symbol(&'a str),
+    Lines(u32, u32),
+}
+
+impl<'a> DefectLocation<'a> {
+    fn parse(value: &'a str) -> Option<Self> {
+        let (path, scope) = if let Some(symbol) = value.strip_prefix("symbol:") {
+            let (path, identity) = symbol.split_once('#')?;
+            let (name, kind) = identity.rsplit_once(':')?;
+            if name.is_empty() || kind.is_empty() {
+                return None;
+            }
+            (path, DefectScope::Symbol(identity))
+        } else if let Some(path) = value.strip_prefix("dir:") {
+            (path.trim_end_matches('/'), DefectScope::Directory)
+        } else {
+            let path = selector_path(value)?;
+            if let Some((path, lines)) = path.rsplit_once(':') {
+                let (start, end) = lines.split_once('-').unwrap_or((lines, lines));
+                let (start, end) = (start.parse::<u32>().ok()?, end.parse::<u32>().ok()?);
+                if start == 0 || end < start {
+                    return None;
+                }
+                (path, DefectScope::Lines(start, end))
+            } else {
+                (path, DefectScope::File)
+            }
+        };
+        (!path.is_empty()).then_some(Self { path, scope })
+    }
+
+    /// A coarse site intentionally covers its file/directory. Precise sites
+    /// require comparable evidence; file equality cannot map a symbol to lines.
+    fn covers_citation(&self, cited: &Self) -> bool {
+        if matches!(self.scope, DefectScope::Directory) {
+            return self.path == cited.path
+                || (self.path == "." && !cited.path.starts_with('/'))
+                || cited
+                    .path
+                    .strip_prefix(self.path)
+                    .is_some_and(|rest| rest.starts_with('/'));
+        }
+        self.path == cited.path
+            && match (&self.scope, &cited.scope) {
+                (DefectScope::File, _) => true,
+                (DefectScope::Symbol(site), DefectScope::Symbol(cited)) => site == cited,
+                (DefectScope::Lines(start, end), DefectScope::Lines(other_start, other_end)) => {
+                    start <= other_end && other_start <= end
+                }
+                _ => false,
+            }
+    }
+}
+
 /// Whether a pre-landing review already charged the row for the defect a
 /// regression link names: a `reject` or `accept_with_fixes` on the row's
 /// candidate with a finding that cites or changed one of the link's sites.
@@ -284,11 +347,9 @@ fn charged_by_pre_landing_review(
     since: DateTime<Utc>,
     sites: &[String],
 ) -> bool {
-    let sites: Vec<&str> = sites
+    let sites: Vec<_> = sites
         .iter()
-        .filter_map(|site| selector_path(site))
-        .map(|path| path.trim_end_matches('/'))
-        .filter(|path| !path.is_empty())
+        .filter_map(|site| DefectLocation::parse(site))
         .collect();
     if sites.is_empty() {
         return false;
@@ -308,18 +369,8 @@ fn charged_by_pre_landing_review(
         })
         .flat_map(|review| &review.findings)
         .flat_map(|finding| &finding.paths)
-        .any(|cited| {
-            // A cited path may carry a line suffix (`src/a.rs:10-20`).
-            let path = cited
-                .split_once(':')
-                .map_or(cited.as_str(), |(path, _)| path);
-            sites.iter().any(|site| {
-                path == *site
-                    || path
-                        .strip_prefix(site)
-                        .is_some_and(|rest| rest.starts_with('/'))
-            })
-        })
+        .filter_map(|cited| DefectLocation::parse(cited))
+        .any(|cited| sites.iter().any(|site| site.covers_citation(&cited)))
 }
 
 /// The scored escaped-regression term, also read by the diff context.

@@ -380,9 +380,16 @@ actual size:
   review can both see a task. A `no_test` link whose `sites` name a path that a
   finding of a `reject` (not a false reject) or `accept_with_fixes` on the row's
   candidate cited or changed is the defect that verdict already charged, so it
-  adds nothing to escaped regressions. A `dir:` site covers the paths under it,
-  and a link without sites always counts. The charge stays in the attribution
-  strip's Implementers ownership count.
+  adds nothing to escaped regressions. Precise sites require evidence of
+  overlap: symbol identities must match, and recorded line ranges must
+  intersect (endpoints included). File equality alone cannot match different
+  symbols or disjoint ranges. A symbol and a line citation are incomparable
+  without a source mapping in the stored facts, so that link still counts;
+  a precise site also still counts when the review cites only the file.
+  Coarse `file:` sites retain file-level matching, and a `dir:` site covers
+  the paths under it on directory boundaries. A link without sites always
+  counts. The charge stays in the attribution strip's Implementers ownership
+  count.
 
 The former `escaped_regressions` and `regression_residual` stats are removed:
 the term's count, expected count and contribution carry them. Each row's
