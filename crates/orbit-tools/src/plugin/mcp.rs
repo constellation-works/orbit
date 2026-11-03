@@ -408,6 +408,7 @@ impl McpBackend {
             Some(caller) => self.spec.brokered_sandbox_profile(caller)?,
             None => self.spec.sandbox_profile(ctx.workspace_root.as_deref())?,
         };
+        callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
         let sandbox = profile.with_callback_session(&callback);
         sandbox.validate(&request)?;
         let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);

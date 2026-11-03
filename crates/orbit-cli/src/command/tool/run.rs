@@ -173,7 +173,7 @@ impl Execute for ToolRunArgs {
         let bound = if claimed_owner_call || self.name == "orbit.attention" {
             None
         } else {
-            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input)?
+            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input, &self.name)?
         };
         let runtime = bound.as_ref().unwrap_or(runtime);
 

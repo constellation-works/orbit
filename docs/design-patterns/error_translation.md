@@ -46,13 +46,15 @@ caller never re-derives it with `error.to_string().contains(...)`: any message
 can quote such text (a child's stderr, a remote reply), and rewording a message
 would silently change behaviour.
 
-When a class must not change the wire contract, give it a variant that displays
-and codes exactly like the variant it refines:
+Carry the native class in a dedicated variant. Preserve the original layer for
+context, and choose the wire code according to the cause:
 
 - `StorageAccessDenied { layer, message }`: a read-only or access-denied
   failure from `io::Error` kinds (`From<io::Error>`, `OrbitError::storage_io`)
-  or SQLite codes (`storage::sqlite::sqlite_error`). It reads and codes as the
-  `Io`, `Store` or `Migration` error named by `layer`. Query it with
+  or SQLite codes (`storage::sqlite::sqlite_error`). It displays as the
+  `Io`, `Store` or `Migration` error named by `layer`, but CLI and MCP report
+  `storage_access_denied` rather than a generic I/O, store or migration code.
+  A denied layout-marker read is therefore never `migration_failed`. Query it with
   `is_readonly_or_access_failure()` and `storage_layer()`. Wrap a
   `rusqlite::Error` with `.map_err(sqlite_store_error)`, or `sqlite_error` to
   add context; `OrbitError::Store(e.to_string())` drops the class.

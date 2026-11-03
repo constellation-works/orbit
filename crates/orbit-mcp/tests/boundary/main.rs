@@ -22,4 +22,5 @@ mod role_surface;
 mod scripted_destination;
 #[cfg(unix)]
 mod ssh_reuse;
+mod storage_access;
 mod task_route;

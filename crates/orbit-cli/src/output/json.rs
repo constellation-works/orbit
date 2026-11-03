@@ -159,8 +159,9 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
-        OrbitError::StorageAccessDenied { layer, .. }
-        | OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
+        OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
+        OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
+        OrbitError::CallbackWorkspaceOutsideSandbox(_) => "callback_workspace_outside_sandbox",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
         OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",

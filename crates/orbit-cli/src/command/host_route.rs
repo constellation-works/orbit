@@ -60,6 +60,17 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
             &selector,
         )?;
     }
+    if let Commands::Tool(tool) = &cli.command
+        && let ToolSubcommand::Run(args) = &tool.command
+        && let Some(selector) = workspace_value(cli)?
+    {
+        let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+        orbit_cmd::registry_runtime::refuse_cli_callback_workspace(
+            &callback_root,
+            &args.name,
+            &selector,
+        )?;
+    }
     // A claimed worker's calls follow its owner binding, never a prefix.
     if OrbitRuntime::current_worker_invocation(&global_root)?.is_some() {
         if host.is_some() {

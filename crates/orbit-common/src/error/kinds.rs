@@ -132,10 +132,9 @@ pub struct SqliteContention {
 /// The error family an [`crate::OrbitError::StorageAccessDenied`] or
 /// [`crate::OrbitError::StorageLockBusy`] reports as.
 ///
-/// A read-only, access-denied or lock-busy failure keeps the message prefix
-/// and the stable error code of the variant it would otherwise have been
-/// built as, so carrying the class changes no user-visible text and no wire
-/// code.
+/// A classified storage failure keeps the message prefix of its original
+/// layer. Access denials use `storage_access_denied` on CLI and MCP; lock-busy
+/// failures retain this layer's wire code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageLayer {
@@ -148,7 +147,7 @@ pub enum StorageLayer {
 }
 
 impl StorageLayer {
-    /// The stable error code the CLI and MCP surfaces report for this layer.
+    /// The stable code for unclassified and lock-busy failures in this layer.
     pub fn error_code(self) -> &'static str {
         match self {
             Self::Io => "io_error",

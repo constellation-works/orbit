@@ -463,3 +463,22 @@ fn non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure() {
         "error message should report the underlying write failure: {message}"
     );
 }
+
+/// Native EACCES at the layout marker is an access denial, not a failed
+/// migration. Restore permissions before the disposable fixture is removed.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_layout_marker_reports_storage_access_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::workspace();
+    let marker = fixture.work.join(".orbit/state/layout.version");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, "0\n").unwrap();
+    let original = std::fs::metadata(&marker).unwrap().permissions();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let args = ["tool", "run", "orbit.task.list", "--input", "{}"];
+    let output = fixture.run(&args, &[]);
+    std::fs::set_permissions(&marker, original).unwrap();
+    let error = json_failure(&args, &output, 1);
+    assert_eq!(error["code"], "storage_access_denied", "{error}");
+}

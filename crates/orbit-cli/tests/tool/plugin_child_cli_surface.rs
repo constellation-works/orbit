@@ -54,7 +54,7 @@ impl DisposableCliFixture {
         let temp = tempfile::tempdir().expect("fixture tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
-        let root = temp.path().join("orbit-root");
+        let root = home.join(".orbit");
         std::fs::create_dir_all(&home).expect("create fixture home");
         crate::git_repo::init(&work);
 
@@ -91,8 +91,6 @@ impl DisposableCliFixture {
             .current_dir(&work)
             .env("HOME", &home)
             .env("USERPROFILE", &home)
-            .arg("--root")
-            .arg(&root)
             .args(["workspace", "init", "--name", workspace_name]);
         let output = ws_cmd.output().expect("init fixture workspace");
         assert!(
@@ -147,7 +145,13 @@ struct PluginChildFixture {
 
 impl PluginChildFixture {
     fn new() -> Self {
-        let base = DisposableCliFixture::new("plugin-child-host", "child-fixture-ws");
+        Self::from_base(DisposableCliFixture::new(
+            "plugin-child-host",
+            "child-fixture-ws",
+        ))
+    }
+
+    fn from_base(base: DisposableCliFixture) -> Self {
         let root = base.root.clone();
         let sessions = root.join("state/plugin-callbacks");
         std::fs::create_dir_all(&sessions).expect("create callback session directory");
@@ -161,7 +165,8 @@ impl PluginChildFixture {
         std::fs::write(
             &record,
             serde_json::json!({
-                "schema_version": 4,
+                "schema_version": 5,
+                "workspace_root": base.work,
                 "plugin": "graph",
                 "version": "0.4.1",
                 "manifest_digest": "0".repeat(64),
@@ -424,9 +429,7 @@ fn a_plugin_child_remote_selector_is_refused_before_ssh_with_a_warning() {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = PluginChildFixture::new();
-    let global = fixture.base.home.join(".orbit");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::copy(fixture.root.join("config.toml"), global.join("config.toml")).unwrap();
+    let global = fixture.root.clone();
     std::fs::write(
         global.join("hosts.toml"),
         r#"schema_version = 1
@@ -491,4 +494,201 @@ task_prefix = "REM"
     assert_eq!(warning["fields"]["tool"], "orbit.task.list");
     assert_eq!(warning["fields"]["code"], "policy_denied");
     assert_eq!(warning["fields"]["message"], message);
+}
+
+/// A real Landlock boundary denies the second checkout's store. Refuse it
+/// before opening that store, even if the descendant changes cwd.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_callback_to_another_local_workspace_is_refused_before_store_open() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, LandlockBoundary, StdinMode};
+    use std::os::fd::AsRawFd;
+
+    let probe = orbit_exec::probe_landlock();
+    assert!(
+        probe.available,
+        "Landlock required for callback regression: {}",
+        probe.detail
+    );
+    let base = DisposableCliFixture::new("plugin-child-host", "child-fixture-ws");
+    let other = base.home.join("other-work");
+    crate::git_repo::init(&other);
+    let mut init = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        init.env_remove(name);
+    });
+    let initialized = init
+        .current_dir(&other)
+        .env("HOME", &base.home)
+        .env("USERPROFILE", &base.home)
+        .args(["workspace", "init", "--name", "second-local-ws"])
+        .output()
+        .unwrap();
+    assert!(initialized.status.success(), "{}", stderr_of(&initialized));
+
+    let fixture = PluginChildFixture::from_base(base);
+    let input = serde_json::json!({"workspace": "second-local-ws"}).to_string();
+    let mut environment: std::collections::BTreeMap<_, _> = std::env::vars().collect();
+    test_env::clear_inherited_authority(|name| {
+        environment.remove(name);
+    });
+    environment.insert(
+        "HOME".into(),
+        fixture.base.home.to_string_lossy().into_owned(),
+    );
+    environment.insert(
+        "USERPROFILE".into(),
+        fixture.base.home.to_string_lossy().into_owned(),
+    );
+    environment.insert(
+        "ORBIT_PLUGIN_CALLBACK_FD".into(),
+        fixture.credential.as_raw_fd().to_string(),
+    );
+    environment.insert("ORBIT_PLUGIN_CALLBACK".into(), fixture.token.clone());
+    environment.insert("ORBIT_PLUGIN".into(), "graph".into());
+    environment.insert("RUST_LOG".into(), "warn".into());
+    let mut request = ExecRequest {
+        program: env!("CARGO_BIN_EXE_orbit").to_string(),
+        args: vec![
+            "--root".into(),
+            fixture.root.to_string_lossy().into_owned(),
+            "tool".into(),
+            "run".into(),
+            "orbit.task.list".into(),
+            "--input".into(),
+            input,
+        ],
+        current_dir: Some(fixture.base.work.to_string_lossy().into_owned()),
+        timeout_ms: Some(30_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(environment.into_iter().collect()),
+        debug: false,
+    };
+    let boundary = LandlockBoundary {
+        read: vec![
+            fixture.root.clone(),
+            fixture.base.work.clone(),
+            other.clone(),
+        ],
+        read_denies: vec![other.join(".orbit")],
+        write: vec![fixture.root.clone(), fixture.base.work.join(".orbit")],
+        ..Default::default()
+    };
+    // The same checkout must still reach the ordinary callback allowlist.
+    let original_args = request.args.clone();
+    *request.args.last_mut().unwrap() =
+        serde_json::json!({"workspace": "child-fixture-ws"}).to_string();
+    let descriptor = fixture.credential.as_raw_fd();
+    let same = orbit_exec::spawn_under_linux_landlock_boundary(
+        &request,
+        &boundary,
+        &[orbit_exec::InheritedFd {
+            source: descriptor,
+            target: descriptor,
+        }],
+    )
+    .unwrap()
+    .wait_with_output()
+    .unwrap();
+    let same_stderr = stderr_of(&same);
+    let same_error: serde_json::Value = same_stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    assert_eq!(same_error["code"], "policy_denied", "{same_stderr}");
+    assert!(
+        same_error["error"].as_str().unwrap().contains("allowlist"),
+        "{same_stderr}"
+    );
+    request.args = original_args;
+    for cwd in [&fixture.base.work, &other] {
+        request.current_dir = Some(cwd.to_string_lossy().into_owned());
+        let child = orbit_exec::spawn_under_linux_landlock_boundary(
+            &request,
+            &boundary,
+            &[orbit_exec::InheritedFd {
+                source: descriptor,
+                target: descriptor,
+            }],
+        )
+        .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stderr = stderr_of(&output);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(output.stdout.is_empty(), "refused callback emitted data");
+        let error: serde_json::Value = stderr
+            .lines()
+            .find_map(|line| serde_json::from_str(line).ok())
+            .unwrap_or_else(|| panic!("structured callback refusal: {stderr}"));
+        assert_eq!(
+            error["code"], "callback_workspace_outside_sandbox",
+            "{stderr}"
+        );
+        assert!(
+            error["error"].as_str().unwrap().contains("second-local-ws"),
+            "{stderr}"
+        );
+    }
+    let log = std::fs::read_to_string(fixture.root.join("state/logs/orbit.jsonl")).unwrap();
+    assert!(
+        log.lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .any(|row| row["level"] == "WARN"
+                && row["fields"]["code"] == "callback_workspace_outside_sandbox"
+                && row["fields"]["plugin"] == "graph"
+                && row["fields"]["tool"] == "orbit.task.list"),
+        "{log}"
+    );
+
+    // A host-issued unconfined profile retains the existing local route;
+    // it reaches the tool allowlist instead of this sandbox refusal.
+    let record_path = fixture
+        .root
+        .join("state/plugin-callbacks")
+        .join(&fixture.token);
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    record.as_object_mut().unwrap().remove("workspace_root");
+    record["schema_version"] = serde_json::json!(4);
+    std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let legacy = fixture.orbit(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        "{\"workspace\":\"child-fixture-ws\"}",
+    ]);
+    let legacy_stderr = stderr_of(&legacy);
+    let legacy_error: serde_json::Value = legacy_stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    assert_eq!(
+        legacy_error["code"], "callback_workspace_outside_sandbox",
+        "{legacy_stderr}"
+    );
+    assert!(
+        legacy_error["error"].as_str().unwrap().contains("restart"),
+        "{legacy_stderr}"
+    );
+
+    record["unconfined"] = serde_json::json!(true);
+    std::fs::write(record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let unconfined = fixture.orbit(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        "{\"workspace\":\"second-local-ws\"}",
+    ]);
+    let stderr = stderr_of(&unconfined);
+    let error: serde_json::Value = stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    assert_eq!(error["code"], "policy_denied", "{stderr}");
+    assert!(
+        error["error"].as_str().unwrap().contains("allowlist"),
+        "{stderr}"
+    );
 }
