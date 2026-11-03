@@ -331,8 +331,13 @@ between two levels, take the lower and say why.
   Examples: a stale sentence in a reference doc; a misspelled help string;
   an off-by-one-pixel border.
 
-The agent scorecards use these weights: a held review finding earns its
-weight, and an escaped or missed regression costs twice its weight.
+The agent scorecards apply coefficients to regression rates, not fixed
+score-point penalties. A held review finding earns its severity weight. For
+Implementers, escaped regressions have a coefficient of -0.5 on the
+actual-minus-expected rate, compared with the fleet's expected rate for the
+same tier and change size; each escape is weighted by severity. For Reviewers,
+missed regressions have a coefficient of -2 on the actual rate; each missed
+link is weighted by severity.
 
 ## Operator runbook: granting tools
 
