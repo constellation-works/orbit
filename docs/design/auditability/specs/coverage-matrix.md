@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Audit Coverage Matrix"
-last_validated: 2026-10-31
+last_validated: 2026-11-03
 ---
 
 # Spec: Audit Coverage Matrix
