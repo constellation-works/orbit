@@ -1779,6 +1779,7 @@ try {
   await triggerPage.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
   await triggerPage.addScriptTag({ type: 'module', url: '/routine-triggers.mjs' });
   await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
+  // The fixture hands over an open daily-digest trigger editor as the screenshot state.
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
   await triggerPage.locator('.schedule-editor').scrollIntoViewIfNeeded();
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-trigger-editor-dark-1440.png'), animations: 'disabled' });

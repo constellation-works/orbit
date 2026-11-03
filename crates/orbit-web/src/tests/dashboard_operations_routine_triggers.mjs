@@ -290,4 +290,9 @@ assert(dstSummary.startsWith('41 fires'), `spring-forward summary counts 41 fire
 globalThis.fetch = savedFetch;
 Date.now = () => frozenNow;
 await fetchAndRenderOperations('routines');
+// The browser driver captures the daily-digest trigger editor at 1440 and 375px
+// after this fixture completes, so the fixture ends with that editor open on
+// its persisted missed-slot policy (ORB-21697).
+editTrigger().click();
+assert(editor() && missedSlots().value === 'catch_up_once' && saveTrigger().disabled, 'the daily-digest editor reopens on its persisted policy for the screenshots');
 globalThis.routineTriggerTestsPassed = true;
