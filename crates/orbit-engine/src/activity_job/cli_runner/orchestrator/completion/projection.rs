@@ -196,6 +196,25 @@ pub(in super::super) fn project_completion(
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
 
+    // [ORB-21837] The typed unfinished-work signal, read only when the
+    // declared `failed` token is the step's sole failure: a clean exit with a
+    // complete envelope and no provider, limit, refusal or budget failure.
+    // The continuation loop in the dispatch entry decides admission.
+    let continuation_request = (spec.incomplete_continuation.is_some()
+        && completion_status_failure
+        && exit_success
+        && provider_auth_error.is_none()
+        && provider_refusal.is_none()
+        && provider_limit.is_none()
+        && muse_terminal_failure.is_none()
+        && !print_timeout_reached)
+        .then(|| {
+            declared_failure
+                .as_ref()
+                .and_then(|failure| failure.continuation.clone())
+        })
+        .flatten();
+
     // A conflict-recovery provider repairs files only. Once its process has
     // satisfied the activity completion contract, the host-side boundary
     // independently revalidates live ownership, stages the resolved conflict
@@ -348,6 +367,15 @@ pub(in super::super) fn project_completion(
         Value::Bool(timed_out || print_timeout_reached),
     );
     output.insert("stalled".into(), Value::Bool(stalled));
+    if spec.incomplete_continuation.is_some() {
+        output.insert(
+            super::super::continuation::REQUEST_OUTPUT_KEY.into(),
+            continuation_request.map_or(
+                Value::Null,
+                |request| serde_json::json!({ "remaining_work": request.remaining_work }),
+            ),
+        );
+    }
     output.insert(
         "print_timeout_ms".into(),
         print_timeout.map_or(Value::Null, |budget| {

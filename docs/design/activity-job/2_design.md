@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-11-02
+last_updated: 2026-11-03
 last_validated: 2026-10-31
 status: Draft
 feature: activity-job
@@ -57,6 +57,10 @@ The common `agent_loop` fields are:
   templates consume structured response fields)
 - `require_completion_envelope` (default `true`; opt **out** only for an
   activity whose non-completion is harmless — see §7.6a)
+- optional `incomplete_continuation` (`{max_rounds, min_remaining_seconds}`;
+  bounds the fresh invocations an implementer that declares the typed
+  `implementation_incomplete` signal may get inside its own wall-clock budget —
+  see §7.6a; only `agent_implement` declares it)
 - optional `regression_risk_instruction` (declaring it asks the host, through
   `RuntimeHost::regression_risk_for_agent_input`, for the task's
   regression-risk marks; the engine adds them to the envelope's task snapshot
@@ -1109,6 +1113,34 @@ in `task_pr_pipeline`:
 
 - **Not retried.** The step has no `retry:` block, and a repeat invocation of a
   stalled agent has no new information to work with.
+- **Bounded implementation continuation** ([ORB-21837]). One declared failure
+  is not final inside the dispatch: the typed unfinished-work signal. It is
+  `status: "failed"` with `error.code` exactly `implementation_incomplete`, an
+  object `result` with no non-null `blocker`, and a non-empty `result.remaining_work`
+  of at most 32 non-empty strings (`orbit_agent::IncompleteContinuationRequest`).
+  Any other shape, including that code with a missing or malformed
+  `remaining_work`, is an ordinary declared failure, and no prose is read. The
+  projection records the signal only when the declared token is the
+  invocation's sole failure (clean exit, complete frame, no provider
+  authentication, refusal, limit or print-budget failure) and the activity
+  declares `incomplete_continuation`. The step entry
+  (`cli_runner/orchestrator/continuation.rs`) then starts a fresh invocation of
+  the same step in the same worktree, through the ordinary per-invocation
+  dispatch (same crew, tool grant, sandbox, worktree boundary and task
+  authority), with `input.implementation_continuation` carrying the round,
+  `remaining_work`, the original error and the remaining budget. It refuses,
+  in order, once `max_rounds` continuations have run, when less than
+  `min_remaining_seconds` of the activity's original wall-clock budget is
+  unspent (each continuation's timeout is that remainder; build-admission
+  waits never refill it), and when the live task record is terminal or
+  unreadable. Orbit commits nothing between rounds and persists each
+  superseded invocation's trace. The step succeeds only when a continuation
+  itself completes; otherwise it returns the latest declared failure with
+  `after N implementation continuation(s)`, any refusal and the original
+  error appended, and the worktree keeps the candidate. The step output
+  records `incomplete_continuation: {rounds, max_rounds, refusal}`. This is
+  not recovery: `step_failure_recovery` still repairs only completed delivery
+  candidates.
 - **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
   whose `recovery_activity` resolves dispatches it for a `success: false`
   outcome exactly as it does for an `Err` — once retries are exhausted, if the

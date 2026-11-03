@@ -10,7 +10,10 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::ToolCallTrace;
 use serde_json::Value;
 
-pub use envelope::{DeclaredResponseFailure, ParsedStdout};
+pub use envelope::{
+    DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
+    ParsedStdout,
+};
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};
 pub(crate) use usage::request_usage;

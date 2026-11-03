@@ -102,6 +102,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
         &pair.follower,

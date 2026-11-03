@@ -202,11 +202,15 @@ fn attach_fleet_notices<'a>(
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
 /// the activity name. Policy and broker authorization use `activity_name`;
 /// audit labels and worktree-boundary reports use `step_id`.
+/// One provider invocation of a step: admission, preparation, the
+/// subprocess and its completion projection. The step entry
+/// (`continuation::run_cli_backend_for_step`) may call it again for a
+/// bounded implementation continuation [ORB-21837].
 #[allow(
     clippy::too_many_arguments,
     reason = "policy authorizes the activity name while audit and the worktree boundary report the step id"
 )]
-pub(crate) fn run_cli_backend_for_step(
+pub(crate) fn dispatch_cli_invocation(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
     step_id: &str,

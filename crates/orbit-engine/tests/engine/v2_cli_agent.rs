@@ -58,6 +58,8 @@ mod explore_brief;
 #[cfg(unix)]
 mod fleet_notices;
 #[cfg(unix)]
+mod incomplete_continuation;
+#[cfg(unix)]
 mod no_diff;
 #[cfg(unix)]
 mod regression_risk;
@@ -1624,6 +1626,7 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     }
 }
 
@@ -1742,6 +1745,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 crew_env: Vec::new(),
                 crew_account: None,
                 crew_vision_disabled: false,
+                incomplete_continuation: None,
             }),
             activity_name: None,
             input_schema_json: None,

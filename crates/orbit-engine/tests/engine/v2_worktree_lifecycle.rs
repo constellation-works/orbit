@@ -3208,6 +3208,7 @@ fn agent_loop(instruction: &str) -> ActivityV2Spec {
         crew_env: Vec::new(),
         crew_account: None,
         crew_vision_disabled: false,
+        incomplete_continuation: None,
     })
 }
 
