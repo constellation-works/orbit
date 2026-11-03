@@ -3,7 +3,7 @@ summary: "Auditability — Vision"
 type: design
 title: "Auditability — Vision"
 owner: codex
-last_updated: 2026-10-15
+last_updated: 2026-11-03
 last_validated: 2026-11-03
 status: Draft
 feature: auditability
@@ -93,12 +93,7 @@ External reference categories:
 
 ## Task References
 
-- **[T20260419-0002]** — Add workspace provenance and v2 audit envelope events for activity/job execution.
 - **[T20260426-0519]** — Move file-backed activity/job audit traces under workspace state.
-- **[T20260426-0526]** — Persist v2 invocation traces for metrics beside audit.
-- **[T20260426-0605]** — Add this auditability design folder and name future auditability questions.
-- **[T20260430-20]** — Shorten the auditability docs while preserving required guarantees.
-- **[ORB-00090]** — Aligned auditability identity wording with the family-as-identity convention.
 - **[ORB-10228]** — Established trusted MCP caller/process provenance and anti-spoofing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

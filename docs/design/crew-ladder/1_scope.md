@@ -1,8 +1,8 @@
 ---
 title: "Scope: crew ladder"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 stage: building
 next: "Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials)"
@@ -15,7 +15,7 @@ tags: [crew-ladder, crew-pools, experiments, crew-performance, agent-scorecards,
 
 # Scope: crew ladder
 
-Status: phase 1 implements off/shadow ladder configuration, trials and reporting.
+Status: phase 1 shipped in [ORB-19999]: off/shadow ladder configuration, trials and reporting.
 Promotion/demotion and delivery-quality integration below remain proposed; the offline
 grader contract does not implement them. The whole feature is opt-in: nothing runs until
 an operator sets a mode and names the tiers, and the code-quality guardrail is a second,
@@ -38,7 +38,7 @@ crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, rec
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
 experiment, run by hand, with a verdict expected around 2026-11-18. The proposed
-[delivery-quality grader](../decision-assistance/specs/delivery-quality.md) (ORB-20000,
+[delivery-quality grader](../decision-assistance/specs/delivery-quality.md) ([ORB-20000],
 design only) would grade each delivered code
 change on six anchored dimensions (scope fit, robustness, structure, standards, verification,
 maintainability), with abstention and coverage. It forbids any ranking or routing use until a
@@ -47,8 +47,8 @@ separate evaluated proposal and an explicit adoption decision; §
 
 ## Monthly evidence review
 
-`crew-ladder-review` was a shipped default until it was demoted for unproven
-yield ([auto-task promotion](../auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)).
+`crew-ladder-review` shipped in [ORB-20118] and was demoted for unproven
+yield in [ORB-20704] ([auto-task promotion](../auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)).
 Orbit no longer seeds it; a workspace that already had a copy keeps it as a
 workspace-local definition, with its settings and schedule. Its `0 9 1 * *` schedule means the first day at 09:00 host-local; enabling the
 review does not enable the ladder. It mints a medium, backlog, no-diff chore
@@ -167,6 +167,10 @@ One trial per tier at a time, for the rung directly below the tier's floor:
 - **Operator experiments come first.** A tier with a running operator crew experiment gets no
   trial; its tasks are excluded through the existing one-experiment-per-surface rule. Until
   `exp-4e3e0399` concludes, medium is not trialled.
+- **Current controls stay coherent.** [ORB-20221] repaired reload handling so trial
+  planning and lifecycle admission use the current ladder, pools and experiment controls
+  together. An unreadable reload keeps ordinary admission's last-known-good settings
+  but skips shared trial reconciliation rather than retiring another runtime's valid trial.
 - **One rung, one tier.** A trial never skips a rung and never runs on two tiers for the same
   rung at once, so a bad rung costs at most `explore_rate` of one tier.
 
@@ -374,15 +378,15 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 
 ## Phasing
 
-1. **Ladder config, report and shadow.** The `workflow.crew_ladder` keys and validation,
+1. **Ladder config, report and shadow — done in [ORB-19999].** The `workflow.crew_ladder` keys and validation,
    `orbit crew ladder`, and `shadow` mode: system experiments in experiment shadow mode, so
    the report shows which rung each tier would trial and which tasks would have gone to it.
    Nothing changes for any task.
-2. **Trials with `propose`.** Live system experiments, the quality score, the sequential test
+2. **Trials with `propose` — not filed.** Live system experiments, the quality score, the sequential test
    with its looks and guardrail stops, promotion and stop handling, failed rungs and re-trial,
    and decision requests. Promotion goes through the existing promotion task.
    `delivery_quality = "shadow"` records trial tasks' grades when the grader runs.
-3. **`auto` and demotion.** The learned pool record, draws that include learned members with
+3. **`auto` and demotion — not filed.** The learned pool record, draws that include learned members with
    `ladder:` provenance, the demotion watch, and the Analytics › Crews ladder panel.
 4. **Code-quality guardrail.** Filed only after the delivery-quality grader is adopted for
    this use: `delivery_quality = "guardrail"`, per-dimension shares with intervals,
@@ -435,8 +439,11 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 
 ## Task References
 
-- [ORB-19999] — phase 1: ladder config, report and shadow trials
+- [ORB-19999] — shipped phase 1: ladder config, report and shadow trials
 - [ORB-20000] — proposes the advisory delivery-quality grader the guardrail would consume
+- [ORB-20118] — shipped the monthly evidence review without enabling ladder modes or routing
+- [ORB-20221] — repaired trial reconciliation across runtime configuration reloads
+- [ORB-20704] — demoted the unproven monthly review default while preserving workspace copies
 
 The reused machinery is in the [experiments](../experiments/1_scope.md) and
 [crew performance](../crew-performance/1_scope.md) designs.

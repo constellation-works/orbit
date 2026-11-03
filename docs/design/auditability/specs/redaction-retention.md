@@ -2,6 +2,7 @@
 type: design
 summary: Spec: Redaction and Retention Boundaries
 last_validated: 2026-10-29
+last_updated: 2026-11-03
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -135,3 +136,10 @@ Future retention work should add:
 ## Agent Signature
 
 Last revised by codex / gpt-5.5 for [T20260427-0023].
+
+## Task References
+
+- **[ORB-10591]** — Document the artifact-write redaction boundary, add structural SSH identifier coverage, and return field-level redaction details.
+- [T20260427-0023] — project policy denials and friction task submissions into the global tracing feed.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

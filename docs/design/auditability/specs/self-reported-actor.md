@@ -3,6 +3,7 @@ type: design
 summary: "Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls"
 tags: ["auditability"]
 last_validated: 2026-10-24
+last_updated: 2026-11-03
 ---
 
 # Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls
@@ -143,3 +144,10 @@ rather than counting as authenticated.
 - The dashboard audit summary emits `attribution_split` beside `actor_split`.
   Each row carries its own `attribution` plus a `verified` boolean, so a
   chart legend reading only `label` still says which half of the split it is in.
+
+## Task References
+
+- [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
+- [ORB-10890] — Added a separate untrusted identity claim for standalone MCP calls.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

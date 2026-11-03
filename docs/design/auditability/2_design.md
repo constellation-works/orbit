@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-11-03
 last_validated: 2026-11-03
 status: Draft
 feature: auditability
@@ -56,7 +56,8 @@ tracing warning. A successful mutating call returns success with a structured
 `audit_warning` (`code: audit_row_unpersisted`, naming the committed `tool` and `id`)
 instead of an error, because the audit seam cannot roll back a mutation already committed
 and a failure would invite a retry that duplicates it [ORB-16383]. When the tool itself
-fails, that domain error remains primary and no audit outcome replaces it.
+fails, that domain error remains primary and no audit outcome replaces it. [ORB-20668]
+reconciled the documentation with this contract, current MCP correlation and sink-backed snapshots.
 
 Pipeline submission has a separate best-effort audit row for `pipeline.invoke`,
 `pipeline.resume`, or `agent.invoke`. After admission and worker dispatch, a failed
@@ -272,7 +273,7 @@ After [ORB-10590], a record carries an author-settable `title` — its handle in
 
 `crates/orbit-common/src/observability/logging.rs` installs a default subscriber with independent stderr/file filters, stderr formatting, and a non-blocking JSONL layer routing operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to `orbit-agent.jsonl` beside it after [T20260426-2343]. The operational writer drops a line when its queue is full. The agent writer blocks instead, so relay stdout and stderr are not discarded. The retained writer guards let routine event emission avoid synchronous disk writes; because statics are never dropped, the CLI calls `shutdown_jsonl_writer` when `main` returns and leaves early through `logging::exit`, which drains the queue before `std::process::exit`.
 
-Each record contains timestamp, level, target, and structured fields. After [T20260426-2349], both stderr and JSONL use `RedactingFields`, which scrubs string values, `Debug`-formatted values, and unstructured messages while preserving numeric and boolean JSON types. The merged global feeds are the live landing zone for subprocess output [T20260426-2313], policy-denial and friction projections [T20260427-0023], and other `tracing` events emitted before workspace runtime context exists. After [T20260508-8], CLI subprocess line events include `cwd` when Activity/Job resolved one, matching the audit-started event while omitting the field when the child inherits the parent cwd. It is operational telemetry, not the canonical workflow envelope.
+Each record contains timestamp, level, target, and structured fields. After [T20260426-2349], both stderr and JSONL use `RedactingFields`, which scrubs string values, `Debug`-formatted values, and unstructured messages while preserving numeric and boolean JSON types. The merged global feeds are the live landing zone for subprocess output [T20260426-2313], policy-denial projections [T20260427-0023], and other `tracing` events emitted before workspace runtime context exists. The friction projection introduced by that historical task has no active producer; [ORB-21797] tracks restoring the coverage-matrix contract. After [T20260508-8], CLI subprocess line events include `cwd` when Activity/Job resolved one, matching the audit-started event while omitting the field when the child inherits the parent cwd. It is operational telemetry, not the canonical workflow envelope.
 
 ---
 
@@ -291,35 +292,24 @@ Each record contains timestamp, level, target, and structured fields. After [T20
 
 ## Task References
 
-- **[T20260419-0002]** — Add workspace provenance and v2 audit envelope events for activity/job execution.
 - **[T20260426-0519]** — Move file-backed activity/job audit traces under workspace state.
-- **[T20260426-0526]** — Persist v2 invocation traces for metrics beside audit.
-- **[T20260426-0605]** — Add this auditability design folder and document the current audit architecture.
-- **[T20260426-0705]** — Expose v2 run audit events through `orbit run events` and `orbit run trace`.
 - **[T20260426-0709]** — Align run step selectors on activity `step.id` and move CLI invocation log reading behind orbit-core runtime accessors.
-- **[T20260426-0742]** — Remove duplicate job-level run inspection aliases and keep run inspection under `orbit run`.
 - **[T20260426-2313]** — Stream CLI subprocess stdout/stderr through structured tracing events while retaining the existing audit/blob path.
 - **[T20260426-2343]** — Add the global process tracing JSONL feed at `~/.orbit/state/logs/orbit.jsonl`.
 - **[T20260426-2349]** — Apply tracing-layer redaction before stderr and global JSONL output.
 - **[T20260427-0023]** — Project policy denials and friction task submissions into the global tracing feed.
-- **[T20260427-43]** — Superseded friction lifecycle scoring with `status: friction` and history-derived counters.
 - **[T20260427-47]** — Allow explicit task attribution correction for `planned_by` and `implemented_by` through task update paths.
 - **[T20260428-4]** — Move tool-invocation audit ownership into the runtime, add the `ToolEntryPoint` discriminator, bracket MCP preflight + dispatch, and deduplicate CLI guard rows.
 - **[T20260428-11]** — Derive `summary.json` all/failed tool-call counts from command-audit tool-run rows while keeping invocation/token scoreboard data as the token source.
 - **[T20260428-17]** — Split local Orbit task-review scoring from PR review-comment scoring and surface both in compact scoreboards.
 - **[T20260430-4]** — Change local task-review scoring to count review-thread creations rather than replies, rename the compact field to `task_review.threads`, and keep legacy metric reads mapped forward.
-- **[T20260430-20]** — Shorten the auditability docs while preserving required guarantees.
 - **[T20260505-6]** — Replace timestamp-only command-audit execution ids with collision-resistant generated ids for parallel tool runs.
 - **[T20260506-2]** — Lazily materialize loop audit JSONL files only when loop-level events are emitted.
 - **[T20260508-8]** — Record backend: cli subprocess cwd in v2 audit and live tracing.
 - **[T20260508-14]** — Surface bounded per-step agent log previews and derived diagnostics error rows in the dashboard.
-- **[T20260508-22]** — Use `task.implemented_by` to set git commit authors for automated task commits.
-- **[T20260509-12]** — Scope workflow git author and committer identity to the spawned commit process without writing repo-local Git config.
 - **[ORB-10519]** — Keep the persisted crew-model author and process-scoped Orbit committer while removing hook-specific trailer input and provider-commit adoption ([Workflow alone creates shipment commits while dirty failures remain recoverable](./4_decisions.md#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable)).
-- **[ORB-10369]** — Introduce the persisted resolved crew model as the pipeline commit author with generic fallback and no alias resolver ([Workflow commit authors use the persisted crew model](./4_decisions.md#workflow-commit-authors-use-the-persisted-crew-model), superseded by [Workflow alone creates shipment commits while dirty failures remain recoverable](./4_decisions.md#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable)).
 - **[T20260510-13]** — Move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
 - **[ORB-00062]** — Surface first-class friction artifacts in the dashboard Knowledge tab and add triage endpoints.
-- **[ORB-00090]** — Aligned agent-facing provenance wording with the family-as-identity convention.
 - **[ORB-10337]** — Added dashboard HTTP ingestion for worker invocation records without changing the invocation schema.
 - **[ORB-10338]** — Added the versioned model price table and query-time `derived_cost_usd`, plus a persisted `provider_cost_usd` column for reconciliation.
 - **[ORB-10370]** — Parsed provider-reported CLI model/cost metadata, preferred the reported model at ingest, and retained structured mismatch evidence.
@@ -330,18 +320,38 @@ Each record contains timestamp, level, target, and structured fields. After [T20
 - **[ORB-10591]** — Document the artifact-write redaction boundary, add structural SSH identifier coverage, and return field-level redaction details.
 - **[ORB-00106]** — Preserve per-task implementer attribution when `orbit run ship` moves batch PR tasks from Review to Done.
 - **[ORB-10200]** — Derive CLI audit metadata and the other cross-cutting command policies from one exhaustive command-operation registry.
-- **[ORB-10225]** — Route in-process graph MCP calls through the safe-surface allowlist and shared runtime audit boundary.
-- **[ORB-10228]** — Historical expansion of the MCP audit schema; the current v1 path persists effective capabilities, may carry a federated `mcp_call_id`, and leaves `lease_id` empty because sessions do not carry execution leases. See [Command Audit Rows](./2_design.md#2-command-audit-rows) for the current field contract.
-- **[ORB-10262]** — Historical capability/placement preflight work, no longer part of the v1 MCP execution path.
-- **[ORB-10319]** — Historical MCP boundary move; current ownership is `orbit-mcp` framing, CLI server composition, and Core audit dispatch.
-- **[ORB-10325]** — Remove graph from MCP and registered tool dispatch while preserving the direct `orbit graph` CLI.
-- **[ORB-10357]** — Remove the direct `orbit graph` CLI too; the graph has no audited surface left.
 - **[ORB-10451]** — Attribute CLI and dashboard runtimes from the canonical agent env envelope, recording unenveloped callers as unknown.
-
 - **[ORB-10590]** — Gave friction records an author-settable `title` and replaced first-line derivation with a structural, write-time fallback ([Friction records carry an author-settable title; derivation is a structural fallback](./4_decisions.md#friction-records-carry-an-author-settable-title-derivation-is-a-structural-fallback)).
 - **[ORB-10680]** — Moved friction records into the host-global SQLite store under `(workspace_id, friction_id)` and pushed filters, paging, and stats into SQL ([Friction records move to SQLite with a legacy-evidence path projection](./4_decisions.md#friction-records-move-to-sqlite-with-a-legacy-evidence-path-projection)).
 - **[ORB-15933]** — Record an audit row per unknown input field an operations-as-data tool accepts in warn mode.
 - **[ORB-19680]** — Price prompt-size tiers per request from captured per-request usage, persisted with each invocation.
 - **[ORB-16768]** — Attribute Orbit's recovery and reviewer repair commits to the agent model (`orbit[<model>]` under the unchanged role addresses), with historical-identity fallback when the model is unknown.
+- [ORB-00080] — Made the normalized agent family the durable tool attribution identity.
+- [ORB-10202] — Removed friction from task lifecycle status and persisted task values.
+- [ORB-10496] — Added provider subprocess liveness as a separately correlated audit event.
+- [ORB-10583] — Added the weekly model-price audit auto-task.
+- [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
+- [ORB-10890] — Added a separate untrusted identity claim for standalone MCP calls.
+- [ORB-11069] — Captured requested and effective activity tool authority before provider launch.
+- [ORB-11284] — Correlated provider completions by invocation ancestry.
+- [ORB-11333] — Separated reviewer repair authorship from the implementer identity.
+- [ORB-13899] — Added bounded, redacted provider activity events for live run inspection.
+- [ORB-15527] — Bounded and cached the audit-derived diagnostics friction projection.
+- [ORB-15746] — Added delivery-duration and task-completion time series to Health metrics.
+- [ORB-16383] — Preserved committed tool success with a warning when its audit insert fails.
+- [ORB-18364] — Charted average task tokens by complexity and tag over time.
+- [ORB-18383] — Persisted landed diff statistics and charted code/test lines by crew.
+- [ORB-18384] — Charted delivery-friction rates, cost and tokens over time.
+- [ORB-18385] — Added backlog forecasts and scored stored predictions against actuals.
+- [ORB-18542] — Added the explore-brief turns-to-first-edit series.
+- [ORB-18688] — Included blocked, failed and retried runs in backlog forecasts.
+- [ORB-18689] — Bounded forecast concurrency by predicted CPU and memory fit.
+- [ORB-18859] — Stored retry-aware per-task forecast quantiles.
+- [ORB-19615] — Served default backlog forecasts from the hourly stored snapshot.
+- [ORB-20572] — Excluded truncated provider traces from first-edit measurements.
+- [ORB-20668] — Reconciled audit warning, MCP correlation, snapshot and forecast contracts with code.
+- [ORB-20702] — Corrected the GPT-5.6 Sol price period and filled its historical gap.
+- [ORB-21797] — Tracks restoring the missing friction live-tracing projection.
+- [T20260427-52] — Collapsed duplicate agent and model inputs on tool invocation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

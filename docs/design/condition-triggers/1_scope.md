@@ -1,8 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 stage: building
 next: "File phase 3: host scope and notifications"
@@ -26,7 +26,9 @@ expressions/scripts", for predicates only. The other non-goals stay: a generic e
 bus, scripts, arbitrary transition subscriptions, cross-host failover and a second
 scheduler.
 
-Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
+Bearing: the pre-condition baseline below was read at `d0cfa7a04`. The shipped
+phase-1 and phase-2 changes are recorded in [Phasing](#phasing); baseline claims
+about missing predicates or edge state describe the motivation, not current gaps.
 
 - **Two trigger carriers.** A routine (`.orbit/routines/*.yaml`) runs one catalog job.
   Its `trigger` takes one of `cron`, `deliveries_landed` or `state: {kind: …}`
@@ -116,7 +118,7 @@ The current code shapes the fix in four ways:
   worktree GC (`worktree_gc_pipeline`) and store GC (`store_gc_pipeline`); every
   other routine, auto-task and recovery stays owner-only (`runs_in_replica`,
   `crates/orbit-core/src/application/routines/loader.rs`; `collect_host_routines`
-  consumed at `crates/orbit-core/src/application/routines/sweep.rs:255`).
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs`).
 - **Any path to tag or publish must keep release authority with Daniel.** RELEASING.md
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
@@ -1300,7 +1302,8 @@ target: job:media_ingest_pipeline    # workspace-defined
    - `orbit automation explain`, with clause trees over live state. Arm state, holds,
      fires and `self` history show as not yet tracked.
 
-   Operators see what would match before anything can fire.
+   Operators see what would match before anything can fire. Shipped in [ORB-19990];
+   phase 2 subsequently enabled task/workspace firing.
 2. **Firing for task and workspace scopes.** This phase adds:
    - condition state rows (migration), edges, holds, re-arm and fire identity;
    - keyed mint and job actions with the subject passed in;
@@ -1311,11 +1314,14 @@ target: job:media_ingest_pipeline    # workspace-defined
    - `self` fire history, own-task exclusion from `board` with `board_includes_own`,
      and `on_enable` on re-enable (phase 1 already parses and type-checks them).
 
-   Covers use case A. Shipped in [ORB-20156].
-3. **Host scope and notifications.** Host facts from the sampler, notice records in
+   Covers use case A. Shipped in [ORB-20156]. Follow-up [ORB-20263] also shipped the
+   load-time refusal of a condition matching its own template output; [ORB-20265]
+   repaired retained-state capacity handling, and [ORB-20266] included condition
+   runs in routine fire history.
+3. **Host scope and notifications — not filed.** Host facts from the sampler, notice records in
    the decision channel, the `notify` action, and `hosts:` (parsed since phase 1) with
    follower evaluation of host-local GC actions (§4). Covers use case C on the owner and on followers.
-4. **File scope.** This phase adds:
+4. **File scope — not filed.** This phase adds:
    - roots, the `watch_roots` allowlist, and the rescan manifest;
    - plugin-seeded templated roots checked against plugin grants;
    - `root_unreadable` reporting, including macOS privacy denials;
@@ -1323,7 +1329,7 @@ target: job:media_ingest_pipeline    # workspace-defined
      aggregates.
 
    Covers use case D, including the office intake, with rescan only.
-5. **High-authority actions.** The job `authority` and `approval` fields, operator
+5. **High-authority actions — not filed.** The job `authority` and `approval` fields, operator
    grants with digests, and the `trigger_action` decision gate. Covers use case B
    once a workspace defines its release job.
 6. **Later.** Each of these is filed only when needed:
@@ -1429,8 +1435,11 @@ Daniel's answers, folded into the sections named:
 ## Task References
 
 - [ORB-19288] — designs condition triggers (this doc).
-- [ORB-19990] — phase 1: CEL schema, load-time checking and `orbit automation explain`.
-- [ORB-20156] — phase 2: firing for task and workspace scopes, `when:` guards, chains and `clear-stall`.
+- [ORB-19990] — shipped phase 1: CEL schema, load-time checking and `orbit automation explain`.
+- [ORB-20156] — shipped phase 2: firing for task and workspace scopes, `when:` guards, chains and `clear-stall`.
+- [ORB-20263] — shipped load-time refusal of conditions matching their own template output.
+- [ORB-20265] — bounded condition passes by retained-state capacity without losing pending work.
+- [ORB-20266] — included condition runs in routine fire history.
 - [ORB-12746] — added state-trigger batching (`batch_size`), which presets would need.
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.
