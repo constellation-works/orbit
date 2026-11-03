@@ -203,7 +203,9 @@ impl RuntimeKernel {
                 Some(existing)
                     if matches!(
                         bundle,
-                        BundleCrews::PreparationPartitions | BundleCrews::AutoDispatchSingletons
+                        BundleCrews::PreparationPartitions
+                            | BundleCrews::AutoDispatchSingletons
+                            | BundleCrews::DrainPartitions
                     ) =>
                 {
                     return Ok(existing.clone());
@@ -332,6 +334,11 @@ pub enum BundleCrews {
     /// The task-auto pipeline's backlog action emits one task per gate bundle
     /// before any task worker starts.
     AutoDispatchSingletons,
+    /// A verified drain pilot whose tasks' crews changed after the drain
+    /// selected a homogeneous bundle. It keeps the first task's current
+    /// crew at run start, and prepare re-partitions by live `task.crew`
+    /// before any pilot worker runs [ORB-21839].
+    DrainPartitions,
 }
 
 fn mixed_bundle_crew_error(left: Option<&str>, right: Option<&str>) -> String {
