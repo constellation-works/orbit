@@ -763,16 +763,16 @@ a read a refused command offered requests the serving tool instead:
 | `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability |
 | a run's commit and landing for one task | `orbit.task.show` with `field: "delivery"` | `orbit tool run` or MCP | — (bounded host evidence; no `operator`) |
 
-Reaching another machine through a federated destination still needs a `network` grant and
-`ssh` in `requires.programs`.
+Cross-host callbacks through `orbit tool run` are unsupported. A `network` grant and `ssh` in
+`requires.programs` do not grant access to the host’s SSH credentials.
 
 **Workspace addressing.** A callback addresses a workspace with the same `workspace` selector as any `orbit tool run`, and the session does not narrow it. The session carries a tool ceiling, not a workspace ceiling, so a callback may name any workspace the local registry lists (by name, `ws_*` ID or checkout path), not only its plugin's own. Narrowing callbacks to the plugin's own workspace is not implemented. A `hm_*/ws_*` selector is decided by the host it names:
 
 - This machine's own ID runs locally.
-- A host registered with `orbit host add` is reached over the federated route. That route needs the `network` grant and `ssh` in `requires.programs`, as stated above; without them the call fails with `unreachable_destination`.
+- For `orbit tool run`, a host registered with `orbit host add` is refused before any SSH attempt with `policy_denied`. The error names the selector and explains that cross-host callbacks are not supported from confined plugins. A `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and refusal; the same warning reaches stderr. This is a preflight refusal, before the runtime’s persistent CLI audit guard opens. Local callbacks still use the recorded allowlist and session ceiling.
 - A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
 
-MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
+For ordinary clients, MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
 
 **Credential binding.** The descriptor must hold a current session record whose token names
 the same device and inode in the host-owned session directory; a forged file is no credential.
