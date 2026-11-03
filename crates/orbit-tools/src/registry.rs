@@ -8,8 +8,7 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
-use crate::mcp_annotations::mcp_annotations;
-use crate::mcp_rules::mcp_rules;
+use crate::mcp::{builtin_mcp_toolset, mcp_annotations, mcp_rules};
 use crate::plugin::PluginToolBinding;
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
@@ -30,7 +29,7 @@ struct ToolEntry {
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
     /// The `orbit mcp serve` toolset this entry belongs to: a builtin MCP
-    /// tool's comes from [`crate::mcp_toolsets`], a plugin's is
+    /// tool's comes from [`crate::mcp::builtin_mcp_toolset`], a plugin's is
     /// [`McpToolset::Plugins`] and a tool MCP never advertises is
     /// [`McpToolset::Local`]. `None` only for a builtin MCP tool missing from
     /// the toolset table, which [`ToolRegistry::mcp_tool_definitions`]
@@ -62,7 +61,7 @@ impl ToolRegistry {
     /// Register one active builtin for MCP advertisement at the given scope,
     /// in the toolset the builtin toolset table places it.
     pub fn register_mcp<T: Tool + 'static>(&mut self, tool: T, scope: McpToolScope) {
-        let toolset = crate::mcp_toolsets::builtin_mcp_toolset(&tool.schema().name);
+        let toolset = builtin_mcp_toolset(&tool.schema().name);
         self.register_entry(tool, ToolAvailability::Active, Some(scope), toolset, None);
     }
 

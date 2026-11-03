@@ -34,10 +34,8 @@
 pub(crate) mod builtin;
 pub mod external;
 pub mod github_cli;
-mod mcp_annotations;
-mod mcp_rules;
-mod mcp_toolsets;
-pub use mcp_rules::builtin_mcp_rules;
+mod mcp;
+pub use mcp::builtin_mcp_rules;
 pub mod plugin;
 mod registry;
 pub mod tool_suggestions;

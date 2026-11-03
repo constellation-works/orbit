@@ -218,7 +218,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 
 **Recorded:** 2026-11 · [ORB-21263]
 
-**Code anchors:** `crates/orbit-types/src/tool/mcp_toolset.rs::McpRole`, `crates/orbit-tools/src/mcp_toolsets.rs::builtin_mcp_toolset`, `crates/orbit-mcp/src/toolset.rs::with_mcp_toolsets`, `crates/orbit-mcp/src/remote/proxy.rs::remote_surface_args`
+**Code anchors:** `crates/orbit-types/src/tool/mcp_toolset.rs::McpRole`, `crates/orbit-tools/src/mcp/toolsets.rs::builtin_mcp_toolset`, `crates/orbit-mcp/src/toolset.rs::with_mcp_toolsets`, `crates/orbit-mcp/src/remote/proxy.rs::remote_surface_args`
 
 ### Context
 
