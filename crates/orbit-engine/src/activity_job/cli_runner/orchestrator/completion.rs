@@ -291,8 +291,10 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     };
     // [ORB-19680] Prompt-size price tiers key on each request's own prompt,
     // which the totals above cannot show. Codex identifies its rollout from
-    // thread.started, which can live in the redacted retained prefix after
-    // truncation; answer projection above stays on protocol_bytes().
+    // thread.started and turn.started, which can live in the redacted retained
+    // prefix after truncation. The collector excludes earlier rollout turns
+    // before assigning requests to this invocation; pricing adds their premiums
+    // to this invocation's totals. Answer projection stays on protocol_bytes().
     // Usage stays on the reduced document. Claude's and Muse's reductions
     // drop the tool frames, and Grok's streaming-json reduction keeps only
     // the end event, so the calls are read from the raw capture.

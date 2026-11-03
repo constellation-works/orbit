@@ -156,29 +156,38 @@ pub(crate) fn codex_usage_windows(
 }
 
 /// The usage of each model request in the run's rollout whose prompt may
-/// reach a prompt-size price tier, or `None` when the rollout cannot be found
-/// or read.
+/// reach a prompt-size price tier, or `None` when the rollout or the current
+/// turn's boundary cannot be read.
 ///
 /// The whole rollout is scanned, since a long session's first requests are
-/// far from its end. Codex can repeat a `token_count` without a new request
-/// (a rate-limit refresh); its `total_token_usage` has not moved, so it is
-/// skipped.
+/// far from its end. Only requests after the latest `task_started` belong to
+/// this invocation; a resumed session retains earlier turns. Codex can repeat
+/// a `token_count` without a new request (a rate-limit refresh); keep the
+/// session's running total across turn boundaries to skip those repeats.
 pub(crate) fn codex_long_prompt_requests(
     stdout: &[u8],
     codex_home: &Path,
     now: DateTime<Utc>,
 ) -> Option<Vec<TokenUsage>> {
     let thread_id = run_thread_id(stdout)?;
+    // A resume that failed before starting a turn must not claim the previous
+    // turn's requests. This frame survives in the retained capture prefix.
+    if !top_level_frames(stdout)
+        .any(|(_, frame)| frame.get("type").and_then(Value::as_str) == Some("turn.started"))
+    {
+        return None;
+    }
     let path = rollout_path(codex_home, &thread_id, now)?;
     let reader = BufReader::new(File::open(path).ok()?);
     let mut requests = Vec::new();
     let mut last_total: Option<Value> = None;
+    let mut saw_turn_start = false;
     for line in reader.split(b'\n') {
         let line = line.ok()?;
-        // Only `token_count` events matter; skip parsing every other frame.
-        if !line
-            .windows(b"token_count".len())
-            .any(|w| w == b"token_count")
+        // Skip unrelated frames, but never skip an invocation boundary.
+        if ![b"token_count".as_slice(), b"task_started".as_slice()]
+            .iter()
+            .any(|kind| line.windows(kind.len()).any(|window| window == *kind))
         {
             continue;
         }
@@ -191,8 +200,14 @@ pub(crate) fn codex_long_prompt_requests(
         let Some(payload) = frame.get("payload") else {
             continue;
         };
-        if payload.get("type").and_then(Value::as_str) != Some("token_count") {
-            continue;
+        match payload.get("type").and_then(Value::as_str) {
+            Some("task_started") => {
+                requests.clear();
+                saw_turn_start = true;
+                continue;
+            }
+            Some("token_count") => {}
+            _ => continue,
         }
         let Some(info) = payload.get("info").and_then(Value::as_object) else {
             continue;
@@ -206,10 +221,10 @@ pub(crate) fn codex_long_prompt_requests(
             .get("last_token_usage")
             .and_then(Value::as_object)
             .and_then(request_usage)
-            .filter(TokenUsage::may_reach_long_prompt_floor)
+            .filter(|usage| saw_turn_start && usage.may_reach_long_prompt_floor())
         {
             requests.push(usage);
         }
     }
-    Some(requests)
+    saw_turn_start.then_some(requests)
 }

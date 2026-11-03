@@ -38,9 +38,19 @@ including Codex terminal usage, Copilot usage events and Gemini model stats.
 Tool inputs and outputs, reasoning, conversation histories and quoted provider
 streams cannot supply counters. A complete Orbit answer envelope can declare
 usage directly or on its immediate result object; deeper result data is ignored.
+Declared counters are a compatibility fallback only when the capture contains no
+provider counters. Direct, named and model rollups take precedence, including
+explicit zeroes and counters in separate provider frames.
 Claude's terminal usage rollup takes precedence over its duplicate model map and
 retains the separate five-minute and one-hour cache creation counts. Raw Codex
 tool events remain available to invocation tracing.
+
+Codex prompt-tier evidence reads every request after the session rollout's latest
+`task_started`, retaining the running-total deduplication across resumes. Earlier
+turns never contribute premiums to the current invocation. A missing turn boundary
+or stdout `turn.started` leaves per-request usage unknown. A truncated stdout
+capture can still identify the thread and turn from its retained prefix; the
+rollout supplies all current-turn requests, including those lost from stdout.
 
 ## Provider boundary tests
 

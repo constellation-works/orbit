@@ -120,6 +120,13 @@ available. Do not infer provider usage or token cost from the requested or
 resolved crew, and do not charge deterministic workflow wrapper steps to a
 model.
 
+Provider token counters take precedence over usage declared in an answer;
+declared usage is only a fallback when provider counters are absent. Codex
+prompt-tier evidence belongs to the latest started rollout turn, so a resumed
+session does not re-charge earlier turns. Missing rollout or turn-boundary
+evidence leaves per-request usage unknown; large invocation totals alone cannot
+prove which requests incurred a premium.
+
 An explicit activity `crew` always wins. Otherwise activities with a
 `crew_config_key` draw from that pool once per run: the task pilot from
 `workflow.purpose_crews.task_pilot`, step-failure and PR conflict recovery from

@@ -765,6 +765,67 @@ fn declared_answer_usage_and_provider_model_rollups_survive() {
 }
 
 #[test]
+fn provider_usage_precedes_declared_answer_fallback() {
+    let counters = json!({"input_tokens":10, "output_tokens":2,
+        "cache_read_input_tokens":5, "cache_creation_input_tokens":7,
+        "cache_creation":{"ephemeral_5m_input_tokens":3, "ephemeral_1h_input_tokens":4}});
+    let expected = TokenUsage {
+        input: 10,
+        output: 2,
+        cache_read: 5,
+        cache_create: 3,
+        cache_create_1h: 4,
+    };
+    let mut answer = json!({"schemaVersion":1, "status":"success", "error":null,
+        "result":{"usage":counters, "transcript":{"usage":{"input_tokens":9999}}}});
+    for top_level in [false, true] {
+        if top_level {
+            answer["usage"] = counters.clone();
+        }
+        for provider in ["claude", "grok", "antigravity", "gemini", "codex"] {
+            for has_provider_usage in [true, false] {
+                let mut wrapper = match provider {
+                    "claude" => {
+                        json!({"type":"result", "result":answer.to_string(), "structured_output":answer})
+                    }
+                    "grok" => json!({"text":answer.to_string(), "stopReason":"end_turn"}),
+                    "antigravity" => json!({"status":"SUCCESS", "response":answer.to_string()}),
+                    "gemini" => json!({"response":answer.to_string()}),
+                    "codex" => {
+                        json!({"type":"item.completed", "item":{"type":"agent_message", "text":answer.to_string()}})
+                    }
+                    _ => unreachable!(),
+                };
+                if has_provider_usage && provider != "codex" {
+                    if provider == "gemini" {
+                        wrapper["stats"] = json!({"models":{"model":{"usage":counters}}});
+                    } else {
+                        wrapper["usage"] = counters.clone();
+                    }
+                }
+                let mut raw = wrapper.to_string();
+                if provider == "codex" && has_provider_usage {
+                    raw.push_str(&format!(
+                        "\n{}",
+                        json!({"type":"turn.completed", "usage":counters})
+                    ));
+                }
+                let stdout =
+                    String::from_utf8(normalize_cli_stdout(provider, raw.as_bytes()).into_owned())
+                        .unwrap();
+                let (_, _, trace) = ParsedStdout::parse(&stdout)
+                    .parse_and_validate(&execution(stdout.clone()))
+                    .unwrap();
+                assert_eq!(
+                    trace.usage, expected,
+                    "{provider}, provider counters={has_provider_usage}, envelope counters={top_level}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn claude_terminal_rollup_preserves_cache_ttl_without_counting_quotes() {
     let answer = json!({"schemaVersion": 1, "status": "success", "result": {
         "transcript": {"usage": {"input_tokens": 9999, "output_tokens": 8888}},
@@ -889,6 +950,8 @@ fn codex_rollout_keeps_each_long_prompt_request() {
     };
     let rollout = [
         json!({"type": "session_meta", "payload": {"id": "thread-a"}}).to_string(),
+        json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":"original"}})
+            .to_string(),
         token_count(300_900, 300_000, 280_000),
         // A rate-limit refresh repeats the last request.
         token_count(300_900, 300_000, 280_000),
@@ -897,10 +960,14 @@ fn codex_rollout_keeps_each_long_prompt_request() {
     .join("\n");
     std::fs::write(
         sessions.join("rollout-2026-10-29T04-00-00-thread-a.jsonl"),
-        rollout,
+        &rollout,
     )
     .unwrap();
-    let stdout = json!({"type": "thread.started", "thread_id": "thread-a"}).to_string();
+    let stdout = format!(
+        "{}\n{}",
+        json!({"type": "thread.started", "thread_id": "thread-a"}),
+        json!({"type":"turn.started"})
+    );
 
     assert_eq!(
         provider_long_prompt_requests(
@@ -917,6 +984,58 @@ fn codex_rollout_keeps_each_long_prompt_request() {
             output: 900,
             ..TokenUsage::default()
         }])
+    );
+    let path = sessions.join("rollout-2026-10-29T04-00-00-thread-a.jsonl");
+    let mut resumed = rollout.clone();
+    for (turn, total, input, cached, expected) in [
+        ("short", 352_700, 0, 0, vec![]),
+        (
+            "long",
+            653_600,
+            300_000,
+            280_000,
+            vec![TokenUsage {
+                input: 300_000,
+                cache_read: 280_000,
+                output: 900,
+                ..Default::default()
+            }],
+        ),
+        ("short-again", 654_500, 0, 0, vec![]),
+    ] {
+        resumed.push_str(&format!(
+            "\n{}\n{}\n{}",
+            json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":turn}}),
+            // A refresh of the previous turn is not a new request.
+            token_count(total - input - 900, 300_000, 280_000),
+            token_count(total, input, cached)
+        ));
+        std::fs::write(&path, &resumed).unwrap();
+        assert_eq!(
+            provider_long_prompt_requests(
+                "codex",
+                stdout.as_bytes(),
+                false,
+                Some(codex_home.path()),
+                None,
+                now
+            ),
+            Some(expected),
+            "resume {turn}"
+        );
+    }
+    std::fs::write(&path, token_count(300_900, 300_000, 280_000)).unwrap();
+    assert_eq!(
+        provider_long_prompt_requests(
+            "codex",
+            stdout.as_bytes(),
+            true,
+            Some(codex_home.path()),
+            None,
+            now
+        ),
+        None,
+        "missing turn boundary is unknown"
     );
     assert_eq!(
         provider_long_prompt_requests("grok", b"{}", true, None, None, now),
