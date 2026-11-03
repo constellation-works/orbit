@@ -190,8 +190,8 @@ impl PluginChildFixture {
         }
     }
 
-    /// `orbit --root <fixture> …`, run the way a backend descendant runs it.
-    fn orbit(&self, args: &[&str]) -> std::process::Output {
+    /// `orbit --root <fixture> …`, configured as a backend descendant.
+    fn command(&self, args: &[&str]) -> assert_cmd::Command {
         use std::os::fd::AsRawFd;
 
         let mut command = cargo_bin_cmd!("orbit");
@@ -218,7 +218,13 @@ impl PluginChildFixture {
             .arg("--root")
             .arg(&self.root)
             .args(args);
-        command.output().expect("run orbit as a plugin child")
+        command
+    }
+
+    fn orbit(&self, args: &[&str]) -> std::process::Output {
+        self.command(args)
+            .output()
+            .expect("run orbit as a plugin child")
     }
 }
 
@@ -409,4 +415,80 @@ fn an_ordinary_caller_is_not_gated_by_the_cli_surface_guard() {
             .any(|ws| ws["name"] == "ordinary-fixture-ws"),
         "workspace list must contain the fixture workspace, got: {stdout}"
     );
+}
+
+/// A remote selector must be refused before a backend descendant tries SSH,
+/// with a warning retained in the operational log as well as the callback error.
+#[test]
+fn a_plugin_child_remote_selector_is_refused_before_ssh_with_a_warning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = PluginChildFixture::new();
+    let global = fixture.base.home.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::copy(fixture.root.join("config.toml"), global.join("config.toml")).unwrap();
+    std::fs::write(
+        global.join("hosts.toml"),
+        r#"schema_version = 1
+[[hosts]]
+name = "remote"
+machine_id = "hm_1111111111111111"
+ssh = "remote-fixture"
+task_prefix = "REM"
+"#,
+    )
+    .expect("register remote host");
+    let bin = fixture.base.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let ssh = bin.join("ssh");
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\nprintf attempted > \"$SSH_SENTINEL\"\nexit 42\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sentinel = fixture.base.home.join("ssh-attempted");
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let selector = "hm_1111111111111111/ws_remote";
+    let input = serde_json::json!({"workspace": selector, "limit": 1}).to_string();
+    let output = fixture
+        .command(&["tool", "run", "orbit.task.list", "--input", &input])
+        .env("PATH", path)
+        .env("SSH_SENTINEL", &sentinel)
+        .env("RUST_LOG", "warn")
+        .output()
+        .expect("remote callback");
+    let stderr = stderr_of(&output);
+    assert!(
+        !output.status.success(),
+        "remote callback must fail: {stderr}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "remote callback attempted SSH: {stderr}"
+    );
+    let error: serde_json::Value = stderr
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap_or_else(|| panic!("callback must return a structured error: {stderr}"));
+    assert_eq!(error["code"], "policy_denied", "{stderr}");
+    let message = error["error"].as_str().unwrap();
+    assert!(
+        message.contains("cross-host callbacks are not supported from confined plugins")
+            && message.contains(selector),
+        "callback must name cause and selector: {stderr}"
+    );
+    let log = std::fs::read_to_string(global.join("state/logs/orbit.jsonl")).unwrap();
+    let warning = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|row| row["level"] == "WARN" && row["fields"]["workspace"] == selector)
+        .unwrap_or_else(|| panic!("missing callback warning: {log}"));
+    assert_eq!(warning["fields"]["plugin"], "graph");
+    assert_eq!(warning["fields"]["tool"], "orbit.task.list");
+    assert_eq!(warning["fields"]["code"], "policy_denied");
+    assert_eq!(warning["fields"]["message"], message);
 }

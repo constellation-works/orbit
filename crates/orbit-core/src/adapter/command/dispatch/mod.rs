@@ -16,7 +16,7 @@ pub use audit::{
 };
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
-pub use callback::refuse_plugin_child_cli_command;
+pub use callback::{refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback};
 #[cfg(unix)]
 pub use claimed::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use dry_run::DryRunResult;

@@ -121,6 +121,42 @@ pub fn refuse_plugin_child_cli_command(
     }
 }
 
+/// Refuse a plugin callback before the CLI delivers it to another host.
+///
+/// The caller has already resolved `selector` to a registered remote host.
+/// Callback sessions authorize local tools, not a federated SSH session with
+/// host credentials. Resolve the host-issued identity even if a descendant
+/// cleared its environment; a missing credential must not enable SSH either.
+/// Preflight has no runtime audit guard, so retain the refusal in the
+/// operational log with plugin attribution as well as returning it to the child.
+pub fn refuse_plugin_child_remote_callback(
+    global_root: &Path,
+    tool: &str,
+    selector: &str,
+) -> Result<(), OrbitError> {
+    let plugin = match resolve_plugin_callback_session(global_root)? {
+        CallbackResolution::None => return Ok(()),
+        CallbackResolution::Identified(identity) => Some(identity.provenance.name),
+        CallbackResolution::RetiredCredential(identity) => {
+            identity.map(|identity| identity.provenance.name)
+        }
+        CallbackResolution::UnidentifiedPluginChild => None,
+    };
+    let message = format!(
+        "cross-host callbacks are not supported from confined plugins; workspace selector \
+         '{selector}' names another host. Use a workspace on this host"
+    );
+    let error = OrbitError::PolicyDenied(message);
+    tracing::warn!(
+        plugin = plugin.as_deref().unwrap_or("unidentified"),
+        tool,
+        workspace = selector,
+        code = "policy_denied",
+        "{error}"
+    );
+    Err(error)
+}
+
 fn plugin_cli_surface_refused(plugin: Option<&str>, invocation: Option<&str>) -> OrbitError {
     let who = match plugin {
         Some(plugin) => format!("plugin '{plugin}'"),

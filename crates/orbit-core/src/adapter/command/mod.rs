@@ -18,8 +18,8 @@ pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
     AuditContext, DryRunResult, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
     audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
-    mark_tool_audit_recorded, refuse_plugin_child_cli_command, take_tool_audit_recorded,
-    tool_suggestion_context, trusted_mcp_audit_context,
+    mark_tool_audit_recorded, refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback,
+    take_tool_audit_recorded, tool_suggestion_context, trusted_mcp_audit_context,
 };
 #[cfg(unix)]
 pub use dispatch::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
