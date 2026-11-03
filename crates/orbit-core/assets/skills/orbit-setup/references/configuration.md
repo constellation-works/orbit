@@ -264,6 +264,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `pr.task_tag_labels`, `pr.task_type_labels` | Opt-in task labels after PR creation or reuse: exact, case-sensitive tag allowlist (array, default `[]`), and a table mapping `feature`, `bug`, `refactor`, `chore` to label names (default `{}`, e.g. `{ bug = "bug", feature = "enhancement" }`). Names must be non-empty and cannot start with `-`; unknown types are refused. Unioned over every delivered task; missing labels are created and existing labels accepted. Failures warn and are recorded in `pr_open.task_labels.applied` / `.failed` without failing the PR step. Empty settings add no commands; labels are never removed or synced after later task edits. |
 | `commit.subject_template`, `commit.body_template` | Single-task commit templates; the subject must contain `[{{task_id}}]` and keeps a 72-character budget. |
 | `commit.orchestrated_by_trailer` | Toggle Orbit's orchestration trailer (default `true`). |
+| `commit.regression_trailers` | Toggle `Fixes`, `Regression-From` and `Regression` trailers for `regression_from` relations (bool, default `true`). Set with `orbit config set commit.regression_trailers false`; verify with `orbit config get commit.regression_trailers` or `orbit config show`. |
 | `branch.name_template` | Single-task delivery branch name (default `{{prefix}}/{{task_id}}-{{hash}}`); must contain `{{task_id}}` and `{{hash}}`. Names with `..` or a leading `-` are refused. |
 
 Host pressure holds admission after high readings span ten seconds and releases
@@ -303,6 +304,132 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `operation.review_repair_cycles` are ignored with a warning; delete them.
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
+
+## Fleet notices, attention, evolution pass and failing jobs
+
+These settings are ordinary layered settings: a workspace value overrides
+the global value, and the built-in default fills the rest. Set one for a
+workspace with `orbit config set <key> <value>`, or for every workspace on
+the host with `orbit config set --global <key> <value>`. Verify any one
+with `orbit config get <key>`, and inspect the effective values with their
+sources with `orbit config show` or `orbit config show --all`. The types,
+defaults and ranges below match `orbit config keys --json` for the
+installed version; check that command before applying version-dependent
+values.
+
+### Failing-job warning: `jobs.failure_streak_warn`
+
+| Key | Type | Default | Range | What it changes |
+|---|---|---|---|---|
+| `jobs.failure_streak_warn` | integer | `5` | `0`–`1000` | Consecutive failed runs of one job at which the dashboard Jobs catalogue shows a failing badge. Display only; it never pauses, disables or changes a job. `0` turns the warning off. |
+
+```bash
+orbit config set jobs.failure_streak_warn 5
+orbit config get jobs.failure_streak_warn
+orbit config show
+```
+
+### Resident evolution pass: `resident.evolution.*`
+
+Every threshold below must be met for a capability gap to be ranked. Cost
+includes minutes plus slot minutes within the window; distinct cycle and
+mandate counts exclude entries without those identifiers. Decline
+suppression still ends early only when window cost doubles.
+
+| Key | Type | Default | Range | What it changes |
+|---|---|---|---|---|
+| `resident.evolution.window_days` | integer | `14` | `1`–`3650` | Evidence window, in days, the evolution pass ranks over. |
+| `resident.evolution.min_occurrences` | integer | `3` | `1`–`1000000` | Minimum occurrences of a gap inside the window. |
+| `resident.evolution.min_distinct_cycles` | integer | `3` | `1`–`1000000` | Minimum distinct cycles a gap appears in. |
+| `resident.evolution.min_distinct_mandates` | integer | `1` | `1`–`1000000` | Minimum distinct mandates a gap appears under. |
+| `resident.evolution.min_cost_minutes` | integer | `60` | `1`–`1000000000` | Minimum cost, in minutes, a gap must carry inside the window. |
+| `resident.evolution.max_proposals` | integer | `3` | `1`–`100` | Most design-task proposals one pass drafts. |
+| `resident.evolution.decline_suppress_days` | integer | `30` | `1`–`3650` | Days a declined proposal suppresses the same gap. |
+
+```bash
+orbit config set resident.evolution.window_days 14
+orbit config set resident.evolution.max_proposals 3
+orbit config get resident.evolution.window_days
+orbit config show --all
+```
+
+In TOML the same values live under `[resident.evolution]`, for example
+`window_days = 14`. Workspace settings override the global layer.
+
+### Fleet notices: `notice.*`
+
+Fleet notices are short, expiring, attributed announcements. The limits
+below cap their size, lifetime, volume and how they are quoted into
+managed activities.
+
+| Key | Type | Default | Range | What it changes |
+|---|---|---|---|---|
+| `notice.default_expiry_hours.incident` | integer | `72` | `1`–`720` | Hours an incident notice lasts when its post names no expiry. |
+| `notice.default_expiry_hours.maintenance` | integer | `12` | `1`–`720` | Hours a maintenance notice lasts when its post names no expiry. |
+| `notice.default_expiry_hours.info` | integer | `168` | `1`–`720` | Hours an info notice lasts when its post names no expiry. |
+| `notice.max_expiry_hours.operator` | integer | `720` | `1`–`720` | Longest expiry, in hours, an operator may give a notice of any kind. |
+| `notice.max_expiry_hours.orchestrator.incident` | integer | `168` | `1`–`720` | Longest expiry, in hours, an orchestrator may give an incident notice. |
+| `notice.max_expiry_hours.orchestrator.maintenance` | integer | `72` | `1`–`720` | Longest expiry, in hours, an orchestrator may give a maintenance notice. |
+| `notice.max_expiry_hours.orchestrator.info` | integer | `168` | `1`–`720` | Longest expiry, in hours, an orchestrator may give an info notice. |
+| `notice.max_expiry_hours.agent` | integer | `24` | `1`–`720` | Longest expiry, and the default, in hours, of a managed agent's notice. |
+| `notice.max_title_chars` | integer | `120` | `1`–`120` | Longest notice title, in characters. |
+| `notice.max_body_bytes` | integer | `4096` | `0`–`65536` | Longest notice body, in UTF-8 bytes. |
+| `notice.max_evidence` | integer | `8` | `0`–`8` | Evidence references per notice. |
+| `notice.max_open_per_workspace` | integer | `20` | `1`–`1000` | Open notices one workspace may hold, all poster classes. |
+| `notice.max_open_global_per_owner` | integer | `10` | `1`–`1000` | Open global notices across one owner host's workspaces. |
+| `notice.max_open_per_agent_task` | integer | `2` | `1`–`100` | Open notices one managed task's runs may hold. |
+| `notice.agent_posts_per_task_per_day` | integer | `5` | `1`–`1000` | Posts, corroborations included, one managed task's runs may make in 24 hours. |
+| `notice.orchestrator_posts_per_hour` | integer | `30` | `1`–`10000` | Posts one orchestrator crew may make per hour on this owner. |
+| `notice.retention_days` | integer | `30` | `1`–`3650` | Days closed and expired notices stay listable before they are purged. |
+| `notice.agent_posting` | bool | `true` | — | Managed agents may post and close their own fleet notices through their bound task. When `false`, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes. |
+| `notice.brief_delivery` | bool | `true` | — | Quote open fleet notices into opted-in managed activities' prompts as untrusted data. Independent of the MCP toolsets. |
+| `notice.brief_max_items` | integer | `5` | `1`–`50` | Most open notices one agent brief quotes. |
+| `notice.brief_body_chars` | integer | `600` | `0`–`4096` | Body characters per notice in an agent brief. |
+| `notice.brief_read_timeout_ms` | integer | `2000` | `1`–`60000` | Milliseconds a prompt build may wait reading notices before the brief says unavailable. |
+
+```bash
+orbit config set notice.max_open_per_workspace 20
+orbit config set --global notice.brief_max_items 5
+orbit config get notice.max_open_per_workspace
+orbit config get notice.brief_max_items
+orbit config show --all
+```
+
+### Attention: `attention.*`
+
+These settings bound the attention feed that reports work needing a
+human or operator. Querying attention changes none of them.
+
+| Key | Type | Default | Range | What it changes |
+|---|---|---|---|---|
+| `attention.cursor_ttl_hours` | integer | `24` | `1`–`8760` | Cursor validity, in hours, for delta polling. |
+| `attention.run_window_hours` | integer | `48` | `1`–`87600` | Failed-run lookback, in hours. |
+| `attention.run_stuck_after_minutes` | integer | `120` | `1`–`525600` | Running wall-clock bound, in minutes, after which a run counts as stuck. |
+| `attention.ci_cache_seconds` | integer | `60` | `1`–`86400` | Provider cache lifetime, in seconds, for the base-branch CI reading. |
+| `attention.source_timeout_seconds` | integer | `10` | `1`–`3600` | Per-source read deadline, in seconds. |
+| `attention.fanout_budget_seconds` | integer | `20` | `1`–`3600` | Cross-host call deadline, in seconds. |
+| `attention.per_workspace_item_cap` | integer | `200` | `1`–`10000` | Maximum candidates per workspace. |
+| `attention.age_bump_hours` | array of integer | `[24, 72]` | strictly increasing positive hours, each at most `87600` | Severity age thresholds, in hours, at which an item steps up. |
+
+```bash
+orbit config set attention.run_window_hours 48
+orbit config set attention.age_bump_hours '[24, 72]'
+orbit config get attention.run_window_hours
+orbit config get attention.age_bump_hours
+orbit config show --all
+```
+
+### Commit regression trailers: `commit.regression_trailers`
+
+| Key | Type | Default | Range | What it changes |
+|---|---|---|---|---|
+| `commit.regression_trailers` | bool | `true` | — | Add `Fixes`, `Regression-From` and `Regression` trailers for `regression_from` relations to commit messages. `Fixes` appears when the target's landed commit is resolvable. |
+
+```bash
+orbit config set commit.regression_trailers true
+orbit config get commit.regression_trailers
+orbit config show
+```
 
 ## Host capability labels
 
