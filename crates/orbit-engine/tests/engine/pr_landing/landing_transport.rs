@@ -6,7 +6,10 @@
 //! once the provider recovers. A run that still fails, on that or on a
 //! permanent refusal, records a stop with its error instead of leaving the
 //! attempt dispatched. A failed merge request is never resent: its intent
-//! stays unresolved, and the next attempt reconciles it first.
+//! stays unresolved, and the next attempt reconciles it first. A merge the
+//! provider refuses because the base moved (HTTP 405) was never applied, so
+//! the run resolves its intent as unmerged and asks again on fresh evidence,
+//! up to the same attempt ceiling `pr_complete` uses.
 use super::absent_context::{AcceptedLanding, NEW, accepted_landing, setup};
 use super::*;
 
@@ -21,6 +24,10 @@ const STATUS_READ: &str = "--json number,state,isDraft";
 const REQUIRED_READ: &str = "isRequired(pullRequestNumber";
 const MERGE_WRITE: &str = "pulls/42/merge";
 const INTENT: &str = "accepted-fixture:42";
+/// The intent id of the second merge request after one base-modified refusal.
+const RETRY_INTENT: &str = "accepted-fixture:42:2";
+const BASE_MODIFIED_405: &str =
+    "gh: Base branch was modified. Review and try the merge again. (HTTP 405)";
 
 /// One landing run with a check budget, so status reads carry a deadline and
 /// get no in-process retry from the provider adapter. The budget fits both
@@ -387,6 +394,101 @@ fn owner_landing_retries_transport_failures_and_never_leaves_a_failed_run_dispat
                 reconciled.extend(landed_steps());
                 assert_eq!(steps(&host), reconciled, "reconciled before merging again");
                 assert_eq!(mutations(&fx), "merge\n");
+            });
+        },
+    );
+}
+
+/// [ORB-21765] A merge the provider refuses because the base moved (HTTP 405,
+/// base modified) was never applied. The run resolves its intent as unmerged
+/// and asks again on fresh evidence, as `pr_complete` does, under the same
+/// attempt ceiling.
+#[test]
+fn owner_landing_retries_a_base_modified_merge_refusal_on_fresh_evidence() {
+    isolated(
+        "landing_transport::owner_landing_retries_a_base_modified_merge_refusal_on_fresh_evidence",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, MERGE_WRITE, BASE_MODIFIED_405, false);
+
+                let (outcome, waits) = land(&host);
+
+                let landed = outcome
+                    .unwrap_or_else(|error| panic!("a base-modified refusal is retried: {error}"));
+                assert_eq!(landed["phase"], "landed");
+                assert_eq!(
+                    calls(&fx, MERGE_WRITE),
+                    2,
+                    "one refused merge, then the landing merge"
+                );
+                assert_eq!(waits, [30], "one normal check poll before asking again");
+                assert_eq!(mutations(&fx), "merge\n", "only the accepted merge lands");
+                assert_eq!(
+                    steps(&host),
+                    [
+                        HandoffLandingStep::PublishIntent {
+                            intent_id: INTENT.into()
+                        },
+                        HandoffLandingStep::ResolveIntent {
+                            intent_id: INTENT.into(),
+                            merged: false,
+                        },
+                        HandoffLandingStep::PublishIntent {
+                            intent_id: RETRY_INTENT.into()
+                        },
+                        HandoffLandingStep::ResolveIntent {
+                            intent_id: RETRY_INTENT.into(),
+                            merged: true,
+                        },
+                        HandoffLandingStep::Complete,
+                    ],
+                    "the refused intent is resolved as unmerged before the retry publishes its own"
+                );
+            });
+
+            // Every request is refused: the attempt ceiling stops the landing
+            // after three refused merges, each intent resolved and none merged.
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, MERGE_WRITE, BASE_MODIFIED_405, true);
+
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("the attempt ceiling stops a persistent base race");
+                assert_eq!(
+                    calls(&fx, MERGE_WRITE),
+                    3,
+                    "three requests, then the ceiling"
+                );
+                assert_eq!(waits, [30, 30], "a poll between refused requests only");
+                assert!(mutations(&fx).is_empty(), "no merge landed");
+                let recorded = steps(&host);
+                assert_eq!(
+                    recorded.last(),
+                    Some(&HandoffLandingStep::Stop { repairable: false }),
+                    "the ceiling records a stop"
+                );
+                let stop = host
+                    .updates
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .evidence
+                    .clone();
+                assert!(stop.contains("Base branch was modified"), "{stop}");
+                let resolved = recorded
+                    .iter()
+                    .filter(|step| {
+                        matches!(
+                            step,
+                            HandoffLandingStep::ResolveIntent { merged: false, .. }
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    resolved, 3,
+                    "every refused intent is resolved before the stop"
+                );
             });
         },
     );

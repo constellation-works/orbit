@@ -14,10 +14,10 @@ use super::super::pr::{
     classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
     resolve_permitted_merge,
 };
-use super::super::pr::{diagnostics, draft_recovery};
+use super::super::pr::{ReviewedMergeOutcome, diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
 use super::checks::{CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks};
-use super::intent::LandingView;
+use super::intent::{LandingView, reconcile_intent};
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
 use super::record::{behind_base, complete, describe, hold_pr, record, refuse_pr, stop_pr};
 use super::run::{LandingBudget, LandingPass, transport_failure};
@@ -46,6 +46,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
+    // Merge requests the provider refused because the base moved, against the
+    // same ceiling pr_complete uses.
+    let mut base_modified_refusals = 0_u32;
     let mut diagnostic = json!({"pr":{"state":"not_collected"},
         "required_checks":{"state":"not_collected"}, "status_observations":0,
         "classification":{"state":"not_collected"}});
@@ -544,7 +547,18 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                         ),
                     )?);
                 }
-                let intent_id = format!("{}:{pr_number}", context.handoff_id);
+                // A refused request never reached the merge, so each request after
+                // the first carries its own intent id: the store replays a mutation
+                // it has already recorded under the same id.
+                let intent_id = if base_modified_refusals == 0 {
+                    format!("{}:{pr_number}", context.handoff_id)
+                } else {
+                    format!(
+                        "{}:{pr_number}:{}",
+                        context.handoff_id,
+                        base_modified_refusals + 1
+                    )
+                };
                 // Durable before the external mutation: a lost reply after this
                 // point is uncertainty the next attempt reconciles.
                 let head = pin
@@ -566,20 +580,58 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                         "head": head,
                     }),
                 )?;
-                intent = Some(intent_id);
+                intent = Some(intent_id.clone());
                 // The synchronous mutation carries the pinned head, so the
-                // provider itself refuses a candidate that moved.
-                host.run_private_vcs_operation(
+                // provider itself refuses a candidate that moved. A base-modified
+                // refusal comes back as a value, so the intent is resolved below.
+                let response = host.run_private_vcs_operation(
                     operations::PR_MERGE,
                     json!({
                         "pr": pr_number,
                         "strategy": capabilities.strategy.as_str(),
                         "auto": false,
                         "reviewed_head_sha": head,
+                        "report_base_modified": true,
                         "workspace_path": workspace_path,
                     }),
                 )?;
-                // Merged is what the provider reports, not what we asked for.
+                let refusal = match ReviewedMergeOutcome::from_response(&response) {
+                    // Merged is what the provider reports, not what we asked for.
+                    ReviewedMergeOutcome::Accepted { .. } => continue,
+                    ReviewedMergeOutcome::BaseModified { diagnostic: text } => text,
+                };
+                base_modified_refusals += 1;
+                tracing::warn!(
+                    pull_request = number,
+                    attempt = base_modified_refusals,
+                    "handoff_land: merge refused by a concurrent base change; re-reading the \
+                     pull request before asking again"
+                );
+                // The provider refused, so nothing merged: resolve the intent as
+                // unmerged by reading the pull request, as reconciliation does. A
+                // pull request that did merge still completes here.
+                if let Some(completed) = reconcile_intent(host, context, &intent_id, view)? {
+                    return Ok(completed);
+                }
+                intent = None;
+                if base_modified_refusals >= operations::BASE_MODIFIED_MERGE_ATTEMPTS {
+                    return Err(stop_pr(
+                        host,
+                        context,
+                        &diagnostic,
+                        false,
+                        &format!(
+                            "pull request #{pr_number} was refused {base_modified_refusals} \
+                             merge requests because the base branch was modified ({refusal}); \
+                             the attempt ceiling is reached"
+                        ),
+                    )?);
+                }
+                // Wait one normal poll, then re-read before asking again.
+                let delay =
+                    poll_interval_seconds.min(max_wait_seconds.saturating_sub(waited_seconds));
+                sleep(Duration::from_secs(delay));
+                waited_seconds = waited_seconds.saturating_add(delay);
                 continue;
             }
             // Requested already, or still waiting for required or owed checks.
