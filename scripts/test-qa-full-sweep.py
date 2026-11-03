@@ -2863,7 +2863,7 @@ def process_self_test():
                         "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
                         "q.run([" + repr(sys.executable) + ",'-c',q._HELD_WORKER,"
                         + repr(str(death_root)) + "," + repr(str(death_release)) + ","
-                        + repr(str(death_ready)) + ",'cancel'],cwd=Path(" + repr(str(temp))
+                        + repr(str(death_ready)) + ",'cancel-parent-live'],cwd=Path(" + repr(str(temp))
                         + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
             death_owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
