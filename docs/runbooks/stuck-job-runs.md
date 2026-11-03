@@ -188,10 +188,12 @@ base's own result are held as `delivery_base_checks_pending` until candidate
 recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 [delivery refusals](../CONFIG.md#delivery-refusals-are-held).
 The task keeps the state the refusing action left it in, and gate/auto parents
-pass the held child. Missing or contradictory evidence, permanent forge read
-refusals (credentials, permissions) and red candidate checks still fail. A
-provider read that errors or times out for a permanent or other non-transient
-reason, including a non-transport subprocess timeout, remains a failure;
+pass the held child. Missing or contradictory evidence and red candidate
+checks still fail. In auto-fix, a permanent required-check evidence read failure,
+including a credential or permission refusal, holds as
+`delivery_check_evidence_inconclusive` before or after a completion mutation;
+it admits neither a repair agent nor a merge. Permanent forge-read failures at
+other boundaries, including non-transport subprocess timeouts, remain failures;
 eligible transient transport failures may use the read-only recovery below.
 Transport failures that outlast it, or that it cannot take, hold as
 `delivery_forge_observation_unavailable` only before a completion mutation
@@ -780,8 +782,12 @@ authenticated retry. A transient required-check read in auto-fix after a
 completion mutation in this run or recorded in task history instead holds as
 `delivery_check_evidence_inconclusive`, allowing the next auto-fix pass to
 reread PR status and reconcile the mutation. Transport failures at other
-observation boundaries after a merge, auto-merge or rebase request still fail,
-as do credential or permission refusals. `gh`'s
+observation boundaries after a merge, auto-merge or rebase request still fail.
+A permanent required-check evidence read failure in auto-fix, including a
+credential or permission refusal, also holds as
+`delivery_check_evidence_inconclusive` before or after mutation; it admits
+neither a repair agent nor a merge. Permanent forge-read refusals at other
+boundaries still fail. `gh`'s
 `error connecting to api.github.com` counts as a transport failure.
 
 Changed task meaning, policy, candidate, review repairs, publication, ownership,
