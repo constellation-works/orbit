@@ -191,8 +191,11 @@ function buildArtifactPreview(artifact, response) {
   });
 }
 
+const ARTIFACTS_PAGE_SIZE = 25;
+
 export function buildArtifacts(task) {
   const wrap = el("div", { class: "artifacts" });
+  const units = [];
   for (const [index, artifact] of task.artifacts.entries()) {
     const path = String(artifact.path || "");
     const mediaType = String(artifact.media_type || "application/octet-stream");
@@ -261,8 +264,84 @@ export function buildArtifacts(task) {
         }
       },
     });
-    wrap.appendChild(row);
-    wrap.appendChild(preview);
+    units.push({ artifact, row, preview, search: `${path} ${mediaType}`.toLowerCase() });
   }
+  if (units.length <= ARTIFACTS_PAGE_SIZE) {
+    for (const unit of units) {
+      wrap.appendChild(unit.row);
+      wrap.appendChild(unit.preview);
+    }
+    return wrap;
+  }
+
+  // Hundreds of rows made the pane thousands of pixels tall. Only one page
+  // is in the DOM at a time; detached units stay alive (no teardown on
+  // detach) so a loaded preview, its blob URL and an in-flight read survive
+  // paging and filtering, and return exactly as left.
+  const filterId = `artifact-filter-${task.id}`;
+  const filterLabel = el("label", { class: "artifacts-filter-label", text: "Filter artifacts" });
+  filterLabel.htmlFor = filterId;
+  const filterInput = el("input", { class: "artifacts-filter", type: "search" });
+  filterInput.id = filterId;
+  filterInput.placeholder = "Filter by path or type…";
+  filterInput.setAttribute("aria-describedby", `artifact-status-${task.id}`);
+  const toolbar = el("div", { class: "artifacts-toolbar" }, [filterLabel, filterInput]);
+  const status = el("div", { class: "artifacts-status", role: "status", "aria-live": "polite" });
+  status.id = `artifact-status-${task.id}`;
+  const list = el("div", { class: "artifacts-list" });
+  const empty = el("p", { class: "field-empty artifacts-empty", text: "No artifacts match this filter." });
+  empty.hidden = true;
+  const prev = el("button", { class: "action artifacts-page-btn", type: "button", text: "Previous" });
+  const next = el("button", { class: "action artifacts-page-btn", type: "button", text: "Next" });
+  const pageLabel = el("span", { class: "artifacts-page-label", "aria-live": "polite" });
+  const pagination = el("nav", { class: "artifacts-pagination", "aria-label": "Artifact pages" }, [prev, pageLabel, next]);
+
+  let filterText = "";
+  let page = 0;
+  const render = () => {
+    const filtered = filterText
+      ? units.filter((unit) => unit.search.includes(filterText))
+      : units;
+    const pageCount = Math.max(1, Math.ceil(filtered.length / ARTIFACTS_PAGE_SIZE));
+    page = Math.min(page, pageCount - 1);
+    const start = page * ARTIFACTS_PAGE_SIZE;
+    const visible = filtered.slice(start, start + ARTIFACTS_PAGE_SIZE);
+    // replaceChildren only detaches: it never runs a preview's teardown, so
+    // blob URLs stay live and in-flight reads keep their owner.
+    list.replaceChildren(...visible.flatMap((unit) => [unit.row, unit.preview]));
+    empty.hidden = filtered.length !== 0;
+    status.textContent = filtered.length === 0
+      ? `No artifacts match this filter. ${units.length} artifacts total.`
+      : filterText
+        ? `Showing ${start + 1}–${start + visible.length} of ${filtered.length} matching artifacts (${units.length} total)`
+        : `Showing ${start + 1}–${start + visible.length} of ${units.length} artifacts`;
+    pageLabel.textContent = `Page ${page + 1} of ${pageCount}`;
+    prev.disabled = page === 0;
+    next.disabled = page >= pageCount - 1;
+    pagination.hidden = pageCount <= 1;
+  };
+  filterInput.addEventListener("input", () => {
+    filterText = filterInput.value.trim().toLowerCase();
+    page = 0;
+    render();
+  });
+  // A button that disables itself under focus drops focus to the body; hand
+  // it to the other page button so keyboard users stay in the pagination.
+  prev.addEventListener("click", () => {
+    if (page > 0) { page -= 1; render(); if (prev.disabled) next.focus(); }
+  });
+  next.addEventListener("click", () => {
+    page += 1; render(); if (next.disabled) prev.focus();
+  });
+  // Detached previews are outside this subtree when the detail retires, so
+  // the traversal in teardownNode cannot reach them: retire them here.
+  // Attached ones are left to that traversal, which runs after this.
+  wrap.teardown = () => {
+    for (const unit of units) {
+      if (!list.contains(unit.preview)) teardownNode(unit.preview);
+    }
+  };
+  wrap.append(toolbar, status, list, empty, pagination);
+  render();
   return wrap;
 }
