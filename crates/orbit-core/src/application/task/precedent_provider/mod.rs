@@ -14,6 +14,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use crate::runtime::audit::system::{self, AuditRunAttribution, SystemAuditEvent};
 
 pub use history::{decision_precedent_category, decision_precedents_from_history};
@@ -156,7 +157,7 @@ impl OrbitRuntime {
         // Normal audited dispatch sets up the plugin's existing callback
         // session and sandbox/grants. Never execute a backend directly.
         let value = self
-            .execute_tool_command_with_session_context(
+            .run_tool_command_with_session(
                 name,
                 serde_json::to_value(request).map_err(|_| PrecedentGapReason::InvalidShape)?,
                 None,

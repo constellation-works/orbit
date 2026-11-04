@@ -2,6 +2,7 @@
 //! `github.run.list`, cached per workspace and bounded by the source timeout.
 use super::sources::{AttentionCandidates, attention_reason};
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use chrono::{DateTime, Utc};
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
 use orbit_config::AttentionSettings;
@@ -96,7 +97,7 @@ fn call_provider(
         .spawn(move || {
             let result = (|| -> Result<Vec<Value>, String> {
                 let auth = runtime
-                    .execute_tool_command_with_session_context(
+                    .run_tool_command_with_session(
                         "github.auth.status",
                         json!({}),
                         None,
@@ -108,7 +109,7 @@ fn call_provider(
                     return Err("GitHub authentication missing".to_string());
                 }
                 let listed = runtime
-                    .execute_tool_command_with_session_context(
+                    .run_tool_command_with_session(
                         "github.run.list",
                         json!({"branch": branch, "limit": 100}),
                         None,

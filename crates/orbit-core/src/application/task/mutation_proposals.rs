@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 
 use super::TaskUpdateParams;
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 /// Contract label folded into every proposal idempotency key.
@@ -360,7 +361,7 @@ impl OrbitRuntime {
             return Ok(receipt);
         }
         self.record_mutation_receipt(&receipt)?;
-        let outcome = self.run_tool_with_context_and_role_and_capability(
+        let outcome = self.run_tool_with_enforcement(
             &proposal.tool,
             proposal.input.clone(),
             Role::Admin,

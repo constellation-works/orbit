@@ -53,8 +53,9 @@ use std::time::Duration;
 
 use super::candidate::stopping_candidate;
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, attach_claimed_review, attach_leaf_attribution,
-    leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
+    PullDrain, PullTransportPort, RefusedDelivery, SettleScope, attach_claimed_review,
+    attach_leaf_attribution, leaf_failure_settlement, operator_cancel_release,
+    recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
 use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
@@ -482,8 +483,8 @@ impl OrbitRuntime {
                 })
                 .collect();
         };
-        let peer = self.routed_pull_peer(transport);
-        let launcher = self.leaf_pull_launcher();
+        let peer = self.follower_pull_peer(transport);
+        let launcher = self.bound_leaf_launcher();
         let claimed_review = |run_id: &str| self.claimed_review_carry(run_id);
         let drain = PullDrain {
             jobs: self.stores().jobs(),

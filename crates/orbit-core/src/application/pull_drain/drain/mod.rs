@@ -6,11 +6,14 @@ mod reconcile;
 mod refill_pass;
 mod settlement;
 
+use std::sync::Arc;
+
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimedReviewCarry, JobRunStoreBackend,
     LocalPullAdmission, PullDestination,
 };
+use orbit_tools::DrainOwnerTransport;
 use orbit_types::workflow::BaselineRedHold;
 
 use crate::application::job::pipeline::WorkerLaunchError;
@@ -83,6 +86,19 @@ pub(crate) trait PullLauncher {
         let _ = hold;
         None
     }
+}
+
+/// The owner transport and leaf launcher a pull drain runs over, built by the
+/// adapter on `OrbitRuntime` [ORB-22004]. A drain asks for them here, so it
+/// never names the adapter's types; the composition-supplied owner route stays
+/// the adapter's to construct.
+pub(crate) trait PullTransportPort {
+    /// The follower's peer for a drain: every owner call goes over `transport`
+    /// to the owner's registered tools.
+    fn follower_pull_peer(&self, transport: Arc<dyn DrainOwnerTransport>)
+    -> Box<dyn PullPeer + '_>;
+    /// The launcher for the leaf runs a drain's claims are bound to.
+    fn bound_leaf_launcher(&self) -> Box<dyn PullLauncher + '_>;
 }
 
 /// How far a settle-only pass may carry an admission [ORB-13663].
