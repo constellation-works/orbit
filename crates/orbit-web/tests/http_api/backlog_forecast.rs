@@ -976,13 +976,63 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
 }
 
 #[test]
+fn arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals() {
+    isolated(
+        "backlog_forecast::arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 850);
+            // A spent budget cuts before the first iteration whatever the
+            // host's speed.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "0".as_ref(),
+                )],
+            );
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let forecast = &cut["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "compute_budget",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["simulation_cut"]["compute_budget_seconds"], 0);
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            // The bound that cut the run is the budget, not the generation limit.
+            assert_eq!(forecast["simulation_truncated"], 0);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+        },
+    );
+}
+
+#[test]
 fn arrivals_draining_before_the_generation_bound_stay_complete() {
     isolated(
         "backlog_forecast::arrivals_draining_before_the_generation_bound_stay_complete",
         || {
             let fixture = Fixture::new();
             busy_arrivals_fixture(&fixture, 850);
-            let server = fixture.server(false);
+            // The simulation costs well over the production wall-time budget
+            // on a host slowed by instrumentation, so this checks completion
+            // under a budget no host reaches; the budget's own cut is checked
+            // by the test above.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "3600000".as_ref(),
+                )],
+            );
             // Over 90 days this rate files past the limit, yet every run
             // drains long before using that many filings.
             let complete = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
