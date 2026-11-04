@@ -69,7 +69,7 @@ fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
 
 fn readiness_payload(payload: Value, formatter: &WaitingTaskFormatter) -> CommandOut {
     let lines = readiness_lines(&payload, formatter);
-    Ok(Payload::blocks(payload, vec![Block::text(lines.join("\n"))]).into())
+    Ok(Payload::blocks(payload, vec![Block::prose(lines.join("\n"))]).into())
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs

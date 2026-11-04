@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-11-02
-last_updated: 2026-11-02
+last_validated: 2026-11-04
+last_updated: 2026-11-04
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -26,6 +26,8 @@ The sink is resolved once at startup and answers every environment question. Not
 **Invariant:** `is_tty == false` implies `width == 0` and `color_allowed == false`. A non-terminal sink is never width-adapted or styled, regardless of what `COLUMNS` says.
 
 `width == 0` disables truncation rather than assuming 80. Assuming a width for a sink that has none produces silently truncated data in a file, which is worse than a long line.
+
+Diagnostic summary prose and table notices word-wrap to this width in terminal `table` mode, preserving explicit line breaks and indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit. Verbatim text blocks and table rows retain their existing layout. Pipes, explicit `plain`, and machine-readable modes retain unwrapped prose and notice bytes.
 
 ## 2. Mode Resolution
 

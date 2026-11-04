@@ -113,7 +113,7 @@ fn ladder_blocks(value: &Value) -> Vec<Block> {
             ));
         }
     }
-    let mut blocks = vec![Block::text(header), Block::table(table)];
+    let mut blocks = vec![Block::prose(header), Block::table(table)];
     let effort = value["effort_breakdown"]
         .as_array()
         .into_iter()
@@ -132,7 +132,7 @@ fn ladder_blocks(value: &Value) -> Vec<Block> {
             )
         })
         .collect::<Vec<_>>();
-    blocks.push(Block::text(format!(
+    blocks.push(Block::prose(format!(
         "Recorded effort ({} days): {}",
         text(&value["effort_window_days"]),
         if effort.is_empty() {
@@ -143,7 +143,7 @@ fn ladder_blocks(value: &Value) -> Vec<Block> {
     )));
 
     if !reasons.is_empty() {
-        blocks.push(Block::text(format!("\nReasons:\n{}", reasons.join("\n"))));
+        blocks.push(Block::prose(format!("\nReasons:\n{}", reasons.join("\n"))));
     }
     blocks
 }
