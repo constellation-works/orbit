@@ -67,26 +67,27 @@ stage counts, and review rebuilds still use repository build-budget slots.
 {usage-heading} {usage}
 
 Workflows:
-  auto         Drain the workspace backlog for a window; --stop ends new admissions
-  ship         Ship backlog or explicitly selected tasks through the gated task pipeline
-  task-pilot   Preflight proposed/backlog tasks and persist validated selectors
-  job          Run an arbitrary job by ID
-  agent        Invoke an agent on the host for exploration or debugging (deprecated)
+  auto                 Drain the workspace backlog for a window; --stop ends new admissions
+  ship                 Ship backlog or explicitly selected tasks through the gated task pipeline
+  task-pilot           Preflight proposed/backlog tasks and persist validated selectors
+  job                  Run an arbitrary job by ID
+  agent                Invoke an agent on the host for exploration or debugging (deprecated)
 
 Audits:
-  history      Show recent job runs filtered by job, task, state or time
-  show         Show structured state and step summary for a job run
-  logs         Print raw stdout/stderr captured for a job run
-  events       Show audit events recorded for a job run
-  trace        Show audit event parent/child trace for a job run
-  settlements  Show failure and release settlements claimed leaves sent this owner
+  history              Show recent job runs filtered by job, task, state or time
+  show                 Show structured state and step summary for a job run
+  logs                 Print raw stdout/stderr captured for a job run
+  events               Show audit events recorded for a job run
+  trace                Show audit event parent/child trace for a job run
+  settlements          Show failure and release settlements claimed leaves sent this owner
+  settlements-hydrate  Keep settled leaf run evidence from its follower (operator)
 
 Maintenance:
-  cancel       Cancel a pending or running job run
-  concurrency  Retune a running drain's admission ceiling
-  extend       Lengthen a running drain's window, and optionally retune it
-  readiness    Explain why backlog tasks are waiting in auto-drain
-  profiles     Show what each kind of delivery costs on this host, minute by minute
+  cancel               Cancel a pending or running job run
+  concurrency          Retune a running drain's admission ceiling
+  extend               Lengthen a running drain's window, and optionally retune it
+  readiness            Explain why backlog tasks are waiting in auto-drain
+  profiles             Show what each kind of delivery costs on this host, minute by minute
 
 Options:
 {options}

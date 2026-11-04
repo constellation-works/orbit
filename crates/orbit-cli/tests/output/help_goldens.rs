@@ -259,7 +259,15 @@ fn grouped_command_help_stays_aligned_without_stacked_rows() {
         ("Workflows", &["auto", "ship", "task-pilot", "job", "agent"]),
         (
             "Audits",
-            &["history", "show", "logs", "events", "trace", "settlements"],
+            &[
+                "history",
+                "show",
+                "logs",
+                "events",
+                "trace",
+                "settlements",
+                "settlements-hydrate",
+            ],
         ),
         (
             "Maintenance",
@@ -599,6 +607,52 @@ fn clap_help_wraps_to_the_terminal_width_with_a_hanging_indent() {
                     );
                 }
                 previous_indent = indent;
+            }
+        }
+    }
+}
+
+#[test]
+fn public_commands_appear_in_grouped_help() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+    for flag in ["-h", "--help"] {
+        for (args, group, names) in [
+            (&[][..], "Environment", &["application"][..]),
+            (&[][..], "Observe", &["attention"][..]),
+            (&["run"][..], "Audits", &["settlements-hydrate"][..]),
+        ] {
+            let mut command = cargo_bin_cmd!("orbit");
+            test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let output = command
+                .current_dir(&work)
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .args(args)
+                .arg(flag)
+                .output()
+                .expect("run help");
+            assert!(output.status.success());
+            let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+            let section = help
+                .split_once(&format!("{group}:\n"))
+                .expect("group")
+                .1
+                .split("\n\n")
+                .next()
+                .expect("rows");
+            for name in names {
+                assert!(
+                    section
+                        .lines()
+                        .any(|line| line.split_whitespace().next() == Some(name)),
+                    "{name} missing from {group} in {flag}: {section}"
+                );
             }
         }
     }
