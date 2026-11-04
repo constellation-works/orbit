@@ -358,8 +358,13 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-related-evidence .codebase-task-link { display: block; padding: 3px 0; font-family: inherit; overflow-wrap: anywhere; }
 
 /* Coupling & locks. */
+/* Align bounded previews; expanded lists keep their own natural height. */
+.panel > .body.codebase-body[data-view="coupling"]:not(:has(.codebase-list-toggle[aria-expanded="true"])) { align-items: stretch; }
 .codebase-body > .codebase-pairs,
-.codebase-body > .codebase-locks { flex: 1 1 480px; }
+.codebase-body > .codebase-locks { flex: 1 1 480px; display: flex; flex-direction: column; }
+.codebase-list-footer { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding: 12px 16px 14px; }
+.codebase-list-footer:empty { display: none; }
+.codebase-list-disclosure { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .codebase-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-dim); cursor: pointer; }
 .codebase-check { width: 16px; height: 16px; accent-color: var(--accent); }
 .codebase-pair-row,
@@ -413,7 +418,7 @@ td.codebase-empty { padding: 16px 14px; }
   .codebase-search { flex-basis: 100%; }
   .codebase-pair-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .codebase-pair-figure { width: auto; align-items: flex-start; }
-  .codebase-box-head, .codebase-box-body, .codebase-task, .codebase-pair-row, .codebase-release-row, .codebase-lock-row { padding-left: 12px; padding-right: 12px; }
+  .codebase-box-head, .codebase-box-body, .codebase-task, .codebase-pair-row, .codebase-release-row, .codebase-lock-row, .codebase-list-footer { padding-left: 12px; padding-right: 12px; }
 }
 
 /* Reliability > Tools summary: one column of cards. On a wide screen the
