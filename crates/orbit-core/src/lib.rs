@@ -103,6 +103,9 @@ pub mod test_support {
     pub use crate::application::notice::test_support::with_notice_post_time;
     pub use crate::application::resident::with_resident_cycle_admission_checkpoint;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
+    /// Replace the backlog forecast's wall-time budget for a scenario with
+    /// arrivals, in milliseconds, in an isolated test's server child.
+    pub use crate::application::task::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
     pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{
         with_decision_answer_checkpoint, with_decision_dkim_resolver,

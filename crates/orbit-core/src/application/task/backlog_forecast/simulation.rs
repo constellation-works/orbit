@@ -16,6 +16,25 @@ use std::time::{Duration, Instant};
 /// use before it is cut. The dashboard abandons a read at 30 seconds, and
 /// serializing and scoring what follows the simulation need the margin.
 pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
+
+/// Milliseconds an isolated test fixture's server substitutes for
+/// [`ARRIVALS_COMPUTE_BUDGET`]. Only dev-dependency builds with `test-support`
+/// recognize this variable.
+#[cfg(feature = "test-support")]
+pub const COMPUTE_BUDGET_ENV: &str = "ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS";
+
+/// The wall-time budget of a scenario with arrivals: [`ARRIVALS_COMPUTE_BUDGET`]
+/// unless a test fixture substituted another through [`COMPUTE_BUDGET_ENV`].
+pub(super) fn arrivals_compute_budget() -> Duration {
+    #[cfg(feature = "test-support")]
+    if let Some(millis) = std::env::var(COMPUTE_BUDGET_ENV)
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
+        return Duration::from_millis(millis);
+    }
+    ARRIVALS_COMPUTE_BUDGET
+}
 /// Nodes the arrival stream first draws, growing by [`ARRIVAL_BATCH_GROWTH`]
 /// each time a drain outruns them.
 const FIRST_ARRIVAL_BATCH: usize = 64;
@@ -422,7 +441,7 @@ impl Outcome {
                 "iterations": ITERATIONS,
                 "iterations_completed": completed,
                 "generated_limit": rework::MAX_GENERATED,
-                "compute_budget_seconds": ARRIVALS_COMPUTE_BUDGET.as_secs(),
+                "compute_budget_seconds": arrivals_compute_budget().as_secs(),
             });
         }
         result
