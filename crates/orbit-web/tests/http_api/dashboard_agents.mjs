@@ -176,8 +176,28 @@ window.history = history;
 const pending = [];
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => payload, text: async () => JSON.stringify(payload) });
 const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
+let clockNow = Date.now();
+let timerId = 0;
+const timers = new Map();
+const advanceClock = ms => {
+  const until = clockNow + ms;
+  while (true) {
+    const next = [...timers].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next) break;
+    clockNow = next[1].at;
+    timers.delete(next[0]);
+    next[1].callback();
+  }
+  clockNow = until;
+};
+class ClockDate extends Date {
+  constructor(...args) { super(...(args.length ? args : [clockNow])); }
+  static now() { return clockNow; }
+}
 const context = vm.createContext({
-  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, history, Node, Intl,
+  URLSearchParams, URL, AbortController, console, Date: ClockDate,
+  setTimeout: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, at: clockNow + ms }); return id; },
+  clearTimeout: id => timers.delete(id), fetch, document, window, history, Node, Intl,
   requestAnimationFrame: fn => fn(), HashChangeEvent: class { constructor(type) { this.type = type; } },
 });
 const modules = new Map();
@@ -541,7 +561,7 @@ takeAll();
 // Fixtures are placed relative to now, so each sits clearly inside or outside
 // its cache window whenever the suite runs.
 const MINUTE = 60_000;
-const ago = ms => new Date(Date.now() - ms).toISOString();
+const ago = ms => new Date(clockNow - ms).toISOString();
 const withoutKeys = (payload, ...keys) => Object.fromEntries(Object.entries(payload).filter(([key]) => !keys.includes(key)));
 const scanned = (role, computedAt, ttl = 300) => ({
   ...(role === 'orchestrators' ? orchestrators(computedAt) : { ...header(role, computedAt), fleet_average: null, terms: TERMS.slice(0, 2), rows: [] }),
@@ -619,12 +639,59 @@ assert.equal(common.getWorkspaceRevision(), revisionBefore, 'the refresh changes
 assert.equal(rankingRows().length, 3, 'the ranks render after the newer scan');
 takeAll();
 
+// Expiry belongs to the retained scan, independent of the next request.
+for (const refresh of ['none', 'pending', 'failed']) {
+  await loadScan('orchestrators', everyRole(ago(0), 300));
+  const ranking = part('ranking');
+  const detail = part('detail');
+  let loading;
+  let requests;
+  if (refresh !== 'none') {
+    loading = agents.fetchAndRenderAgents();
+    requests = takeAll();
+    if (refresh === 'failed') {
+      answer(requests, () => response({ error: 'Scan unavailable' }, 503));
+      await assert.rejects(loading);
+    }
+  }
+  advanceClock(300_001);
+  const scan = byId['agents-meta'].querySelector('.agents-scan');
+  const note = view().children.find(node => node.dataset.panelStatus);
+  assert.equal(scan.dataset.freshness, 'stale', `${refresh}: a retained scan expires without a successful response`);
+  assert.match(scan.textContent, /5 min ago/, `${refresh}: the retained scan age advances`);
+  assert.equal(part('ranking'), ranking, `${refresh}: expiry preserves the ranking DOM`);
+  assert.equal(part('detail'), detail, `${refresh}: expiry preserves the selected detail DOM`);
+  assert.equal(scan.getAttribute('role'), 'status', 'expiry has an accessible status');
+  assert.equal(scan.getAttribute('aria-live'), 'polite');
+  assert.equal(note.getAttribute('aria-live'), 'polite');
+  assert.doesNotMatch(note.textContent, /Scan current/, 'the panel never retains a contradictory current claim');
+  if (refresh === 'failed') assert.match(note.textContent, /Refresh failed/, 'expiry preserves the request error');
+  if (refresh === 'pending') {
+    assert.match(note.textContent, /Refreshing/, 'expiry preserves the pending request status');
+    answer(requests, url => response(url.pathname.endsWith('/attribution') ? attribution : { ...scanned(url.pathname.split('/')[3], ago(0)), requested_window: url.searchParams.get('window') }));
+    await loading;
+  }
+  const renewed = await loadScan('orchestrators', everyRole(ago(0)));
+  assert.equal(renewed.scan.dataset.freshness, 'fresh', 'a newer response restores current status');
+  advanceClock(1);
+  assert.equal(renewed.scan.dataset.freshness, 'fresh', 'the superseded expiry cannot age a newer response');
+  takeAll();
+}
+
+// A newer response owns the timer even when the old scan was about to expire.
+await loadScan('orchestrators', everyRole(ago(299_000)));
+const replacement = await loadScan('orchestrators', everyRole(ago(0)));
+advanceClock(1_001);
+assert.equal(replacement.scan.dataset.freshness, 'fresh', 'the old deadline cannot expire the replacement scan');
+
 // The aggregate view has no workspace to rank.
 common.setWorkspace('');
 await agents.fetchAndRenderAgents();
 assert.equal(view().textContent, common.AGGREGATE_PANEL_PLACEHOLDER);
 assert.equal(byId['agents-count'].textContent, '—');
 assert.equal(pending.length, 0);
+advanceClock(60_000);
+assert.equal(byId['agents-meta'].textContent, '', 'workspace reset discards the retained scan timer');
 common.setWorkspace('ws-a');
 
 // Router: `#analytics/orchestrators` and old `#agents/<role>` open

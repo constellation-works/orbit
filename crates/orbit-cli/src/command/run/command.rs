@@ -25,8 +25,10 @@ const RUN_AFTER_HELP: &str = "\
 Examples:
   orbit run auto --for 2h --concurrency 8
   orbit run ship <task_id>
+  orbit run job <job_id> [--input key=value] [--json]
   orbit run history --state failed --since 24h
   orbit run show <run_id>
+  orbit run cancel <run_id> --confirm
 
 `orbit run <COMMAND> -h` lists a command's flags. Drain admission, concurrency
 and window rules: installed orbit-orchestrate skill `references/orchestration.md`.
