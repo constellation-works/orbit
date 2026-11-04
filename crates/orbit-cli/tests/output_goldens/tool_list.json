@@ -3000,7 +3000,7 @@
       },
       {
         "name": "limit",
-        "description": "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.",
+        "description": "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing.",
         "param_type": "integer",
         "required": false
       },
