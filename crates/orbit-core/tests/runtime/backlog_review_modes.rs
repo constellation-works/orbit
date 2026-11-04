@@ -300,6 +300,107 @@ fn exempt_step(runtime: &OrbitRuntime, run_id: &str) {
         .unwrap();
 }
 
+fn forecast_riskiness_preserves_observation_timestamps() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime("off");
+    for _ in 0..5 {
+        delivery(&runtime, ReviewTiming::None, 1);
+    }
+    let pending_id = pending(&runtime, TaskComplexity::Medium, "sample");
+    let result = runtime
+        .backlog_forecast(Default::default(), None, None)
+        .unwrap();
+    let predictions = result["forecast"]["task_predictions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let prediction = predictions
+        .iter()
+        .find(|row| row["id"] == pending_id)
+        .unwrap_or_else(|| panic!("missing prediction for {pending_id}: {result}"))
+        .clone();
+    let riskiness = &prediction["riskiness"];
+    for field in ["since", "observed_through"] {
+        let raw = riskiness[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("riskiness.{field} must be a string: {riskiness}"));
+        assert!(
+            raw.contains('T'),
+            "riskiness.{field} must retain the RFC3339 instant, not a date-only string \
+             ({raw}): {prediction}"
+        );
+        chrono::DateTime::parse_from_rfc3339(raw).unwrap_or_else(|_| {
+            panic!("riskiness.{field} must parse as RFC3339 ({raw}): {prediction}")
+        });
+    }
+    let since = chrono::DateTime::parse_from_rfc3339(riskiness["since"].as_str().unwrap()).unwrap();
+    let observed_through =
+        chrono::DateTime::parse_from_rfc3339(riskiness["observed_through"].as_str().unwrap())
+            .unwrap();
+    assert!(
+        since < observed_through,
+        "the observation window must advance: {riskiness}"
+    );
+    // The window is a rolling interval, not day-aligned: its length matches
+    // the configured window within scan skew, not a calendar boundary.
+    let window_days = riskiness["window_days"].as_u64().unwrap() as f64;
+    let window_hours = (observed_through - since).num_seconds() as f64 / 3600.0;
+    assert!(
+        (window_hours - window_days * 24.0).abs() < 1.0,
+        "the window must span window_days ({window_days}): {riskiness}"
+    );
+    let scan_age = (Utc::now() - observed_through.with_timezone(&Utc))
+        .num_seconds()
+        .abs();
+    assert!(
+        scan_age < 3600,
+        "observed_through must be the scan time: {riskiness}"
+    );
+    // The stored tasks keep the same exact window the live forecast serves.
+    let stored: Value =
+        serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();
+    let stored_row = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == pending_id)
+        .unwrap_or_else(|| panic!("missing stored task for {pending_id}: {stored}"))
+        .clone();
+    assert_eq!(
+        stored_row["riskiness"]["since"], riskiness["since"],
+        "stored and live riskiness must share the estimator window: {stored_row} vs {prediction}"
+    );
+    assert_eq!(
+        stored_row["riskiness"]["observed_through"], riskiness["observed_through"],
+        "stored and live riskiness must share the estimator window: {stored_row} vs {prediction}"
+    );
+    // The task API reads the same estimator shape: identical fields and a
+    // window from the same scan, within clock skew between the two scans.
+    let task = runtime.get_task(&pending_id).unwrap();
+    let estimated = runtime.task_riskiness_model().unwrap().estimate(&task);
+    assert_eq!(
+        estimated.window_days as u64,
+        riskiness["window_days"].as_u64().unwrap(),
+        "forecast and task API must share the estimator window: {estimated:?} vs {prediction}"
+    );
+    for (field, expected_raw) in [
+        ("since", estimated.since.as_str()),
+        ("observed_through", estimated.observed_through.as_str()),
+    ] {
+        let live = chrono::DateTime::parse_from_rfc3339(riskiness[field].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        let expected = chrono::DateTime::parse_from_rfc3339(expected_raw)
+            .unwrap()
+            .with_timezone(&Utc);
+        let skew = (live - expected).num_seconds().abs();
+        assert!(
+            skew < 3600,
+            "riskiness.{field} must track the estimator scan ({expected_raw}): {prediction}"
+        );
+    }
+}
+
 fn forecast(runtime: &OrbitRuntime) -> Value {
     let mut forecast = runtime
         .backlog_forecast(Default::default(), Some(1), None)
@@ -737,6 +838,7 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
 
 crate::scenario_table!(
     review_modes,
+    forecast_riskiness_preserves_observation_timestamps,
     scheduled_forecast_starts_at_or_after_not_before,
     review_policy_selects_observed_delivery_distribution,
     thin_cells_preserve_mode_before_borrowing_pooled_history,
