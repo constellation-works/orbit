@@ -1788,6 +1788,45 @@ try {
   await triggerPage.setViewportSize({ width: 375, height: 812 });
   await triggerPage.locator('.schedule-editor').scrollIntoViewIfNeeded();
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-trigger-editor-dark-375.png'), animations: 'disabled' });
+  await triggerPage.evaluate(() => globalThis.renderRoutineTimelineCollisionFixture());
+  const captureRoutineTimeline = async (width) => {
+    await triggerPage.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+    await triggerPage.waitForFunction(() => {
+      const track = document.querySelector('.operation-timeline-track');
+      return track && track.dataset.labelLayoutWidth === String(track.clientWidth);
+    }, undefined, { timeout: 5000 });
+    const layout = await triggerPage.evaluate(() => {
+      const track = document.querySelector('.operation-timeline-track');
+      const trackRect = track.getBoundingClientRect();
+      const labels = [...track.querySelectorAll('.operation-timeline-label')].map(label => {
+        const rect = label.getBoundingClientRect();
+        return { text: label.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, lineBoxes: label.getClientRects().length };
+      });
+      const overlaps = [];
+      for (let left = 0; left < labels.length; left += 1) {
+        for (let right = left + 1; right < labels.length; right += 1) {
+          const a = labels[left], b = labels[right];
+          if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push([a.text, b.text]);
+        }
+      }
+      return {
+        width: window.innerWidth,
+        trackWidth: track.clientWidth,
+        labels,
+        overlaps,
+        clipped: labels.filter(label => label.left < trackRect.left - 0.5 || label.right > trackRect.right + 0.5).map(label => label.text),
+        positions: [...track.querySelectorAll('.operation-timeline-tick')].map(tick => Number.parseFloat(tick.style.left)),
+      };
+    });
+    if (layout.labels.length !== 4 || layout.labels.some(label => label.lineBoxes !== 1) || layout.overlaps.length || layout.clipped.length || layout.positions[0] > 0.1 || layout.positions.at(-1) < 98) {
+      throw new Error(`Routine timeline labels overlap or clip at ${width}px: ${JSON.stringify(layout)}`);
+    }
+    await triggerPage.locator('.operation-timeline').screenshot({
+      path: path.join(evidence, `timeline-collisions-dark-${width}.png`), animations: 'disabled',
+    });
+  };
+  await captureRoutineTimeline(1440);
+  await captureRoutineTimeline(375);
   // ORB-18356: an open editor keeps its observed schedule/trigger after a
   // background refresh and opening another editor; a stale save preserves the draft.
   const stalePage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });

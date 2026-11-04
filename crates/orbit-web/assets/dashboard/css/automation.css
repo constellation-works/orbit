@@ -274,20 +274,14 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-timeline-key::before { content: ""; width: 8px; height: 8px; background: var(--border); }
 .operation-timeline-key.fires::before { background: var(--accent); }
 .operation-timeline-track { position: relative; height: 39px; margin: 0 56px 0 6px; }
-.operation-timeline-track.rows-2 { height: 54px; }
-.operation-timeline-track.rows-3 { height: 69px; }
-.operation-timeline-track.rows-4 { height: 84px; }
 .operation-timeline-axis { position: absolute; left: 0; right: 0; top: 6px; height: 1px; background: var(--border); }
 .operation-timeline-tick {
-  position: absolute; top: 0; transform: translateX(-50%);
+  position: absolute; top: 0; width: max-content; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
-.operation-timeline-tick.row-1 .operation-timeline-label { margin-top: 15px; }
-.operation-timeline-tick.row-2 .operation-timeline-label { margin-top: 30px; }
-.operation-timeline-tick.row-3 .operation-timeline-label { margin-top: 45px; }
 .operation-timeline-mark { width: 2px; height: 14px; background: var(--border); }
 .operation-timeline-tick.fires .operation-timeline-mark { background: var(--accent); }
-.operation-timeline-label { color: var(--fg-mute); font-size: 10px; white-space: nowrap; }
+.operation-timeline-label { color: var(--fg-mute); font-size: 10px; text-align: center; white-space: normal; overflow-wrap: anywhere; }
 .operation-timeline-tick.fires .operation-timeline-label { color: var(--fg); }
 .operation-running { margin-bottom: 12px; }
 .operation-running-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--fg-dim); font: 11px var(--font-sans); }
