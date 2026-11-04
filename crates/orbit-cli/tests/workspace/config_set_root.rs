@@ -92,6 +92,101 @@ impl Fixture {
 }
 
 #[test]
+fn unknown_config_keys_offer_bounded_recovery_without_writes() {
+    if crate::isolated_test::run_in_child(
+        "config_set_root::unknown_config_keys_offer_bounded_recovery_without_writes",
+    ) {
+        return;
+    }
+    let fixture = Fixture::layered();
+    let root = fixture.root.to_string_lossy().into_owned();
+    let workspace = fixture.repo.join(".orbit/config.toml");
+    let before = (
+        fs::read(fixture.global_config()).unwrap(),
+        fs::read(&workspace).unwrap(),
+    );
+    for key in ["workflow.base_branc", "not_a_config_key", "semantic.model"] {
+        for verb in ["get", "set"] {
+            for json in [true, false] {
+                let mut args = vec!["--root", &root, "config", verb, key];
+                if verb == "set" {
+                    args.extend(["x", "--global"]);
+                }
+                if json {
+                    args.push("--json");
+                }
+                let output = fixture.orbit(&args).failure().get_output().clone();
+                assert!(output.stdout.is_empty());
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if json {
+                    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                    assert_eq!(error["code"], "invalid_input");
+                    if key == "workflow.base_branc" {
+                        let suggestions = error["did_you_mean"].as_array().unwrap();
+                        assert_eq!(suggestions.first().unwrap(), "workflow.base_branch");
+                        assert!(suggestions.len() <= 3, "{error}");
+                    } else {
+                        assert!(error.get("did_you_mean").is_none(), "{error}");
+                    }
+                } else if key != "semantic.model" {
+                    assert!(stderr.contains("orbit config keys"), "{stderr}");
+                    if key == "workflow.base_branc" {
+                        assert!(stderr.contains("workflow.base_branch"), "{stderr}");
+                    }
+                }
+                if key == "semantic.model" {
+                    let migration = orbit_config::admit_config_key(key).unwrap_err().to_string();
+                    if json {
+                        let error: serde_json::Value =
+                            serde_json::from_slice(&output.stderr).unwrap();
+                        assert_eq!(error["error"], migration);
+                    } else {
+                        assert!(stderr.contains(&migration), "{stderr}");
+                        assert!(!stderr.contains("orbit config keys"), "{stderr}");
+                    }
+                }
+                assert_eq!(
+                    (
+                        fs::read(fixture.global_config()).unwrap(),
+                        fs::read(&workspace).unwrap(),
+                    ),
+                    before,
+                    "refused {args:?} must preserve both config layers"
+                );
+            }
+        }
+    }
+    fixture
+        .orbit(&["--root", &root, "config", "keys"])
+        .success();
+    fixture
+        .orbit(&[
+            "--root",
+            &root,
+            "config",
+            "set",
+            "workflow.base_branch",
+            "recovery-check",
+            "--global",
+        ])
+        .success();
+    let output = fixture
+        .orbit(&[
+            "--root",
+            &root,
+            "config",
+            "get",
+            "workflow.base_branch",
+            "--json",
+        ])
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["value"], "recovery-check");
+}
+
+#[test]
 fn config_set_under_root_refuses_without_workspace_layer_and_names_global() {
     let fixture = Fixture::initialized_with_workspace();
     let root = fixture.root.to_string_lossy().into_owned();
