@@ -296,7 +296,10 @@ impl OrbitRuntime {
     }
 
     /// Raise, or return the open, grant request for exactly this addition.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument feeds a different field of the stored grant request and its history: rights, workspaces, the verbatim quote, the relay caller and the history writer"
+    )]
     fn raise_resident_grant_request(
         &self,
         task: &orbit_types::task::Task,
