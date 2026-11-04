@@ -758,6 +758,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             "claim_handoff" => json!({ "decision": "handed_off" }),
             "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
             "visual_capture" => json!({ "applies": false, "captures": [] }),
+            "visual_recapture" => json!({ "applies": false, "resolved": [] }),
             "visual_review_prepare" => {
                 json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
             }
