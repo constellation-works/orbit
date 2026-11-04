@@ -106,6 +106,7 @@ pub fn recorded_tool_calls(provider: &str, stdout: &[u8]) -> Option<Vec<ToolCall
         "claude" => claude::recorded_claude_tool_calls(stdout),
         "muse" => muse::recorded_muse_tool_calls(stdout),
         "grok" => grok::recorded_grok_tool_calls(stdout),
+        "antigravity" | "agy" | "gemini" => antigravity::recorded_antigravity_tool_calls(stdout),
         _ => None,
     }
 }
