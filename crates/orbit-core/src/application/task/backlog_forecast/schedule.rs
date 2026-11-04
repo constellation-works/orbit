@@ -21,11 +21,12 @@
 //! Under resource fit [ORB-18689] the pass also asks gap fit, which prices
 //! each running task's profile by the hours since its admission (an
 //! in-progress task's age at t=0 included); a pass it held while a slot was
-//! free is retried as the running profiles age. Pure computation: no store,
-//! clock or filesystem access.
+//! free is retried as the running profiles age. Pure computation: no store or
+//! filesystem access, and the clock is read only against a caller's deadline.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::time::Instant;
 
 use crate::application::admission::forecast::{
     ForecastAdmission, ForecastPassScratch, ForecastTaskSet, ForecastWait,
@@ -40,6 +41,8 @@ use super::rework::ForecastGeneratedNode;
 pub(super) const HORIZON_HOURS: f64 = 90.0 * 24.0;
 /// Events one simulated drain may process before it counts as truncated.
 const MAX_EVENTS: usize = 100_000;
+/// Events between checks of a scenario's deadline.
+const DEADLINE_CHECK_EVENTS: usize = 256;
 /// One summed wait per [`ForecastWait::ALL`] reason.
 pub(super) const WAITS: usize = ForecastWait::ALL.len();
 
@@ -59,6 +62,10 @@ pub(super) struct Scenario<'a> {
     pub(super) initial: usize,
     /// `included` in dependency order.
     topological: Vec<usize>,
+    /// Simulated hours up to which `generated` holds every exogenous filing.
+    pub(super) known_until: f64,
+    /// When to give up on this drain, if ever.
+    pub(super) deadline: Option<Instant>,
 }
 
 impl<'a> Scenario<'a> {
@@ -106,12 +113,24 @@ impl<'a> Scenario<'a> {
             generated: &[],
             initial: len,
             topological,
+            known_until: f64::INFINITY,
+            deadline: None,
         }
     }
 }
 
+/// Why a simulated drain stopped before reaching any result.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DrainStop {
+    /// It had not drained when it ran out of drawn filings.
+    ArrivalsOutrun,
+    /// The scenario's deadline passed.
+    Deadline,
+}
+
 /// What one simulated drain did.
 pub(super) struct Run {
+    pub(super) stop: Option<DrainStop>,
     /// Hours until everything finished; `None` past the horizon, when
     /// truncated, or without hours to draw.
     pub(super) drained: Option<f64>,
@@ -320,6 +339,7 @@ pub(super) fn simulate_drain(
     let included: &[bool] = &scenario.included;
     let scheduled = move || (0..hours.len()).filter(move |index| included[*index]);
     let unavailable = Run {
+        stop: None,
         drained: None,
         critical_path: None,
         parallelism: None,
@@ -497,6 +517,22 @@ pub(super) fn simulate_drain(
             .min(recheck)
             .min(state.returns.peek().map_or(f64::INFINITY, |end| end.0))
             .min(state.filings.peek().map_or(f64::INFINITY, |end| end.0));
+        if scenario.known_until.is_finite() && next >= scenario.known_until {
+            return Run {
+                stop: Some(DrainStop::ArrivalsOutrun),
+                ..unavailable
+            };
+        }
+        if events.is_multiple_of(DEADLINE_CHECK_EVENTS)
+            && scenario
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Run {
+                stop: Some(DrainStop::Deadline),
+                ..unavailable
+            };
+        }
         let until = next.min(HORIZON_HOURS);
         let span = (until - at).max(0.0);
         occupied += running as f64 * span;
@@ -586,6 +622,7 @@ pub(super) fn simulate_drain(
         };
     }
     Run {
+        stop: None,
         drained,
         critical_path: critical_path(scenario, scripts, state),
         parallelism: Some(if length > 0.0 { occupied / length } else { 0.0 }),

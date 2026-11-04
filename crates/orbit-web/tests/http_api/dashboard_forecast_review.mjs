@@ -283,6 +283,31 @@ assert.deepEqual(coverageRow('History with unknown review'), { text: '0', warn: 
 assert.ok(supported.includes('Medium · Before landing · mode kept'), `the tasks table names complexity and review assumption per task: ${supported}`);
 for (const column of ['Task', 'Status', 'Starts in', 'Work hours', 'Cost', 'Finishes']) assert.ok(headers().includes(column), `the tasks table has ${column}: ${headers().join(', ')}`);
 
+// A with-arrivals scenario cut at a bound names that bound and shows no totals,
+// whichever bound fired, and not as a regression-history gap.
+for (const [reason, expected] of [
+  ['generated_limit', 'filed 10,000 new tasks'],
+  ['event_limit', 'limit on scheduling events'],
+  ['compute_budget', '20-second limit'],
+]) {
+  const unknown = { p50: null, p90: null };
+  const cut = payload({ tasks: [task({ id: 'ORB-CUT', title: 'Cut scenario' })] });
+  cut.inputs.arrivals = true;
+  Object.assign(cut.forecast, {
+    time_to_drain_hours: unknown, usd: unknown, tokens: unknown, effective_parallelism: unknown, critical_path_hours: unknown,
+    drain_probability: null, completion_probability: null, not_expected_to_drain: null, by_complexity: [],
+    unavailable: { simulation_cut: true, risk_unestimated: false, regression_history_missing: false, arrival_conflict_unknown: false },
+    simulation_cut: { reason, iterations: 1000, iterations_completed: 0, generated_limit: 10000, compute_budget_seconds: 20 },
+  });
+  await render(cut);
+  const warning = body().querySelector('.fc-unavailable');
+  assert.equal(warning?.dataset.forecastReason, 'simulation_cut', `a ${reason} cut warns: ${text()}`);
+  assert.ok(warning.textContent.startsWith('No forecast — '), `a ${reason} cut shows no figures: ${warning.textContent}`);
+  assert.ok(warning.textContent.includes(expected), `a ${reason} cut names its bound: ${warning.textContent}`);
+  assert.ok(warning.textContent.includes('No arrivals'), `a ${reason} cut points at the readable scenario: ${warning.textContent}`);
+  assert.ok(!warning.textContent.includes('regression'), `a ${reason} cut is not a regression gap: ${warning.textContent}`);
+}
+
 await render(payload({
   coverage: { thin_cell_fallbacks: 1, review_mode_fallbacks: 1 },
   basis: { mode_pooled_cell: 1, review_workspace: 1 },

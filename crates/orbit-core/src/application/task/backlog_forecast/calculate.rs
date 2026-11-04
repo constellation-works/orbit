@@ -40,6 +40,7 @@ pub(super) fn calculate_backlog_forecast(
         &prepared.rework,
         options.arrivals.then_some(&prepared.arrival_rates),
         &correction,
+        preparation_started + simulation::ARRIVALS_COMPUTE_BUDGET,
     );
     let simulation_ms = simulation_started.elapsed().as_secs_f64() * 1000.0;
     let items = &prepared.items;
