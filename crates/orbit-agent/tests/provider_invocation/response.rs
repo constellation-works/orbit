@@ -1395,6 +1395,136 @@ fn grok_malformed_stream_fails_closed_across_projection_and_telemetry() {
     assert!(!format!("{:?}", calls).contains("GROK_PATCH_SECRET"));
 }
 
+// [ORB-21951] A real `grok` 1.0.70 `streaming-json` capture interleaves
+// `available_commands` frames with text chunks and reports each tool call
+// twice (`tool_call`, then `tool_call_update` with a null `rawOutput` before
+// the completed one). The recorded calls survive through the completion
+// projection, including the `search_replace` edit a first-edit score needs.
+#[test]
+fn grok_real_stream_shape_records_read_and_edit_calls() {
+    let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+    let raw = [
+        json!({"type": "available_commands", "tools": ["read_file", "search_replace"], "commands": []}).to_string(),
+        json!({"type": "text", "data": envelope}).to_string(),
+        json!({"type": "usage", "usage": {"input_tokens": 9999, "output_tokens": 8888}, "signature": "sig"}).to_string(),
+        json!({"type": "tool_call", "toolCallId": "call-1", "title": "read_file", "kind": "read", "status": "pending", "toolName": "read_file", "rawInput": {"target_file": "probe.txt"}, "content": [], "locations": []}).to_string(),
+        json!({"type": "tool_call_update", "toolCallId": "call-1", "status": null, "content": [], "rawOutput": null, "locations": [{"path": "probe.txt"}]}).to_string(),
+        json!({"type": "tool_call_update", "toolCallId": "call-1", "status": "completed", "content": [], "rawOutput": {"type": "ReadFile", "FileContent": {"content": "hello"}}}).to_string(),
+        json!({"type": "tool_call", "toolCallId": "call-2", "title": "search_replace", "kind": "edit", "status": "pending", "toolName": "search_replace", "rawInput": {"path": "probe.txt"}}).to_string(),
+        json!({"type": "end", "stopReason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 2}, "total_cost_usd": 0.5, "num_turns": 2}).to_string(),
+    ]
+    .join("\n");
+
+    let trace = traced("grok", &raw);
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, vec![(1, "read_file"), (2, "search_replace")]);
+    assert!(trace.tool_calls[0].result_bytes > 0);
+    assert!(
+        trace
+            .tool_calls
+            .iter()
+            .all(|call| call.result_payload.is_none())
+    );
+}
+
+// [ORB-21951] A real `agy` 1.4.12 `stream-json` capture reports tools only
+// as `step_update` frames (`step_type: "tool"`); the terminal `result`
+// document normalization keeps none of them. The raw stream records
+// them through the same projection, and a stream with no tool step records
+// an authoritative zero.
+#[test]
+fn antigravity_step_update_tools_are_recorded_through_projection() {
+    let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+    let raw = [
+        json!({"event": "init", "conversation_id": "c1", "init": {"cwd": "/tmp", "tools": ["read_file", "write_to_file"]}}).to_string(),
+        json!({"event": "step_update", "step_update": {"conversation_id": "c1", "step_index": 1, "state": "DONE", "step_type": "agent_response", "usage": {"input_tokens": 5, "output_tokens": 1}}}).to_string(),
+        json!({"event": "step_update", "step_update": {"conversation_id": "c1", "step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "read_file", "tool_info": {"name": "read_file", "parameters": {"Path": "probe.txt"}}}}).to_string(),
+        json!({"event": "step_update", "step_update": {"conversation_id": "c1", "step_index": 2, "state": "DONE", "step_type": "tool", "tool_name": "read_file", "tool_info": {"name": "read_file", "parameters": {"Path": "probe.txt"}, "output": "1 lines, 17 bytes"}}}).to_string(),
+        json!({"event": "step_update", "step_update": {"conversation_id": "c1", "step_index": 3, "state": "DONE", "step_type": "tool", "tool_name": "write_to_file", "tool_info": {"name": "write_to_file", "output": "edited"}}}).to_string(),
+        json!({"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": envelope, "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}}}).to_string(),
+    ]
+    .join("\n");
+
+    let trace = traced("antigravity", &raw);
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "read_file",
+                serde_json::to_vec(&json!("1 lines, 17 bytes"))
+                    .unwrap()
+                    .len() as u64
+            ),
+            (
+                2,
+                "write_to_file",
+                serde_json::to_vec(&json!("edited")).unwrap().len() as u64
+            ),
+        ]
+    );
+
+    let no_tools = [
+        json!({"event": "init", "conversation_id": "c1", "init": {"cwd": "/tmp", "tools": []}}).to_string(),
+        json!({"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": envelope, "usage": {"input_tokens": 1, "output_tokens": 1}}}).to_string(),
+    ]
+    .join("\n");
+    assert!(
+        traced("agy", &no_tools).tool_calls.is_empty(),
+        "a recognized stream with no tool step records 0, with nothing fabricated"
+    );
+}
+
+// [ORB-21951] Legacy Gemini CLI `stream-json` tool frames record through the
+// same dispatch; its `-o json` document has no per-call events and is left
+// to the generic parser (no fabricated calls).
+#[test]
+fn gemini_stream_tool_frames_are_recorded_and_json_document_is_left_alone() {
+    let raw = [
+        json!({"type": "init", "session_id": "s1", "model": "gemini-3.8-flash"}).to_string(),
+        json!({"type": "tool_use", "tool_name": "read_file", "tool_id": "call-1", "parameters": {"path": "probe.txt"}}).to_string(),
+        json!({"type": "tool_result", "tool_id": "call-1", "status": "success", "output": "hello"}).to_string(),
+        json!({"type": "tool_use", "tool_name": "write_file", "tool_id": "call-2", "parameters": {}}).to_string(),
+        json!({"type": "result", "status": "success", "stats": {}}).to_string(),
+    ]
+    .join("\n");
+    let calls = recorded_tool_calls("gemini", raw.as_bytes()).expect("gemini stream is recognized");
+    let actual = calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "read_file",
+                serde_json::to_vec(&json!("hello")).unwrap().len() as u64
+            ),
+            (2, "write_file", 0),
+        ]
+    );
+
+    let document = json!({"response": "done", "stats": {"tools": {"totalCalls": 0}}}).to_string();
+    assert!(
+        recorded_tool_calls("gemini", document.as_bytes()).is_none(),
+        "a single -o json document has no per-call events to record"
+    );
+    assert!(
+        recorded_tool_calls("antigravity", b"not json").is_none(),
+        "unrecognized output is left to the generic parser"
+    );
+}
+
 /// The serialized provider schema stays inside the Claude structured-output
 /// subset (no top-level conditional), the Claude CLI argv carries that same
 /// schema, and the parser enforces the status/error correlation ([ORB-21567]).

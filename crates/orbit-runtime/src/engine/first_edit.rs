@@ -47,6 +47,11 @@ const FILE_MUTATING: &[&str] = &[
     "search_replace",
     // Grok's hashline file toolset records this edit under its own name.
     "hashline_edit",
+    // Antigravity (`agy`) file editors, from its recorded tool steps.
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "sed_file",
     "edit_file",
     "write_file",
     "create_file",
