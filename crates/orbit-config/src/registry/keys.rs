@@ -307,9 +307,9 @@ pub fn admit_settable_config_key(key: &str) -> Result<(), OrbitError> {
 ///
 /// Fixed registry keys, live `crews.<name>.<field>` keys and
 /// `plugins.<ns>.<key>` keys owned by an installed plugin succeed. A
-/// removed key fails with its migration note; unknown registry keys and
-/// misspelled crew fields fail with suggestions. All before any document
-/// mutation.
+/// removed key fails with its migration note. Unknown registry keys fail
+/// with nearby-key suggestions when available; misspelled crew fields fail
+/// with valid-field suggestions. All before any document mutation.
 pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
     if describe(key).is_some() {
         return Ok(());
@@ -331,7 +331,7 @@ pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
         Some(_) => Ok(()),
         None => Err(OrbitError::invalid_input_with_suggestions(
             format!("unknown config key '{key}'"),
-            all_key_names(),
+            nearby_config_key_names(key),
         )),
     }
 }
@@ -383,10 +383,21 @@ pub(crate) fn parse_crew_field_key(key: &str) -> Result<Option<CrewFieldKey<'_>>
     ))
 }
 
-/// Every settable key name, used for did-you-mean suggestions.
-pub(crate) fn all_key_names() -> Vec<String> {
-    CONFIG_KEY_REGISTRY
+/// At most three nearby fixed keys, closest first with lexical tie-breaking.
+fn nearby_config_key_names(key: &str) -> Vec<String> {
+    let key_length = key.chars().count();
+    let mut candidates: Vec<_> = CONFIG_KEY_REGISTRY
         .iter()
-        .map(|entry| entry.key.to_string())
+        .filter_map(|entry| {
+            let threshold = key_length.max(entry.key.chars().count()).div_ceil(3);
+            let distance = orbit_common::text::unicode_edit_distance(key, entry.key);
+            (distance <= threshold).then_some((distance, entry.key))
+        })
+        .collect();
+    candidates.sort_unstable();
+    candidates
+        .into_iter()
+        .take(3)
+        .map(|(_, candidate)| candidate.to_owned())
         .collect()
 }

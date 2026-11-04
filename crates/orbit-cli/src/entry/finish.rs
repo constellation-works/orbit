@@ -95,6 +95,16 @@ pub(super) fn print_error(
     }
 
     match error {
+        orbit_core::OrbitError::InvalidInput(message)
+        | orbit_core::OrbitError::InvalidInputDiagnostic { message, .. }
+            if message.starts_with("unknown config key '") =>
+        {
+            eprintln!("error: {error}");
+            if let Some(suggestion) = error.did_you_mean().and_then(|keys| keys.first()) {
+                eprintln!("Did you mean '{suggestion}'?");
+            }
+            eprintln!("List valid keys with `orbit config keys`.");
+        }
         orbit_core::OrbitError::DecisionRefused { code, message }
             if code.as_str() == "request_not_found" =>
         {
