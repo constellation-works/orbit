@@ -23,17 +23,31 @@ pub(super) struct ValidatedSelectors {
     pub(super) normalizations: Vec<Value>,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The task, pilot disposition and pinned context that a selector list is
+/// validated against.
+pub(super) struct SelectorCheck<'a> {
+    pub(super) action: &'a str,
+    pub(super) task_id: &'a str,
+    pub(super) disposition: &'a str,
+    pub(super) assessment: &'a Value,
+    pub(super) workspace_root: &'a Path,
+    pub(super) source: Option<&'a SourceSnapshot>,
+    pub(super) authorized_creation: &'a [String],
+}
+
 pub(super) fn validate_after_selectors(
-    action: &str,
-    task_id: &str,
-    disposition: &str,
-    assessment: &Value,
+    check: SelectorCheck<'_>,
     selectors: &[String],
-    workspace_root: &Path,
-    source: Option<&SourceSnapshot>,
-    authorized_creation: &[String],
 ) -> Result<ValidatedSelectors, DispatchError> {
+    let SelectorCheck {
+        action,
+        task_id,
+        disposition,
+        assessment,
+        workspace_root,
+        source,
+        authorized_creation,
+    } = check;
     if selectors.is_empty() {
         if !matches!(disposition, "verified_no_diff" | "host_operational") {
             return Err(DispatchError::action_failed(
