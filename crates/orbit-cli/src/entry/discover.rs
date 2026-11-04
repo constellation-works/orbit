@@ -58,7 +58,7 @@ pub(super) fn explicit_root_source(
 /// only argument that changes *which* plugins those are, so it is the only
 /// one read here, with the same precedence `resolve_generation_root` applies
 /// afterwards (`--root`, then `ORBIT_ROOT`, then the host-global root).
-fn plugin_root_override() -> Option<std::path::PathBuf> {
+pub(super) fn cli_root_override_from_argv() -> Option<std::path::PathBuf> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         let arg = arg.to_string_lossy().into_owned();
@@ -80,7 +80,8 @@ fn plugin_root_override() -> Option<std::path::PathBuf> {
 /// this command's: the built-in CLI must stay usable, so it is logged and
 /// the groups are simply absent (§4.9).
 fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
-    let Ok(root) = orbit_core::runtime::resolve_generation_root(plugin_root_override().as_deref())
+    let Ok(root) =
+        orbit_core::runtime::resolve_generation_root(cli_root_override_from_argv().as_deref())
     else {
         return Vec::new();
     };

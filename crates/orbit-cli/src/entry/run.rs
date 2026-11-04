@@ -6,7 +6,7 @@ use super::classify::{
     claimed_owner_tool, command_rotates_jsonl_on_start, handover_capability, is_clock_tick,
     participant_role, report_refused_clock_tick,
 };
-use super::discover::{explicit_root_source, parse_cli};
+use super::discover::{cli_root_override_from_argv, explicit_root_source, parse_cli};
 use super::finish::{finish_command, print_error, refuse_plugin_child_cli};
 use crate::audit_middleware;
 use crate::command;
@@ -21,9 +21,11 @@ pub(crate) fn run() {
     orbit_core::mark_process_as_pipeline_worker_binary();
     // Provider lines are retained for `run logs --follow`, while diagnostics
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
-    orbit_common::observability::logging::init_subscriber_with_file_filter(
+    let root_override = cli_root_override_from_argv();
+    orbit_common::observability::logging::init_subscriber_with_file_filter_at_root(
         "warn",
         "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info",
+        root_override.as_deref(),
     );
     output::pipe::install_handler();
 

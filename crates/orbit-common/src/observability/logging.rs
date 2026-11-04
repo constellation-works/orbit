@@ -5,11 +5,12 @@
 //! subscriber.
 //!
 //! `init_default_subscriber` writes human-readable fmt output to stderr and,
-//! when possible, also appends machine-readable JSON Lines to
-//! `$HOME/.orbit/state/logs/orbit.jsonl`. Agent stdout/stderr uses the separately
-//! budgeted `orbit-agent.jsonl` beside it. Readers merge both feeds. Logging is
-//! global rather than workspace-local because logging starts before CLI argument parsing and
-//! runtime root resolution.
+//! when possible, also appends machine-readable JSON Lines to the selected
+//! Orbit root's `state/logs/orbit.jsonl`. Agent stdout/stderr uses the
+//! separately budgeted `orbit-agent.jsonl` beside it. Readers merge both
+//! feeds. Logging is root-global rather than workspace-local. The CLI supplies
+//! an explicit `--root` before subscriber setup; otherwise a managed child
+//! uses its registry root, with `$HOME/.orbit` as the ordinary fallback.
 //!
 //! The JSONL file is opened on the first tracing event, not at subscriber
 //! init, so commands that never log (`orbit --help`) do not create the log
@@ -74,6 +75,7 @@ use crate::security::redaction;
 /// The JSONL writer's guard. Statics are never dropped, so the guard is held
 /// in an `Option` that [`shutdown_jsonl_writer`] can take and drop at exit.
 static FILE_GUARD: OnceLock<Mutex<Option<Vec<WorkerGuard>>>> = OnceLock::new();
+static EXPLICIT_JSONL_LOG_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 // A reserved tracing field selects the independent agent-output writer while
 // retaining relay targets and their existing RUST_LOG filters.
@@ -380,8 +382,9 @@ fn json_field_name(field: &Field) -> &str {
 /// `"orbit=debug"`).
 ///
 /// The JSONL layer is installed immediately but opens the file only on the
-/// first event. Path resolution reads environment variables only; it does
-/// not walk the log directory or parse `config.toml`.
+/// first event. Path resolution uses the supplied explicit root when present
+/// and otherwise reads environment variables; it does not walk the log
+/// directory or parse `config.toml`.
 pub fn init_default_subscriber(default_filter: &str) {
     init_subscriber_with_file_filter(default_filter, default_filter);
 }
@@ -390,6 +393,19 @@ pub fn init_default_subscriber(default_filter: &str) {
 /// set and valid, overrides both; otherwise callers can retain additional file
 /// evidence without also printing it as a terminal diagnostic.
 pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str) {
+    init_subscriber_with_file_filter_at_root(stderr_default, file_default, None);
+}
+
+/// Install stderr and JSONL layers, retaining an explicit Orbit root for this
+/// process's log path when one was selected from the CLI arguments.
+pub fn init_subscriber_with_file_filter_at_root(
+    stderr_default: &str,
+    file_default: &str,
+    root_override: Option<&Path>,
+) {
+    if let Some(root) = root_override {
+        let _ = EXPLICIT_JSONL_LOG_ROOT.set(root.to_path_buf());
+    }
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .with_ansi(stderr_ansi_enabled())
@@ -515,32 +531,42 @@ pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
 
 /// Resolve the canonical path to the global JSONL tracing feed
 /// (`$HOME/.orbit/state/logs/orbit.jsonl`, or the managed child's registry
-/// root). A managed child uses `ORBIT_REGISTRY_ROOT` only when the complete
-/// managed-run context is present, matching global-root resolution in
-/// `orbit-core`. Returned as `Result` because the path depends on environment
-/// variables; callers that need a fallback should fall back to a
-/// workspace-relative path or fail with a clear error.
+/// root). An explicit `--root`/`ORBIT_ROOT` wins; otherwise a managed child
+/// uses `ORBIT_REGISTRY_ROOT` only when the complete managed-run context is
+/// present, matching global-root resolution in `orbit-core`. Returned as
+/// `Result` because the path depends on process configuration; callers that
+/// need a fallback should use a workspace-relative path or fail with a clear
+/// error.
 ///
 /// Producers and readers MUST agree on this path — `init_default_subscriber`
 /// writes here, and `orbit log tail` reads here by default.
 pub fn global_jsonl_log_path() -> io::Result<PathBuf> {
-    let orbit_root = match managed_registry_root()? {
-        Some(root) => root,
-        None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "cannot resolve HOME/USERPROFILE for JSONL tracing log",
-                    )
-                })?;
-            PathBuf::from(home).join(".orbit")
-        }
+    let orbit_root = if let Some(root) = explicit_jsonl_log_root() {
+        root
+    } else if let Some(root) = managed_registry_root()? {
+        root
+    } else {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "cannot resolve HOME/USERPROFILE for JSONL tracing log",
+                )
+            })?;
+        PathBuf::from(home).join(".orbit")
     };
 
     Ok(orbit_root.join("state").join("logs").join("orbit.jsonl"))
+}
+
+fn explicit_jsonl_log_root() -> Option<PathBuf> {
+    EXPLICIT_JSONL_LOG_ROOT.get().cloned().or_else(|| {
+        std::env::var_os("ORBIT_ROOT")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })
 }
 
 /// Resolve the registry root carried by an Orbit-managed child. The run ID is
