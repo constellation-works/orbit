@@ -379,7 +379,8 @@ let pinnedRefreshInFlight = null;
 // The pinned object is the only copy of a filtered-out task, so without this
 // it stays at whatever the first open fetched. Drafts are preserved by the
 // pane's draft retention; this only replaces the cached record, guarded by
-// the workspace visit and the open-task generation like the first read.
+// the workspace visit and the open-task generation like the first read, and
+// by the starting record so a completed save wins over an older response.
 export function refreshPinnedTask(context) {
   const pinned = taskState.pinnedExternalTask;
   if (!pinned || !pinned.task) return Promise.resolve();
@@ -395,6 +396,9 @@ export function refreshPinnedTask(context) {
     try {
       const task = await fetchJson(taskMutationPath(previous));
       if (superseded()) return;
+      // Check only before applying the response: our own update also replaces
+      // the pinned record, but must still reach the repaint below.
+      if (taskState.pinnedExternalTask.task !== previous) return;
       if (!task || task.id !== taskId) return;
       const merged = mergeTaskRecord(previous, task);
       taskState.pinnedExternalTask = { task: merged, id: taskId };
