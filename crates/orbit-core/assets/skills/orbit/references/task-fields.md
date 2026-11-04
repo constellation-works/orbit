@@ -307,6 +307,38 @@ on the operator-only `orbit.workflow.run.show`.
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
 
+## Human CLI task update
+
+`orbit task update -h` keeps one line per flag; these are the rules behind
+them. The fields above apply to the CLI flags of the same name.
+
+- `--approve` takes the task's next approval step: `proposed` -> `backlog`, or
+  `review` -> `done`. The transition is chosen from the current status, so it
+  cannot be combined with field edits or an explicit `--status`; `--note` is
+  recorded on that status history entry.
+- `--status` on a task assigned to a human crew takes any status directly,
+  with no plan, evidence or review and no `--force`; task history records it
+  as a human-crew bypass. Such a task needs `--force` only to leave `done` or
+  `archived`.
+- `--force` applies `--status` even when the task lifecycle refuses the
+  transition (for example reopening a `done` task). It is a human-operator
+  override, recorded in task history as `forced`; `orbit.task.update` refuses
+  `force`.
+- `--discard-candidate` discards the candidate the last failed run preserved,
+  so the next run implements fresh instead of resuming it. Combine it with
+  `--status backlog` to requeue.
+- `--tag` replaces the list. `os:linux`, `os:macos` or `os:windows` limits
+  which host OS may run the task from its next admission; any other `os:`
+  value is rejected. `--allow-drop-system-tags` permits a replacement that
+  drops a system identity tag (`ci-failure:*`).
+- `--granted-tools` is accepted only before the task's next attempt is
+  dispatched; see `granted_tools` above.
+- `--context` replaces the whole list and `--context ""` clears it; repeat or
+  comma-separate selectors, and to extend send every existing selector plus
+  the new ones. `--allow-missing-context` records creation intent per missing
+  selector. Both follow [Context selectors](#context-selectors).
+- `--not-before` and `--clear-not-before` follow `not_before` above.
+
 ## Severity rubric
 
 Review findings and `regression_from` links rate on one scale. Rate by the

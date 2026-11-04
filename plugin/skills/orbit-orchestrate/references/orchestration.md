@@ -149,7 +149,11 @@ for a pull drain is only after every leaf it claimed has settled.
   it has stopped admitting.
 - It is refused for a drain stopped with `--stop` or being cancelled (an
   extension never reopens one) and for a drain started without `--for`, which
-  makes a single admission pass.
+  makes a single admission pass. A pull drain is refused too once a pass has
+  closed its window with nothing left to settle: that drain is ending.
+- The run ID, its completion authorization and every task in flight are
+  preserved. `--concurrency` changes the ceiling as `orbit run concurrency
+  --set` does, so a pull drain keeps the bounded review credit above.
 - Each request is audited on the run with the old and new deadline, and
   `orbit run show` prints `Window: extended to …` (`drain_window_extension`
   in JSON). `orbit run readiness` reports the extended `ends_at`.
