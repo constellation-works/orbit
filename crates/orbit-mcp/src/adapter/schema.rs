@@ -81,8 +81,7 @@ const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str =
 
 /// An id-routed task tool on the federated mux: an id-only call goes to the
 /// host the id's prefix names.
-const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str =
-    "Optional host-qualified workspace selector; omit to route by the task ID prefix.";
+const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional host-qualified workspace selector; omit to route by the task ID prefix, or copy `selector` from orbit_workspace_list.";
 
 /// A workspace-optional tool on the federated mux: omitted, the mux
 /// aggregates every owner it reaches.
