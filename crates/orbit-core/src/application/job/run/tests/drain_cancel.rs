@@ -243,7 +243,7 @@ fn drain(runtime: &OrbitRuntime, job: &str, input: Value) -> JobRun {
     run
 }
 
-fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
+pub(super) fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
     let task = runtime
         .stores()
         .task_records()

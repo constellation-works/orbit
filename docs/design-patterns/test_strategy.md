@@ -1104,6 +1104,22 @@ timeout without proving the byte cap. These cases retain `TunnelSpec`, `ProbeLim
 and the fake SSH/peer harness, alongside all 24 previously admitted private fault,
 security and platform cases. No production visibility or behavior changes.
 
+## Reconciliation during a cancellation admission
+
+`crates/orbit-core/src/application/job/run/tests/reconcile.rs::reconciling_a_reaped_worker_mid_cancel_leaves_the_outcome_to_the_canceller`
+(criterion 2, deterministic interleaving) reproduces ORB-21876. The private
+signal seam of the public cancel path places a reconciling `show_job_run` read
+after a real owner is signalled and reaped and before the canceller reads the
+run again, the gap in which retained production cancels ended `interrupted`.
+No public entry point can stop between those two steps without timing. It also
+shows that a bystander process survives and the task returns to the backlog.
+
+`crates/orbit-core/src/application/job/run/tests/reconcile.rs::reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish`
+(criterion 2, crash mid-operation) covers the two exits from that deferral: a
+canceller that reported failure and one that vanished without reporting. A
+crash between request and completion cannot be produced through a public entry
+point, so the fixture records that durable state directly.
+
 ## Landing-review gate verdict parse admission
 
 `crates/orbit-core/src/application/job/tests/delivery_attention.rs::abandoned_landing_review_settle_reports_abandoned_verdict`
