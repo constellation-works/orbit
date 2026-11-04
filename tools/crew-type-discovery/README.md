@@ -22,7 +22,11 @@ For each group (by default crew, model and tier; `--group-by tier`
 groups by tier alone) the script fits a shallow regression tree
 (hand-rolled variance reduction, `--max-depth 3`) on each task's
 score relative to its crew's own tier mean. Features are the task's
-tags and its top-level context-file path prefixes.
+tags and its top-level context-file path prefixes. Review terms use the exported
+`reviewed_units` (0 or 1) as their population: unreviewed tasks contribute zero,
+and reviewed contributions are scaled by the crew tier's tasks / reviewed tasks
+so the per-task mean equals the tier raw score. Exports without that field retain
+the historical all-task population.
 
 Each leaf is printed with its `n`, its mean relative score, and the
 tag/path predicate that reaches it. A leaf becomes a suggested type

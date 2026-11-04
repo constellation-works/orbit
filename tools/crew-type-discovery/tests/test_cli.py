@@ -119,6 +119,29 @@ def matched_by_suggestion(rows, suggestion):
 
 
 class DiscoveryCliTest(unittest.TestCase):
+    def test_unreviewed_tasks_do_not_create_a_review_quality_split(self):
+        tasks = []
+        for crew, reviewed in [("dense", 8), ("sparse", 4), ("unreviewed", 0)]:
+            for index in range(8):
+                measured = int(index < reviewed)
+                tasks.append(
+                    {
+                        "crew": crew, "model": "model", "tier": "medium",
+                        "tags": ["reviewed"] if measured else ["unreviewed"],
+                        "path_prefixes": [], "reviewed_units": measured,
+                        "counts": {"weighted_landed": 1, "first_pass_accepts": measured},
+                    }
+                )
+        report = json.loads(run_cli(
+            payload={"terms": TERMS, "tasks": tasks}, extra=("--json", "--min-leaf", "2")
+        ))
+        self.assertEqual(
+            report["suggestions"], [],
+            "equal observed outcomes must not suggest routing by review coverage",
+        )
+        for group in report["groups"]:
+            self.assertTrue(all(leaf["mean_relative"] == 0 for leaf in group["leaves"]))
+
     def test_conjunction_leaf_never_becomes_any_of_suggestion(self):
         payload = build_conjunction_export()
         report = json.loads(run_cli(payload=payload))
