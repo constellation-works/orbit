@@ -19,6 +19,10 @@
 //     file uncreated, and global or existing-file writes keep a plain Save.
 // (h) a key deep link (?key=) or an open drawer lands on its All keys page
 //     once; Next, Previous and closing the drawer do not snap the page back.
+// (i) with review.timing off, the Before landing rows keep their text and
+//     enabled Edit control at WCAG AA contrast after opacity is composited,
+//     at 1440 and 375 px; they still show the reason and stay distinct from
+//     active rows (ORB-21956: the old .55 opacity composited keys to 2.7:1).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -102,6 +106,69 @@ print(type(parsed).__name__, parsed)
   const out = execFileSync('python3', ['-I', '-c', script, command], { encoding: 'utf8' }).trim();
   const [typeName, valStr] = out.split(' ');
   return { typeName, value: Number(valStr) };
+}
+
+// Runs in the page. Composites each text-bearing element of every Review row
+// the way it is painted: an opacity group blends its content over whatever
+// lies beneath it, so a dimmed row's text is measured after that blend.
+function measureCompositedRows() {
+  const parse = (c) => {
+    const m = c && c.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+  };
+  const over = (top, bottom) => ({
+    r: top.r * top.a + bottom.r * (1 - top.a),
+    g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a),
+    a: 1,
+  });
+  const lum = (c) => {
+    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const ratio = (x, y) => {
+    const [hi, lo] = [lum(x), lum(y)].sort((p, q) => q - p);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const base = { r: 11, g: 13, b: 16, a: 1 };
+  const samples = [];
+  for (const rowEl of document.querySelectorAll('.topic-row')) {
+    for (const el of [rowEl, ...rowEl.querySelectorAll('*')]) {
+      const textNodes = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim());
+      if (!textNodes.length) continue;
+      const chain = [];
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) chain.unshift(n);
+      const styles = chain.map((n) => getComputedStyle(n));
+      let k = styles.findIndex((s) => parseFloat(s.opacity) < 1);
+      if (k < 0) k = chain.length;
+      let outside = base;
+      for (let i = 0; i < k; i++) {
+        const bg = parse(styles[i].backgroundColor);
+        if (bg && bg.a > 0) outside = over(bg, outside);
+      }
+      let inside = outside;
+      let alpha = 1;
+      for (let i = k; i < chain.length; i++) {
+        alpha *= parseFloat(styles[i].opacity);
+        const bg = parse(styles[i].backgroundColor);
+        if (bg && bg.a > 0) inside = over(bg, inside);
+      }
+      const text = over({ ...over(parse(styles[chain.length - 1].color), inside), a: alpha }, outside);
+      const back = over({ ...inside, a: alpha }, outside);
+      samples.push({
+        rowKey: rowEl.dataset.key,
+        inactive: rowEl.classList.contains('inactive'),
+        tag: el.tagName.toLowerCase(),
+        cls: String(el.className),
+        text: textNodes.map((n) => n.textContent.trim()).join(' ').slice(0, 48),
+        ratio: Number(ratio(text, back).toFixed(2)),
+        rendered: `rgb(${Math.round(text.r)}, ${Math.round(text.g)}, ${Math.round(text.b)})`,
+      });
+    }
+  }
+  return samples;
 }
 
 const pageErrors = [];
@@ -595,6 +662,59 @@ try {
   await drawer.locator('button.config-action:has-text("Save")').click();
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
   assert.deepEqual(capturedPuts, [{ key: 'review.timing', body: { value: 'before_pr', scope: 'workspace' } }], 'enum Save sends the selected value');
+
+  // -------------------------------------------------------------------------
+  // Case (i): with review.timing off, the Before landing rows keep their text
+  // and enabled Edit control at AA contrast once composited, at 1440 and 375
+  // px, stay distinct from active rows and still state the reason (ORB-21956)
+  // -------------------------------------------------------------------------
+  const inactiveKeys = ['review.minutes', 'review.before_landing_hosts', 'review.baseline_commands'];
+  // The Before landing rows exist only in this case's fixture section, so the
+  // key inventory the other cases page through stays as it was.
+  const beforeLandingSection = {
+    token: 'review',
+    title: 'Review',
+    keys: [
+      { key: 'review.minutes', label: 'Review minutes', description: 'Minutes review may run.', value_type: 'integer', value: 30, state: 'built-in', settable: true, source: undefined, built_in: { value: 30 }, shadowed_by: [] },
+      { key: 'review.before_landing_hosts', label: 'Before-landing hosts', description: 'Hosts that run review before landing.', value_type: 'array<string>', value: ['dk-server-1'], state: 'set', settable: true, source: { layer: 'workspace' }, built_in: { value: [] }, shadowed_by: [] },
+      { key: 'review.baseline_commands', label: 'Baseline commands', description: 'Commands for the review baseline.', value_type: 'array<string>', value: ['make ci-guards'], state: 'set', settable: true, source: { layer: 'global' }, built_in: { value: [] }, shadowed_by: [] },
+    ],
+  };
+  effectiveConfig.sections.push(beforeLandingSection);
+  await page.goto('about:blank');
+  await page.goto(`http://127.0.0.1:${port}/#config/review`);
+  await page.locator('.topic-row.inactive').first().waitFor({ state: 'visible' });
+  assert.equal(await page.locator('.topic-row.inactive').count(), inactiveKeys.length, 'the Before landing rows are the inactive rows while review.timing is off');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 900 : 812 });
+    // The .tab-pane fade-in runs 0.3s and dims everything under it.
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.animationName !== 'fadeIn'));
+    const samples = await page.evaluate(measureCompositedRows);
+    const inactiveText = samples.filter((s) => s.inactive);
+    assert.ok(inactiveText.length > 0, `${width}px: inactive rows render text`);
+    for (const s of inactiveText) {
+      assert.ok(s.ratio >= 4.5, `${width}px: ${s.rowKey} ${s.tag}.${s.cls} "${s.text}" composites to ${s.ratio}:1 against its background, below WCAG AA 4.5:1 (inactive rows must stay readable)`);
+    }
+    for (const key of inactiveKeys) {
+      const edit = page.locator(`.topic-row[data-key="${key}"] button.config-action:has-text("Edit")`);
+      assert.equal(await edit.isEnabled(), true, `${width}px: ${key} Edit stays enabled while inactive`);
+      const reason = (await page.locator(`.topic-row[data-key="${key}"] .topic-inactive`).textContent()).trim();
+      assert.equal(reason, 'inactive — review.timing is off', `${width}px: ${key} still states why it is inactive`);
+    }
+    const activeLabel = samples.find((s) => s.rowKey === 'review.timing' && s.tag === 'span' && s.text === 'Review timing');
+    const inactiveLabel = samples.find((s) => s.rowKey === 'review.minutes' && s.tag === 'span' && s.text === 'Review minutes');
+    assert.ok(activeLabel && inactiveLabel, `${width}px: labels measured for both active and inactive rows`);
+    assert.notEqual(inactiveLabel.rendered, activeLabel.rendered, `${width}px: inactive labels look secondary, not identical to active ones`);
+    // The Review page scrolls inside the shell pane: bring Before landing into
+    // view so the evidence shows the rows, not the top of the page.
+    await page.evaluate(() => [...document.querySelectorAll('.config-section')]
+      .find((s) => s.querySelector('.config-section-title')?.textContent.includes('Before landing'))
+      .scrollIntoView({ block: 'start' }));
+    await page.waitForTimeout(100);
+    await page.screenshot({ path: path.join(evidence, `review-inactive-dark-${width}.png`) });
+  }
+  effectiveConfig.sections = effectiveConfig.sections.filter((section) => section !== beforeLandingSection);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`http://127.0.0.1:${port}/#config/workflow`);
   await arrayRow.waitFor({ state: 'visible' });
 
@@ -933,6 +1053,8 @@ try {
       'key-deep-link-lands-once-then-pages-without-snapping-back',
       'closing-a-drawer-keeps-the-page-the-user-paged-to',
       'open-drawer-paging-does-not-snap-back',
+      'inactive-review-rows-meet-aa-after-composition-at-1440-and-375',
+      'inactive-review-rows-keep-edit-and-reason-and-stay-distinct',
     ],
   }, null, 2));
 

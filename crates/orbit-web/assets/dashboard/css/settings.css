@@ -307,7 +307,13 @@
   gap: 6px 14px; align-items: center; min-width: 0; padding: 8px 14px;
 }
 .topic-row.topic-plain { grid-template-columns: minmax(180px, 1.1fr) minmax(0, 3fr); }
-.topic-row.inactive { opacity: .55; }
+/* ORB-21956: an inactive row reads as secondary through its text tones and a
+   left marker, not opacity. Opacity composited the text below AA (config keys
+   2.7:1 at .55), so every text tone here stays at AA, and the reason chip stays
+   readable. The marker is a box-shadow, so the grid does not move. */
+.topic-row.inactive { box-shadow: inset 2px 0 0 var(--fg-disabled); }
+.topic-row.inactive > .topic-label, .topic-row.inactive > .config-value { color: var(--fg-dim); }
+.topic-row.inactive > .topic-inactive { color: var(--fg-dim); border: 1px dashed var(--fg-mute); }
 .topic-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 .topic-label .config-key { color: var(--fg-mute); font: 11px/1.4 var(--font-mono); }
 .topic-plain > .config-key { color: var(--fg); }
