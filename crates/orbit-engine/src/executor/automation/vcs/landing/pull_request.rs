@@ -405,6 +405,16 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                         &evidence,
                     )?);
                 }
+                CheckRecoveryStep::HoldForBase(evidence) => {
+                    return Err(hold_pr(
+                        host,
+                        context,
+                        &diagnostic,
+                        false,
+                        DeliveryRefusal::BaseChecksPending,
+                        &evidence,
+                    )?);
+                }
                 CheckRecoveryStep::Stop(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, false, &evidence)?);
                 }

@@ -101,6 +101,11 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Wait,
     /// A base-suspect failure waits without authorizing candidate recovery.
     WaitForBase(String),
+    /// A base-suspect failure spent its observation budget with the base's
+    /// own result still missing: hold in review for that result, with this
+    /// evidence. Nothing is repaired or rerun, so it is a designed wait, not a
+    /// failure.
+    HoldForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
@@ -465,7 +470,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 }
             }
             if let Some((cycles, check, signature)) = exhausted {
-                Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                Ok(CheckRecoveryStep::HoldForBase(evidence(&format!(
                     "escalated after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; a matching pull_request rerun failure and a successful same-check agent-main run on the accepted base ancestry have not both been observed, so review the missing base/check evidence",
                 ))))
             } else {

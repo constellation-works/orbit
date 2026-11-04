@@ -2739,7 +2739,7 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   (or requeue once spent). Candidate failures keep their candidate repair/requeue route, and
   inherited failures keep their base update/wait route. Other failure classes with unreadable
   retry evidence stop in review naming the read failure. If untouched-path evidence remains
-  incomplete, landing stops after
+  incomplete, landing holds the candidate in review as `delivery_base_checks_pending` after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
   whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
   protection's own reading of a skipped or neutral required check is unchanged. Without

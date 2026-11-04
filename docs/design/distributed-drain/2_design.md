@@ -1164,7 +1164,8 @@ consecutive polls, a same-check base pass sends a flaky failure to repair (or re
 Candidate failures keep their candidate repair/requeue route, and inherited failures keep their
 base update/wait route. Other failure classes whose rerun evidence stays unreadable stop in review
 naming the read failure. A provider throttle keeps its paced hold. Without both
-results, `handoff_land` stops in review after
+results, `handoff_land` holds the candidate in review as
+`delivery_base_checks_pending` after
 `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
 whichever comes first. Each observation cycle rechecks the failed job against the accepted base
 ancestry. Reruns share the eligible-set planner with owner-local `auto_fix=true` completion. Before the
