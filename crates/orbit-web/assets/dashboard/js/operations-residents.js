@@ -144,7 +144,7 @@ function createForm(payload) {
     node("option", { value: "prefer", text: "prefer" }),
     node("option", { value: "off", text: "off" }),
   ]);
-  const complexity = node("select", { name: "complexity" }, ["low", "medium", "high"].map(level => {
+  const complexity = node("select", { name: "complexity" }, ["low", "medium", "hard", "xhard"].map(level => {
     const option = node("option", { value: level, text: level });
     option.selected = level === "medium";
     return option;
@@ -307,7 +307,9 @@ function authorityForm(payload, mandate) {
       await write(path, { deadline }, `Shortened the deadline for ${mandate.task_id}.`, [grant, narrow]);
       return;
     }
-    await write(path, { add, workspaces, quote: quoteValue }, `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
+    await write(path, { add, workspaces, quote: quoteValue }, (result) => result?.outcome === "unchanged"
+      ? `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded.`
+      : `Widened ${mandate.task_id}; recorded as your answered request.`, [grant, narrow]);
   });
   narrow.addEventListener("click", () => {
     const values = form.elements;
