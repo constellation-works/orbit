@@ -455,7 +455,8 @@ where
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; pass --machine-name or --non-interactive"
+        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; {}",
+        prompt_stdin::PROMPT_REMEDY
     )))
 }
 
@@ -485,11 +486,13 @@ where
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; pass --task-prefix or --non-interactive"
+        "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; {}",
+        prompt_stdin::PROMPT_REMEDY
     )))
 }
 
 fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
+    let error = prompt_stdin::with_remedy(error, prompt_stdin::PROMPT_REMEDY);
     match error.kind() {
         ErrorKind::UnexpectedEof | ErrorKind::TimedOut => {
             OrbitError::InvalidInput(error.to_string())

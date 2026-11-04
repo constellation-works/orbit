@@ -15,9 +15,27 @@ use std::time::{Duration, Instant};
 
 use crate::output::sink;
 
-pub(super) const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
+/// The next step for a fresh machine's identity prompts, or for the crew prompts
+/// that run before them. It names both identity flags because `--non-interactive`
+/// alone cannot create a fresh identity, and `--non-interactive` because only
+/// that flag skips the crew prompts.
+pub(super) const PROMPT_REMEDY: &str = "pass both --machine-name <NAME> and --task-prefix <PREFIX> (2-5 uppercase ASCII letters) to create this machine's identity without prompts; add --non-interactive to skip the remaining prompts";
 
-const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt; pass --task-prefix/--machine-name or --non-interactive";
+/// Attach `remedy` to a prompt that closed, stalled or overflowed. Other read
+/// errors pass through unchanged. Callers pick the remedy, because the same
+/// stalled read means different things to each prompt.
+pub(super) fn with_remedy(error: io::Error, remedy: &str) -> io::Error {
+    match error.kind() {
+        ErrorKind::UnexpectedEof | ErrorKind::TimedOut | ErrorKind::InvalidData => {
+            io::Error::new(error.kind(), format!("{error}; {remedy}"))
+        }
+        _ => error,
+    }
+}
+
+const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered";
+
+const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt";
 
 /// Ceiling for one non-TTY prompt. Piped answers are already in the kernel
 /// buffer, so a working pipe returns immediately.
@@ -27,7 +45,7 @@ pub(super) const NON_TTY_PROMPT_TIMEOUT: Duration = Duration::from_secs(2);
 /// it holds the init identity lock. TTY input is not subject to this limit.
 const MAX_NON_TTY_LINE_BYTES: usize = 64 * 1024;
 
-const STDIN_LINE_TOO_LONG: &str = "stdin interactive prompt answer is too long; pass --task-prefix/--machine-name or --non-interactive";
+const STDIN_LINE_TOO_LONG: &str = "stdin interactive prompt answer is too long";
 
 struct StdinLeftover {
     buf: Vec<u8>,
