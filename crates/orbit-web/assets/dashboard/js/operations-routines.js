@@ -56,7 +56,8 @@ let routineFailureRequest = 0;
 // the clock itself: a draft made on one host never shows on another, while a
 // workspace switch on the same host keeps it.
 const pendingCadenceByHost = new Map();
-const TIMELINE_ROWS = 4;
+let timelineResizeObserver = null;
+let observedTimelineBody = null;
 
 // ---------------------------------------------------------------------------
 // Routines
@@ -204,6 +205,57 @@ function routineFireTimes(routine, first, until) {
   return times;
 }
 
+// Measure the real label boxes after rendering; their font metrics and track width vary by viewport.
+function layoutRoutineTimelineLabels(track) {
+  const width = track.clientWidth;
+  if (width <= 0) return;
+
+  const labels = Array.from(track.querySelectorAll(".operation-timeline-label"));
+  for (const label of labels) label.style.maxWidth = `${width}px`;
+
+  const placements = labels.map((label) => {
+    const tick = label.closest(".operation-timeline-tick");
+    const tickPosition = ((Number.parseFloat(tick.style.left) || 0) / 100) * width;
+    const labelWidth = label.getBoundingClientRect().width;
+    const center = Math.min(width - labelWidth / 2, Math.max(labelWidth / 2, tickPosition));
+    return { label, labelWidth, labelHeight: label.getBoundingClientRect().height, tickPosition, center };
+  }).sort((a, b) => a.center - b.center);
+
+  const rows = [];
+  for (const placement of placements) {
+    const left = placement.center - placement.labelWidth / 2;
+    const right = placement.center + placement.labelWidth / 2;
+    let row = rows.findIndex((placed) => placed.intervals.every((interval) => right + 4 <= interval.left || interval.right + 4 <= left));
+    if (row < 0) row = rows.push({ intervals: [], placements: [], height: 0 }) - 1;
+    rows[row].intervals.push({ left, right });
+    rows[row].placements.push(placement);
+    rows[row].height = Math.max(rows[row].height, placement.labelHeight);
+    placement.label.style.marginTop = "";
+    placement.label.style.transform = `translateX(${placement.center - placement.tickPosition}px)`;
+  }
+
+  let rowTop = 0;
+  for (const row of rows) {
+    for (const placement of row.placements) placement.label.style.marginTop = `${rowTop}px`;
+    rowTop += row.height + 4;
+  }
+  track.style.height = `${Math.max(39, 18 + rowTop)}px`;
+  track.dataset.labelLayoutWidth = String(width);
+}
+
+function watchRoutineTimelineSize(track) {
+  const body = $("routines-body");
+  if (typeof ResizeObserver === "function" && body && observedTimelineBody !== body) {
+    timelineResizeObserver ||= new ResizeObserver(() => {
+      const current = body.querySelector(".operation-timeline-track");
+      if (current) layoutRoutineTimelineLabels(current);
+    });
+    timelineResizeObserver.observe(body);
+    observedTimelineBody = body;
+  }
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutRoutineTimelineLabels(track));
+}
+
 // The next hour as a strip: where each routine's slots land, with paused
 // routines drawn hollow so an operator sees skipped slots, not only live ones.
 // A routine due several times in the hour is drawn at each of its slots.
@@ -232,35 +284,21 @@ function routineTimeline(routines, now = Date.now()) {
   ]));
   const track = el("div", { class: "operation-timeline-track" });
   track.appendChild(el("div", { class: "operation-timeline-axis" }));
-  // Labels are stacked into rows so two routines due in the same minute
-  // stay legible: each label takes the first row where it does not overlap
-  // the previous label in that row (width estimated from the name length).
-  // A routine's later slots reuse its first slot's row and carry no label of
-  // their own, so a frequent routine marks every slot without repeating its name.
-  const rowEnds = [];
-  const routineRows = new Map();
-  let rows = 0;
+  // Label rows are assigned from their rendered pixel widths after the track
+  // enters the DOM. Repeated fires keep their tick marks but do not add labels.
   due.forEach(({ routine, at, repeat }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    let row = routineRows.get(routine.name);
-    if (!repeat || row === undefined) {
-      const halfWidth = routine.name.length * 0.42;
-      row = rowEnds.findIndex((end) => end <= pct - halfWidth);
-      if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
-      rowEnds[row] = pct + halfWidth;
-      routineRows.set(routine.name, row);
-    }
-    rows = Math.max(rows, row + 1);
     const fires = routine.enabled && routine.effective !== false;
-    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"} row-${row}` }, [
+    const label = repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name });
+    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"}` }, [
       el("span", { class: "operation-timeline-mark" }),
-      repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name }),
+      label,
     ]);
     tick.style.left = `${pct}%`;
     tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
     track.appendChild(tick);
   });
-  track.className = `operation-timeline-track rows-${Math.max(rows, 1)}`;
+  watchRoutineTimelineSize(track);
   strip.appendChild(track);
   return strip;
 }

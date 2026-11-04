@@ -295,4 +295,26 @@ await fetchAndRenderOperations('routines');
 // its persisted missed-slot policy (ORB-21697).
 editTrigger().click();
 assert(editor() && missedSlots().value === 'catch_up_once' && saveTrigger().disabled, 'the daily-digest editor reopens on its persisted policy for the screenshots');
+globalThis.renderRoutineTimelineCollisionFixture = async () => {
+  [...document.querySelectorAll('.schedule-editor button')].find(button => button.textContent === 'Cancel')?.click();
+  const at = minutes => new Date(frozenNow + minutes * 60_000).toISOString();
+  const timelineRoutines = [
+    routine('ci-failure', { cron: '48 12 8 10 *', next_evaluation: { state: 'scheduled', at: at(0) } }),
+    routine('worktree-gc', { cron: '0 13 8 10 *', next_evaluation: { state: 'scheduled', at: at(12) } }),
+    routine('crew-performance-refresh', { cron: '12 13 8 10 *', next_evaluation: { state: 'scheduled', at: at(24) } }),
+    routine('routine-near-right-edge', { cron: '47 13 8 10 *', next_evaluation: { state: 'scheduled', at: at(59) } }),
+  ];
+  globalThis.fetch = async path => {
+    const url = new URL(path, 'http://dashboard.test');
+    if (url.pathname === '/api/routines') return response({
+      machine_name: 'fixture-host', capabilities, controls_authorized: true,
+      cron_zone: { name: null, offset_seconds: 0 }, routines: timelineRoutines,
+      clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true },
+      inactive_plugin_counts: {}, retired: [],
+    });
+    return response({});
+  };
+  await fetchAndRenderOperations('routines');
+  globalThis.fetch = savedFetch;
+};
 globalThis.routineTriggerTestsPassed = true;
