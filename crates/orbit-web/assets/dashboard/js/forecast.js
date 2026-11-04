@@ -349,12 +349,23 @@ function supportText(forecast, payload) {
   return parts.length ? `Available evidence: ${parts.join(" · ")}.` : "";
 }
 
+// A scenario with arrivals stopped at a simulation bound. Its partial runs are
+// withheld, so this names the bound rather than any figure.
+function simulationCutReason(cut) {
+  const detail = {
+    generated_limit: `A simulated run filed ${(cut?.generated_limit ?? 10000).toLocaleString("en-US")} new tasks at the recent rate without the backlog ever emptying, so there is no drain time to report.`,
+    event_limit: "A simulated run reached the limit on scheduling events before it finished, so its totals are withheld.",
+  }[cut?.reason] ?? `The simulation stopped at its ${cut?.compute_budget_seconds ?? 20}-second limit before finishing every run, so partial totals are withheld.`;
+  return { kind: "simulation_cut", label: "With arrivals simulation cut short", detail };
+}
+
 /// Reasons the adjusted forecast is unavailable, from `forecast.unavailable`.
 /// Null when no flag is set (older payloads omit the object entirely).
 export function forecastUnavailableInfo(forecast, payload = {}) {
   const unavailable = forecast?.unavailable;
   if (!unavailable || typeof unavailable !== "object") return null;
   const reasons = [];
+  if (unavailable.simulation_cut) reasons.push(simulationCutReason(forecast.simulation_cut));
   if (unavailable.regression_history_missing) {
     const named = regressionGapReasonPhrase(forecast);
     let label = "Missing regression history";
@@ -808,7 +819,9 @@ function warningLine(info, hasBaseline) {
   const forecast = lastPayload.forecast;
   const tasks = `${missing} task${missing === 1 ? "" : "s"}`;
   let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
-  if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(forecast)) {
+  if (info.kind === "simulation_cut") {
+    text = `${lead}${info.reasons[0].detail} Choose No arrivals for the current backlog's forecast.`;
+  } else if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(forecast)) {
     text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(forecast)}.`;
   } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(forecast)) {
     text = `${lead}regression follow-up work isn't included because ${tasks} ${missing === 1 ? "has" : "have"} no regression history.`;
@@ -865,7 +878,7 @@ function drainOdds(forecast) {
   if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
   if (!parts.length) return null;
   const text = `${parts.join("; ")}.`;
-  return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
+  return forecast.simulation_truncated ? `${text} Some runs hit a simulation limit.` : text;
 }
 
 function answerCard() {
