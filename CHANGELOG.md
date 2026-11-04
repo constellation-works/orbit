@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.44.1 — 2026-11-04
+
+### Highlights
+
+- **Faster dashboard and task reads**: main views stay within ten API reads per poll, the fleet task list scans workspaces concurrently again, and task detail, auto-task, failed-run and host-list reads stay bounded on large stores. ([ORB-21829])
+- **Minted auto-tasks face the pilot**: an auto-task without `no-diff-expected` now lands `proposed` instead of `backlog`, including from existing workspace definitions, so the task pilot assesses it before dispatch. ([ORB-21785])
+- **Implementer scores count delivery review**: scorecards now score escaped regressions against the expected rate for a change's size. ([ORB-21789])
+- **Clear plugin callback refusals**: a confined plugin calling into another workspace or host is refused up front with the reason, instead of failing with an SSH or migration error. ([ORB-21384])
+- **Delivery recovers on its own more often**: an implementer that reports unfinished work continues within its activity budget, and a landing merge retries when the base branch moved. ([ORB-21837])
+- **Quicker retention sweeps**: store-retention local work drops from about a minute to under 25 seconds on large stores, with the same counts reclaimed and retained. ([ORB-21830])
+
 ## 0.44.0 — 2026-11-03
 
 ### Breaking Changes
