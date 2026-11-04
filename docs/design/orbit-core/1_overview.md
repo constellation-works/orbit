@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-10-28
+last_updated: 2026-11-03
 last_validated: 2026-10-30
 status: Accepted
 stage: shipped
@@ -142,8 +142,10 @@ to go before any of them can become its own crate (bearing 5 in
 [ORB-17936], [ORB-17972] and [ORB-17943] cut task's remaining upward edges,
 so task now names only `contracts`, [ORB-17937] cut job's edges to
 `distributed` and `pull_drain`, [ORB-17938] cut job's remaining upward
-edges, so job now names only `task` and `contracts`, and [ORB-17939] cut
-the back edges among the modules above job:
+edges, so job now names only `task` and `contracts`, [ORB-17939] cut
+the back edges among the modules above job, and [ORB-22003] cut the task
+and job edges that had regrown past the fixed-name guard (all but
+`task/backlog_forecast/`, below):
 
 - **Contracts.** `application::contracts` holds the constants and DTOs that
   several of these modules name: the job names `PULL_DRAIN_JOB`,
@@ -187,19 +189,30 @@ the back edges among the modules above job:
   reads, the published-owner and failure-handoff preservation records,
   inspection-capable pools and default crew, crew re-rating, purpose-pool
   candidates and delivery observation, under port names distinct from the
-  inherent `job` methods they wrap, with `CrewPoolDraw` in `contracts`), `task::TaskReviewPort` (the review projection, the evidence
+  inherent `job` methods they wrap, with `CrewPoolDraw` in `contracts`;
+  since [ORB-22003] also the script-grant decision answer, the decision
+  pilot preflight and explicit pilot request, the native publication
+  identity desktop review checks, purpose-pool members, the final-recovery
+  resume, a claimed leaf's captured explore brief and crew candidates, the
+  live pilot run, the exact batched run-state read and a row's delivery
+  attention; the brief's pilot-policy read reuses `observed_job_run`),
+  `task::TaskReviewPort` (the review projection, the evidence
   hold resume and the merged-head reconciliation refusal),
-  `task::TaskDistributedPort` (the crew a pilot run drew),
+  `task::TaskDistributedPort` (the crew a pilot run drew, and since
+  [ORB-22003] the completion authority an external merge's handoff
+  observation records),
   `task::TaskSweepFilingPort` (CI-sweep admission) and
   `task::TaskWorkspaceAutoPort` (the tasks live `run auto` leaves carry).
   [ORB-17937] added two job-owned ports in `job/drain_port.rs`:
   `job::JobDrainPort` (the explicit drain entry decision, the Git protection
   preflight, the admission resource throttle, host provider holds, a pull
   drain's claimed leaves and carried admissions, the owner's handoff
-  completion authority and commit boundary), which `distributed` implements,
-  and `job::JobPullSettlementPort` (the settle-only passes, a claimed leaf's
-  delivery and worker retry, and a stopped leaf's release), which
-  `pull_drain` implements. [ORB-17938] added three more job-owned ports:
+  completion authority and commit boundary, and since [ORB-22003] a claim's
+  admission receipt and the claimed-leaf stage this host holds for a task),
+  which `distributed` implements, and `job::JobPullSettlementPort` (the
+  settle-only passes, a claimed leaf's delivery and worker retry, a stopped
+  leaf's release, and since [ORB-22003] the orphaned-admission settlement
+  after a reconciling run read), which `pull_drain` implements. [ORB-17938] added three more job-owned ports:
   `job::JobAutomationPort` (whether a run's bundle may mix crews, the
   source's repository and the task-pilot routine warning), which
   `automation` implements, `job::JobAdmissionPort` (a resumed published
@@ -222,21 +235,24 @@ the back edges among the modules above job:
   through `task::TaskWorkspaceAutoPort`.
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
-  `job`, `review`, `distributed`,
-  `sweep_filing` or `workspace_auto` by path, grouped tree or `super::` chain
-  or calls the inherent methods and functions its ports wrap, when `task`
-  calls any of `job`'s remaining inherent methods (`get_job_run_backend`,
-  `read_run_state`, the requeue preservation records, the crew-pool draws
-  and candidates, or delivery observation) on any receiver (store reads
-  through `stores().jobs()` excepted) [ORB-17972], when `job`
+  `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`
+  or `workspace_auto` by path, grouped tree or `super::` chain, when `job`
   names `distributed`, `pull_drain`, `admission`, `automation`, `review`,
-  `sweep_filing` or `workspace_auto` the same ways or calls the inherent
-  methods and functions its ports wrap (except the review hook's, whose
-  names match the methods it wraps), when a module above job names a module
-  above it in the order below by path, grouped tree or `super::` chain, or
-  calls the inherent methods and functions the [ORB-17939] ports and reused
-  reads wrap, when `contracts` imports any of the nine modules, or when a
-  shared contract is defined or imported anywhere but
+  `sweep_filing` or `workspace_auto` the same ways, and when either calls an
+  inherent `OrbitRuntime` method one of those modules defines on any
+  receiver. Since [ORB-22003] those method names are not listed: the guard
+  derives them from the `impl OrbitRuntime` blocks under each higher module
+  (methods whose visibility reaches the caller), so a new inherent method is
+  covered as soon as it exists, and port methods must use distinct names.
+  Same-named methods on other types are exact-line allowances (store reads
+  through `stores().jobs()` and `stores().tasks()`). `task/backlog_forecast/`
+  is the one exempt path: it still calls `job`, `admission` and
+  `workspace_auto` directly and waits for the forecast's move above
+  `workspace_auto`. The guard also fails when a module above job names a
+  module above it in the order below by path, grouped tree or `super::`
+  chain, or calls the inherent methods and functions the [ORB-17939] ports
+  and reused reads wrap, when `contracts` imports any of the nine modules,
+  or when a shared contract is defined or imported anywhere but
   `application::contracts`.
 
 The application layering, lowest first, is `contracts < task < job <
@@ -245,9 +261,12 @@ sweep_filing`. A module map that counts `crate::` paths, grouped trees,
 `super::` chains and calls on an `OrbitRuntime` receiver into another
 module's inherent methods (a lowercase `module::name(` path is a free
 function, not a method call) shows that every edge among the nine modules
-runs down that order: since [ORB-17972] no task → job edge remains, and
-since [ORB-17943] no task → automation edge remains, making `task` the
-lowest of the nine modules above `contracts`.
+runs down that order outside `task/backlog_forecast/`: since [ORB-22003]
+no task → job, task → distributed, job → distributed or job → pull_drain
+call edge remains (ORB-17972's cut had regrown past its fixed name list),
+and since [ORB-17943] no task → automation edge remains, making `task` the
+lowest of the nine modules above `contracts`. The forecast's task → job,
+task → admission and task → workspace_auto edges are the known exception.
 
 ## Task References
 
@@ -263,6 +282,7 @@ lowest of the nine modules above `contracts`.
 - [ORB-17938] — cut job's edges to admission, automation, review, sweep_filing and workspace_auto through job-owned automation, admission and auto-concurrency ports and the local-route, filing-tag and published-delivery contracts, and guarded them.
 - [ORB-17939] — cut the back edges among automation, review, distributed, admission and workspace_auto through ports the lower modules own and the distributed mutation gate contract, and guarded the order above job.
 - [ORB-17972] — routed task's remaining inherent calls to `job` through `task::TaskJobPort` and guarded them; no task → job edge remains.
+- [ORB-22003] — routed the regrown task → job, task → distributed, job → distributed and job → pull_drain calls through the existing lower-owned ports and made the guard derive forbidden inherent names from each higher module's `impl OrbitRuntime` blocks; `task/backlog_forecast/` is exempt pending its move.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

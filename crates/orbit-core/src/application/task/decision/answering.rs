@@ -12,7 +12,7 @@ use super::super::TaskRecordUpdateParams;
 use super::super::params::{TaskAddParams, TaskUpdateParams};
 use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
-use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
+use crate::application::task::{PilotAdmissionHold, TaskJobPort, TaskRecords, TriageTarget};
 
 impl OrbitRuntime {
     /// Apply `answer_id` to the open request `request_id` as the human
@@ -321,7 +321,7 @@ impl OrbitRuntime {
                 Ok(None)
             }
             DecisionGate::ScriptGrant => {
-                self.apply_script_grant_answer(request, answer_id, actor_label, via)?;
+                self.answer_script_grant_decision(request, answer_id, actor_label, via)?;
                 Ok(None)
             }
         }
@@ -368,8 +368,8 @@ impl OrbitRuntime {
         }
 
         if matches!(option.action, Some(DecisionAction::RePilot)) {
-            self.check_decision_task_pilot(task_id)
-                .map_err(|error| refuse(&error.to_string()))?;
+            self.decision_pilot_preflight(task_id)
+                .map_err(|error| refuse(&error))?;
         }
         let mut params = TaskUpdateParams::default();
         let mut applied = Vec::new();
@@ -480,7 +480,7 @@ impl OrbitRuntime {
         }
         self.update_task_as_human(task_id, params, actor)?;
         if matches!(option.action, Some(DecisionAction::RePilot)) {
-            self.submit_explicit_task_pilot(
+            self.request_explicit_task_pilot(
                 task_id,
                 Some(actor_label),
                 orbit_types::workflow::JobRunTrigger::cli(),

@@ -35,6 +35,7 @@ use super::{
     FINAL_RECOVERY_CI_RERUN_EVENT, FINAL_RECOVERY_REQUEUED_EVENT, FINAL_RECOVERY_RESUMED_EVENT,
 };
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
 
 /// Events that may own an inherited failure within the current block episode.
 const BASE_RED_EVENTS: [&str; 2] = [PR_AUTO_FIX_BASE_RED_EVENT, "ci_base_suspect"];
@@ -140,8 +141,8 @@ impl OrbitRuntime {
             let (recent, bound) = self.mechanical_bound(task, STEP)?;
             // The resume path validates resumability before it inserts a run or
             // readmits the task, so its refusal changes nothing either.
-            let invoke = self
-                .submit_resume_run(run_id, Some("final-recovery"), None)
+            let resumed_run_id = self
+                .resume_failed_run(run_id, Some("final-recovery"), None)
                 .map_err(|error| format!("{STEP} refused: {error}"))?;
             Ok(Plan {
                 status: task.status,
@@ -153,7 +154,7 @@ impl OrbitRuntime {
                     recent + 1,
                     bound.max_requeues,
                     bound.window.num_hours(),
-                    invoke.run_id,
+                    resumed_run_id,
                     reason.trim()
                 ),
                 execution_summary: None,
@@ -162,7 +163,7 @@ impl OrbitRuntime {
                 readmitted: true,
                 history: vec![system_entry(
                     FINAL_RECOVERY_RESUMED_EVENT,
-                    format!("source_run_id={run_id} resumed_run_id={}", invoke.run_id),
+                    format!("source_run_id={run_id} resumed_run_id={resumed_run_id}"),
                 )],
                 raise: None,
             })

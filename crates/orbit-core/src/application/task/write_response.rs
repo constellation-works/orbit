@@ -40,7 +40,7 @@ use orbit_types::workflow::{
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 use super::pull_request_links::PullRequestLinks;
@@ -435,7 +435,7 @@ pub fn active_task_triage_map(
     // lenient page read would treat unreadable JSON as absent and fall back to
     // submitted bindings. An unreadable state fails only this decoration, so
     // every task stays unmarked, the way `tasks_in_pilot_preparation` degrades.
-    let states = match runtime.read_run_states_exact(&run_ids) {
+    let states = match runtime.stored_run_states_exact(&run_ids) {
         Ok(states) => states,
         Err(error) => {
             tracing::warn!(%error, "task triage: active run states unreadable");
@@ -598,7 +598,7 @@ pub fn task_detail_with_dashboard_extras(
     let mut value = with_dashboard_extras_from(runtime, &row.task, object, page)?;
     let attention = match page.delivery_attention {
         Some(map) => map.get(&row.task.id).cloned(),
-        None => runtime.delivery_attention(row)?,
+        None => runtime.task_row_delivery_attention(row)?,
     };
     if let Some(attention) = attention
         && let Some(object) = value.as_object_mut()

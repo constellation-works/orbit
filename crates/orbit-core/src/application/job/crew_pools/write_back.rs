@@ -24,6 +24,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::{
     BACKFILL_CREW_SOURCE, REDRAW_SOURCE_PREFIX, experiment_crew_source,
 };
+use crate::application::job::JobDrainPort;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams, TaskRecords};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
@@ -191,7 +192,7 @@ impl OrbitRuntime {
         // Settlement attributes the contract this leaf actually received,
         // even when the experiment ended while its worker was running.
         let captured = self
-            .claim_receipt(claim_id)
+            .claim_admission_receipt(claim_id)
             .ok()
             .and_then(|receipt| receipt.experiments);
         let treatment = captured

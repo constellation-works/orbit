@@ -221,7 +221,7 @@ impl OrbitRuntime {
         claimed_leaf: bool,
     ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
         let (candidates, source) = if claimed_leaf {
-            self.unheld_claimed_leaf_crew_candidates(task, pools)?
+            self.claimed_leaf_candidates_before_holds(task, pools)?
         } else {
             self.crew_candidates_before_holds(task, pools)?
         };
