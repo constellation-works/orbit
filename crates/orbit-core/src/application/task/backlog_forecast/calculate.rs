@@ -52,7 +52,23 @@ pub(super) fn calculate_backlog_forecast(
                     .iter()
                     .position(|item| prediction["id"] == item.task_id)
                 {
-                    prediction["riskiness"] = rework.risks[index].clone();
+                    let mut riskiness = rework.risks[index].clone();
+                    if let Some(riskiness) = riskiness.as_object_mut() {
+                        // The forecast window is day-based. Keeping only that precision here
+                        // prevents identical no-arrival forecasts from differing by a second
+                        // because each request reads riskiness at a separate instant.
+                        for field in ["since", "observed_through"] {
+                            if let Some(date) = riskiness
+                                .get(field)
+                                .and_then(Value::as_str)
+                                .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+                                .map(|timestamp| timestamp.date_naive().to_string())
+                            {
+                                riskiness.insert(field.to_owned(), json!(date));
+                            }
+                        }
+                    }
+                    prediction["riskiness"] = riskiness;
                     prediction["regression_probability"] = json!(rework.probabilities[index]);
                     prediction["regression_probability_basis"] = json!(rework.prior_basis[index]);
                     prediction["regression_bundle_samples"] = json!(rework.pools[index].len());
