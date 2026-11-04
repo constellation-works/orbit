@@ -1,3 +1,4 @@
+// Examples are binaries with no public API to document, so missing_docs does not apply.
 #![allow(missing_docs)]
 // Examples are user-facing smoke binaries that print progress and unwrap setup invariants.
 #![allow(
