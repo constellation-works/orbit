@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Activity / Job"
 last_updated: 2026-11-03
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 ---
 
 # Glossary: Activity / Job

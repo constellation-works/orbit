@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-11-03
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 status: Draft
 stage: shipped
 next: "Readiness adapters (ORB-20165), then disabled readiness job (ORB-20166); both someday"
