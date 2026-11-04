@@ -9,6 +9,7 @@
 // shared selector. Chart drawing and tooltips stay in metrics.js.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { TERMINAL_TIME_NOTE, undatedNote } from './metrics-running.js';
 
 const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
 const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
@@ -246,6 +247,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     if (left) parts.push(`${tasks(left)} outside the measured sample: ${excludedDescription(total)}`);
     if (other) parts.push(`${tasks(other)} on another provider`);
     parts.push(coverageNote(payload), providerCoverageNote(payload));
+    if (payload.undated_tasks) parts.push(undatedNote(payload.undated_tasks));
     return {
       blurb,
       cards,
@@ -267,12 +269,13 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
     "lines join across buckets where no task closed",
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     bytes ? "result bytes before the first edit" : "tool calls before the first edit",
   ];
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider`);
   notes.push(coverageNote(payload), providerCoverageNote(payload));
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.truncated) notes.push("older implement invocations were left out of this read");
 
   return {

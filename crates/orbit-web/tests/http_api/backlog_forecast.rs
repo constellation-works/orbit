@@ -536,7 +536,7 @@ fn completed_delivery(
     id
 }
 
-fn comment(fixture: &Fixture, id: &str) {
+pub(super) fn comment_on_task(fixture: &Fixture, id: &str) {
     history(fixture)
         .update_task_history(
             id,
@@ -641,7 +641,7 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             );
 
             for id in [&recent, &old] {
-                comment(&fixture, id);
+                comment_on_task(&fixture, id);
                 // The old helper keeps its documented updated_at semantics.
                 let rows = fixture
                     .runtime

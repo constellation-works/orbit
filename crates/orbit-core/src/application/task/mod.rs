@@ -61,6 +61,8 @@ mod resolves;
 mod retained_candidate;
 mod schedule;
 pub(crate) use schedule::schedule_hold_in;
+mod terminal_dates;
+pub use terminal_dates::{DatedTerminalTask, TerminalTaskDates};
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod ci_sweep_filing;

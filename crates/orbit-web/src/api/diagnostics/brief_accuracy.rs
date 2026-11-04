@@ -116,17 +116,24 @@ fn brief_accuracy_report(
     range: &DiagnosticsRange,
     tags: &BTreeSet<String>,
 ) -> Result<Value, OrbitError> {
-    // Use the same terminal index and date convention as completions.
-    let tasks: BTreeSet<String> = runtime
-        .task_terminal_transitions(range.since)?
+    // Date done tasks by their durable transition, as completions does. A
+    // done task whose history has none is left out and counted, never scored.
+    let dates = runtime.task_terminal_dates(range.since)?;
+    let selected = |status: TaskStatus, task_tags: &[String]| {
+        status == TaskStatus::Done
+            && (tags.is_empty() || task_tags.iter().any(|tag| tags.contains(tag)))
+    };
+    let tasks: BTreeSet<String> = dates
+        .dated
         .into_iter()
-        .filter(|row| {
-            row.status == TaskStatus::Done
-                && range.contains(row.at)
-                && (tags.is_empty() || row.tags.iter().any(|tag| tags.contains(tag)))
-        })
-        .map(|row| row.task_id)
+        .filter(|row| range.contains(row.terminal_at) && selected(row.task.status, &row.task.tags))
+        .map(|row| row.task.task_id)
         .collect();
+    let undated_tasks = dates
+        .undated
+        .iter()
+        .filter(|task| selected(task.status, &task.tags))
+        .count();
 
     let mut predicted = BTreeMap::new();
     let mut no_brief = 0;
@@ -234,6 +241,7 @@ fn brief_accuracy_report(
         "until": range.until,
         "tags": tags,
         "done_tasks": tasks.len(),
+        "undated_tasks": undated_tasks,
         "accuracy": {
             "scored_tasks": scored,
             "predicted_files": predicted_files,

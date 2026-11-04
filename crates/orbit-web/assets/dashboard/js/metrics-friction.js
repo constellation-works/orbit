@@ -10,6 +10,7 @@
 // which passes its helpers in.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { undatedNote } from './metrics-running.js';
 
 const FAMILIES = [
   { key: "step_recovery", label: "Step recoveries", swatch: "c1" },
@@ -229,7 +230,7 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
     return {
       blurb,
       cards,
-      empty: { title: `No delivery friction or done tasks in the last ${windowKey === "all" ? "recorded history" : windowKey}`, detail: "" },
+      empty: { title: `No delivery friction or done tasks in the last ${windowKey === "all" ? "recorded history" : windowKey}`, detail: undatedNote(payload.done && payload.done.undated) || "" },
     };
   }
 
@@ -249,8 +250,9 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
 
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
-    rate ? "per task done in the same bucket" : "distinct occurrences; USD and tokens summed",
+    rate ? "per task done in the same bucket, by the recorded move to done" : "distinct occurrences; USD and tokens summed",
   ];
+  if (rate && payload.done && payload.done.undated) notes.push(undatedNote(payload.done.undated));
   if (!shared) notes.push("mixed units: each line is scaled to its own peak (axis = % of peak)");
   if (filtering) notes.push("complexity and crew narrow done tasks, auto-fixes, failed CI, cost and tokens; recoveries and conflicts stay unfiltered");
 

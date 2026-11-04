@@ -227,7 +227,10 @@ pub struct TaskCompletionByComplexity {
 
 /// One terminal task as the generated index holds it. `at` is the row's
 /// `updated_at`: the moment the task reached `status`, unless a later write
-/// (a comment, an artifact) touched the terminal bundle again.
+/// (a comment, an artifact, a crew backfill) touched the terminal bundle again.
+/// It therefore only bounds the transition from above; analytics that need the
+/// transition's time read it from status history (`task_terminal_dates` on the
+/// runtime).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskTerminalTransition {
     /// Empty when an older owner answered a worker read without it.

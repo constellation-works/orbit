@@ -1,7 +1,9 @@
 //! Tool calls and result bytes before the first file edit, by complexity
 //! and tag cohort, for Analytics › Metrics.
 //!
-//! Each terminal task counts once, in the bucket of its index `updated_at`.
+//! Each terminal task counts once, in the bucket of its durable terminal
+//! transition, as in the completions series; a task whose history has no such
+//! transition is left out and counted in `undated_tasks`.
 //! Its score is the first-edit score of its first implement invocation, the
 //! same definition the experiment readout uses. Tasks without a score are
 //! excluded and counted, never averaged as zero. Empty traces are counted
@@ -287,21 +289,37 @@ fn turns_to_edit_trend(
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let transitions: Vec<_> = runtime
-        .task_terminal_transitions(TrendWindow::read_since(range))?
-        .into_iter()
-        .filter(|row| !filters.done_only || row.status == TaskStatus::Done)
+    let dates = runtime.task_terminal_dates(TrendWindow::read_since(range))?;
+    let in_outcome = |status: TaskStatus| !filters.done_only || status == TaskStatus::Done;
+    let wanted = |complexity: &str| {
+        filters
+            .complexities
+            .as_ref()
+            .is_none_or(|selected| selected.contains(complexity))
+    };
+    let transitions: Vec<_> = dates
+        .dated
+        .iter()
+        .filter(|row| in_outcome(row.task.status))
         .collect();
-    let window = TrendWindow::new(range, transitions.first().map(|row| row.at));
+    let window = TrendWindow::new(range, transitions.first().map(|row| row.terminal_at));
+    let undated_tasks = dates
+        .undated
+        .iter()
+        .filter(|task| {
+            in_outcome(task.status)
+                && wanted(task.complexity.as_str())
+                && window.may_hold_undated(task.at)
+        })
+        .count();
     let in_window: Vec<_> = transitions
         .iter()
-        .filter_map(|row| window.bucket_of(row.at).map(|index| (index, row)))
-        .filter(|(_, row)| {
-            filters
-                .complexities
-                .as_ref()
-                .is_none_or(|selected| selected.contains(row.complexity.as_str()))
+        .filter_map(|row| {
+            window
+                .bucket_of(row.terminal_at)
+                .map(|index| (index, &row.task))
         })
+        .filter(|(_, row)| wanted(row.complexity.as_str()))
         .collect();
     // No implement invocation predates its task, so the oldest task in the
     // window bounds the read, with a day's slack for clock skew. An owner
@@ -440,6 +458,7 @@ fn turns_to_edit_trend(
         "total": overall.to_json(),
         "coverage": overall.coverage_json(),
         "excluded_other_provider": other_provider,
+        "undated_tasks": undated_tasks,
         "available_tags": tags
             .into_iter()
             .map(|(tag, tasks)| json!({ "tag": tag, "tasks": tasks }))

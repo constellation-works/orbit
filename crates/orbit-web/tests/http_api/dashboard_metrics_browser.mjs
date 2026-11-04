@@ -94,6 +94,8 @@ function completions(key) {
     buckets: Array.from({ length: count }, (_, i) => ({ start: start(i), ...(i === 9 ? counts(0, 0, 0, 0, 1, 0) : counts(i % 4, 5, 3, i === 2 ? 1 : 0, 0, i === 4 ? 2 : 0)) })),
     current: refreshFixture ? counts(60, 130, 101, 2, 1, 2) : counts(56, 127, 92, 1, 1, 2),
     previous: counts(71, 77, 81, 0, 1, 32),
+    undated: counts(2, 0, 0, 0),
+    previous_undated: counts(2, 0, 0, 0),
   };
 }
 
@@ -439,6 +441,7 @@ try {
   await hoverColumns.nth(9).hover();
   assert.match(await tip.textContent(), /No tasks reached done in this bucket/);
   await page.mouse.move(5, 5);
+  await body.getByText('2 closed tasks have no recorded close time and are left out').waitFor();
   await page.screenshot({ path: path.join(evidence, 'completed-1440.png'), fullPage: true, animations: 'disabled' });
   await page.keyboard.press('Tab');
   pass('completed trend', { doneCards });
