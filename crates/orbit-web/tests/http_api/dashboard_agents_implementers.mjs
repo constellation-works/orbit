@@ -57,8 +57,10 @@ assert.match(part('detail').textContent, /Cost per landed task/, 'cost stays in 
 assert.deepEqual(takeAll(), [], 'the dashboard does not fetch agent detail');
 assert.match(part('detail').textContent, /model-b/);
 const shown = part('detail').querySelectorAll('.agents-term-context');
-assert.equal(shown.length, implementerCard().terms.length, 'every scored term shows its reference count');
+assert.equal(shown.length, implementerCard().terms.length + 3, 'every scored term shows its reference count and review terms name their denominator');
 assert.equal(shown[0].textContent, '22 actual · 19.1 expected');
+const measuredZero = part('ranking').querySelectorAll('tr.agents-row').find(node => node.textContent.includes('small-sample')).querySelectorAll('td').find(node => node.dataset.term === 'reviewer_repairs');
+assert.equal(measuredZero.textContent, '0', 'observed zero repairs remains a measured zero');
 const rejects = part('detail').querySelectorAll('.agents-breakdown li').find(node => node.dataset.term === 'review_rejects');
 assert.equal(rejects.querySelector('.agents-term-value').textContent, '−2.7', 'the bar uses excess rejects, rather than total rejects');
 assert.ok(!part('detail').textContent.includes('[object Object]'), 'structured tier data never leaks into the detail column');
@@ -193,6 +195,11 @@ assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the fleet median sits on the middle ring, got ${radius}`);
 assert.ok(radarRadius('weighted_landed') > 52, 'a rank-2 row above the landed median plots outside the median ring');
 for (const term of ['first_pass_accepts', 'review_rejects', 'reviewer_repairs']) {
+  const rankingRow = part('ranking').querySelectorAll('tr.agents-row').find(node => node.textContent.includes('sol'));
+  const cell = rankingRow.querySelectorAll('td').find(node => node.dataset.term === term);
+  assert.equal(cell.textContent, 'no reviewed deliveries', `${term} table cell distinguishes missing reviews from zero`);
+  const breakdown = part('detail').querySelectorAll('.agents-breakdown li').find(node => node.dataset.term === term);
+  assert.equal(breakdown.querySelector('.agents-term-value').textContent, '+0', `${term} without reviews contributes nothing`);
   assert.ok(hasClass(radarVertex(term), 'is-gap'), `${term} with no reviewed deliveries is a gap`);
   assert.match(radarVertex(term).getAttribute('aria-label'), /no reviewed deliveries/, `${term} gap names its reason`);
   assert.match(radarTableRow(term).textContent, /no reviewed deliveries/, `${term} accessible row names the gap reason`);
@@ -203,6 +210,8 @@ assert.match(radarTableRow('weighted_landed').textContent, /\+20/, 'the accessib
 // Adding one extreme outlier crew must not move the median ring or squeeze
 // a normal crew toward the rim.
 await selectCrew('peer-a');
+const firstPassBreakdown = part('detail').querySelectorAll('.agents-breakdown li').find(node => node.dataset.term === 'first_pass_accepts');
+assert.equal(firstPassBreakdown.querySelector('.agents-term-value').textContent, '+5.4', 'review contribution uses expected counts per reviewed delivery');
 const peerLandedBefore = radarRadius('weighted_landed');
 const outlierCard = implementerOutlierCard();
 await loadCard(outlierCard);

@@ -418,9 +418,9 @@ function provisionalTerm(term, row) {
 }
 
 function contribution(term, row) {
-  if (provisionalTerm(term, row)) return 0;
+  if (provisionalTerm(term, row) || noReviewedDeliveries(term, row)) return 0;
   const rate = row.per_100 ? row.per_100[term.key] : null;
-  const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.units) : 0;
+  const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.term_units?.[term.key] ?? row.units) : 0;
   return typeof rate === "number" ? term.weight * (rate - expected) : null;
 }
 
@@ -667,10 +667,11 @@ function rankingNode(ranking) {
     if (row.below_support) support.append(el("span", { class: "agents-below", text: `below ${scorecard.min_support}` }));
     const cells = (role === "implementers" && implementerTier ? [] : terms()).map((term) => {
       const provisional = provisionalTerm(term, row);
+      const noReviews = noReviewedDeliveries(term, row);
       const td = el("td", {
         class: provisional ? "agents-num agents-term-provisional" : "agents-num",
-        text: number(row.per_100 && row.per_100[term.key]),
-        title: `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)})`
+        text: noReviews ? "no reviewed deliveries" : number(row.per_100 && row.per_100[term.key]),
+        title: noReviews ? `${term.label}: no reviewed deliveries; not scored` : `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)})`
           + (provisional ? `; provisional, too few ${termUnit(term)} to score` : ""),
       });
       td.dataset.term = term.key;
@@ -740,11 +741,15 @@ function rawText(row) {
 // Terms whose rate needs a settled review behind the row (implementers).
 const REVIEW_RATE_TERMS = new Set(["first_pass_accepts", "review_rejects", "reviewer_repairs"]);
 // Reviewed deliveries behind a row, when the payload carries them:
-// `reviewed_units` (implementers), else a term's own units. `null` when
+// `reviewed_units` (implementers). `null` when
 // the payload carries no reviewed denominator at all.
 function reviewedUnits(each) {
   if (typeof each.reviewed_units === "number") return each.reviewed_units;
   return null;
+}
+
+function noReviewedDeliveries(term, row) {
+  return role === "implementers" && REVIEW_RATE_TERMS.has(term.key) && reviewedUnits(row) === 0;
 }
 
 // The radar is a percentile view of rates: outward is better, the fleet
@@ -772,11 +777,11 @@ function radarNode(row) {
   const gap = (axis, each) => {
     if (each.unjudged) return "not judged yet";
     if (below(each)) return "too little evidence to compare";
-    if (REVIEW_RATE_TERMS.has(axis.key) && reviewedUnits(each) === 0) return "no reviewed deliveries";
+    if (noReviewedDeliveries(axis, each)) return "no reviewed deliveries";
     if (provisionalTerm(axis, each) || (axis.key === "missed_regressions" && each.provisional > 0)) return "provisional";
     if (axis.key === "missed_scope_blocks" && scorecard.sources?.missed_scope_blocks?.available === false) return "unmeasured";
     if (!(units(axis, each) > 0)) return "no units";
-    if (axis.unit && units(axis, each) < (scorecard.warning_min_support ?? scorecard.min_support)) return "below term support";
+    if (axis.unit && !(role === "implementers" && REVIEW_RATE_TERMS.has(axis.key)) && units(axis, each) < (scorecard.warning_min_support ?? scorecard.min_support)) return "below term support";
     return Number.isFinite(rate(axis, each)) ? null : "no rate";
   };
   const fleet = (scorecard.rows || []).filter((each) => each.rank != null && !below(each));
@@ -925,7 +930,7 @@ function detailNode(rankedRow) {
       const provisional = provisionalTerm(term, row);
       const context = el("small", {
         class: provisional ? "agents-term-context agents-term-provisional" : "agents-term-context",
-        text: `${number(row.counts && row.counts[term.key])} of ${plural(ownUnits, termUnit(term).replace(/s$/, ""), termUnit(term))}${provisional ? " · provisional, not scored" : ""}`,
+        text: noReviewedDeliveries(term, row) ? "no reviewed deliveries · not scored" : `${number(row.counts && row.counts[term.key])} of ${plural(ownUnits, termUnit(term).replace(/s$/, ""), termUnit(term))}${provisional ? " · provisional, not scored" : ""}`,
       });
       label.append(context);
     }
@@ -1001,7 +1006,7 @@ function howNode() {
     el("summary", { text: "How the score works" }),
     list,
     el("p", { text: role === "implementers"
-      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
+      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit}, except first-pass accepts, review rejects and reviewer repairs, which use reviewed deliveries. Review expectations use only the row's reviewed tier mix, and no reviewed deliveries contributes nothing. Expected counts use the fleet's rates on the corresponding tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
       : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
     ...(role === "implementers" ? [el("p", { text: "Escaped regressions are scored: regression links with escape no_test, mostly delivery-review findings, at their severity weights (critical 8, high 4, medium 2, low 1, nit 0.25), weighted −0.5. Change size dominates regression risk, so their expected count uses fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. A defect a pre-landing review already rejected or repaired counts once, as that verdict." }),
       el("p", { text: "Diff economy is the median landed-task ratio of lines changed to the fleet median for that tier and type. Above 1 means larger diffs for comparable work. Missing data or a zero reference median is unavailable. It is shown, not scored; normalizing regressions by a crew's own diff would reward bloat. All tiers keeps the tier-mix score. A selected tier ranks its crew scores from the cell matrix, pulled toward 100 with 30 tasks of reference evidence, and hides rows without work in that tier. Detail evidence remains for all tiers." })] : []),
@@ -1022,7 +1027,7 @@ function howNode() {
 function ownUnitText() {
   const byUnit = new Map();
   for (const term of terms()) {
-    if (!term.unit) continue;
+    if (!term.unit || (role === "implementers" && REVIEW_RATE_TERMS.has(term.key))) continue;
     byUnit.set(term.unit, [...(byUnit.get(term.unit) || []), term.label]);
   }
   return [...byUnit].map(([unit, labels]) => el("p", {

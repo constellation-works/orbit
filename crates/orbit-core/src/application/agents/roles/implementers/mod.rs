@@ -26,7 +26,7 @@ pub(super) use size_curves::{TIERS as SIZE_CURVE_TIERS, size_curves};
 pub(super) const ROLE: super::RoleSpec = super::RoleSpec {
     unit: "implemented tasks",
     terms: performance::TERMS,
-    term_units: &[],
+    term_units: performance::REVIEW_TERM_UNITS,
     rows: Some(performance::rows),
     header: Some(performance::execution_header),
 };

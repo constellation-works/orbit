@@ -501,7 +501,7 @@ try {
   const shownNotScored = await body.locator('.agents-stats').textContent();
   assert.ok(shownNotScored.includes('Diff economy'), 'diff economy stays in Shown, not scored');
   assert.ok(!shownNotScored.includes('Escaped regressions') && !shownNotScored.includes('Regression residual'), 'escaped regressions are a scored term, not unscored context');
-  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
+  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length + 3);
   assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
 
   // Reproduce the reported 30d view with a selected detail/radar. Keep the
@@ -643,7 +643,7 @@ try {
   await body.locator('#agents-detail').scrollIntoViewIfNeeded();
   await shot('agents-implementers-cost-unavailable-dark-375');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
+  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length + 3);
   implementersTails.push(await disclosureTail());
   await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
   await shot('agents-implementers-disclosure-dark-375');

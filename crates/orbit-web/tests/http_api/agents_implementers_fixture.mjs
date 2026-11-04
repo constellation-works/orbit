@@ -6,7 +6,7 @@ export const implementerTerms = [
   ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem'],
   ['crew_rework', 'Crew-caused rework', -1, 'problem'],
   ['escaped_regressions', 'Escaped regressions', -0.5, 'problem'],
-].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label }));
+].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label, ...(['first_pass_accepts', 'review_rejects', 'reviewer_repairs'].includes(key) ? { unit: 'reviewed deliveries' } : {}) }));
 const costCoverage = (measured, unpriced, missing) => {
   const total = measured + unpriced + missing;
   return [
@@ -24,7 +24,8 @@ const row = (crew, model, rank, landed, cost) => {
   const coverage = crew === 'unpriced' ? costCoverage(18, 4, 2) : costCoverage(units, 0, 0);
   return {
     crew, model, rank, units, score_base: 100, score: 0, raw: 0, below_support: rank == null,
-    runs_without_model: 0, provisional: null, counts,
+    runs_without_model: 0, provisional: null, counts, reviewed_units: units,
+    term_units: Object.fromEntries(['first_pass_accepts', 'review_rejects', 'reviewer_repairs'].map(key => [key, units])),
     per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
     stats: [
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
@@ -63,7 +64,8 @@ const radarRow = (crew, model, rank, counts, reviewedUnits) => {
   return {
     crew, model, rank, units, score_base: 100, score: 0, raw: 0, below_support: false,
     runs_without_model: 0, provisional: null, counts, reviewed_units: reviewedUnits,
-    per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
+    term_units: Object.fromEntries(['first_pass_accepts', 'review_rejects', 'reviewer_repairs'].map(key => [key, reviewedUnits])),
+    per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, ['first_pass_accepts', 'review_rejects', 'reviewer_repairs'].includes(key) ? (reviewedUnits ? count * 100 / reviewedUnits : null) : count * 100 / units])),
     stats: [
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: 5 },
@@ -76,8 +78,12 @@ const radarRow = (crew, model, rank, counts, reviewedUnits) => {
 function finishCard(rows, computedAt) {
   const total = rows.reduce((sum, row) => sum + row.units, 0);
   for (const row of rows) {
-    row.expected = Object.fromEntries(implementerTerms.map(term => [term.key, rows.reduce((sum, peer) => sum + peer.counts[term.key], 0) * row.units / total]));
-    row.raw = 100 + implementerTerms.reduce((sum, term) => sum + term.weight * (row.counts[term.key] - row.expected[term.key]) * 100 / row.units, 0);
+    row.expected = Object.fromEntries(implementerTerms.map(term => {
+      const units = peer => peer.term_units?.[term.key] ?? peer.units;
+      const fleetUnits = rows.reduce((sum, peer) => sum + units(peer), 0);
+      return [term.key, rows.reduce((sum, peer) => sum + peer.counts[term.key], 0) * units(row) / Math.max(1, fleetUnits)];
+    }));
+    row.raw = 100 + implementerTerms.reduce((sum, term) => sum + (row.term_units?.[term.key] === 0 ? 0 : term.weight * (row.counts[term.key] - row.expected[term.key]) * 100 / (row.term_units?.[term.key] ?? row.units)), 0);
   }
   const fleet = rows.reduce((sum, row) => sum + row.units * row.raw, 0) / total;
   rows.forEach(row => { row.score = Math.min(row.raw, (row.units * row.raw + 30 * fleet) / (row.units + 30)); });
