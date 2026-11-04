@@ -230,7 +230,7 @@ orbit resident control <task id> stop --reason "Goal dropped"
 | `takeover` | `active`, `paused` | `taken_over` | No cycle fires. Records who took over. |
 | `release` | `taken_over` | `active` | Due on the next tick. The cycle reads the comments written during the takeover as new. |
 
-An action that does not apply to the current state is refused and writes nothing. A live cycle is not interrupted: it keeps its grant, writes its checkpoint and ends at its boundary. When `stop` cannot move the assignment to review (a `proposed` assignment, say), the reply says why, and you move it by hand.
+An action that does not apply to the current state is refused and writes nothing. A live cycle is not interrupted: it keeps its grant, writes its checkpoint and ends at its boundary. A stopped assignment in `proposed` is moved through `in-progress` to `review`. If the lifecycle refuses a handoff, the reply says why, and you move the assignment by hand.
 
 Any caller that can write the assignment may call `control`, because every action narrows or restores firing under the existing authority. `resume` and `release` never widen it. Each action appends a `resident_control` event to the assignment's history with the action, the resulting state, the caller, the reason and any `--by-session`.
 
