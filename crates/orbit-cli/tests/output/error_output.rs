@@ -276,6 +276,61 @@ fn a_missing_task_and_a_missing_friction_are_both_not_found_and_exit_1() {
 }
 
 #[test]
+fn missing_values_name_their_listing_commands() {
+    let fixture = Fixture::workspace();
+    for (args, listing) in [
+        (vec!["task", "show", MISSING_TASK], "orbit task list"),
+        (vec!["run", "show", "missing-run"], "orbit run history"),
+        (vec!["run", "logs", "missing-run"], "orbit run history"),
+        (vec!["run", "job", "missing-job"], "orbit job list"),
+        (vec!["tool", "show", "missing-tool"], "orbit tool list"),
+        (
+            vec!["decision", "show", "missing-request"],
+            "orbit decision list",
+        ),
+        (
+            vec!["--workspace", "missing-workspace", "task", "list"],
+            "orbit workspace list",
+        ),
+    ] {
+        let output = fixture.run(&args, &[]);
+        plain_failure(&args, &output, 1);
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains(listing), "{}", describe(&args, &output));
+        assert!(
+            !message.starts_with("error: request_not_found:"),
+            "{message}"
+        );
+    }
+    let args = ["decision", "show", "missing-request", "--json"];
+    let error = json_failure(&args, &fixture.run(&args, &[]), 1);
+    assert_eq!(error["code"], "request_not_found", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("orbit decision list")
+    );
+}
+
+#[test]
+fn implicit_run_on_an_empty_store_explains_that_no_runs_exist() {
+    let fixture = Fixture::workspace();
+    for args in [vec!["run", "show"], vec!["run", "logs"]] {
+        let output = fixture.run(&args, &[]);
+        plain_failure(&args, &output, 1);
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains("no job runs exist"), "{message}");
+        assert!(!message.contains("latest"), "{message}");
+        assert!(message.contains("orbit run history"), "{message}");
+        let mut json_args = args.clone();
+        json_args.push("--json");
+        let error = json_failure(&json_args, &fixture.run(&json_args, &[]), 1);
+        assert_eq!(error["code"], "job_run_not_found", "{error}");
+    }
+}
+
+#[test]
 fn friction_mutations_on_a_missing_record_are_not_found_and_exit_1() {
     let fixture = Fixture::two_workspaces();
 

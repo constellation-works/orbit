@@ -79,6 +79,7 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::CallbackWorkspaceOutsideSandbox(m) => {
             OrbitError::CallbackWorkspaceOutsideSandbox(redact(&m))
         }
+        OrbitError::NoJobRuns => OrbitError::NoJobRuns,
         OrbitError::NotFound { kind, id, guidance } => OrbitError::NotFound {
             kind,
             id: redact(&id),

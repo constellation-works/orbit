@@ -29,6 +29,9 @@ pub enum OrbitError {
         #[serde(skip_serializing_if = "Option::is_none")]
         guidance: Option<String>,
     },
+    /// A run read omitted the ID, and the workspace has no runs to select.
+    #[error("no job runs exist in this workspace; see `orbit run history` for recorded runs")]
+    NoJobRuns,
     /// A governed operation was refused because the caller lacked the required
     /// capability [ORB-10453]. Distinct from [`Self::PolicyDenied`], which is
     /// `orbit-policy`'s filesystem-scoping refusal: this one is about *who is
@@ -58,7 +61,7 @@ pub enum OrbitError {
         message: String,
     },
     /// A decision refusal with a stable code, independent of its human explanation.
-    #[error("{code}: {message}")]
+    #[error("{message}")]
     DecisionRefused {
         code: DecisionRefusalCode,
         message: String,
@@ -407,7 +410,19 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
         return "workspace not found; run `orbit workspace init` from a project or pass `--workspace <workspace>`".to_string();
     }
 
-    format!("{kind} not found: {id}{}", guidance.unwrap_or_default())
+    // Explicit guidance (for example a spelling suggestion or an artifact's
+    // owning task) is more specific than the default listing.
+    let guidance = guidance.unwrap_or(match kind {
+        NotFoundKind::Task => "; see `orbit task list` or `orbit.task.list` for valid task IDs",
+        NotFoundKind::JobRun => {
+            "; see `orbit run history` for valid run IDs, or use `orbit.task.show` with `field: \"delivery\"` for a task's delivery run"
+        }
+        NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
+        NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
+        NotFoundKind::Workspace => "; see `orbit workspace list` for registered workspaces",
+        _ => "",
+    });
+    format!("{kind} not found: {id}{guidance}")
 }
 
 fn serialize_absorbed_candidate<S: serde::Serializer>(
