@@ -1,8 +1,8 @@
 ---
 title: "Spec: Auto-task steps and durable waiting"
 owner: codex
-last_updated: 2026-11-03
-last_validated: 2026-10-31
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 feature: activity-job
 type: design
@@ -72,9 +72,13 @@ delivery finalization to unrelated child tasks.
 | Field | Meaning |
 |---|---|
 | Existing `when` | Evaluate once; false skips successfully, without retry. Existing grammar and template semantics stay unchanged. |
-| Proposed step `wait_until` | CEL readiness predicate; false waits, unknown waits with the missing fact shown. Re-evaluate until true or expired. Absent means immediately ready once job structure reaches the step. |
-| Proposed step `expire_when` | CEL terminal predicate; true ends this unfinished step as `timeout`. It does not cancel its bound task. |
-| Proposed job `spec.expire_when` | Finite outer CEL deadline for jobs containing auto-task steps; prevents an unbounded wait even if a step never becomes ready. |
+| Shipped step `wait_until` | CEL readiness predicate; false waits, unknown waits with the missing fact shown. Re-evaluate until true or expired. Absent means immediately ready once job structure reaches the step. |
+| Shipped step `expire_when` | CEL terminal predicate; true ends this unfinished step as `timeout`. It does not cancel its bound task. |
+| Shipped job `spec.expire_when` | Finite outer CEL deadline for jobs containing auto-task steps; prevents an unbounded wait even if a step never becomes ready. |
+
+These fields are shipped in the auto-task job schema and runtime. The job-wait
+`board.empty` fact below is also shipped, but belongs to that wait environment;
+it is not the aggregate `board.empty` read proposed for condition triggers.
 
 Initially the new step wait fields are admitted only on auto-task targets. Job
 expiry is admitted only when such a target exists. A `when` guard remains an
@@ -115,12 +119,12 @@ task/host/file conditions without a bindable subject are refused explicitly.
 
 ## 3. Board conditions, time spacing and maximum wait
 
-`board.empty` is a proposed read matching the release-prep unfinished-task gate:
-no backlog, in-progress or review tasks. It does not mean only "no eligible
-backlog". Proposed, blocked and someday tasks are excluded and shown as such in
-explain; use explicit status counts if they should block. Scheduled tasks retain
-their stored status and count according to that status. Open release-blocking
-findings are also checked by the result contract below.
+In a job wait, `board.empty` is a shipped read matching the release-prep
+unfinished-task gate: no backlog, in-progress or review tasks. It does not mean
+only "no eligible backlog". Proposed, blocked and someday tasks are excluded and
+shown as such in explain; use explicit status counts if they should block.
+Scheduled tasks retain their stored status and count according to that status.
+Open release-blocking findings are also checked by the result contract below.
 
 Exclude only the current step's bound task from its mint/admission board view.
 Sibling children and outside work count normally; a child cannot block its own
@@ -259,8 +263,14 @@ No cross-workspace task binding or follower-owned coordination is introduced.
 
 ## 6. Release-readiness example
 
-All additions are illustrative proposed syntax; these examples are disabled.
-`full-qa-sweep` must resolve to the actual intended definition before enabling.
+These examples are disabled design examples. Auto-task job `wait_until`,
+`expire_when` and job-wait `board.empty` are shipped. The routine condition has
+per-bucket `board.backlog.empty`, `board.in_progress.empty`, and
+`board.review.empty` fields, but no aggregate `board.empty`; its
+`auto_tasks['release-prep'].last_succeeded_at` read is also future work. The
+accepted-history read and readiness adapters below are not implemented, so this
+release-readiness flow is not ready to enable. `full-qa-sweep` must resolve to
+the actual intended definition before enabling.
 The job is an ordinary catalog job with one condition-triggered routine:
 
 ```yaml
@@ -272,7 +282,8 @@ trigger:
   condition:
     scope: workspace
     when: >-
-      now >= timestamp('2026-10-31T00:00:00-07:00') && board.empty
+      now >= timestamp('2026-10-31T00:00:00-07:00')
+      && board.backlog.empty && board.in_progress.empty && board.review.empty
       && (!has(auto_tasks['release-prep'].last_succeeded_at)
           || now - auto_tasks['release-prep'].last_succeeded_at >= duration('24h'))
     for_minutes: 30
@@ -423,8 +434,9 @@ enablement, provider work and release timing remain operator decisions.
   branch the read is refused. `job.source_revision` is required-typed when a
   step requires `release-readiness/v1`, which pins the revision at admission;
   otherwise it needs `has()`. So does `result.revision`, except under that
-  contract. `board` adds `empty` to the condition board fields, and
-  `tasks['<ID>']` stays readable.
+  contract. The job-wait schema adds aggregate `board.empty`; condition-trigger
+  `board` still exposes only per-bucket `empty` fields, and does not expose
+  `auto_tasks['name']` accepted-completion reads. `tasks['<ID>']` stays readable.
 - **Explain.** `orbit automation explain job:<name>` (MCP
   `orbit.automation.explain`) reports the outer bound, the revision pin, and
   each step's target, resolved now with its file digest, enabled state and
