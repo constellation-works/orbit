@@ -117,6 +117,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Auditability](./design/auditability/1_overview.md) | Develop tamper evidence and joined queries | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
@@ -130,13 +131,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Apply ORB-19976's operator handoff so UX reviews consume routine results | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Evaluate the live experiment before default promotion | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (6)
+### Designing (5)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
@@ -186,11 +185,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
-### Parked (1)
+### Parked (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
+| [Web Terminal](./design/web-terminal/1_scope.md) | Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume | claude |
 
 ## Designs
 

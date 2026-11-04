@@ -1,11 +1,11 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
-stage: building
-next: "Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed"
+stage: parked
+next: "Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume"
 feature: web-terminal
 doc_role: scope
 type: design
@@ -17,7 +17,7 @@ related_features: [remote-access, user-interface, policy-sandbox]
 
 # Scope: a terminal in the dashboard
 
-Status: proposed; phase 1 landed (ORB-18488); phases 2–5 filed as ORB-18489, ORB-18491, ORB-18492 and ORB-18493.
+Status: parked; phase 1 landed ([ORB-18488], done); phases 2–5 archived as deferred ([ORB-18489], [ORB-18491], [ORB-18492], [ORB-18493]) under the 2026-10-29 disposition, preserved for a future scheduled effort.
 Bearing: the dashboard already reaches every registered host. `/api/on/<host>/…` forwards a
 request to that host's own `orbit web serve` over an SSH local forward the serving dashboard
 opens on demand, and unsafe methods need the serving dashboard's operator session through
@@ -209,15 +209,15 @@ host.
 ## Phasing
 
 1. **Browser-session credential.** Secret file, mask entry, one-time URL, cookie exchange,
-   `orbit web open`. Nothing uses it yet beyond `/api/session`. ([ORB-18488])
+   `orbit web open`. Nothing uses it yet beyond `/api/session`. (done, [ORB-18488])
 2. **Local terminal.** PTY sessions, WebSocket attach, limits, `terminal.open` audit,
-   configuration, and the `innerHTML` audit. ([ORB-18489])
+   configuration, and the `innerHTML` audit. (archived, deferred, [ORB-18489])
 3. **Dashboard pane.** Vendored xterm.js, dock pane and session list, Open terminal on
-   Settings › Hosts for the serving host. ([ORB-18491])
+   Settings › Hosts for the serving host. (archived, deferred, [ORB-18491])
 4. **Remote hosts.** WebSocket upgrade through the forward and the remote credential hand-over;
-   Open terminal on every host row. ([ORB-18492])
+   Open terminal on every host row. (archived, deferred, [ORB-18492])
 5. **Context launch.** Open terminal in a run's worktree on its host and in a registered
-   checkout. ([ORB-18493])
+   checkout. (archived, deferred, [ORB-18493])
 
 ## Open questions
 
