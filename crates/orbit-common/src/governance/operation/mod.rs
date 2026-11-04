@@ -50,7 +50,8 @@ mod registry;
 mod spec;
 
 pub(crate) use builders::{
-    aliased, both, cli_actions, cli_only, defaulted, free_text, mcp_only, preserve_empty, required,
+    aliased, both, cli_actions, cli_only, cli_required, defaulted, free_text, mcp_only,
+    preserve_empty, required,
 };
 pub use cli::{CliAction, CliArgKind, CliBinding, CliConstraint, CliGroup, CliHelp};
 pub use effects::{Effect, RETIRED_AGENT_FIELD, RetiredField, RetiredWording, UnknownFields};

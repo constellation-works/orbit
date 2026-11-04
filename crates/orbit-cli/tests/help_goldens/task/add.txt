@@ -1,6 +1,6 @@
 Create a new task
 
-Usage: orbit task add [OPTIONS] --title <TITLE>
+Usage: orbit task add [OPTIONS] --title <TITLE> --complexity <low|medium|hard|xhard>
 
 Options:
       --parent <PARENT_ID>
@@ -55,7 +55,7 @@ Options:
           [default: medium]
           [possible values: low, medium, high, critical]
 
-      --complexity <COMPLEXITY>
+      --complexity <low|medium|hard|xhard>
           Task complexity (low, medium, hard, or xhard). Required
 
           Possible values:

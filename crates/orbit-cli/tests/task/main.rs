@@ -53,6 +53,7 @@ mod pilot_comments;
 mod reconcile_review;
 #[cfg(unix)]
 mod repilot_cli;
+mod required_inputs;
 mod rescue_close_cli;
 mod review_after_landing_cli;
 mod review_crew_os_cli;

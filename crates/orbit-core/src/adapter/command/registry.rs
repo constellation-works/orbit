@@ -19,6 +19,8 @@ pub struct ToolInfo {
     pub active: bool,
     pub builtin: bool,
     pub parameters: Vec<orbit_types::tool::ToolParam>,
+    /// Full declared input schema; flat parameter metadata cannot express conditionals.
+    pub input_schema: Option<serde_json::Value>,
     /// The `orbit mcp serve` toolset this tool belongs to (`local` for a
     /// tool MCP never advertises); `None` only for an unclassified builtin.
     pub mcp_toolset: Option<orbit_types::tool::McpToolset>,
@@ -81,6 +83,7 @@ impl OrbitRuntime {
                 let enabled = stored.is_none_or(|s| s.enabled);
                 let active = self.tool_registry().is_active(&schema.name);
                 ToolInfo {
+                    input_schema: self.tool_registry().get_input_schema(&schema.name),
                     mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
                     name: schema.name.clone(),
                     description: schema.description.clone(),
@@ -123,6 +126,7 @@ impl OrbitRuntime {
         let active = self.tool_registry().is_active(&schema.name);
 
         Ok(ToolInfo {
+            input_schema: self.tool_registry().get_input_schema(&schema.name),
             mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
             name: schema.name,
             description: schema.description,
@@ -422,6 +426,7 @@ fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
         active: true,
         builtin: false,
         parameters: schema.parameters,
+        input_schema: None,
         // A catalogued external tool is never advertised over MCP.
         mcp_toolset: Some(orbit_types::tool::McpToolset::Local),
     }

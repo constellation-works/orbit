@@ -11,6 +11,19 @@ last_validated: 2026-11-02
 
 Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` and plain output carry full values everywhere; human detail selectors below recover one record without terminal-width truncation.
 
+`orbit task add` requires `--title` and `--complexity` (low, medium, hard or
+xhard); its `--description` remains optional. The tool-call surface has its own
+requirements: `orbit tool show <name>` marks fields required by schema branches
+as `conditional` and prints the object-level input constraints as JSON Schema.
+For `orbit.task.add`, ordinary creation requires `description` and `complexity`;
+with `request_id`, `workspace`, `description` and `acceptance_criteria` are required
+and `complexity` is not accepted. The same rendering applies to other tools with
+conditional schemas, including `orbit.task.update` and `orbit.pipeline.invoke`.
+`--parameter <name>` includes the same constraints. JSON inspection includes the
+full declared `input_schema` and each parameter's `requirement` (`required`,
+`conditional` or `optional`); the existing `required` boolean continues to describe
+unconditional requirements from the flat parameter metadata.
+
 `orbit tool show <name>` also prints persisted metadata for disabled external tools listed by `orbit tool list --all`. Inspection preserves their disabled state; `orbit tool run` remains refused until the tool is enabled.
 
 ## Covered
