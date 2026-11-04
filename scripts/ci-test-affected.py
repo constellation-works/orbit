@@ -266,8 +266,8 @@ def feature_units(cargo, packages=None):
     selection = ["--workspace"] if packages is None else [
         argument for name in packages for argument in ("-p", name)]
     listing = subprocess.check_output(
-        [*cargo, "tree", "--locked", "--edges", "normal,build,dev", "--prefix", "none",
-         "--format", "{p}\t{f}", *selection], cwd=ROOT, text=True)
+        [*cargo, "tree", "--locked", "--color", "never", "--edges", "normal,build,dev",
+         "--prefix", "none", "--format", "{p}\t{f}", *selection], cwd=ROOT, text=True)
     units = {}
     for line in listing.splitlines():
         package, _, features = line.removesuffix(" (*)").partition("\t")

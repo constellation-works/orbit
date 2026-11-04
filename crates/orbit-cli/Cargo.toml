@@ -43,8 +43,14 @@ tracing.workspace = true
 orbit-cmd = { path = "../orbit-cmd", features = ["test-release-api-base"] }
 # Real sandbox broker integration against the built CLI and MCP transport.
 orbit-engine = { path = "../orbit-engine" }
-orbit-exec = { path = "../orbit-exec" }
+orbit-exec = { path = "../orbit-exec", features = ["test-support"] }
 orbit-tools = { path = "../orbit-tools" }
+# With the feature entries above and below, these resolve a test build of this
+# crate as the workspace test build does, so a pull request's selected build
+# reuses the cached dependencies without compiling other crates' test harnesses
+# as feature anchors (scripts/ci-test-affected.py --test-build-packages).
+orbit-mcp = { path = "../orbit-mcp", features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 assert_cmd.workspace = true
@@ -54,7 +60,7 @@ regex.workspace = true
 reqwest.workspace = true
 # Signs the fake release mirror `orbit_cmd::update` tests verify against.
 rsa.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
 flate2.workspace = true

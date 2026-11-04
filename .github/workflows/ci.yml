@@ -52,7 +52,7 @@ env:
   # [ORB-21420] Replaying two full runs' logged test durations, a sixth
   # partition cut the slowest partition's summed test time by 27-30%
   # (docs/design-patterns/test_strategy.md).
-  NEXTEST_PARTITIONS: "6"
+  NEXTEST_PARTITIONS: "8"
   # The nextest transfer travels as this many artifacts, which each shard
   # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
   # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
@@ -234,7 +234,7 @@ jobs:
   # the workspace tests once and archives them (on an `affected:` PR, only the
   # affected crates' build set); NEXTEST_SHARDS "Test shard" jobs run nextest
   # from that archive, one count partition each, in parallel, as do the "Test
-  # extra partition", "Test partition 2" and "Test partition 6" jobs. On an
+  # extra partition" and "Test partition 2", 6, 7 and 8 jobs. On an
   # `affected:` PR every partition runs only
   # the affected and always-run crates' tests (ALWAYS_RUN in
   # scripts/ci-test-affected.py). [ORB-20394] "CI guardrails" runs the
@@ -460,7 +460,8 @@ jobs:
               for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
               sys.argv += ["--job", "Test extra partition", "--job", "Test partition 2",
-                           "--job", "Test partition 6", "--job", "CI guardrails"]
+                           "--job", "Test partition 6", "--job", "Test partition 7",
+                           "--job", "Test partition 8", "--job", "CI guardrails"]
               exec(compile(producer_bytes, producer, "exec"),
                    {"__name__": "__main__", "__file__": producer,
                     "__package__": "", "__spec__": None, "__cached__": None,
@@ -957,7 +958,7 @@ jobs:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          echo "tested_head=$(git rev-parse HEAD) runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown} cache_hit=${CACHE_HIT} cpus=$(nproc)"
+          echo "tested_head=$(git rev-parse HEAD) runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown} cache_hit=${CACHE_HIT} cpus=$(nproc) cpu_model=$(awk -F': ' '/^model name/ {gsub(/ /, "_", $2); print $2; exit}' /proc/cpuinfo)"
           rustc --version
           df -Pk /
           du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
@@ -1067,9 +1068,9 @@ jobs:
   # setting up while the build runs. The jobs share one step list; the
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
   # SHARD names the job (its JUnit report and the shard-1 sandbox gate);
-  # PARTITION is the count partition it runs. "Test partition 2", "Test
-  # extra partition" and "Test partition 6" run partitions 2, 5 and 6, so the
-  # shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
+  # PARTITION is the count partition it runs. "Test extra partition" runs
+  # partition 5 and each "Test partition k" job runs partition k (2, 6, 7, 8),
+  # so the shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
   # agent-main's ruleset requires these exact names: renaming a shard, or
   # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
   test-1:
@@ -1344,4 +1345,36 @@ jobs:
     env:
       SHARD: "partition-6"
       PARTITION: "6"
+    steps: *test-shard-steps
+
+  # [ORB-22077] Replaying the 2026-11-04 cohort's logged durations, an eighth
+  # count partition cut the slowest partition's test time by 35-57 s on core and
+  # full selections. A ninth or tenth gains little more: the longest single test
+  # (96-136 s) then bounds the partition. Check awaits these literal jobs too.
+  test-partition-7:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 7
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-7"
+      PARTITION: "7"
+    steps: *test-shard-steps
+
+  test-partition-8:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-8"
+      PARTITION: "8"
     steps: *test-shard-steps
