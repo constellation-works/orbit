@@ -94,7 +94,14 @@ pub(super) fn print_error(
         }
     }
 
-    eprintln!("error: {error}");
+    match error {
+        orbit_core::OrbitError::DecisionRefused { code, message }
+            if code.as_str() == "request_not_found" =>
+        {
+            eprintln!("error: {message}");
+        }
+        _ => eprintln!("error: {error}"),
+    }
 }
 
 /// Whether to report an error as JSON, and whether to pretty-print it.

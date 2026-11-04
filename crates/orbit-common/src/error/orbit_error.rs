@@ -61,7 +61,7 @@ pub enum OrbitError {
         message: String,
     },
     /// A decision refusal with a stable code, independent of its human explanation.
-    #[error("{message}")]
+    #[error("{code}: {message}")]
     DecisionRefused {
         code: DecisionRefusalCode,
         message: String,
