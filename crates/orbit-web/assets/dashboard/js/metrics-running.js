@@ -15,6 +15,15 @@ export const COUNT_VIEWS = [["bucket", "Per bucket"], ["cumulative", "Cumulative
 // The hash query parameter that remembers each count trend's view.
 const VIEW_PARAMS = { completed: "completed_view", defects: "defects_view", "tokens-total": "tokens_view", diff: "diff_view" };
 
+export const TERMINAL_TIME_NOTE = "time = when the task entered its closed status, from its recorded history; later edits do not move it";
+
+/// The footnote for closed tasks whose history records no time to count them
+/// at, or null when there are none (an older host reports no count).
+export function undatedNote(count) {
+  if (!count) return null;
+  return `${count} closed ${count === 1 ? "task has" : "tasks have"} no recorded close time and ${count === 1 ? "is" : "are"} left out`;
+}
+
 export function isCountTrend(trend) {
   return Object.hasOwn(VIEW_PARAMS, trend);
 }

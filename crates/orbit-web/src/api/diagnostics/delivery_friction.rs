@@ -19,8 +19,11 @@
 //! pull request, so `failed_ci` misses failures on runs without it.
 //!
 //! The denominator of every rate is the tasks that reached `done` in the
-//! bucket, dated as `/diagnostics/completions` dates them. A bucket with
-//! fewer than [`MIN_DONE`] done tasks is marked sparse.
+//! bucket, dated as `/diagnostics/completions` dates them: by the durable
+//! transition, so a later write never changes a rate. A done task whose history
+//! has no such transition stays out of every denominator and is counted in
+//! `done.undated`. A bucket with fewer than [`MIN_DONE`] done tasks is marked
+//! sparse.
 //!
 //! The complexity and crew filters narrow the denominator and the families
 //! whose occurrences belong to a task (`auto_fix`, `failed_ci`, `cost`,
@@ -361,10 +364,16 @@ fn delivery_friction_trend(
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
     let read_since = TrendWindow::read_since(range);
-    let done: Vec<_> = runtime
-        .task_terminal_transitions(read_since)?
-        .into_iter()
-        .filter(|row| row.status == TaskStatus::Done)
+    let dates = runtime.task_terminal_dates(read_since)?;
+    let done: Vec<_> = dates
+        .dated
+        .iter()
+        .filter(|row| row.task.status == TaskStatus::Done)
+        .collect();
+    let undated_done: Vec<_> = dates
+        .undated
+        .iter()
+        .filter(|task| task.status == TaskStatus::Done)
         .collect();
     let needs_tasks =
         filters.active() || filters.families.iter().any(|family| family.reads_history());
@@ -374,7 +383,11 @@ fn delivery_friction_trend(
     let metadata = if needs_tasks {
         runtime.list_task_metadata()?
     } else {
-        let ids: BTreeSet<String> = done.iter().map(|row| row.task_id.clone()).collect();
+        let ids: BTreeSet<String> = done
+            .iter()
+            .map(|row| row.task.task_id.clone())
+            .chain(undated_done.iter().map(|task| task.task_id.clone()))
+            .collect();
         runtime.list_task_metadata_for_ids(&ids)?
     };
     let tasks: HashMap<String, Task> = metadata
@@ -426,7 +439,7 @@ fn delivery_friction_trend(
     // `all` windows open at the oldest sample any source read.
     let earliest = done
         .iter()
-        .map(|row| row.at)
+        .map(|row| row.terminal_at)
         .chain(occurrences.iter().map(|occurrence| occurrence.at))
         .min();
     let window = TrendWindow::new(range, earliest);
@@ -435,19 +448,33 @@ fn delivery_friction_trend(
     let mut filtered = Denominator::new(bucket_count);
     let mut unfiltered = Denominator::new(bucket_count);
     for row in &done {
-        let admitted = filters.admits(tasks.get(&row.task_id));
+        let admitted = filters.admits(tasks.get(&row.task.task_id));
         for (denominator, counts) in [(&mut unfiltered, true), (&mut filtered, admitted)] {
             if !counts {
                 continue;
             }
-            if let Some(index) = window.bucket_of(row.at) {
+            if let Some(index) = window.bucket_of(row.terminal_at) {
                 denominator.points[index] += 1;
                 denominator.total += 1;
-            } else if window.in_previous(row.at) {
+            } else if window.in_previous(row.terminal_at) {
                 denominator.previous += 1;
             }
         }
     }
+    let unfiltered_undated = undated_done
+        .iter()
+        .filter(|task| window.may_hold_undated(task.at))
+        .count();
+    let undated = undated_done
+        .iter()
+        .filter(|task| window.may_hold_undated(task.at) && filters.admits(tasks.get(&task.task_id)))
+        .count();
+    let previous_undated = undated_done
+        .iter()
+        .filter(|task| {
+            window.previous_may_hold_undated(task.at) && filters.admits(tasks.get(&task.task_id))
+        })
+        .count();
 
     let admits = |family: Family, task_ids: &[String]| {
         !family.task_scoped()
@@ -530,11 +557,13 @@ fn delivery_friction_trend(
     let mut crews: BTreeMap<&str, u64> = BTreeMap::new();
     let mut complexities: BTreeMap<&str, u64> = BTreeMap::new();
     for row in &done {
-        if window.bucket_of(row.at).is_none() {
+        if window.bucket_of(row.terminal_at).is_none() {
             continue;
         }
-        *complexities.entry(row.complexity.as_str()).or_default() += 1;
-        if let Some(task) = tasks.get(&row.task_id) {
+        *complexities
+            .entry(row.task.complexity.as_str())
+            .or_default() += 1;
+        if let Some(task) = tasks.get(&row.task.task_id) {
             *crews
                 .entry(task.crew.as_deref().unwrap_or(UNKNOWN_CREW))
                 .or_default() += 1;
@@ -560,6 +589,9 @@ fn delivery_friction_trend(
             "previous": window.previous.map(|_| filtered.previous),
             "unfiltered_points": unfiltered.points,
             "unfiltered_total": unfiltered.total,
+            "undated": undated,
+            "previous_undated": window.previous.map(|_| previous_undated),
+            "unfiltered_undated": unfiltered_undated,
         },
         "available_crews": crews
             .into_iter()

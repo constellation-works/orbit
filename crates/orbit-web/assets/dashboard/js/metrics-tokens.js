@@ -11,7 +11,7 @@
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
-import { runningModel } from './metrics-running.js';
+import { TERMINAL_TIME_NOTE, runningModel, undatedNote } from './metrics-running.js';
 
 const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
 const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
@@ -186,7 +186,7 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
       cards,
       empty: {
         title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with token totals in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "",
+        detail: [left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "", undatedNote(payload.undated_tasks)].filter(Boolean).join(" "),
       },
     };
   }
@@ -202,9 +202,10 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
     "lines join across buckets where no task closed",
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
   ];
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
   if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
@@ -292,7 +293,7 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
       cards,
       empty: {
         title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with token totals in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "",
+        detail: [left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "", undatedNote(payload.undated_tasks)].filter(Boolean).join(" "),
       },
     };
   }
@@ -301,9 +302,10 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
   const addColumns = (lists, length) => Array.from({ length }, (_, i) => lists.reduce((sumSoFar, list) => sumSoFar + (list[i] || 0), 0));
   const leadLength = Math.max(0, ...series.map((entry) => (entry.lead_points || []).length));
   const notes = [
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
   ];
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
   if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);

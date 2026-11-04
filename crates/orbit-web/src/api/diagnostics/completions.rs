@@ -1,7 +1,10 @@
 //! Tasks reaching a terminal status per bucket, for Analytics › Metrics.
 //!
-//! A task counts at its index `updated_at`, which is its move to the terminal
-//! status unless a later write (a comment, an artifact) touched the bundle.
+//! A task counts at the latest entry into its current terminal status in its
+//! durable history, so a later comment, artifact or crew backfill cannot move
+//! it. A task with no such entry has no known completion time: it stays out of
+//! every bucket and total, and `undated` / `previous_undated` count it instead
+//! when its last write leaves that window possible.
 
 use std::collections::HashMap;
 
@@ -77,22 +80,32 @@ fn completion_trend(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let transitions =
-        runtime.task_terminal_transitions(TrendWindow::read_since_with_day_lead(range))?;
-    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.at));
+    let dates = runtime.task_terminal_dates(TrendWindow::read_since_with_day_lead(range))?;
+    let window = TrendWindow::with_day_lead(range, dates.dated.first().map(|row| row.terminal_at));
     let mut buckets = vec![Counts::default(); window.bucket_count()];
     let mut lead = vec![Counts::default(); window.lead_count()];
     let mut current = Counts::default();
     let mut previous = Counts::default();
-    for row in &transitions {
-        if let Some(index) = window.bucket_of(row.at) {
-            buckets[index].record(row.status, &row.complexity);
-            current.record(row.status, &row.complexity);
-        } else if window.in_previous(row.at) {
-            previous.record(row.status, &row.complexity);
+    for row in &dates.dated {
+        let (at, task) = (row.terminal_at, &row.task);
+        if let Some(index) = window.bucket_of(at) {
+            buckets[index].record(task.status, &task.complexity);
+            current.record(task.status, &task.complexity);
+        } else if window.in_previous(at) {
+            previous.record(task.status, &task.complexity);
         }
-        if let Some(index) = window.lead_bucket_of(row.at) {
-            lead[index].record(row.status, &row.complexity);
+        if let Some(index) = window.lead_bucket_of(at) {
+            lead[index].record(task.status, &task.complexity);
+        }
+    }
+    let mut undated = Counts::default();
+    let mut previous_undated = Counts::default();
+    for task in &dates.undated {
+        if window.may_hold_undated(task.at) {
+            undated.record(task.status, &task.complexity);
+        }
+        if window.previous_may_hold_undated(task.at) {
+            previous_undated.record(task.status, &task.complexity);
         }
     }
     let buckets: Vec<Value> = buckets
@@ -110,5 +123,7 @@ fn completion_trend(
         "lead_buckets": lead.iter().map(Counts::to_json).collect::<Vec<_>>(),
         "current": current.to_json(),
         "previous": window.previous.map(|_| previous.to_json()),
+        "undated": undated.to_json(),
+        "previous_undated": window.previous.map(|_| previous_undated.to_json()),
     }))
 }

@@ -6,7 +6,9 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
-use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
+use orbit_types::task::{
+    TaskComplexity, TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus, TaskType,
+};
 use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
@@ -16,7 +18,11 @@ use super::support::{Fixture, isolated, json_ok};
 const WS: &str = "workspace=ws_http_fixture";
 const MINUTE_MS: u64 = 60_000;
 
-fn add_task(fixture: &Fixture, complexity: TaskComplexity, status: TaskStatus) -> String {
+pub(super) fn add_task(
+    fixture: &Fixture,
+    complexity: TaskComplexity,
+    status: TaskStatus,
+) -> String {
     fixture
         .runtime
         .add_task(TaskAddParams {
@@ -236,10 +242,49 @@ fn implement_one_outcome_filters_every_aggregation_and_retry_attempt() {
     );
 }
 
-/// Closes `task` in the index at `at`: the row the completion trend reads.
-/// The bundle's clock is not settable from outside, and archiving is not a
-/// creation status, so the row is written directly.
-fn close_at(fixture: &Fixture, task: &str, status: TaskStatus, at: DateTime<Utc>) {
+/// Rewrites `task`'s recorded events. The bundle's clock is not settable from
+/// outside, so a fixture dates history directly.
+pub(super) fn rewrite_task_events(
+    fixture: &Fixture,
+    task: &str,
+    edit: impl FnOnce(&mut Vec<TaskEventRowV2>),
+) {
+    let path = task_events_path(fixture, task);
+    let mut events: Vec<TaskEventRowV2> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    edit(&mut events);
+    let text: String = events
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap() + "\n")
+        .collect();
+    std::fs::write(path, text).unwrap();
+}
+
+pub(super) fn task_events_path(fixture: &Fixture, task: &str) -> std::path::PathBuf {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    registry
+        .find_task_binding(task)
+        .unwrap()
+        .unwrap()
+        .canonical_path
+        .join("events.jsonl")
+}
+
+/// Points the index row of `task` at `status` and `last_write`.
+pub(super) fn index_terminal_row(
+    fixture: &Fixture,
+    task: &str,
+    status: TaskStatus,
+    last_write: DateTime<Utc>,
+) {
     let index =
         rusqlite::Connection::open(fixture.global.join("tasks").join("index.sqlite")).unwrap();
     let changed = index
@@ -248,8 +293,8 @@ fn close_at(fixture: &Fixture, task: &str, status: TaskStatus, at: DateTime<Utc>
              WHERE task_id = ?4",
             (
                 status.to_string(),
-                at.to_rfc3339(),
-                at.format("%Y-%m").to_string(),
+                last_write.to_rfc3339(),
+                last_write.format("%Y-%m").to_string(),
                 task,
             ),
         )
@@ -257,11 +302,27 @@ fn close_at(fixture: &Fixture, task: &str, status: TaskStatus, at: DateTime<Utc>
     assert_eq!(changed, 1, "index row for {task}");
 }
 
+/// Closes `task` at `at`: its latest status event enters `status` then, and the
+/// index row, which only bounds that time, matches it. Archiving is not a
+/// creation status, so the event and the row are written directly.
+pub(super) fn close_at(fixture: &Fixture, task: &str, status: TaskStatus, at: DateTime<Utc>) {
+    rewrite_task_events(fixture, task, |events| {
+        let entry = events
+            .iter_mut()
+            .rev()
+            .find(|event| event.to_status.is_some())
+            .expect("a task records its creation status");
+        entry.to_status = Some(status);
+        entry.at = at;
+    });
+    index_terminal_row(fixture, task, status, at);
+}
+
 fn since(window: &Value) -> DateTime<Utc> {
     window["since"].as_str().unwrap().parse().unwrap()
 }
 
-fn bucket_of(response: &Value, at: DateTime<Utc>) -> &Value {
+pub(super) fn bucket_of(response: &Value, at: DateTime<Utc>) -> &Value {
     let width = response["window"]["bucket_seconds"].as_i64().unwrap();
     let index = (at - since(&response["window"])).num_seconds() / width;
     &response["buckets"][usize::try_from(index).unwrap()]
@@ -1103,10 +1164,9 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
             let p = add_closed(&fixture, TaskComplexity::XHard, TaskStatus::Done, &[]);
             let q = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Rejected, &[]);
 
-            // Pin every closed task to the middle of one hourly bucket. The
-            // index dates terminal tasks by wall-clock close time, so tasks
-            // created across an hour boundary would split into two points
-            // and flake the single-point assertion below.
+            // Pin every closed task to the middle of one hourly bucket, so
+            // tasks created across an hour boundary cannot split into two
+            // points and flake the single-point assertion below.
             let closed_at = {
                 let base = (now - Duration::hours(2)).timestamp();
                 DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)

@@ -23,7 +23,7 @@ import {
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokenSpendModel, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
-import { availableCountViews, countViewHash, countViewsFromQuery, isCountTrend, resolveCountView, runningModel } from './metrics-running.js';
+import { TERMINAL_TIME_NOTE, availableCountViews, countViewHash, countViewsFromQuery, isCountTrend, resolveCountView, runningModel, undatedNote } from './metrics-running.js';
 import { fetchTurns, isCurrentTurnsPayload, turnsModel, turnsQuery, turnsTools, turnsView } from './metrics-turns.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
@@ -774,8 +774,9 @@ function completedModel(countView) {
   });
 
   const blurb = "Tasks that moved to done in each bucket, by complexity.";
+  const undated = undatedNote(payload.undated && payload.undated.done.total);
   if (!current.done.total && !current.rejected && !current.archived) {
-    return { blurb, cards, empty: { title: `No tasks closed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
+    return { blurb, cards, empty: { title: `No tasks closed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: undated || "" } };
   }
 
   if (countView !== "bucket") {
@@ -801,7 +802,7 @@ function completedModel(countView) {
         fmt: String,
         noun: "tasks",
         subject: "Tasks moved to done",
-        notes: ["time = the task's last write after it closed", "xhard and unset count toward the total only"],
+        notes: [TERMINAL_TIME_NOTE, "xhard and unset count toward the total only", undated].filter(Boolean),
         bucketTitle,
         bucketWidthLabel,
       }),
@@ -836,8 +837,9 @@ function completedModel(countView) {
       notes: [
         `${bucketWidthLabel(seconds)}, aligned to the clock`,
         "bars stack low · medium · hard · other; line = total",
-        "time = the task's last write after it closed",
-      ],
+        TERMINAL_TIME_NOTE,
+        undated,
+      ].filter(Boolean),
       aria: `Tasks completed per ${unit}, window ${windowKeyValue}: ${current.done.total} done (low ${current.done.low}, medium ${current.done.medium}, hard ${current.done.hard})${previous ? `, versus ${previous.done.total} in the ${prevText}` : ""}. Use the Table view for per-bucket values.`,
       tip: (index) => {
         const bucket = buckets[index];
