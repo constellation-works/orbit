@@ -1053,6 +1053,164 @@ fn arrivals_draining_before_the_generation_bound_stay_complete() {
     );
 }
 
+/// The furthest apart two back-to-back forecast scans may be. Each live
+/// forecast builds its own riskiness model from a fresh wall-clock scan, so
+/// the two `observed_through` instants differ by the requests' own compute
+/// time — one second across the F2026-11-097 CI run. The semantic remainder
+/// must still match exactly, so this bound only recognizes same-test scans;
+/// it matches the cross-scan skew the
+/// `forecast_riskiness_preserves_observation_timestamps` regression allows.
+const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
+
+/// One riskiness observation window read from a forecast prediction.
+struct RiskinessScanWindow {
+    since: DateTime<Utc>,
+    observed_through: DateTime<Utc>,
+    window_days: u64,
+}
+
+/// Validate every `task_predictions[].riskiness` observation window in
+/// `forecast` and remove `since`/`observed_through` from it, returning the
+/// removed windows. The windows keep their exact RFC3339 instants (never
+/// date-only: ORB-22032) and must each span `window_days`.
+fn strip_riskiness_scan_windows(
+    forecast: &mut Value,
+    side: &str,
+) -> Result<Vec<RiskinessScanWindow>, String> {
+    if !forecast
+        .get("task_predictions")
+        .is_some_and(|predictions| predictions.is_array())
+    {
+        return Err(format!(
+            "{side} forecast has no task_predictions array: {forecast}"
+        ));
+    }
+    let rows = forecast
+        .get_mut("task_predictions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| format!("{side} forecast has no task_predictions array"))?;
+    let mut windows = Vec::with_capacity(rows.len());
+    for row in rows.iter_mut() {
+        let id = row.get("id").unwrap_or(&Value::Null).clone();
+        let row_context = row.to_string();
+        let riskiness = row
+            .get_mut("riskiness")
+            .ok_or_else(|| format!("{side} prediction {id} has no riskiness: {row_context}"))?;
+        let context = riskiness.to_string();
+        let object = riskiness.as_object_mut().ok_or_else(|| {
+            format!("{side} prediction {id} riskiness is not an object: {row_context}")
+        })?;
+        let raw = ["since", "observed_through"]
+            .into_iter()
+            .map(|field| {
+                object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!(
+                            "{side} prediction {id} riskiness.{field} is not a string: {context}"
+                        )
+                    })
+                    .map(|raw| (field, raw))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut instants = Vec::with_capacity(2);
+        for (field, text) in raw {
+            if !text.contains('T') {
+                return Err(format!(
+                    "{side} prediction {id} riskiness.{field} must retain the RFC3339 instant, \
+                     not a date-only string ({text}): {context}"
+                ));
+            }
+            let instant = DateTime::parse_from_rfc3339(text)
+                .map_err(|_| {
+                    format!(
+                        "{side} prediction {id} riskiness.{field} must parse as RFC3339 ({text}): \
+                         {context}"
+                    )
+                })?
+                .with_timezone(&Utc);
+            instants.push(instant);
+        }
+        let since = instants[0];
+        let observed_through = instants[1];
+        if since >= observed_through {
+            return Err(format!(
+                "{side} prediction {id} observation window must advance: {context}"
+            ));
+        }
+        let window_days = object
+            .get("window_days")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                format!("{side} prediction {id} riskiness has no window_days: {context}")
+            })?;
+        let span_hours = (observed_through - since).num_seconds() as f64 / 3600.0;
+        if (span_hours - window_days as f64 * 24.0).abs() >= 1.0 {
+            return Err(format!(
+                "{side} prediction {id} riskiness window must span window_days ({window_days}): \
+                 {context}"
+            ));
+        }
+        object.remove("since");
+        object.remove("observed_through");
+        windows.push(RiskinessScanWindow {
+            since,
+            observed_through,
+            window_days,
+        });
+    }
+    Ok(windows)
+}
+
+/// Compare the no-arrivals (`off`) and arrivals-on (`on`) forecasts for
+/// semantic equality, tolerating only independently sampled riskiness scan
+/// instants. Every estimate, probability, cohort/prediction identity and
+/// completeness field must match exactly; the excluded `since`/
+/// `observed_through` pairs must each be an exact RFC3339 window from the
+/// same estimator, sampled within same-test skew (F2026-11-097).
+/// Returns the number of riskiness windows compared.
+fn compare_no_arrivals_forecasts(off: &Value, on: &Value) -> Result<usize, String> {
+    let mut off = off.clone();
+    let mut on = on.clone();
+    let off_windows = strip_riskiness_scan_windows(&mut off, "off")?;
+    let on_windows = strip_riskiness_scan_windows(&mut on, "on")?;
+    if off_windows.len() != on_windows.len() {
+        return Err(format!(
+            "off and on forecasts compare {} and {} riskiness windows",
+            off_windows.len(),
+            on_windows.len()
+        ));
+    }
+    if off != on {
+        return Err(format!("semantic forecast difference: off: {off} on: {on}"));
+    }
+    for (index, (off_window, on_window)) in off_windows.iter().zip(&on_windows).enumerate() {
+        if off_window.window_days != on_window.window_days {
+            return Err(format!(
+                "prediction {index} compares window_days {} against {}",
+                off_window.window_days, on_window.window_days
+            ));
+        }
+        for (field, off_instant, on_instant) in [
+            ("since", off_window.since, on_window.since),
+            (
+                "observed_through",
+                off_window.observed_through,
+                on_window.observed_through,
+            ),
+        ] {
+            let skew = (off_instant - on_instant).num_seconds().abs();
+            if skew >= NO_ARRIVALS_SCAN_SKEW_SECONDS {
+                return Err(format!(
+                    "prediction {index} {field} scans are {skew}s apart, beyond same-test skew"
+                ));
+            }
+        }
+    }
+    Ok(off_windows.len())
+}
+
 #[test]
 fn arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast() {
     isolated(
@@ -1078,8 +1236,130 @@ fn arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast() {
             let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
             assert_eq!(on["arrivals"]["per_day"]["total"], 0.0);
             assert_eq!(on["inputs"]["arrivals"], true);
-            assert_eq!(on["forecast"], off["forecast"]);
+            let compared = compare_no_arrivals_forecasts(&off["forecast"], &on["forecast"])
+                .unwrap_or_else(|diff| {
+                    panic!(
+                        "arrivals=on with zero arrivals must preserve the no-arrivals forecast: \
+                         {diff}"
+                    )
+                });
+            assert!(
+                compared > 0,
+                "the comparison must exercise at least one sampled riskiness window: {}",
+                on["forecast"]["task_predictions"]
+            );
             assert!(on["forecast"].get("simulation_cut").is_none());
+        },
+    );
+}
+
+/// One semantic mutation of a no-arrivals comparison fixture: its case
+/// name and the change that must fail the comparison.
+type NoArrivalsComparisonMutation = (&'static str, fn(&mut Value));
+
+/// A forecast shaped like the no-arrivals HTTP response, with the given
+/// riskiness observation window. The comparison treats everything except
+/// `since`/`observed_through` as semantic.
+fn no_arrivals_comparison_fixture(since: &str, observed_through: &str) -> Value {
+    json!({
+        "tasks": 1,
+        "time_to_drain_hours": {"p50": 2.0, "p90": 3.0},
+        "tokens": {"p50": 100.0, "p90": 150.0},
+        "usd": {"p50": 1.0, "p90": 2.0},
+        "drain_probability": 1.0,
+        "completion_probability": 1.0,
+        "simulation_truncated": 0,
+        "task_predictions": [
+            {
+                "id": "task-1",
+                "title": "Initial work",
+                "status": "backlog",
+                "completion_probability": 1.0,
+                "regression_probability": 0.05,
+                "riskiness": {
+                    "estimator_version": 3,
+                    "state": "estimated",
+                    "probability": 0.05,
+                    "basis": "declared_files",
+                    "size": 2,
+                    "window_days": 30,
+                    "min_support": 5,
+                    "since": since,
+                    "observed_through": observed_through,
+                },
+            },
+        ],
+    })
+}
+
+#[test]
+fn no_arrivals_comparison_tolerates_only_scan_instants() {
+    isolated(
+        "backlog_forecast::no_arrivals_comparison_tolerates_only_scan_instants",
+        || {
+            // Two scans one second apart across a date boundary: off sampled
+            // at midnight, on the second before. Both windows span the same
+            // 30 days with exact RFC3339 instants.
+            let off = no_arrivals_comparison_fixture(
+                "2025-12-02T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            );
+            let on = no_arrivals_comparison_fixture(
+                "2025-12-01T23:59:59+00:00",
+                "2025-12-31T23:59:59+00:00",
+            );
+            assert_eq!(
+                compare_no_arrivals_forecasts(&off, &on).unwrap_or_else(|diff| panic!(
+                    "distinct scan instants across a second/date boundary must compare equal: \
+                     {diff}"
+                )),
+                1
+            );
+            // Every other field is semantic: any material change fails.
+            let mutations: Vec<NoArrivalsComparisonMutation> = vec![
+                ("estimate", |forecast| {
+                    forecast["time_to_drain_hours"]["p50"] = json!(2.5);
+                }),
+                ("probability", |forecast| {
+                    forecast["drain_probability"] = json!(0.5);
+                }),
+                ("prediction identity", |forecast| {
+                    forecast["task_predictions"][0]["id"] = json!("task-2");
+                }),
+                ("regression probability", |forecast| {
+                    forecast["task_predictions"][0]["regression_probability"] = json!(0.5);
+                }),
+                ("riskiness probability", |forecast| {
+                    forecast["task_predictions"][0]["riskiness"]["probability"] = json!(0.5);
+                }),
+                ("completeness", |forecast| {
+                    forecast["simulation_truncated"] = json!(1);
+                }),
+            ];
+            for (case, mutate) in mutations {
+                let mut changed = on.clone();
+                mutate(&mut changed);
+                assert!(
+                    compare_no_arrivals_forecasts(&off, &changed).is_err(),
+                    "{case} must fail the no-arrivals comparison"
+                );
+            }
+            // The tolerated metadata itself must stay exact: date-only
+            // windows (the rejected ORB-22032 workaround) fail.
+            let date_only = no_arrivals_comparison_fixture("2025-12-02", "2026-01-01");
+            assert!(
+                compare_no_arrivals_forecasts(&off, &date_only).is_err(),
+                "date-only observation windows must fail the comparison"
+            );
+            // As do windows sampled outside same-test skew.
+            let stale = no_arrivals_comparison_fixture(
+                "2025-11-01T00:00:00+00:00",
+                "2025-12-01T00:00:00+00:00",
+            );
+            assert!(
+                compare_no_arrivals_forecasts(&off, &stale).is_err(),
+                "scans from different days must fail the comparison"
+            );
         },
     );
 }
