@@ -2508,6 +2508,44 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     );
 }
 
+/// [ORB-22100] A checkout that disappears while its provider runs names the
+/// missing worktree at the post-run snapshot. The snapshot used to surface the
+/// vanished working directory as a missing `git` binary
+/// (`failed to spawn git: No such file or directory`).
+#[cfg(unix)]
+fn dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree() {
+    let (fixture, host, checkout) = Fixture::with_checkout("T-VANISH", "jrun-vanished");
+    // The substitute provider deletes its own checkout, as an outside remover
+    // would, then exits before the boundary's post-run snapshot.
+    let body = format!("rm -rf '{}'", checkout.path.display());
+    let host = fixture.with_provider(&host, &body);
+
+    let error = dispatch_linked_provider(&host, "jrun-vanished", "T-VANISH", &checkout.path)
+        .expect_err("a checkout that vanishes before its snapshot must fail");
+    let diagnostic = integrity_diagnostic(&error, "worktree_mismatch");
+    let message = error.to_string();
+    let path = checkout.path.display().to_string();
+
+    assert!(
+        !checkout.path.exists(),
+        "ORB-22100: the race must remove the checkout before the snapshot runs"
+    );
+    assert!(
+        diagnostic["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("worktree is missing") && reason.contains(&path)),
+        "ORB-22100: the diagnostic must say the worktree is missing and name its path: {diagnostic}"
+    );
+    assert!(
+        message.contains(&path),
+        "ORB-22100: the error must name the missing worktree path: {message}"
+    );
+    assert!(
+        !message.contains("failed to spawn"),
+        "ORB-22100: a vanished checkout must not read as a missing git binary: {message}"
+    );
+}
+
 /// [ORB-19177] The ORB-18737 shape: a run starts while an operator has the
 /// primary on a hand hotfix branch, and the primary returns to the base branch
 /// mid-run. The guard's baseline is `workflow.base_branch`, never the branch
@@ -4729,6 +4767,8 @@ worktree_families! {
         agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
         #[cfg(unix)]
         provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
+        #[cfg(unix)]
+        dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree,
     ],
     worktree_contracts_8: [
         #[cfg(unix)]

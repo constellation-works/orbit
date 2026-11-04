@@ -9,7 +9,7 @@ links: [ORB-18269, ORB-18270, ORB-18271, ORB-22100]
 
 ## Signature
 
-Dispatch fails with `snapshot Git state in '<worktree>': execution failed: failed to spawn git: No such file or directory (os error 2)`. Final recovery then escalates with `did not return a decision: worktree integrity violation worktree_mismatch ... workspace_path '<worktree>' is not a directory`.
+Before ORB-22100, dispatch failed with `snapshot Git state in '<worktree>': execution failed: failed to spawn git: No such file or directory (os error 2)`. With ORB-22100, the first failure is `worktree integrity violation worktree_mismatch` whose reason reads `worktree is missing: workspace_path '<worktree>' is not a directory`. Final recovery then escalates with `did not return a decision: worktree integrity violation worktree_mismatch ... workspace_path '<worktree>' is not a directory`.
 
 ## Mechanism
 
@@ -21,7 +21,7 @@ Do not read the escalation text as unconcluded checks or as a missing binary. Ch
 
 ## Fix task
 
-ORB-22100 (proposed, tagged `run-failure-patterns`) makes the snapshot name a missing worktree. It does not identify why the directory was absent; that cause stays open until a later occurrence has a readable record.
+ORB-22100 (tagged `run-failure-patterns`) makes the snapshot check the worktree directory before it spawns Git, so the first failure names a missing worktree instead of a missing binary. It does not identify why the directory was absent; that cause stays open until a later occurrence has a readable record.
 
 ## Occurrences
 
