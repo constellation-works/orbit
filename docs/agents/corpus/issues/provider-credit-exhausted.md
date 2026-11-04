@@ -9,7 +9,7 @@ links: [ORB-17053, ORB-17055]
 
 ## Signature
 
-The run fails at draw with HTTP 402: `Grok Build balance is exhausted`; the task sits blocked and final recovery refuses a stale escalation.
+The run fails at draw with HTTP 402: `Grok Build usage balance exhausted`; the task sits blocked and final recovery refuses a stale escalation.
 
 ## Mechanism
 
