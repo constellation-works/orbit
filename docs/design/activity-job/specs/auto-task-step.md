@@ -1,7 +1,7 @@
 ---
 title: "Spec: Auto-task steps and durable waiting"
 owner: codex
-last_updated: 2026-10-31
+last_updated: 2026-11-03
 last_validated: 2026-10-31
 status: Draft
 feature: activity-job
@@ -83,7 +83,7 @@ use `wait_until` instead. A skipped step does not produce accepted prerequisite
 evidence. No new expression is fed to the shipped equality-only `when` parser.
 
 Use the type-checked subset from the
-[condition-trigger design](../../condition-triggers/1_scope.md), with its size,
+[condition-trigger design](../../condition-triggers/1_scope.md) ([ORB-19990]), with its size,
 cost, literal-read and unknown-value rules. `now` is the owner's pass timestamp.
 The additional wait environment is typed:
 
@@ -385,7 +385,9 @@ Deliver in phases: (1) disabled schema, target resolution and CEL explain
 (shipped, see "Phase 1 as built" below);
 (2) keyed bind/mint, parked waits, admission and partial-branch checkpoints
 (built, see "Phase 2 as built");
-(3) QA, security and preparation readiness adapters plus disabled job/routine examples.
+(3) QA, security and preparation readiness adapters ([ORB-20165], someday),
+the accepted-history condition consumer ([ORB-20397], someday), and disabled
+job/routine examples ([ORB-20166], someday).
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
 
@@ -531,13 +533,12 @@ to enable until those contracts are implemented and validated.
 
 ## Task References
 
-- ORB-19973 — records Daniel's decision to reuse jobs with an auto-task step.
-- ORB-19990 — covers condition-language schema/explain only; this proposal does
-  not change that task or authorize job extension implementation.
-- [ORB-20157] — phase 1: define, check and explain disabled auto-task steps.
-- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older
-  clients with layout migration 5.
-- [ORB-20158] — phase 2: keyed bind/mint, parked waits, admission rechecks and
-  partial-branch checkpoints; layout migration 7.
+- [ORB-19990] — Define and explain the typed condition-language schema.
+- [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
+- [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
+- [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
+- [ORB-20397] — Expose accepted-result history through condition success facts (someday).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

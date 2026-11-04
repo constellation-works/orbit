@@ -1,13 +1,13 @@
 ---
 title: Visual Review — Design
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-01
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 feature: visual-review
 doc_role: design
 type: design
-summary: Proposed design for mock-driven visual review — verify-mock-ui tasks carry mocks named by view, state, theme and width; the implementer compares its working tree with each mock through orbit visual capture; Orbit captures the mocked views on the final candidate, runs the workspace's UI rules, and a vision crew compares capture with mock under a precedence rule, with in-line verification, configurable blocking and an experiment gating the default.
+summary: Design for mock-driven visual review — verify-mock-ui tasks carry mocks named by view, state, theme and width; the implementer compares its working tree with each mock through orbit visual capture; Orbit captures the mocked views on the final candidate, runs the workspace's UI rules, and a vision crew compares capture with mock under a precedence rule, with in-line verification, configurable blocking and an experiment gating the default.
 tags: [visual-review, ui, mocks, review-gate, task-artifacts, finding-verification, experiments, browser-kit, ux-rules]
 paths: ["crates/orbit-core/assets/tag_instructions/ui/**", "crates/orbit-core/assets/tag_instructions/verify-mock-ui/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/executors/**", "crates/orbit-web/visual/**", "scripts/ux-rules/**"]
 related_features: [ux-rules, review-gate, task-artifacts, finding-verification, experiments, agent-scorecards, distributed-drain, user-interface]
@@ -20,12 +20,17 @@ This doc specifies the mechanisms of [1_scope.md](./1_scope.md): where visual re
 delivery, mocks and how they name views, the view manifest, capture, the implementer's
 self-check, hosts and claims, the deterministic checks, the comparison review, image
 delivery per provider, budgets, findings and their verification, measurement, the later
-before/after review, and the tag instructions. Nothing here is built. Where this doc names a
-mechanism that exists today, it links its design; everything else is a proposal, and the
-configuration keys are those in [1_scope.md › Configuration](./1_scope.md#configuration).
+before/after review, and the tag instructions. Phases 1–6 landed: image input
+([ORB-19977]), mock contracts ([ORB-19978]), capture and self-check ([ORB-19979]),
+delivery capture/checks ([ORB-19980]), comparison/verification ([ORB-19981]), and local
+live resolution plus experiment machinery ([ORB-19982]). Claimed live delivery remains
+safely unavailable after [ORB-20264]; [ORB-21963] tracks its remaining proof contract.
+Section 13 is later intent, and the experiment's promotion gate is not established by
+shipping its machinery. Configuration keys are in
+[1_scope.md › Configuration](./1_scope.md#configuration).
 
-The view manifest (§3) and the browser-context settings (§4.2) are delivered first by
-[UX rules](../ux-rules/1_scope.md) phases 1 and 2, whose UI rules are also this design's
+The view manifest (§3) and browser-context settings (§4.2) landed in [ORB-19975],
+on the [UX rules](../ux-rules/1_scope.md) runner; its UI rules are this design's
 deterministic checks (§7).
 
 ## 1. Placement in delivery
@@ -272,7 +277,7 @@ a mock names the view whose data is closest. The reviewer is told data values di
 
 ### 3.3 Orbit's manifests
 
-Proposed location: **crates/orbit-web/visual/views.toml**, with fixtures in
+Shipped in [ORB-19975]: **crates/orbit-web/visual/views.toml**, with fixtures in
 **crates/orbit-web/visual/fixtures/** and the setup script
 **scripts/visual-fixture-server.sh**; the website's manifest beside `website/`. Orbit's
 `.orbit/config.toml` sets `visual_review.manifests` to both.
@@ -577,7 +582,7 @@ driver keeps each context open until its checks have run). Two kinds of check:
 | `color_scheme_leak` | A `color_scheme_invariant` app whose light-preference capture differs from its dark one. | medium |
 | `unstable_view` | §4.3; recorded against the manifest. | low |
 
-Checks report in `shadow` until phase 6. The capture driver still loads and runs every
+Checks record without blocking in `shadow`; phase 6 ([ORB-19982]) enabled live dispositions. The capture driver still loads and runs every
 applicable UI rule. Orbit filters rules listed in `ux_rules.disabled` only after capture
 finishes and the driver writes `rules.json`, so disabling a rule does not avoid its
 capture-time work. Check findings are passed to the reviewer as known issues, so it does
@@ -676,20 +681,23 @@ it.
 
 ### 9.2 Per provider
 
-| Provider | Route | Status at design time |
+| Provider | Route | Implementation / evidence |
 |---|---|---|
-| `claude` | `native_read`: Claude Code's Read tool presents PNG, JPEG, GIF and WebP files as images. | Expected to work; phase 1 probes it under the worker sandbox. |
-| `codex` | `attach_args`: `codex exec` accepts image attachments on its command line (`--image`). | Expected to work for review; phase 1 confirms the flag on the pinned CLI version and whether a native read exists for the self-check. |
+| `claude` | `native_read`: Claude Code's Read tool presents PNG, JPEG, GIF and WebP files as images. | Shipped declaration; phase 1 Linux probe passed ([ORB-19977]). |
+| `codex` | `attach_args`: `codex exec` accepts image attachments on its command line (`--image`). | Shipped declaration; phase 1 Linux probe passed; `view_image` supports the self-check. |
 | `gemini` | `native_read` is expected (the Gemini CLI's file read returns image data). | Not verified; declared only after a probe passes. |
 | `antigravity`, `grok`, `copilot` | Unknown. | No declaration; refused until probed. |
-| `muse` | Unknown. The observed Muse Code contract takes the prompt from a file, has no Orbit-managed MCP, and documents no image attachment ([Muse Code CLI](../../CONFIG.md#muse-code-cli)). | No declaration; refused with `ImageInputUnavailable`. Phase 1 probes an authenticated `muse exec` for an attachment flag or an image-reading file tool. |
-| `ollama`, `openai_compat` | No CLI runtime. | Unsupported, as for every activity. |
+| `muse` | `attach_args --image {path}`, PNG only ([Muse Code CLI](../../CONFIG.md#muse-code-cli)). | Shipped declaration; phase 1 Linux probe passed on Muse Code 1.4.14. |
+| `ollama` | CLI runtime (`crates/orbit-agent/src/providers/ollama/ollama_runtime.rs`), without a shipped image-input declaration. | Visual use needs an image-input declaration and a passing crew probe. |
+| `openai_compat` | No CLI runtime. | Unsupported, as for every activity. |
 
 Phase 1 result ([ORB-19977], `orbit agents vision-probe` on Linux): the claude (`native_read`), codex
 (`attach_args`) and muse (`attach_args` `--image`, Muse Code 1.4.14) lanes passed and ship
 declarations; gemini was not authenticated on the probing host and ships none. Codex also has a
 native image read (`view_image`), so a codex implementer can read self-check images. Some codex
-models misread the canary on a passing lane; those crews opt out with `vision = false`.
+models intermittently misread the canary on a passing lane. [ORB-21365] keeps a probe miss
+visible per crew without failing the probe batch; a delivery miss still fails its step.
+`vision = false` remains an explicit opt-out, not an automatic consequence of one miss.
 
 ### 9.3 Proving the model saw the images
 
@@ -781,7 +789,9 @@ REJECTED, a confidence, and for CONFIRMED a severity, which may differ from the 
 The verified severity is the one recorded, filed and scored, with `severity_source: verified`.
 
 The verifier receives the cited images and regions, the precedence rule, the bounded
-base-revision design-rule excerpts and any deviation that touches the finding. It checks a
+base-revision design-rule excerpts and any deviation that touches the finding.
+[ORB-20529] added question 9 and carried those excerpts through initial and escalation
+verification; [ORB-20926] enforces their aggregate 16 KiB budget. It checks a
 design-rules citation against the cited text. It does not receive the reviewer's other findings. A low-confidence verdict escalates once to a crew of the next
 tier's filtered pool, as finding verification does. A finding left without a valid verdict is
 `unverified`.
@@ -936,7 +946,7 @@ with this design unchanged.
 
 ## 14. Tag instructions
 
-**`verify-mock-ui/implement.md`** (new) says:
+**`verify-mock-ui/implement.md`** says:
 
 - The mocks under `mocks/` are this task's visual specification. Each name gives the view,
   state, theme and width.
@@ -954,7 +964,7 @@ with this design unchanged.
 - Keep the manifest current in the same diff: add a view and its fixture when a mock names a
   route or state the manifest lacks.
 
-**`verify-mock-ui/review.md`** (new) says:
+**`verify-mock-ui/review.md`** says:
 
 - Read `visual/capture.json` and `visual/review.json`. Confirmed findings at or above the
   blocking severity must be addressed: fix each in your commit or mark it disputed with a
@@ -967,7 +977,7 @@ with this design unchanged.
 
 **`ui/implement.md` and `ui/review.md`** change only to point at `verify-mock-ui` for tasks
 with mocks. The workspace guide's screenshot rule and
-[browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) change in phase 6:
+[browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
 the implementer's capture duty is dropped for mocked views of a `verify-mock-ui` task in a
 workspace with visual review `live`, and remains for everything else.
 
@@ -984,9 +994,10 @@ workspace with visual review `live`, and remains for everything else.
 - **Mocks go stale.** Replacement between deliveries and declared deviations handle it, but
   both need someone to act. A mock that nobody updates after an operator comment changes the
   design produces findings the reviewer should reject, which costs a verifier batch.
-- **Unproven image routes.** Only the Claude and Codex routes are expected to work, and both
-  need a probe. An `attach_args`-only lane can review but cannot use the self-check. Visual
-  review may launch with fewer vision crews than hoped.
+- **Vision varies by crew and host.** Phase 1 established Claude, Codex and Muse routes
+  on its Linux host (§9.2), not universal capability. An `attach_args`-only lane can review
+  but needs native image reading for the self-check. A probe miss remains visible per crew
+  ([ORB-21365]); a delivery canary miss still refuses the review.
 - **The self-check depends on the implementer looking.** The tool produces the images; the
   instructions tell the implementer to compare. An implementer that skips it is visible
   only in the comparison findings and its scorecard credit.
@@ -1009,17 +1020,23 @@ workspace with visual review `live`, and remains for everything else.
 
 ## Task References
 
-- [ORB-19397] — the first version of this design: before/after visual review
-- [ORB-19304] — adds the shared five-level severity scale and weights findings and regressions by it
+- [ORB-19397] — Write the initial before/after visual-review design.
+- [ORB-19304] — Add the shared five-level severity scale and severity-weighted findings and regressions.
 - [ORB-11365] — added the bounded artifact read surface and image presentation classification
 - [ORB-18351] — publishes screenshot artifacts into the PR body through the task's evidence ref
-- [ORB-19977] — phase 1: image-input probes
-- [ORB-19978] — phase 2: mock convention
-- [ORB-19979] — phase 3: capture driver and implementer self-check
-- [ORB-19980] — phase 4: capture of record and checks in shadow
-- [ORB-19981] — phase 5: comparison review and verification in shadow
-- [ORB-19982] — phase 6: live mode and experiment
+- [ORB-19977] — Deliver phase 1 image-input declarations and vision probes.
+- [ORB-19978] — Deliver phase 2 mock naming, contracts and admission validation.
+- [ORB-19979] — Deliver phase 3 capture and implementer self-check.
+- [ORB-19980] — Deliver phase 4 capture of record and shadow checks.
+- [ORB-19981] — Deliver phase 5 comparison review and in-line verification.
+- [ORB-19982] — Deliver phase 6 local live resolution, measurement and experiment machinery.
 - [ORB-13989] — made the reviewer fix its findings as one second commit
 - [ORB-14849] — added before-landing review of the open PR
+- [ORB-19975] — Deliver view manifests, browser-context settings and executable UI rules.
+- [ORB-20264] — Fence live visual evidence and safely refuse unsupported claimed-live delivery.
+- [ORB-20529] — Add design-rule and quality-floor review question 9 and verifier excerpts.
+- [ORB-20926] — Enforce the aggregate design-rule excerpt byte budget.
+- [ORB-21365] — Record per-crew probe canary misses without failing the whole probe run.
+- [ORB-21963] — Complete owner-verifiable final-candidate visual proof for claimed live delivery (proposed).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

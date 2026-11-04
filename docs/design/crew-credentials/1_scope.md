@@ -9,13 +9,15 @@ doc_role: scope
 type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]
-last_updated: 2026-10-21
-last_validated: 2026-11-01
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 ---
 
 # Scope: per-crew credentials (`crews.<name>.env`)
 
-Status: phase 1 (`crews.<name>.env`, [ORB-17287]) and phase 2 (crew as account, [ORB-17288]) implemented.
+Status: phase 1 (`crews.<name>.env`, [ORB-17287]), phase 2 (crew as account, [ORB-17288])
+and file-backed sources ([ORB-20547]) have landed. [ORB-17462] completed same-provider
+auth-failure attribution to the failing crew account. No committed implementation remains.
 Bearing: [`[execution.env]`](../../CONFIG.md#executionenv--the-agent-subprocess-environment) is an
 allowlist of names, never values; [provider usage limits](../../CONFIG.md#provider-usage-limits)
 and [auth recovery probes](../../CONFIG.md#executor-authentication-recovery-probes) are keyed by
@@ -41,15 +43,19 @@ effort = "high"
 env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]   # or just "ANTHROPIC_API_KEY"
 ```
 
-`env` is a list of extra names this crew's agents receive, on top of `pass`:
+`env` adds variables to this crew's agents on top of `pass`, using names or file paths:
 
 - **`NAME`** passes `NAME` from the launching process, like a `pass` entry, but only to this crew.
 - **`NAME=SOURCE`** gives the agent `NAME` with the value of `SOURCE` from the launching process.
   The source can then live in `~/.zprofile` or `~/.orbit/clock.env` under a name no CLI reads,
   so interactive shells and other crews are unaffected, and different crews can use different
   keys (`_1`, `_2`).
-- Names only, never values. Both sides must be valid identifiers; privilege-bearing `ORBIT_*`
-  names are refused, as in `allowlisted_child_env_from`.
+- **`NAME=file:PATH`** reads the source file on the host at each child spawn ([ORB-20547]).
+  `PATH` is absolute or starts with `~/`. The host refuses a symlink, non-regular file,
+  foreign owner, group/world-readable file, missing file or empty content, and trims trailing
+  newlines. Only the target variable reaches the child; the file is not mounted as a secret.
+- Configure names and paths, never secret values. The target and a variable source must be
+  valid identifiers; privilege-bearing `ORBIT_*` names are refused.
 
 Rules:
 
@@ -59,9 +65,9 @@ Rules:
 2. **Crew env wins.** A crew's `NAME` overrides the same name from `pass`. When a crew sets a
    Claude credential (`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`), the other one is
    removed from that crew's agents, so exactly one credential is present.
-3. **Unset source = crew excluded.** A drain or ship start whose crew window includes a crew
-   with an unset `env` source warns (same path as unset `pass` names) and excludes that crew
-   rather than letting it fall back to the default login. `orbit doctor` reports it.
+3. **Unavailable source = crew excluded.** A drain or ship start whose crew window includes a crew
+   with an unset variable source or missing, empty or refused file source warns (names and
+   paths only) and excludes that crew rather than letting it fall back to the default login. `orbit doctor` reports it.
 4. **A crew with `env` is its own account.** Usage-limit readings, provider failure holds,
    pull-drain auth exclusions and probes key on `(provider, crew)` for such crews and on
    `provider` for the rest. The subscription's 5-hour limit does not stop the credits crew,
@@ -72,20 +78,25 @@ Rules:
 
 | Concern | File |
 |---|---|
-| Parse, validate, global-only | [`raw.rs`](../../../crates/orbit-config/src/raw.rs), [`Crew`](../../../crates/orbit-types/src/identity/agent_pair.rs) |
-| Overlay on the agent env | [`child_env.rs`](../../../crates/orbit-common/src/security/child_env.rs), `agent_subprocess_environment` in [engine trait](../../../crates/orbit-engine/src/context/hosts/runtime_host/mod.rs) and [core host](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs), [`CrewConfig`](../../../crates/orbit-engine/src/context/hosts/config.rs); also the detached worker snapshot and the auth probe |
+| Parse, validate, global-only | [`raw.rs`](../../../crates/orbit-config/src/raw.rs), [`Crew`](../../../crates/orbit-types/src/identity/agent_pair.rs), [`CrewEnvVar` / `CrewEnvSource`](../../../crates/orbit-types/src/identity/crew_env.rs) |
+| Overlay on the agent env | [`child_env.rs`](../../../crates/orbit-common/src/security/child_env.rs), [`operator_env.rs`](../../../crates/orbit-common/src/security/operator_env.rs) (`read_secret_file`), `agent_subprocess_environment` in [engine trait](../../../crates/orbit-engine/src/context/hosts/runtime_host/mod.rs) and [core host](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs), [`CrewConfig`](../../../crates/orbit-engine/src/context/hosts/config.rs); also the detached worker snapshot and the auth probe |
 | macOS Claude credential gate | [`environment.rs`](../../../crates/orbit-engine/src/activity_job/cli_runner/orchestrator/environment.rs) checks the composed crew env |
 | Limits, holds, exclusions | [`provider_hold.rs`](../../../crates/orbit-runtime/src/task/provider_hold.rs), [`host_provider_hold.rs`](../../../crates/orbit-core/src/application/distributed/host_provider_hold.rs), [`auth_recovery.rs`](../../../crates/orbit-core/src/application/distributed/auth_recovery.rs), crew window, admission policy |
-| Surfaces | `config show/get/set`, dashboard Settings, `orbit doctor` (`env-pass`, `claude-worker-token`), run detail credential origin: names only |
+| Surfaces | `config show/get/set`, dashboard Settings, `orbit doctor` (`env-pass`, `claude-worker-token`), run detail credential origin: names and paths only |
 
 ## Phasing
 
-1. **Env list** [ORB-17287]. Parse, global-only rule, overlay, credential exclusivity,
+1. **Env list — done ([ORB-17287]).** Parse, global-only rule, overlay, credential exclusivity,
    unset-source exclusion, doctor and config surfaces. Usable alone; limits still per provider
    (documented).
-2. **Crew as account** [ORB-17288]. Limits, holds, exclusions, probes and budgets keyed by crew
+2. **Crew as account — done ([ORB-17288]).** Limits, holds, exclusions, probes and budgets keyed by crew
    for crews with `env`. Existing records read as provider-level; an additive migration adds
-   the crew-account readings table and the invocation `account` column.
+   the crew-account readings table and the invocation `account` column. [ORB-17462]
+   fixes same-provider, different-account failures so the actual failing activity's account
+   is held rather than the healthy run account.
+3. **File-backed sources — done ([ORB-20547]).** `NAME=file:PATH` supplies credentials
+   consistently to CLI-, dashboard- and clock-started agents, with owner-only reads at spawn
+   and direct source checks in readiness and doctor.
 
 ## Open questions
 
@@ -109,7 +120,9 @@ Rules:
 
 ## Task References
 
-- [ORB-17287] — phase 1: `crews.<name>.env` overlays the agent environment
-- [ORB-17288] — phase 2: a crew with `env` is its own account for limits, holds and exclusions
+- [ORB-17287] — Add crew-specific environment overlays (phase 1).
+- [ORB-17288] — Isolate limits, holds and exclusions by crew account (phase 2).
+- [ORB-17462] — Attribute same-provider activity auth failures to the actual failing crew account.
+- [ORB-20547] — Read owner-only file-backed crew credentials at child spawn.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

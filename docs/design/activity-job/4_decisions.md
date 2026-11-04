@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-11-02
+last_updated: 2026-11-03
 last_validated: 2026-10-14
 status: Draft
 feature: activity-job
@@ -1786,18 +1786,18 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 
 ## Task References
 
-- [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
-- [T20260418-2019] — add v2 activity name resolution and pipeline skeleton assets.
-- [T20260418-2143] — wire `V2RuntimeHost` in orbit-core and add `orbit activity run-v2`.
-- [T20260418-2210] — reshape `V2RuntimeHost` to keep `orbit-agent` types out of orbit-core.
-- [T20260419-0002] — add `workspace_path` provenance to the v2 audit envelope.
-- [T20260419-0104] — add `backend: cli` dispatch for v2 `agent_loop`.
-- [T20260419-0622-3] — add `task_gate_pipeline`.
-- [T20260419-0623] — add `task_auto_pipeline`.
+- [T20260418-2018] — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
+- [T20260418-2019] — Add v2 activity name resolution and pipeline skeleton assets.
+- [T20260418-2143] — Wire `V2RuntimeHost` in orbit-core and add its standalone activity runner.
+- [T20260418-2210] — Reshape `V2RuntimeHost` to keep `orbit-agent` types out of orbit-core.
+- [T20260419-0002] — Add `workspace_path` provenance to the v2 audit envelope.
+- [T20260419-0104] — Add `backend: cli` dispatch for v2 `agent_loop`.
+- [T20260419-0622-3] — Add `task_gate_pipeline`.
+- [T20260419-0623] — Add `task_auto_pipeline`.
 - [T20260419-0623-2] — add `task_epic_pipeline`.
 - [T20260419-2014] — merge `orbit-types` into `orbit-common`.
-- [T20260419-2156] — retire v1 assets and drop the transitional v2 naming.
-- [T20260419-2347] — seed activities and workflows on `orbit init`.
+- [T20260419-2156] — Retire v1 assets and drop the transitional v2 naming.
+- [T20260419-2347] — Seed activities and workflows on `orbit init`.
 - [T20260420-0510-2] — add the Groundhog v1 activity runner.
 - [T20260421-0542-2] — add structured `list_backlog_tasks` output for context-lock exclusions.
 - [T20260423-0114] — expose the `backend: cli` executor-args gap during a local task ship run.
@@ -1822,7 +1822,7 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 - [T20260427-45] — use freshly fetched remote base refs for default task-shipping worktrees.
 - [T20260427-48] — thread provider config into the v2 CLI backend and keep Codex dynamic flags exec-compatible.
 - [T20260428-8] — add workflow-specific task admission for task-starting workflows.
-- [T20260428-9] — `orbit init` writes per-role agent settings to `[agent.<role>]` in `config.toml`.
+- [T20260428-9] — Write per-role agent settings from `orbit init` to `[agent.<role>]` in `config.toml`.
 - [T20260428-12] — wire `[agent.<role>]` config into `agent_loop` dispatch via the `role:` field and a host-backed resolver.
 - [T20260430-9] — add a job-level recovery activity hook for retry-exhausted v2 step failures.
 - [T20260430-12] — ship a generic deterministic recovery activity for direct task shipment workflows.
@@ -1869,7 +1869,7 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 - [ORB-10385] — gate job admission on the runtime's deterministic-action registry; register `pr_failure_handoff` and `worktree_gc`.
 - [ORB-10380] — pin `base_sha` from `worktree_setup` through `git_commit`; split the commit step's failure diagnostics.
 - [ORB-00075] — unify ship aliases into async `orbit run ship`.
-- [ORB-00363] — security bug: `run_shell` spawned unsandboxed subprocesses behind a tautological allowlist.
+- [ORB-00363] — Identify unsandboxed `run_shell` subprocesses behind a tautological allowlist.
 - [ORB-00374] — remove the `shell` activity variant and `run_shell` dispatch (fail-closed resolution of [ORB-00363]).
 - [ORB-10202] — remove the retired friction task status while preserving workflow admission and triage behavior.
 - [ORB-10232] — model recoverable PR handoff as checkpointed job activities with exact-SHA force-push provenance.
@@ -1882,13 +1882,55 @@ Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `tar
 - [ORB-15584] — persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one.
 - [ORB-15643] — cancel a blocking child whose parent's wait expired, keep its candidate for the task's next run, and report `child_timeout`.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
-- [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
+- [ORB-13897] — Add final recovery, its typed decision/applier contract and crew pool, and repair step-failure resume.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
-- [ORB-19985] — run granted script steps on Linux under `linux-bwrap-script-v1`, record each attempt as `script.execution`, and supersede ORB-00374's removal for script steps.
+- [ORB-19985] — Execute granted Linux script steps under linux-bwrap-script-v1.
 - [ORB-21298] — run granted script steps on macOS under `macos-sandbox-script-v1` with no network, `RLIMIT_*` limits, root probes and nested-sandbox refusal.
 - [ORB-20132] — operator approval of the breaking schemaVersion 3 change for auto-task jobs.
-- [ORB-20157] — define and explain disabled auto-task job steps (phase 1).
-- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older clients with layout migration 5.
-- [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
+- [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
+- [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
+- [ORB-14685] — Offer only backstop-applicable decisions and name the failed run's retained candidate.
+- [DANI-10438] — Run configured step recovery for unsuccessful dispatch outcomes as well as errors.
+- [ORB-10070] — Reconcile orphaned pending job runs so they don't permanently defer orbit-web-upgrade.
+- [ORB-10129] — Ship a triage routine for failed runs and blocked tasks.
+- [ORB-10231] — Make artifact-backed CLI activities tolerate non-envelope responses.
+- [ORB-10243] — Reconcile externally completed tasks and suppress repeat triage.
+- [ORB-10262] — Start MCP through an exact-checkout local broker.
+- [ORB-10266] — Make review_bundle materialize or fail closed.
+- [ORB-10332] — Remove the unused Groundhog activity kind and the epic/parallel pipeline layer.
+- [ORB-10381] — Remove orbit.learning writes from executor activities; redirect the learning checkpoint to frictions.
+- [ORB-10444] — Retire Threads and consolidate dashboard diagnostics.
+- [ORB-10458] — Backfill design decisions missing from the former ADR store.
+- [ORB-10462] — Make SQLite migrations safe for legacy databases and long-lived workers.
+- [ORB-10479] — Restore the 18 design-doc ADRs whose allocation survived but whose body was lost.
+- [ORB-10540] — Validate the workflow-tool self-dispatch guard and ship path on-box.
+- [ORB-10557] — Prevent sandboxed child runtimes from falsely interrupting their live pipeline.
+- [ORB-10576] — Remove orbit audit export.
+- [ORB-10586] — Move command output rendering to the renderer boundary.
+- [ORB-10594] — Keep liveness reconciliation from interrupting succeeding runs.
+- [ORB-10606] — Report independent-review candidate failures without conflating launch refusal and review failure.
+- [ORB-10623] — Add an optional reviewer crew field to the task schema.
+- [ORB-10624] — Resolve review crews from tasks and retire the former independence policy.
+- [ORB-10625] — Address fan out independent review to one child run per task.
+- [ORB-10627] — Remove the planning duel subsystem.
+- [ORB-10628] — Remove the independent review subsystem and its contract-preflight framework.
+- [ORB-10633] — Collapse the host-trait families into one runtime boundary.
+- [ORB-10801] — Make job runs asynchronous by default and retire agent backend selection.
+- [ORB-12683] — Preserve changed-HEAD candidates even on no-diff-expected tasks.
+- [ORB-12690] — Apply the changed-HEAD provenance guard before no-diff settlement.
+- [ORB-13755] — Refresh failed-attempt summaries before admitting claimed retries.
+- [ORB-13907] — Run the job-level `final_recovery_activity` once per run after step recovery is spent and before `failure_activity`: engine-owned phase-bounded `resume`, applier-owned settlement, and claimed decisions carried by the failure settlement to the owner.
+- [ORB-13933] — Fail the worktree boundary on stationary primary source edits and on record-store dirt that intersects the run, while still accepting disjoint `.orbit/` record-store dirt ([Stationary primary source edits stay a worktree-boundary failure](./4_decisions.md#stationary-primary-source-edits-stay-a-worktree-boundary-failure)).
+- [ORB-15156] — Review the frozen delivery batch that supplied the cited finding.
+- [ORB-15162] — Omit inapplicable implementing-task tool requirements from shipped non-implementer activities.
+- [ORB-15186] — Require evidence-backed after-landing review coverage rather than summary-only acceptance.
+- [ORB-19294] — Design operator-granted sandboxed script steps.
+- [ORB-19983] — Define script manifests, target parsing and the operator grant store.
+- [ORB-21297] — Mount declared script input files and attach output files as task artifacts.
+- [T20260420-0509] — Add Groundhog chronicle serializer.
+- [T20260420-0509-2] — Add structured task plan parsing.
+- [T20260420-0509-3] — Add Groundhog verb tools.
+- [T20260420-0509-4] — Add Groundhog workspace snapshots.
+- [T20260420-0510] — Add runtime checkpoint verifier.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
