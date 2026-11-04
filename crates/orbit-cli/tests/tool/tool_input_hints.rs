@@ -271,7 +271,9 @@ fn unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
         assert_eq!(error["code"], "tool_not_found", "{error}");
         let expected = match hint {
             Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
-            None => format!("tool not found: {name}"),
+            None => format!(
+                "tool not found: {name}; see `orbit tool list` or MCP `tools/list` for valid tool names"
+            ),
         };
         assert_eq!(error["error"], expected);
     }
@@ -295,5 +297,8 @@ fn unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
         .clone();
     let error: Value = serde_json::from_slice(&output.stderr)
         .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
-    assert_eq!(error["error"], "tool not found: orbit.task.get");
+    assert_eq!(
+        error["error"],
+        "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
+    );
 }

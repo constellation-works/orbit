@@ -17,6 +17,10 @@ use crate::output::sink;
 
 const MAX_HUMAN_CREW_NAME_ATTEMPTS: usize = 4;
 
+/// The next step when the human crew prompt closes. The machine identity already
+/// exists by then, so the remedy is the crew name flag or skipping the prompt.
+const HUMAN_CREW_REMEDY: &str = "pass --human-name <NAME> or --non-interactive";
+
 /// The human crew as `orbit init` reports it.
 pub(super) struct HumanCrewReport {
     pub(super) outcome: &'static str,
@@ -85,8 +89,10 @@ pub(super) fn ensure_human_crew_for_init(
                 agent_crews,
                 &mut output,
                 |prompt, output| {
-                    prompt_stdin::read_trimmed_line(prompt, output)
-                        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+                    prompt_stdin::read_trimmed_line(prompt, output).map_err(|error| {
+                        let error = prompt_stdin::with_remedy(error, HUMAN_CREW_REMEDY);
+                        OrbitError::InvalidInput(error.to_string())
+                    })
                 },
             );
         }

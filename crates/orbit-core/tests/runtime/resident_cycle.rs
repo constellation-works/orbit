@@ -8,6 +8,7 @@
 
 mod assignment_lifecycle;
 mod control_admission;
+mod landing;
 
 use std::path::PathBuf;
 use std::sync::Arc;

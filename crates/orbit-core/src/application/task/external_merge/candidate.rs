@@ -312,6 +312,37 @@ impl OrbitRuntime {
             })
     }
 
+    /// Every PR Orbit recorded for `task`, whether or not it may settle: those
+    /// on the task and those its accepted handoffs and kept claims delivered.
+    pub(super) fn recorded_pull_requests(&self, task: &Task) -> BTreeSet<u64> {
+        task.external_refs
+            .iter()
+            .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+            .filter_map(|reference| reference.id.parse::<u64>().ok())
+            .chain(self.released_claim_pull_requests(&task.id).into_keys())
+            .chain(self.accepted_handoff_pull_requests(&task.id).into_keys())
+            .collect()
+    }
+
+    /// Whether a PR of `author` into `base` may deliver the candidate.
+    pub(super) fn delivers_candidate(
+        &self,
+        candidate: &Candidate,
+        number: u64,
+        author: &str,
+        base: &str,
+        authors: &[String],
+    ) -> bool {
+        match candidate.follower_prs.get(&number) {
+            Some(landing) => base == landing,
+            None => {
+                candidate.revoked.is_none()
+                    && authors.contains(&author.to_ascii_lowercase())
+                    && base == self.delivery_target_branch(&candidate.task)
+            }
+        }
+    }
+
     /// The newest of `merged` that delivered the candidate into its target
     /// branch.
     pub(super) fn delivery_merge(
@@ -321,7 +352,6 @@ impl OrbitRuntime {
         authors: &[String],
     ) -> Option<MergedPullRequest> {
         let task = &candidate.task;
-        let target = self.delivery_target_branch(task);
         merged
             .iter()
             .filter(|merged| {
@@ -336,16 +366,15 @@ impl OrbitRuntime {
                     &task.id,
                 )
             })
-            .filter(
-                |merged| match candidate.follower_prs.get(&merged.pull.number) {
-                    Some(landing) => merged.base_branch == *landing,
-                    None => {
-                        candidate.revoked.is_none()
-                            && authors.contains(&merged.pull.author.to_ascii_lowercase())
-                            && merged.base_branch == target
-                    }
-                },
-            )
+            .filter(|merged| {
+                self.delivers_candidate(
+                    candidate,
+                    merged.pull.number,
+                    &merged.pull.author,
+                    &merged.base_branch,
+                    authors,
+                )
+            })
             .max_by_key(|merged| merged.pull.number)
             .cloned()
     }

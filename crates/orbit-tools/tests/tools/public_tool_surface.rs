@@ -356,6 +356,7 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.pipeline.wait",
         "orbit.search",
         "orbit.workflow.ship",
+        "orbit.workflow.land",
         "orbit.workflow.run.show",
         "orbit.workflow.run.list",
         "orbit.workflow.run.resume",
@@ -621,7 +622,9 @@ fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
         );
         let expected = match hint {
             Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
-            None => format!("tool not found: {name}"),
+            None => format!(
+                "tool not found: {name}; see `orbit tool list` or MCP `tools/list` for valid tool names"
+            ),
         };
         assert_eq!(error.to_string(), expected);
     }
@@ -641,7 +644,10 @@ fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
         let error = registry
             .execute("orbit.task.get", &context, serde_json::json!({}))
             .unwrap_err();
-        assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+        assert_eq!(
+            error.to_string(),
+            "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
+        );
     }
     registry.unregister("orbit.task.show");
     let error = registry
@@ -651,5 +657,8 @@ fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
             serde_json::json!({}),
         )
         .unwrap_err();
-    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+    assert_eq!(
+        error.to_string(),
+        "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
+    );
 }

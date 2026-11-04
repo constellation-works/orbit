@@ -576,21 +576,21 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
 /// this path interpretation; it does not require the root to exist.
 pub fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {
     let root = paths::resolve_path_value(raw, base_dir, "root path")?;
-    Ok(resolve_existing_root_traversal(root))
-}
-
-/// Resolve parent components of an existing root while preserving missing roots.
-pub fn resolve_existing_root_traversal(root: PathBuf) -> PathBuf {
-    // Resolve existing roots through the filesystem so `..` respects symlinks.
-    // Keep missing roots intact for initialization and its existing errors.
     if root
         .components()
-        .any(|c| c == std::path::Component::ParentDir)
+        .any(|component| component == std::path::Component::ParentDir)
     {
-        root.canonicalize().unwrap_or(root)
+        Ok(resolve_existing_root_traversal(root))
     } else {
-        root
+        Ok(root)
     }
+}
+
+/// Resolve an existing root to its filesystem spelling while preserving missing roots.
+pub fn resolve_existing_root_traversal(root: PathBuf) -> PathBuf {
+    // Normalize symlink aliases so different spellings select the same store.
+    // Keep missing roots intact for initialization and its existing errors.
+    root.canonicalize().unwrap_or(root)
 }
 
 /// Like `resolve_initialize_roots` but never falls through to the

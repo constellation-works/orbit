@@ -75,7 +75,7 @@ fn table_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Table(table) => Some(table.trailing_notices()),
-            Block::Text(_) | Block::Notice(_) | Block::DoctorFindings(_) => None,
+            Block::Text(_) | Block::Prose(_) | Block::Notice(_) | Block::DoctorFindings(_) => None,
         })
         .flatten()
         .map(String::as_str)
@@ -93,7 +93,7 @@ fn block_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Notice(text) => Some(text.as_str()),
-            Block::Text(_) | Block::Table(_) | Block::DoctorFindings(_) => None,
+            Block::Text(_) | Block::Prose(_) | Block::Table(_) | Block::DoctorFindings(_) => None,
         })
         .collect()
 }
@@ -144,7 +144,8 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
             for block in blocks {
                 match block {
                     Block::Text(text) => println!("{text}"),
-                    Block::Notice(text) => eprintln!("{text}"),
+                    Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
+                    Block::Notice(text) => eprintln!("{}", sink.wrap_prose(&text)),
                     Block::Table(table) => truncated |= table.emit(sink),
                     Block::DoctorFindings(rows) => {
                         if sink.mode() == OutputMode::Table {
@@ -152,9 +153,9 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                             if !findings.is_empty() {
                                 println!("\n{findings}");
                                 if truncated {
-                                    println!(
+                                    println!("{}", sink.wrap_prose(
                                         "\nTable details shortened. Use --format plain or --json for full output."
-                                    );
+                                    ));
                                 }
                             }
                         }

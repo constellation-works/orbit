@@ -800,7 +800,10 @@ fn unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints(
         .runtime
         .execute_tool_command("orbit.task.get", json!({}), None, Some("codex".into()))
         .expect_err("a disabled replacement must not be suggested");
-    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+    assert_eq!(
+        error.to_string(),
+        "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
+    );
 }
 
 crate::scenario_table!(

@@ -96,6 +96,7 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::JobRun => "job_run_not_found",
             NotFoundKind::Workspace => "workspace_not_found",
         },
+        OrbitError::NoJobRuns => "job_run_not_found",
         OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].

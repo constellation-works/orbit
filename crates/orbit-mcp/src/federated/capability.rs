@@ -84,6 +84,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_lease_show"
         | "orbit_lease_list"
         | "orbit_lease_check"
+        | "orbit_workflow_land"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // A replica may resolve an existing host-local legacy friction. Core
         // checks the update's fields and still refuses every other mutation.

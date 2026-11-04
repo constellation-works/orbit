@@ -180,6 +180,12 @@ workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts rea
 for the run it serves. The sandbox gains no write grant. The handler still refuses a task no human crew
 holds, and the request's filer is the run's identity, never one the input names.
 
+**A resident cycle's landing and move to `done`.** `orbit.workflow.land`, and an `orbit.task.update`
+whose `status` is `done`, reach the forge with the host's `gh` credentials, which the cycle's sandbox
+does not hold. The nested `orbit` forwards them on the same terms as the ship, and the broker runs them
+through the tool host for the run it serves, so the cycle guard decides the live grant, the `merge`
+right and the open pull request. The broker carries no other `orbit.task.update` for a cycle.
+
 **Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
 `orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,

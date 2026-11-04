@@ -71,6 +71,7 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
+            | WorkflowVerb::Land
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -411,6 +412,7 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
+            | WorkflowVerb::Land
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

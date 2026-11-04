@@ -349,12 +349,23 @@ function supportText(forecast, payload) {
   return parts.length ? `Available evidence: ${parts.join(" · ")}.` : "";
 }
 
+// A scenario with arrivals stopped at a simulation bound. Its partial runs are
+// withheld, so this names the bound rather than any figure.
+function simulationCutReason(cut) {
+  const detail = {
+    generated_limit: `A simulated run filed ${(cut?.generated_limit ?? 10000).toLocaleString("en-US")} new tasks at the recent rate without the backlog ever emptying, so there is no drain time to report.`,
+    event_limit: "A simulated run reached the limit on scheduling events before it finished, so its totals are withheld.",
+  }[cut?.reason] ?? `The simulation stopped at its ${cut?.compute_budget_seconds ?? 20}-second limit before finishing every run, so partial totals are withheld.`;
+  return { kind: "simulation_cut", label: "With arrivals simulation cut short", detail };
+}
+
 /// Reasons the adjusted forecast is unavailable, from `forecast.unavailable`.
 /// Null when no flag is set (older payloads omit the object entirely).
 export function forecastUnavailableInfo(forecast, payload = {}) {
   const unavailable = forecast?.unavailable;
   if (!unavailable || typeof unavailable !== "object") return null;
   const reasons = [];
+  if (unavailable.simulation_cut) reasons.push(simulationCutReason(forecast.simulation_cut));
   if (unavailable.regression_history_missing) {
     const named = regressionGapReasonPhrase(forecast);
     let label = "Missing regression history";
@@ -808,7 +819,9 @@ function warningLine(info, hasBaseline) {
   const forecast = lastPayload.forecast;
   const tasks = `${missing} task${missing === 1 ? "" : "s"}`;
   let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
-  if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(forecast)) {
+  if (info.kind === "simulation_cut") {
+    text = `${lead}${info.reasons[0].detail} Choose No arrivals for the current backlog's forecast.`;
+  } else if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(forecast)) {
     text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(forecast)}.`;
   } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(forecast)) {
     text = `${lead}regression follow-up work isn't included because ${tasks} ${missing === 1 ? "has" : "have"} no regression history.`;
@@ -865,7 +878,7 @@ function drainOdds(forecast) {
   if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
   if (!parts.length) return null;
   const text = `${parts.join("; ")}.`;
-  return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
+  return forecast.simulation_truncated ? `${text} Some runs hit a simulation limit.` : text;
 }
 
 function answerCard() {
@@ -943,11 +956,41 @@ function startsCell(row) {
   ]);
 }
 
+export function forecastMetricThin(row, metric) {
+  if (!row) return false;
+  const flag = metric === "tokens" ? row.thin_tokens : row.thin_cost;
+  if (typeof flag === "boolean") return flag;
+  const count = num(metric === "tokens" ? row.token_samples : row.cost_samples);
+  if (count == null || count === 0) return false;
+  const min = num(lastPayload?.inputs?.min_metric_samples) ?? num(lastPayload?.inputs?.min_cell_samples) ?? 5;
+  return count < min;
+}
+
+function metricSupportLine(row) {
+  const parts = [];
+  if (row.cost_samples != null) {
+    const count = forecastCount(row.cost_samples);
+    parts.push(`${count} cost sample${count === 1 ? "" : "s"}`);
+  }
+  if (row.token_samples != null) {
+    const count = forecastCount(row.token_samples);
+    parts.push(`${count} token sample${count === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) return null;
+  const thin = [];
+  if (forecastMetricThin(row, "usd")) thin.push("cost");
+  if (forecastMetricThin(row, "tokens")) thin.push("tokens");
+  return thin.length ? `thin ${thin.join(" & ")} · ${parts.join(" · ")}` : parts.join(" · ");
+}
+
 function costCell(row) {
   const tokens = quantilePair(row.tokens) ? `${formatForecastQuantileRange(row.tokens, formatForecastTokens)} tokens` : null;
+  const support = metricSupportLine(row);
+  const thin = forecastMetricThin(row, "usd") || forecastMetricThin(row, "tokens");
   return el("td", { class: "num" }, [
     formatForecastQuantileRange(row.usd, formatForecastUsd),
     tokens ? el("span", { class: "fc-sub", text: tokens }) : null,
+    support ? el("span", { class: thin ? "fc-sub fc-thin" : "fc-sub", text: support }) : null,
   ]);
 }
 
@@ -1095,6 +1138,10 @@ function coverageItems() {
     ...unreadableItems,
     ["uncovered_model", "Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["uncosted", "Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
+    ...(["thin_tokens", "thin_cost"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
+      ["thin_tokens", "Thin token support", coverage.thin_tokens, `Some but fewer than ${lastPayload.inputs?.min_metric_samples ?? min} measured token samples in the sampled pool: the token range rests on very few measured deliveries (one sample gives the same p50 and p90). Counted separately from the time-sample count.`],
+      ["thin_cost", "Thin cost support", coverage.thin_cost, `Some but fewer than ${lastPayload.inputs?.min_metric_samples ?? min} measured provider-cost samples in the sampled pool: the cost range rests on very few measured deliveries (one sample gives the same p50 and p90). Counted separately from the time-sample count.`],
+    ] : []),
     ["no_history", "No history", coverage.no_history, "Nothing to sample at all."],
     ["dependency_unforecastable", "Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
     ["unverifiable_dependencies", "Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],

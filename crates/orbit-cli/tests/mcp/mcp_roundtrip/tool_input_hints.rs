@@ -2,6 +2,37 @@
 
 use super::*;
 
+#[test]
+fn mcp_missing_records_name_a_recovery_tool_or_field() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = client.add_task("Delivery lookup", "Missing-run recovery fixture");
+    for (tool, input, code, hint) in [
+        (
+            "orbit_task_show",
+            json!({"id": "TST-99999999"}),
+            "not_found",
+            "orbit.task.list",
+        ),
+        (
+            "orbit_task_show",
+            json!({"id": task_id, "field": "delivery", "run_id": "missing-run"}),
+            "not_found",
+            "delivery",
+        ),
+        (
+            "orbit_decision_show",
+            json!({"id": "missing-request"}),
+            "request_not_found",
+            "orbit.decision.list",
+        ),
+    ] {
+        let error = client.call_tool_err(tool, input);
+        assert_eq!(error["code"], code, "{error}");
+        assert!(error["message"].as_str().unwrap().contains(hint), "{error}");
+    }
+}
+
 #[path = "../../support/tool_input_hints.rs"]
 mod tool_input_hint_cases;
 
@@ -51,7 +82,9 @@ fn mcp_unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
         assert_eq!(error["code"], "tool_not_found", "{error}");
         let expected = match hint {
             Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
-            None => format!("tool not found: {name}"),
+            None => format!(
+                "tool not found: {name}; see `orbit tool list` or MCP `tools/list` for valid tool names"
+            ),
         };
         assert_eq!(error["message"], expected);
     }

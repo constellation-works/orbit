@@ -20,6 +20,9 @@ use super::schedule::HORIZON_HOURS;
 /// Bound generated nodes independently of the event bound.
 pub(super) const MAX_GENERATED: usize = 10_000;
 
+/// Each arrival source class's donor indexes.
+pub(super) type ArrivalPools = BTreeMap<&'static str, Vec<usize>>;
+
 /// A historical fix and its measured detection delay, in an origin bundle.
 pub(super) struct RegressionFix {
     pub(super) donor: usize,
@@ -551,58 +554,98 @@ pub(super) fn collect_forecast_donors(
         .collect()
 }
 
-/// Draw a bounded exogenous stream up to the horizon; the event loop stops
-/// consuming it at its first full drain, but not during a detection gap.
-pub(super) fn draw_forecast_arrivals(
-    rework: &RegressionRework,
+/// Each arrival source class's donors, measured once per forecast.
+pub(super) fn forecast_arrival_pools(rework: &RegressionRework) -> ArrivalPools {
+    let mut pools = ArrivalPools::new();
+    for (index, donor) in rework.donors.iter().enumerate() {
+        pools
+            .entry(super::arrival_source(&donor.task))
+            .or_default()
+            .push(index);
+    }
+    pools
+}
+
+/// Exogenous filings, drawn on demand up to the horizon. The event loop stops
+/// consuming them at its first full drain (not during a detection gap), so
+/// filings past that point are never generated.
+pub(super) struct ForecastArrivalStream<'a> {
+    rework: &'a RegressionRework,
     items: usize,
-    rates: &BTreeMap<&'static str, f64>,
-    episodes: &[Episode],
-    rng: &mut Rng,
-    correction: &Correction,
-    nodes: &mut Vec<ForecastGeneratedNode>,
-) -> bool {
-    let total: f64 = rates.values().sum();
-    if total <= 0.0 || rework.donors.is_empty() {
-        return false;
-    }
-    let mut at = -rng.unit().ln() / (total / 24.0);
-    while at <= HORIZON_HOURS {
-        if nodes.len() == MAX_GENERATED {
-            return true;
+    rates: &'a BTreeMap<&'static str, f64>,
+    pools: &'a ArrivalPools,
+    total: f64,
+    /// When the next undrawn filing arrives.
+    next_at: f64,
+}
+
+impl<'a> ForecastArrivalStream<'a> {
+    /// `None`, with no draw, when nothing arrives or no donor can stand in.
+    pub(super) fn start(
+        rework: &'a RegressionRework,
+        items: usize,
+        rates: &'a BTreeMap<&'static str, f64>,
+        pools: &'a ArrivalPools,
+        rng: &mut Rng,
+    ) -> Option<Self> {
+        let total: f64 = rates.values().sum();
+        if total <= 0.0 || rework.donors.is_empty() {
+            return None;
         }
-        let pick = rng.unit() * total;
-        let mut accumulated = 0.0;
-        let class = rates
-            .iter()
-            .find_map(|(class, rate)| {
-                accumulated += rate;
-                (pick <= accumulated).then_some(*class)
-            })
-            .unwrap_or("filing");
-        let matching: Vec<usize> = rework
-            .donors
-            .iter()
-            .enumerate()
-            .filter_map(|(index, donor)| {
-                (super::arrival_source(&donor.task) == class).then_some(index)
-            })
-            .collect();
-        let donor = if matching.len() >= model::MIN_CELL_SAMPLES {
-            matching[rng.index(matching.len())]
-        } else {
-            rng.index(rework.donors.len())
-        };
-        nodes.push(generated_node(
-            &rework.donors[donor],
-            items + donor,
-            None,
-            at,
-            episodes,
-            rng,
-            correction,
-        ));
-        at -= rng.unit().ln() / (total / 24.0);
+        Some(Self {
+            rework,
+            items,
+            rates,
+            pools,
+            total,
+            next_at: -rng.unit().ln() / (total / 24.0),
+        })
     }
-    false
+
+    /// Simulated hours up to which `nodes` holds every filing; unbounded once
+    /// the stream has passed the horizon.
+    pub(super) fn known_until(&self) -> f64 {
+        if self.next_at <= HORIZON_HOURS {
+            self.next_at
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    /// Draw filings until `nodes` holds `limit` nodes or the horizon passes.
+    pub(super) fn extend_forecast_arrivals(
+        &mut self,
+        limit: usize,
+        episodes: &[Episode],
+        rng: &mut Rng,
+        correction: &Correction,
+        nodes: &mut Vec<ForecastGeneratedNode>,
+    ) {
+        while self.next_at <= HORIZON_HOURS && nodes.len() < limit {
+            let pick = rng.unit() * self.total;
+            let mut accumulated = 0.0;
+            let class = self
+                .rates
+                .iter()
+                .find_map(|(class, rate)| {
+                    accumulated += rate;
+                    (pick <= accumulated).then_some(*class)
+                })
+                .unwrap_or("filing");
+            let donor = match self.pools.get(class) {
+                Some(pool) if pool.len() >= model::MIN_CELL_SAMPLES => pool[rng.index(pool.len())],
+                _ => rng.index(self.rework.donors.len()),
+            };
+            nodes.push(generated_node(
+                &self.rework.donors[donor],
+                self.items + donor,
+                None,
+                self.next_at,
+                episodes,
+                rng,
+                correction,
+            ));
+            self.next_at -= rng.unit().ln() / (self.total / 24.0);
+        }
+    }
 }

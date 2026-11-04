@@ -803,6 +803,237 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
     );
 }
 
+#[test]
+fn thin_metric_support_is_disclosed_and_counted() {
+    isolated(
+        "backlog_forecast::thin_metric_support_is_disclosed_and_counted",
+        || {
+            // One measured delivery among five: the pool has five time samples,
+            // but only one measured token and cost sample [ORB-21948].
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(1);
+            completed_delivery(
+                &fixture,
+                at,
+                TaskComplexity::Medium,
+                "gpt-6.1-sol",
+                Some(1.0),
+                1,
+            );
+            for _ in 0..4 {
+                completed_delivery(
+                    &fixture,
+                    at,
+                    TaskComplexity::Medium,
+                    "unpriced-fixture-model",
+                    None,
+                    1,
+                );
+            }
+            let queued = backlog_task(&fixture, "Thin metric work", &["file:thin.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 1, "{row}");
+            assert_eq!(row["cost_samples"], 1, "{row}");
+            assert_eq!(row["thin_tokens"], true, "{row}");
+            assert_eq!(row["thin_cost"], true, "{row}");
+            // One measured sample gives p50 == p90 by construction.
+            assert_eq!(row["tokens"]["p50"], row["tokens"]["p90"], "{row}");
+            assert_eq!(row["usd"]["p50"], row["usd"]["p90"], "{row}");
+            assert_eq!(
+                forecast["coverage"]["thin_tokens"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(
+                forecast["coverage"]["thin_cost"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(forecast["coverage"]["uncosted"], 0);
+            assert_eq!(forecast["coverage"]["uncovered_model"], 0);
+            assert_eq!(forecast["inputs"]["min_metric_samples"], 5);
+            let stored = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(stored.len(), 1);
+            let stored_tasks: Value = serde_json::from_str(&stored[0].tasks_json).unwrap();
+            let stored_row = stored_tasks
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == queued)
+                .unwrap();
+            assert_eq!(stored_row["token_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["cost_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["thin_tokens"], true, "{stored_row}");
+            assert_eq!(stored_row["thin_cost"], true, "{stored_row}");
+
+            // Ample measured samples keep ranges with no thin marking.
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let queued = backlog_task(&fixture, "Ample metric work", &["file:ample.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 5, "{row}");
+            assert_eq!(row["cost_samples"], 5, "{row}");
+            assert_eq!(row["thin_tokens"], false, "{row}");
+            assert_eq!(row["thin_cost"], false, "{row}");
+            assert!(row["tokens"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert!(row["usd"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert_eq!(forecast["coverage"]["thin_tokens"], 0);
+            assert_eq!(forecast["coverage"]["thin_cost"], 0);
+        },
+    );
+}
+
+/// `filings` tasks filed this week, a one-hour no-diff delivery as the only
+/// history, and one task in the backlog.
+fn busy_arrivals_fixture(fixture: &Fixture, filings: usize) {
+    let donor = completed_delivery(
+        fixture,
+        Utc::now() - Duration::days(2),
+        TaskComplexity::Medium,
+        "gpt-6.1-sol",
+        Some(1.0),
+        1,
+    );
+    super::backlog_rework::edit_task(fixture, &donor, |task| {
+        task.tags.push("no-diff-expected".into())
+    });
+    for _ in 0..filings {
+        fixture
+            .runtime
+            .add_task(TaskAddParams {
+                title: "Recent filing".into(),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let queued = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Initial work".into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    super::backlog_rework::edit_task(fixture, &queued.id.to_string(), |task| {
+        task.tags.push("no-diff-expected".into())
+    });
+}
+
+#[test]
+fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
+    isolated(
+        "backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 2_150);
+            let server = fixture.server(false);
+            // Over 300 one-hour filings a day keep some task running at every
+            // moment, so no run drains before the stream's limit.
+            let started = std::time::Instant::now();
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(30),
+                "the dashboard abandons this read at 30 seconds: {elapsed:?}"
+            );
+            assert!(cut["arrivals"]["per_day"]["total"].as_f64().unwrap() >= 300.0);
+            assert_eq!(cut["inputs"]["iterations"], 1000);
+            let forecast = &cut["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "generated_limit",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["generated_limit"], 10_000);
+            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            assert_eq!(forecast["simulation_truncated"], 1);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in [
+                "time_to_drain_hours",
+                "tokens",
+                "usd",
+                "effective_parallelism",
+                "critical_path_hours",
+            ] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            for metric in ["work_hours", "tokens", "usd"] {
+                assert_eq!(forecast["arrival_work"][metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+        },
+    );
+}
+
+#[test]
+fn arrivals_draining_before_the_generation_bound_stay_complete() {
+    isolated(
+        "backlog_forecast::arrivals_draining_before_the_generation_bound_stay_complete",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 850);
+            let server = fixture.server(false);
+            // Over 90 days this rate files past the limit, yet every run
+            // drains long before using that many filings.
+            let complete = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            assert!(complete["arrivals"]["per_day"]["total"].as_f64().unwrap() > 111.2);
+            let forecast = &complete["forecast"];
+            assert!(forecast.get("simulation_cut").is_none(), "{forecast}");
+            assert!(forecast["unavailable"].get("simulation_cut").is_none());
+            assert_eq!(forecast["simulation_truncated"], 0);
+            // This one-delivery history supports no regression estimate, so
+            // the initial-work baseline carries the scenario's figures.
+            let baseline = &forecast["pre_regression_baseline"];
+            assert_eq!(baseline["drain_probability"], 1.0, "{forecast}");
+            assert!(
+                baseline["time_to_drain_hours"]["p90"].as_f64().is_some(),
+                "{forecast}"
+            );
+        },
+    );
+}
+
+#[test]
+fn arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast() {
+    isolated(
+        "backlog_forecast::arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast",
+        || {
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(20);
+            completed_work(&fixture, at, TaskComplexity::Medium, 2);
+            let queued = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Initial work".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            super::backlog_rework::edit_task(&fixture, &queued.id.to_string(), |task| {
+                task.created_at = at;
+            });
+            let server = fixture.server(false);
+            let off = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&refresh=1")));
+            let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+            assert_eq!(on["arrivals"]["per_day"]["total"], 0.0);
+            assert_eq!(on["inputs"]["arrivals"], true);
+            assert_eq!(on["forecast"], off["forecast"]);
+            assert!(on["forecast"].get("simulation_cut").is_none());
+        },
+    );
+}
+
 /// A completed delivery of `hours` with provider cost equal to those hours.
 pub(super) fn completed_work(
     fixture: &Fixture,

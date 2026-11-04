@@ -62,6 +62,7 @@ impl OrbitRuntime {
 
     /// Scan, then report one row of a role with the tasks behind each term,
     /// with a cache period of zero as on [`Self::agent_role_scorecard`].
+    /// Missing-row recovery names the canonical tool and input field.
     pub fn agent_role_detail(
         &self,
         role: AgentRole,
@@ -69,14 +70,55 @@ impl OrbitRuntime {
         crew: &str,
         model: Option<&str>,
     ) -> Result<Value, OrbitError> {
-        agent_detail(
+        self.agent_role_detail_for_surface(role, query, crew, model, AgentDetailSurface::ToolRun)
+    }
+
+    pub(crate) fn agent_role_detail_for_surface(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+        crew: &str,
+        model: Option<&str>,
+        surface: AgentDetailSurface,
+    ) -> Result<Value, OrbitError> {
+        agent_detail_for_surface(
             &self.agent_scan()?,
             role,
             query,
             crew,
             model,
             Duration::ZERO,
+            surface,
         )
+    }
+}
+
+/// Recovery controls available to the caller of an agent detail request.
+#[derive(Clone, Copy)]
+pub(crate) enum AgentDetailSurface {
+    Cli,
+    ToolRun,
+    Mcp,
+    Dashboard,
+}
+
+impl AgentDetailSurface {
+    fn missing_row_recovery(self, role: AgentRole) -> String {
+        let role = role.as_str();
+        match self {
+            Self::Cli => {
+                format!("list rows with orbit agents scorecard --role {role} or widen --window")
+            }
+            Self::ToolRun => format!(
+                "list rows with orbit.agents.scorecard (role {role}) or widen the window field"
+            ),
+            Self::Mcp => format!(
+                "list rows with orbit_agents_scorecard (role {role}) or widen the window field"
+            ),
+            Self::Dashboard => format!(
+                "list rows at /api/agents/{role}/scorecard or widen the window query parameter"
+            ),
+        }
     }
 }
 
@@ -243,7 +285,8 @@ pub fn agent_per_task_export(
 /// One row of a role's ranking and, for each term, its count, contribution
 /// and the tasks behind it. `model` may be omitted when the crew has one row.
 /// A missing crew, or a row the window does not contain, is invalid input.
-/// `cache_ttl` is reported as on [`agent_scorecard`].
+/// `cache_ttl` is reported as on [`agent_scorecard`]. Missing-row recovery
+/// names the dashboard API controls; tool adapters select their own surface.
 pub fn agent_detail(
     facts: &AgentFacts,
     role: AgentRole,
@@ -251,6 +294,26 @@ pub fn agent_detail(
     crew: &str,
     model: Option<&str>,
     cache_ttl: Duration,
+) -> Result<Value, OrbitError> {
+    agent_detail_for_surface(
+        facts,
+        role,
+        query,
+        crew,
+        model,
+        cache_ttl,
+        AgentDetailSurface::Dashboard,
+    )
+}
+
+fn agent_detail_for_surface(
+    facts: &AgentFacts,
+    role: AgentRole,
+    query: &AgentQuery,
+    crew: &str,
+    model: Option<&str>,
+    cache_ttl: Duration,
+    surface: AgentDetailSurface,
 ) -> Result<Value, OrbitError> {
     let crew = crew.trim();
     if crew.is_empty() {
@@ -274,27 +337,20 @@ pub fn agent_detail(
     let row = match matching.as_slice() {
         [row] => row,
         [] => {
-            // Core cannot tell which surface called, so the refusal names each
-            // surface's scorecard and window selectors, as the ambiguous-row
-            // branch below names each surface's model selector.
             return Err(OrbitError::InvalidInput(format!(
-                "no {} row for crew '{crew}'{} in the {} window; list the {} rows with orbit agents scorecard --role {} (CLI), orbit.agents.scorecard with role {} (orbit tool run), orbit_agents_scorecard with role {} (MCP) or the {} scorecard endpoint (dashboard API), or retry with a wider window via --window (CLI), window (MCP and orbit tool run) or the window query parameter (dashboard API). A crew with no work in the window has no row",
+                "no {} row for crew '{crew}'{} in the {} window; {}. A crew with no work in the window has no row",
                 role.as_str(),
                 model
                     .map(|model| format!(" and model '{model}'"))
                     .unwrap_or_default(),
                 query.window,
-                role.as_str(),
-                role.as_str(),
-                role.as_str(),
-                role.as_str(),
-                role.as_str(),
+                surface.missing_row_recovery(role),
             )));
         }
         _ => {
-            // Core cannot tell which surface called, so the refusal names each
-            // surface's selector: `--model` on the CLI, `row_model` over MCP and
-            // `orbit tool run`, and the dashboard's detail `model` query parameter.
+            // Keep the existing model-selection guidance for ambiguous rows:
+            // `--model` on the CLI, `row_model` over MCP and `orbit tool run`,
+            // and the dashboard's detail `model` query parameter.
             let candidates: Vec<&str> = matching
                 .iter()
                 .map(|row| row.input.model.as_str())

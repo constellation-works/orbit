@@ -240,9 +240,10 @@ read names can carry a conservative recovery hint shared with CLI tool dispatch:
 suggests task show's `field: "artifacts"` projection. Candidates must be active,
 advertised builtins allowed on the agent surface and by the activity's tool
 policy; runtime dispatch also filters disabled tools. Operator-only, inactive,
-hidden and ungranted candidates never supply hints. Ambiguous or unmatched names
-keep the original message. These hints register no aliases and preserve the
-not-found code, original requested name and audit failure classification.
+hidden and ungranted candidates never supply replacement hints. Ambiguous or
+unmatched names point to `orbit tool list` or MCP `tools/list` instead. These
+hints register no aliases and preserve the not-found code, original requested
+name and audit failure classification.
 [ORB-18559] implemented these recovery hints.
 
 The adapter-owned UI

@@ -32,6 +32,7 @@ mod roles;
 mod score;
 mod shadow;
 
+pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};
 pub(crate) use facts::review_gate_verdicts;
 pub(crate) use facts::task_execution_modes;

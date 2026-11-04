@@ -946,10 +946,18 @@ fn agents_show_missing_row_names_scorecard_and_window_recovery() {
             "no work in the window has no row",
         ],
     );
-    for part in ["unconfigured", "not configured", "unknown crew"] {
+    for part in [
+        "unconfigured",
+        "not configured",
+        "unknown crew",
+        "--window",
+        "orbit agents",
+        "orbit.agents.",
+        "dashboard",
+    ] {
         assert!(
             !message_contains(&refused, part),
-            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+            "the MCP refusal excludes other surfaces and configuration diagnoses ({part}): {refused}"
         );
     }
 }
@@ -2631,7 +2639,7 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
     assert_eq!(
         missing_task,
-        json!({ "code": "not_found", "message": format!("task not found: {unknown}") }),
+        json!({ "code": "not_found", "message": format!("task not found: {unknown}; see `orbit task list` or `orbit.task.list` for valid task IDs") }),
         "a missing task is not reported as a missing artifact"
     );
     assert_eq!(refused["code"], "not_found", "{refused}");

@@ -5,11 +5,39 @@ use super::dependencies::DependencyPlan;
 use super::model::Delivery;
 use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Rng, Script};
 use super::outcomes::{Episode, MAX_ATTEMPTS};
-use super::rework::{self, RegressionRework};
-use super::schedule::{self, HORIZON_HOURS, Scenario, ScheduleState};
+use super::rework::{self, ForecastArrivalStream, MAX_GENERATED, RegressionRework};
+use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+/// Wall time, from the start of a forecast, that a scenario with arrivals may
+/// use before it is cut. The dashboard abandons a read at 30 seconds, and
+/// serializing and scoring what follows the simulation need the margin.
+pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
+/// Nodes the arrival stream first draws, growing by [`ARRIVAL_BATCH_GROWTH`]
+/// each time a drain outruns them.
+const FIRST_ARRIVAL_BATCH: usize = 64;
+const ARRIVAL_BATCH_GROWTH: usize = 4;
+
+/// The bound that ended a scenario with arrivals before all its iterations.
+#[derive(Clone, Copy)]
+enum SimulationCut {
+    GeneratedLimit,
+    EventLimit,
+    ComputeBudget,
+}
+
+impl SimulationCut {
+    fn key(self) -> &'static str {
+        match self {
+            Self::GeneratedLimit => "generated_limit",
+            Self::EventLimit => "event_limit",
+            Self::ComputeBudget => "compute_budget",
+        }
+    }
+}
 
 fn probability(count: u64, of: u64) -> Option<f64> {
     (of > 0).then(|| (count as f64 / of as f64 * 1000.0).round() / 1000.0)
@@ -53,6 +81,7 @@ struct Outcome {
     arrival_work: [Vec<Option<f64>>; 3],
     followups: Vec<Option<f64>>,
     outside_horizon: u64,
+    cut: Option<SimulationCut>,
 }
 
 impl Outcome {
@@ -82,6 +111,7 @@ impl Outcome {
             arrival_work: Default::default(),
             followups: Vec::new(),
             outside_horizon: 0,
+            cut: None,
         }
     }
 
@@ -167,6 +197,16 @@ impl Outcome {
         arrivals_supported: bool,
         bases: &[Value],
     ) -> Value {
+        // A cut scenario's finished iterations are not a sample of all of
+        // them, so nothing below may be computed from them.
+        let cut = self.cut;
+        let completed = self.drain.len();
+        if cut.is_some() {
+            self = Self {
+                truncated: self.truncated,
+                ..Self::new(self.starts.len())
+            };
+        }
         let included: Vec<usize> = members
             .iter()
             .copied()
@@ -266,6 +306,10 @@ impl Outcome {
                     "review_mode_source": item.review_mode_source,
                     "review_mode_fallback": resolved[index].review_mode_fallback,
                     "cell_samples": resolved[index].cell_samples,
+                    "token_samples": resolved[index].token_sample_count(),
+                    "cost_samples": resolved[index].cost_sample_count(),
+                    "thin_tokens": resolved[index].thin_tokens(),
+                    "thin_cost": resolved[index].thin_cost(),
                     "unforecastable": reasons[index],
                     "profile_source": scenario
                         .admission
@@ -341,13 +385,15 @@ impl Outcome {
                 "usd": model::forecast_quantiles(&mut self.arrival_work[2]),
             },
         });
-        if !rework_supported || !arrivals_supported {
-            let mut baseline = result.clone();
-            if let Some(object) = baseline.as_object_mut() {
-                object.remove("regression_rework");
-                object.remove("task_predictions");
+        if !rework_supported || !arrivals_supported || cut.is_some() {
+            if cut.is_none() {
+                let mut baseline = result.clone();
+                if let Some(object) = baseline.as_object_mut() {
+                    object.remove("regression_rework");
+                    object.remove("task_predictions");
+                }
+                result["pre_regression_baseline"] = baseline;
             }
-            result["pre_regression_baseline"] = baseline;
             result["unavailable"] = json!({
                 "risk_unestimated": members.iter().any(|index| rework.probabilities[*index].is_none()),
                 "regression_history_missing": members.iter().any(|index| !rework.history_supported(*index)),
@@ -369,6 +415,16 @@ impl Outcome {
                 result["regression_rework"][metric] = json!({"p50": null, "p90": null});
             }
         }
+        if let Some(cut) = cut {
+            result["unavailable"]["simulation_cut"] = json!(true);
+            result["simulation_cut"] = json!({
+                "reason": cut.key(),
+                "iterations": ITERATIONS,
+                "iterations_completed": completed,
+                "generated_limit": rework::MAX_GENERATED,
+                "compute_budget_seconds": ARRIVALS_COMPUTE_BUDGET.as_secs(),
+            });
+        }
         result
     }
 }
@@ -382,10 +438,12 @@ pub(super) struct Forecast {
 /// Simulate [`ITERATIONS`] drains of `items` on `slots`, each admitted as
 /// the drain would admit it under `admission`, whose task `i` is
 /// `items[i]`. Proposed items count only toward `if_approved`; tasks
-/// `plan` cannot schedule are left out of each scenario's simulation.
+/// `plan` cannot schedule are left out of each scenario's simulation. With
+/// arrivals, a scenario that passes `deadline` or a generation or event bound
+/// stops and reports the cut instead of its totals.
 #[allow(
     clippy::too_many_arguments,
-    reason = "items, history, episodes, admission, plan, slots, rework, arrivals and correction are independent forecast inputs"
+    reason = "items, history, episodes, admission, plan, slots, rework, arrivals, correction and deadline are independent forecast inputs"
 )]
 pub(super) fn simulate_backlog_forecast(
     items: &[Item],
@@ -398,6 +456,7 @@ pub(super) fn simulate_backlog_forecast(
     rework: &RegressionRework,
     arrivals: Option<&BTreeMap<&'static str, f64>>,
     correction: &Correction,
+    deadline: Instant,
 ) -> Forecast {
     let frozen = admission;
     let initial_admission =
@@ -433,7 +492,20 @@ pub(super) fn simulate_backlog_forecast(
     let mut scripts: Vec<Script> = (0..items.len()).map(|_| Script::default()).collect();
     let mut base_usage: Vec<[Vec<Option<f64>>; 3]> =
         (0..items.len()).map(|_| Default::default()).collect();
+    let arrival_pools = rework::forecast_arrival_pools(rework);
+    let arrivals_active = arrivals
+        .is_some_and(|rates| rates.values().sum::<f64>() > 0.0 && !rework.donors.is_empty());
+    let deadline = arrivals_active.then_some(deadline);
+    let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     for _ in 0..ITERATIONS {
+        if expired() {
+            for outcome in &mut outcomes {
+                outcome.cut.get_or_insert(SimulationCut::ComputeBudget);
+            }
+        }
+        if outcomes[0].cut.is_some() && (approved_scenario.is_none() || outcomes[1].cut.is_some()) {
+            break;
+        }
         // Both scenarios replay the same attempts.
         for (index, item) in items.iter().enumerate() {
             let delivery = model::draw_forecast_delivery(&mut rng, &resolved[index], history);
@@ -453,12 +525,15 @@ pub(super) fn simulate_backlog_forecast(
             correction::apply_script(correction, &item.complexity, &mut scripts[index]);
         }
         let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
-        for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
+        'scenarios: for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
             let Some(scenario) = scenario else {
                 continue;
             };
+            if outcome.cut.is_some() {
+                continue;
+            }
             let supported = rework.regression_inputs_supported(&scenario.included);
-            let (mut generated, mut truncated) = if supported {
+            let (mut generated, truncated) = if supported {
                 rework::draw_regression_bundles(
                     rework,
                     items,
@@ -470,62 +545,98 @@ pub(super) fn simulate_backlog_forecast(
             } else {
                 (Vec::new(), false)
             };
-            if let Some(rates) = arrivals {
-                truncated |= rework::draw_forecast_arrivals(
-                    rework,
-                    items.len(),
-                    rates,
-                    episodes,
-                    &mut rng,
-                    correction,
-                    &mut generated,
-                );
+            let mut stream = arrivals.and_then(|rates| {
+                ForecastArrivalStream::start(rework, items.len(), rates, &arrival_pools, &mut rng)
+            });
+            if truncated && stream.is_some() {
+                outcome.cut = Some(SimulationCut::GeneratedLimit);
+                outcome.truncated += 1;
+                continue;
             }
-            let templates: Vec<usize> = (0..items.len())
-                .chain(generated.iter().map(|node| node.template))
-                .collect();
-            let expanded = (!generated.is_empty())
-                .then(|| frozen.with_forecast_generated_nodes(&templates, items.len()));
-            let mut edges = plan.edges.clone();
-            edges.extend(
-                generated
-                    .iter()
-                    .map(|node| node.origin.into_iter().collect::<Vec<_>>()),
-            );
-            let mut included = scenario.included.clone();
-            included.extend(
-                generated
-                    .iter()
-                    .map(|node| node.origin.is_none_or(|origin| scenario.included[origin])),
-            );
-            let mut running = in_progress.clone();
-            running.resize(templates.len(), false);
-            let mut ages = age_hours.clone();
-            ages.resize(templates.len(), 0.0);
-            let mut expanded_scenario = Scenario::new(
-                expanded.as_ref().unwrap_or(admission),
-                &edges,
-                included,
-                &running,
-                &ages,
-                slots,
-            );
-            expanded_scenario.initial = items.len();
-            expanded_scenario.generated = &generated;
-            let mut expanded_state = expanded.as_ref().map(ScheduleState::new);
+            let mut batch = FIRST_ARRIVAL_BATCH;
+            let (mut run, mut totals, mut expanded_state) = loop {
+                if expired() {
+                    outcome.cut = Some(SimulationCut::ComputeBudget);
+                    continue 'scenarios;
+                }
+                if let Some(stream) = &mut stream {
+                    stream.extend_forecast_arrivals(
+                        (generated.len() + batch).min(MAX_GENERATED),
+                        episodes,
+                        &mut rng,
+                        correction,
+                        &mut generated,
+                    );
+                }
+                let templates: Vec<usize> = (0..items.len())
+                    .chain(generated.iter().map(|node| node.template))
+                    .collect();
+                let expanded = (!generated.is_empty())
+                    .then(|| frozen.with_forecast_generated_nodes(&templates, items.len()));
+                let mut edges = plan.edges.clone();
+                edges.extend(
+                    generated
+                        .iter()
+                        .map(|node| node.origin.into_iter().collect::<Vec<_>>()),
+                );
+                let mut included = scenario.included.clone();
+                included.extend(
+                    generated
+                        .iter()
+                        .map(|node| node.origin.is_none_or(|origin| scenario.included[origin])),
+                );
+                let mut running = in_progress.clone();
+                running.resize(templates.len(), false);
+                let mut ages = age_hours.clone();
+                ages.resize(templates.len(), 0.0);
+                let mut expanded_scenario = Scenario::new(
+                    expanded.as_ref().unwrap_or(admission),
+                    &edges,
+                    included,
+                    &running,
+                    &ages,
+                    slots,
+                );
+                expanded_scenario.initial = items.len();
+                expanded_scenario.generated = &generated;
+                expanded_scenario.known_until = stream
+                    .as_ref()
+                    .map_or(f64::INFINITY, ForecastArrivalStream::known_until);
+                expanded_scenario.deadline = deadline;
+                let mut expanded_state = expanded.as_ref().map(ScheduleState::new);
+                let attempt_state = expanded_state.as_mut().unwrap_or(&mut state);
+                let mut scripts_all = scripts.clone();
+                scripts_all.extend(generated.iter().map(|node| node.script.clone()));
+                let mut hours_all = hours.clone();
+                hours_all.extend(generated.iter().map(|node| Some(node.hours)));
+                let mut totals = Draw::ZERO;
+                let run = schedule::simulate_drain(
+                    &expanded_scenario,
+                    &hours_all,
+                    &scripts_all,
+                    &mut totals,
+                    attempt_state,
+                );
+                if run.stop == Some(DrainStop::ArrivalsOutrun) && generated.len() < MAX_GENERATED {
+                    batch *= ARRIVAL_BATCH_GROWTH;
+                    continue;
+                }
+                break (run, totals, expanded_state);
+            };
+            let cut = match run.stop {
+                Some(DrainStop::ArrivalsOutrun) => Some(SimulationCut::GeneratedLimit),
+                Some(DrainStop::Deadline) => Some(SimulationCut::ComputeBudget),
+                None if run.truncated && stream.is_some() => Some(SimulationCut::EventLimit),
+                None => None,
+            };
+            if let Some(cut) = cut {
+                outcome.cut = Some(cut);
+                if !matches!(cut, SimulationCut::ComputeBudget) {
+                    outcome.truncated += 1;
+                }
+                continue;
+            }
             let state = expanded_state.as_mut().unwrap_or(&mut state);
-            let mut scripts_all = scripts.clone();
-            scripts_all.extend(generated.iter().map(|node| node.script.clone()));
-            let mut hours_all = hours.clone();
-            hours_all.extend(generated.iter().map(|node| Some(node.hours)));
-            let mut totals = Draw::ZERO;
-            let mut run = schedule::simulate_drain(
-                &expanded_scenario,
-                &hours_all,
-                &scripts_all,
-                &mut totals,
-                state,
-            );
             if truncated {
                 run.truncated = true;
                 run.waits = None;

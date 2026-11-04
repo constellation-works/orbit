@@ -25,9 +25,9 @@ impl GuardedModes for WorkflowVerb {
                 })
                 .err()
                 .map(Err),
-            // A resident cycle is a managed run whose mandate is to dispatch;
-            // its grant is checked on the host, under its cycle guard.
-            WorkflowVerb::Ship
+            // A resident cycle is a managed run whose mandate is to dispatch
+            // and land; its grant is checked on the host, under its cycle guard.
+            WorkflowVerb::Ship | WorkflowVerb::Land
                 if ctx
                     .orbit_host
                     .as_ref()
@@ -35,7 +35,9 @@ impl GuardedModes for WorkflowVerb {
             {
                 None
             }
-            WorkflowVerb::Ship | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
+            WorkflowVerb::Ship | WorkflowVerb::Land | WorkflowVerb::RunResume => {
+                ensure_not_managed(ctx).err().map(Err)
+            }
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => None,
         }
     }
@@ -67,7 +69,10 @@ impl GuardedModes for WorkflowVerb {
                 Ok(false) => None,
                 Err(error) => Some(Err(error)),
             },
-            WorkflowVerb::RunObserve | WorkflowVerb::RunResume | WorkflowVerb::Ship => None,
+            WorkflowVerb::Land
+            | WorkflowVerb::RunObserve
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::Ship => None,
         }
     }
 
@@ -84,7 +89,8 @@ impl GuardedModes for WorkflowVerb {
                     .collect::<Vec<_>>();
                 reject_unknown_tool_fields(input, &allowed)
             }
-            WorkflowVerb::RunList
+            WorkflowVerb::Land
+            | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
@@ -95,6 +101,7 @@ impl GuardedModes for WorkflowVerb {
     fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
             WorkflowVerb::Auto
+            | WorkflowVerb::Land
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

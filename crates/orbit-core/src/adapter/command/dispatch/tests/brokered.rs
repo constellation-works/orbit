@@ -697,6 +697,141 @@ impl Drop for RestoreOrbitMode {
     }
 }
 
+/// A sandboxed cycle's landing and move to `done` read the forge with the host's
+/// credentials, through its broker: the nested process has none, so its guard
+/// could not tell an open pull request from an unreachable forge. The host's cycle
+/// guard decides them, and only those task updates are forwarded.
+#[test]
+fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
+    use crate::runtime::plugin::broker::BROKERED_RESIDENT_LAND_TOOL;
+    use orbit_types::workflow::ActivityToolDenyPolicy;
+
+    const UPDATE: &str = "orbit.task.update";
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime();
+    let workspace = runtime.workspace_id().expect("workspace id");
+    let land = json!({"workspace": workspace, "task_id": "ORB-1", "model": "codex"});
+
+    // A run that is no cycle gets neither, whatever the request says.
+    let mut not_a_cycle = fixture.run(&[BROKERED_RESIDENT_LAND_TOOL, UPDATE]);
+    not_a_cycle.workspace = Some(workspace.clone());
+    let refused = serve(&fixture, not_a_cycle).call(request(
+        BROKERED_RESIDENT_LAND_TOOL,
+        land.clone(),
+        &fixture.worktree,
+    ));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("only a resident cycle's run")),
+        "{refused}"
+    );
+
+    let mut cycle = resident_cycle_run(&fixture, &runtime, &["promote"]);
+    cycle.workspace = Some(workspace.clone());
+    cycle.allowed_tools = Vec::new();
+    cycle.tool_deny_policy = Some(ActivityToolDenyPolicy {
+        activity: "resident_cycle".to_string(),
+        disallow_list: vec!["orbit.command.exec".to_string()],
+    });
+    let mut merging = resident_cycle_run(&fixture, &runtime, &["merge"]);
+    merging.workspace = Some(workspace.clone());
+    merging.allowed_tools = Vec::new();
+    merging.tool_deny_policy = Some(ActivityToolDenyPolicy {
+        activity: "resident_cycle".to_string(),
+        disallow_list: vec!["orbit.command.exec".to_string()],
+    });
+    let merging_run = merging.job_run_id.clone().expect("cycle run");
+    let delivered = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Delivered".into(),
+            status: Some(orbit_types::task::TaskStatus::Review),
+            ..Default::default()
+        })
+        .expect("task")
+        .id
+        .to_string();
+    let run_id = cycle.job_run_id.clone().expect("cycle run");
+    let serving = serve(&fixture, cycle);
+    // SAFETY: the fixture's scoped environment holds the process-wide env lock
+    // until it drops, and restores these variables when it does.
+    unsafe {
+        std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
+        std::env::set_var(
+            crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
+            "1",
+        );
+        std::env::set_var("ORBIT_RUN_ID", &run_id);
+    }
+
+    for (tool, input) in [
+        (BROKERED_RESIDENT_LAND_TOOL, land),
+        (
+            UPDATE,
+            json!({"id": "ORB-1", "status": "done", "model": "codex"}),
+        ),
+    ] {
+        let error = runtime
+            .execute_tool_command_dispatch(tool, input, None, None, ToolEntryPoint::Mcp)
+            .expect_err("the grant holds no merge right")
+            .to_string();
+        assert!(error.contains("resident_right_refused"), "{tool}: {error}");
+        let rows = serving.rows(tool);
+        assert!(rows[0].brokered, "the broker carried {tool}: {rows:?}");
+    }
+
+    // The broker carries no other task update.
+    let refused = serving.call(request(
+        UPDATE,
+        json!({"id": "ORB-1", "status": "review", "model": "codex"}),
+        &std::env::current_dir()
+            .and_then(std::fs::canonicalize)
+            .expect("test cwd"),
+    ));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("none of these")),
+        "{refused}"
+    );
+
+    // With the right, the same forwarded calls run: a task with no pull request
+    // completes, and has nothing to land.
+    let serving = serve(&fixture, merging);
+    // SAFETY: as above.
+    unsafe {
+        std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
+        std::env::set_var("ORBIT_RUN_ID", &merging_run);
+    }
+    let error = runtime
+        .execute_tool_command_dispatch(
+            BROKERED_RESIDENT_LAND_TOOL,
+            json!({"workspace": workspace, "task_id": delivered, "model": "codex"}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect_err("no pull request to land")
+        .to_string();
+    assert!(error.contains("task_landing_refused"), "{error}");
+    let completed = runtime
+        .execute_tool_command_dispatch(
+            UPDATE,
+            json!({"id": delivered, "status": "done", "execution_summary": "Delivered.",
+                   "model": "codex"}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect("the host completes the task")
+        .value;
+    assert!(completed["resident_action_key"].is_string(), "{completed}");
+    assert_eq!(
+        runtime.get_task(&delivered).expect("task").status,
+        orbit_types::task::TaskStatus::Done
+    );
+}
+
 /// A sandboxed cycle's raise takes its workspace raise lock on the host, through
 /// its broker: the nested process cannot create that lock on its read-only
 /// `.orbit`, which left a resident's escalation as a plain comment. The host

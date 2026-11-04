@@ -463,7 +463,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             "agents",
             "show",
             "--role",
-            "orchestrators",
+            "implementers",
             "--crew",
             "nobody",
         ])
@@ -482,10 +482,10 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     // implying the crew is unconfigured: a configured crew with no work in
     // the window also has no row.
     for part in [
-        "orchestrators",
+        "implementers",
         "30d",
         "scorecard",
-        "orbit agents scorecard --role orchestrators",
+        "orbit agents scorecard --role implementers",
         "--window",
         "no work in the window has no row",
     ] {
@@ -494,10 +494,17 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             "the missing-row refusal names a recovery step ({part}): {refused}"
         );
     }
-    for part in ["unconfigured", "not configured", "unknown crew"] {
+    for part in [
+        "unconfigured",
+        "not configured",
+        "unknown crew",
+        "orbit_agents_",
+        "orbit.agents.",
+        "dashboard",
+    ] {
         assert!(
             !refused.contains(part),
-            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+            "the CLI refusal excludes other surfaces and configuration diagnoses ({part}): {refused}"
         );
     }
 
@@ -508,7 +515,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             "run",
             "orbit.agents.show",
             "--input",
-            &json!({ "role": "orchestrators", "crew": "nobody" }).to_string(),
+            &json!({ "role": "implementers", "crew": "nobody" }).to_string(),
         ])
         .assert()
         .failure()
@@ -520,7 +527,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     let message = refused["error"].as_str().unwrap();
     for part in [
         "nobody",
-        "orchestrators",
+        "implementers",
         "30d",
         "orbit.agents.scorecard",
         "window",
@@ -529,6 +536,12 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         assert!(
             message.contains(part),
             "the tool refusal names a recovery step ({part}): {message}"
+        );
+    }
+    for part in ["--window", "orbit agents", "orbit_agents_", "dashboard"] {
+        assert!(
+            !message.contains(part),
+            "the tool refusal only names its own surface ({part}): {message}"
         );
     }
 }

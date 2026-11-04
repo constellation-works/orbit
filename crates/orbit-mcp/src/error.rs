@@ -78,6 +78,7 @@ fn error_payload(err: &OrbitError) -> Value {
 
 fn error_code(err: &OrbitError) -> &str {
     match err {
+        OrbitError::NoJobRuns => const { RemoteToolCode::NotFound.as_str() },
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task

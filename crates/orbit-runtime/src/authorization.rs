@@ -52,6 +52,9 @@ pub(crate) const DECISION_DIGEST_OPERATION_ID: &str = "orbit.decision.digest";
 /// [`AGENT_INVOKE_OPERATION_ID`].
 pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 
+/// Canonical tool name of a delivery pull request's landing.
+pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
+
 /// How [`RuntimeKernel::admit_agent_invoke`] admitted one caller.
 #[derive(Debug)]
 pub enum AgentInvokeAdmission {
@@ -121,12 +124,12 @@ impl RuntimeKernel {
             return Ok(());
         }
         // A resident cycle holds no operator grant; its authority to dispatch
-        // is the `dispatch` right a human granted on its mandate. Core's cycle
-        // guard decides that on the tool host, for the same trusted run
-        // binding, before the submission runs: a live cycle, the right and the
-        // workspace. A run this lookup cannot show to be a cycle stays held to
-        // the row.
-        if tool_name == WORKFLOW_SHIP_OPERATION_ID
+        // and land is the `dispatch` and `merge` right a human granted on its
+        // mandate. Core's cycle guard decides that on the tool host, for the
+        // same trusted run binding, before the call runs: a live cycle, the
+        // right and the workspace. A run this lookup cannot show to be a cycle
+        // stays held to the row.
+        if (tool_name == WORKFLOW_SHIP_OPERATION_ID || tool_name == WORKFLOW_LAND_OPERATION_ID)
             && session_context.worker_invocation.is_none()
             && self.caller_is_resident_cycle()
         {
