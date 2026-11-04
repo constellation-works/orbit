@@ -243,7 +243,7 @@ fn triager(
 ) -> Result<TriagerDraw, OrbitError> {
     let avoid = author.into_iter().collect::<Vec<_>>();
     if let Some(purpose) = subject.purpose()
-        && let Some((candidates, _)) = runtime.purpose_pool_candidates(purpose, true)?
+        && let Some((candidates, _)) = runtime.purpose_pool_members(purpose, true)?
     {
         let preferred = candidates
             .iter()

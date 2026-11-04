@@ -17,6 +17,7 @@ use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, R
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::JobPullSettlementPort;
 use crate::runtime::audit::run::RunAuditStep;
 
 use super::projection::{job_run_task_ids, run_error_step};
@@ -415,7 +416,7 @@ impl OrbitRuntime {
         match read {
             RunFailureRead::Reconcile => {
                 let run = self.show_job_run(run_id)?;
-                self.settle_orphaned_pulls();
+                self.settle_orphaned_admissions();
                 Ok(run)
             }
             // Observed, not reconciled: naming a cause must not finalize a

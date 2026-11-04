@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::explore_brief::EXPLORE_BRIEF_SCHEMA;
 
@@ -81,12 +81,8 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> (ExploreBriefRecord, Option<CapturedExploreBrief>) {
         if self.worker_invocation().is_some() {
-            return match self.current_claimed_leaf() {
-                Ok(leaf) => match leaf
-                    .admission
-                    .receipt
-                    .and_then(|receipt| receipt.explore_brief)
-                {
+            return match self.claimed_leaf_explore_brief() {
+                Ok(captured) => match captured {
                     Some(captured) if captured.task_id == task_id => {
                         let (_, record) = stored_brief_document(&captured.document);
                         (record, Some(captured))
@@ -320,7 +316,7 @@ impl OrbitRuntime {
     /// so an unreadable run fails closed rather than passing.
     fn brief_pilot_policy(&self, pilot_run_id: Option<&str>) -> PreparationPolicy {
         let claim = pilot_run_id
-            .and_then(|run_id| self.show_job_run(run_id).ok())
+            .and_then(|run_id| self.observed_job_run(run_id).ok())
             .and_then(|run| run.input?.get("state_automation").cloned())
             .and_then(|claim| serde_json::from_value::<MemberAttempt>(claim).ok());
         self.claim_preparation_policy(claim.as_ref())

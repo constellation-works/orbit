@@ -17,11 +17,11 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::LocalPullAdmission;
+use orbit_store::contracts::{AdmissionReceipt, LocalPullAdmission};
 use orbit_types::workflow::{JobRun, ResourceThrottle};
 
 use crate::application::contracts::{
-    DrainClaimedLeaf, DrainEntryPoint, HostProviderHold, PullSettlementEntry,
+    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold, PullSettlementEntry,
 };
 
 /// Drain admission and owner coordination reads job code calls,
@@ -65,10 +65,27 @@ pub(in crate::application) trait JobDrainPort {
 
     /// The task commit boundary owner admissions are reserved through.
     fn owner_commit_boundary(&self) -> Result<TaskCommitBoundary, OrbitError>;
+
+    /// The admission receipt the owner issued for the current claim
+    /// `claim_id`.
+    fn claim_admission_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError>;
+
+    /// The leaf stage of the claimed leaf this host still holds a pull
+    /// admission for on `task_id`, with the leaf's run ID and recorded state
+    /// label; `None` when no such admission is held here.
+    fn held_claimed_leaf_stage(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError>;
 }
 
 /// Pull settlement job run surfaces carry, implemented by `pull_drain`.
 pub(in crate::application) trait JobPullSettlementPort {
+    /// After an operator's reconciling run read, settle with the owner every
+    /// admission an interrupted drain or leaf left that nothing else will
+    /// carry.
+    fn settle_orphaned_admissions(&self) -> Vec<PullSettlementEntry>;
+
     /// An operator's settle-only pass over every admission in this
     /// workspace that still holds a slot.
     fn settle_workspace_pulls(&self) -> Vec<PullSettlementEntry>;

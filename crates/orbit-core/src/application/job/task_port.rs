@@ -1,11 +1,14 @@
 //! Job dispatch's side of the task-owned job port [ORB-17936].
 
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
+use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{DecisionRequest, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
-    HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation, ShipMode,
-    SourceRepairBinding,
+    CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
+    ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
 
@@ -17,7 +20,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::{
     CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
 };
-use crate::application::task::TaskJobPort;
+use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
 
 impl TaskJobPort for OrbitRuntime {
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
@@ -235,5 +238,94 @@ impl TaskJobPort for OrbitRuntime {
         run_id: Option<&str>,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         self.observe_task_delivery(task_id, run_id)
+    }
+
+    fn answer_script_grant_decision(
+        &self,
+        request: &DecisionRequest,
+        answer_id: &str,
+        actor_label: &str,
+        via: &str,
+    ) -> Result<(), OrbitError> {
+        self.apply_script_grant_answer(request, answer_id, actor_label, via)
+    }
+
+    fn decision_pilot_preflight(&self, task_id: &str) -> Result<(), String> {
+        self.check_decision_task_pilot(task_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn request_explicit_task_pilot(
+        &self,
+        task_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<(), String> {
+        self.submit_explicit_task_pilot(task_id, actor, trigger)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn native_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<NativePublicationIdentity, OrbitError> {
+        let proof = self.desktop_native_publication_proof(task)?;
+        Ok(NativePublicationIdentity {
+            branch: proof.branch,
+            head: proof.head,
+            base_branch: proof.base_branch,
+            number: proof.number,
+            url: proof.url,
+        })
+    }
+
+    fn purpose_pool_members(
+        &self,
+        purpose: CrewPurpose,
+        inspection: bool,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        self.purpose_pool_candidates(purpose, inspection)
+    }
+
+    fn resume_failed_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<String, OrbitError> {
+        self.submit_resume_run(source_run_id, actor, claim_token)
+            .map(|invoke| invoke.run_id)
+    }
+
+    fn claimed_leaf_explore_brief(&self) -> Result<Option<CapturedExploreBrief>, OrbitError> {
+        self.current_claimed_leaf().map(|leaf| {
+            leaf.admission
+                .receipt
+                .and_then(|receipt| receipt.explore_brief)
+        })
+    }
+
+    fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
+        self.live_task_pilot_run(task_id)
+    }
+
+    fn claimed_leaf_candidates_before_holds(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        self.unheld_claimed_leaf_crew_candidates(task, pools)
+    }
+
+    fn stored_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.read_run_states_exact(run_ids)
+    }
+
+    fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError> {
+        self.delivery_attention(row)
     }
 }

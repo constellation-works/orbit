@@ -6,7 +6,7 @@ use orbit_types::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskReviewPort;
+use crate::application::task::{TaskJobPort, TaskReviewPort};
 
 use super::execution::{HandoffPullRequest, pull_number};
 use super::validation::{bounded_text, criteria, invalid};
@@ -172,7 +172,7 @@ impl OrbitRuntime {
             }));
         }
         if foreign.is_none() && refs.len() > 1 {
-            let proof = self.desktop_native_publication_proof(task)?;
+            let proof = self.native_publication_identity(task)?;
             let number = proof
                 .number
                 .parse::<u64>()

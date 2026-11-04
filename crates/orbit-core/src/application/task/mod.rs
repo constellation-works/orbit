@@ -139,7 +139,7 @@ pub(crate) use finding_verification::{
     needs_verification, next_tier,
 };
 use job_port::CrewPools;
-pub(in crate::application) use job_port::TaskJobPort;
+pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
 pub use listing::{
