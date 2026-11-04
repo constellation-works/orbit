@@ -7,6 +7,35 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_types::workflow::{ChildDispatch, DrainWorkerLimit, JobRunTrigger, PipelineState};
 use serde_json::json;
 
+#[test]
+fn malformed_duration_since_errors_show_accepted_format_without_mutating_runs() {
+    if !isolated_run_observation(
+        "run_observation::run_history::malformed_duration_since_errors_show_accepted_format_without_mutating_runs",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let before = fixture.snapshot();
+    for since in ["bogus", "12", ""] {
+        let args = [
+            "run",
+            "history",
+            "--no-reconcile",
+            "--since",
+            since,
+            "--json",
+        ];
+        let output = fixture.orbit().args(args).output().unwrap();
+        assert!(
+            !output.status.success(),
+            "{args:?} accepted malformed input"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("30m"), "{args:?}: {stderr}");
+        assert_eq!(fixture.snapshot(), before, "{args:?} must not mutate runs");
+    }
+}
+
 /// NDJSON exposes ordered history rows, including folded rows, without the
 /// JSON envelope or an empty-list sentinel.
 #[test]
