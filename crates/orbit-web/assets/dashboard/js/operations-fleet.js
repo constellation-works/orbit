@@ -1,4 +1,4 @@
-import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, fleetDrainTooltip, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
 import { setDrainReadiness } from './drain-waits.js';
 import { $, operationsState } from './operations-shared.js';
 
@@ -93,9 +93,11 @@ export function renderFleetIndicator(payload) {
   if (!global) return;
   global.hidden = false;
   const label = fleetDrainLabel(payload);
+  const tooltip = fleetDrainTooltip(payload);
   const active = payload.items.some(row => ['draining', 'pulling'].includes(row.phase));
   global.dataset.drainState = active ? 'draining' : payload.items.some(row => row.phase === 'winding_down') ? 'winding_down' : 'idle';
-  global.setAttribute('aria-label', `${label}. Open fleet drains`);
+  global.setAttribute('aria-label', `${label}. ${tooltip}`);
+  global.title = tooltip;
   global.querySelector('.global-drain-label').textContent = label;
   global.querySelector('.global-drain-running').textContent = '';
   // Open the fleet through the same scope switch used by its rows.
