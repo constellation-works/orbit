@@ -520,13 +520,16 @@ PY
 
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and
-# `task::SourceGit`, with no allowlist.
+# `task::SourceGit`, with no allowlist. A call to an inherent `OrbitRuntime`
+# method that automation defines is the same edge by name [ORB-22035], so it
+# is refused here without the backlog-forecast exemption below.
 if rg -n 'crate::application::automation\b|(super::)+automation\b' \
   "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
-  ! super_chains_into "$app_src" task automation; then
-  echo "orbit-core task must reach automation through task::TaskAutomationPort"
+  ! super_chains_into "$app_src" task automation ||
+  ! inherent_calls_into "$app_src" task automation '' ''; then
+  echo "orbit-core task must reach automation through task::TaskAutomationPort and must not call its inherent methods"
   fail=1
 fi
 
