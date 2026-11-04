@@ -293,7 +293,6 @@ fn configured_mcp_toolsets(
         })
         .transpose()?;
     let flagged_toolsets = toolset_flag.map(|list| list.split(',').collect::<Vec<_>>());
-    // Both flags given: the host config has nothing left to say.
     let config = if flagged_role.is_some() && flagged_toolsets.is_some() {
         None
     } else {
