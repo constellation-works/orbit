@@ -3,7 +3,7 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-10-30
+last_updated: 2026-11-03
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -25,13 +25,17 @@ README describes Orbit through its task queue, delivery pipeline and audit log, 
 
 ### 1.2 Should `target:` grow beyond `activity:<name>`?
 
-`TargetRef` is namespace-prefixed, but only `activity:<name>` exists after [T20260418-2019]. Do nested job refs, subroutine refs, or cross-workspace refs help, or would they turn this layer into a generic workflow engine?
+`TargetRef` now supports `activity:<name>` (originally [T20260418-2019]), granted
+`script:<name>` ([ORB-19983], [ORB-19985]) and `auto-task:<name>` ([ORB-20157],
+[ORB-20237], [ORB-20158]). Do nested job refs, subroutine refs or cross-workspace
+refs help, or would they turn this layer into a generic workflow engine?
 
-**Direction selected 2026-10-30, not implemented.** Add the bounded
-[`auto-task:<name>` target](./specs/auto-task-step.md) to reuse existing jobs for
-task composition and accepted-evidence waits. Durable CEL waiting is separate
-from existing skip guards. A separate auto-sequence carrier is unnecessary;
-nested job and cross-workspace references remain outside this proposal.
+**Auto-task direction partly delivered.** The bounded
+[`auto-task:<name>` target](./specs/auto-task-step.md) has schema/explain and durable
+bind/mint, parked CEL waits and partial-branch checkpoints. Readiness evidence
+adapters/history ([ORB-20165]), their condition-fact consumer ([ORB-20397]) and
+the disabled composition ([ORB-20166]) remain `someday`. Existing skip guards stay
+separate; no auto-sequence carrier, nested-job or cross-workspace reference was added.
 
 ### 1.3 Is the provider model too closed-set?
 
@@ -141,7 +145,16 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - **[T20260419-0623]** — Add `task_auto_pipeline`.
 - **[T20260419-2156]** — Retire v1 assets and drop the transitional v2 naming.
 - **[T20260419-2347]** — Seed activities and workflows on `orbit init`.
-- **[T20260430-19]** — Shorten the Activity / Job design docs while preserving required structure.
 - **[ORB-10332]** — Remove the unused Groundhog activity kind and the epic/parallel pipeline layer.
+- [ORB-10801] — Make job runs asynchronous by default and retire agent backend selection.
+- [ORB-19983] — Define script manifests, target parsing and the operator grant store.
+- [ORB-19985] — Execute granted Linux script steps under linux-bwrap-script-v1.
+- [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
+- [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
+- [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
+- [ORB-20397] — Expose accepted-result history through condition success facts (someday).
+- [T20260420-0510-2] — add the Groundhog v1 activity runner.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

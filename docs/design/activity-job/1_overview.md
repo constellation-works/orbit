@@ -3,11 +3,11 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-10-30
+last_updated: 2026-11-03
 last_validated: 2026-11-01
 status: Draft
 stage: shipped
-next: "Review proposed auto-task targets and durable CEL waiting; no implementation authorized"
+next: "Readiness adapters (ORB-20165), then disabled readiness job (ORB-20166); both someday"
 feature: activity-job
 doc_role: overview
 tags: ["activity-job"]
@@ -17,11 +17,14 @@ tags: ["activity-job"]
 
 Activity / Job is Orbit's execution substrate. Activities describe runnable units; jobs compose them sequentially, in parallel, across collections, or through bounded loops. Orbit's product story is moving toward goals, graphs, sessions, and locks, but this layer remains the runtime underneath. [2_design.md](./2_design.md) is the current contract; [3_vision.md](./3_vision.md) captures open questions.
 
-**Proposed extension.** [Auto-task steps and durable waiting](./specs/auto-task-step.md)
-would let an existing job bind or mint named auto-tasks and wait for accepted
-completion using CEL. A condition-triggered routine starts the job. This is not
-part of the shipped scope: no separate auto-sequence definition or lifecycle is
-introduced, and existing job ordering and `when` skip semantics stay unchanged.
+**Auto-task extension.** [Auto-task steps and durable waiting](./specs/auto-task-step.md)
+now have shipped schema/explain ([ORB-20157], with versioning in [ORB-20237]) and
+keyed bind/mint, parked CEL waits, admission rechecks and partial-branch checkpoints
+([ORB-20158]). Readiness evidence adapters ([ORB-20165]), their condition-history
+consumer ([ORB-20397]) and the disabled release-readiness composition ([ORB-20166])
+remain `someday`, outside the shipped scope. `require_result` holds without an
+adapter and historical `reuse_when` matching is not implemented. No separate
+auto-sequence lifecycle is introduced; ordinary ordering and `when` skips remain.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.
 
@@ -57,11 +60,15 @@ A `JobV2` is a step tree with:
 - `retry`
 - flat target steps
 - `target: activity:<name>` references
+- granted `target: script:<name>` steps ([ORB-19983], [ORB-19985])
+- `target: auto-task:<name>` steps with durable waits ([ORB-20158])
 - `parallel`
 - `fan_out` / `fan_in`
 - `loop`
 
-That grammar landed in [T20260418-2018], with `workflow` / `subroutine` job kinds added in [T20260419-0339].
+The original grammar landed in [T20260418-2018], with `workflow` / `subroutine` job kinds
+added in [T20260419-0339]. Script targets are job steps, not a restored shell activity
+variant; their current contract is [Script steps](../script-steps/1_scope.md).
 
 ### 2.3 Load-time normalization is part of the contract
 
@@ -103,6 +110,9 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | v2 activity type system | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs` | [T20260418-2010] |
 | v2 job step grammar | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260418-2018] |
 | Job kinds (`workflow`, `subroutine`) | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260419-0339] |
+| Auto-task schema / parked execution (done) | `crates/orbit-engine/src/activity_job/job_executor/auto_task.rs`, `crates/orbit-core/src/application/auto_tasks/job_step.rs` | [ORB-20157], [ORB-20237], [ORB-20158] |
+| Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/1_scope.md) | [ORB-19983], [ORB-19985] |
+| Readiness adapters / history / composition (someday) | [Auto-task step specification](./specs/auto-task-step.md) | [ORB-20165], [ORB-20397], [ORB-20166] |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog.rs` | [T20260418-2019] |
 | v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs` | [T20260418-2143], [T20260418-2210] |
 | Retired-declaration rejection | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs`, `crates/orbit-types/src/workflow/activity_job/retired.rs` | [ORB-10801] |
@@ -119,8 +129,8 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.
-- **[T20260418-2143]** — Wire the v2 runtime host in orbit-core and add its standalone activity runner.
-- **[T20260418-2210]** — Reshape the v2 runtime host to keep `orbit-agent` types out of orbit-core.
+- **[T20260418-2143]** — Wire `V2RuntimeHost` in orbit-core and add its standalone activity runner.
+- **[T20260418-2210]** — Reshape `V2RuntimeHost` to keep `orbit-agent` types out of orbit-core.
 - **[T20260419-0002]** — Add `workspace_path` provenance to the v2 audit envelope.
 - **[T20260419-0104]** — Add `backend: cli` dispatch for v2 `agent_loop`.
 - **[T20260419-0339]** — Add v2 job kinds to the job catalog.
@@ -130,8 +140,16 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - **[T20260419-2156]** — Retire v1 assets and drop the transitional v2 naming.
 - **[T20260419-2347]** — Seed activities and workflows on `orbit init`.
 - **[ORB-10332]** — Remove the unused Groundhog activity kind and the epic/parallel pipeline layer.
-- **[T20260430-19]** — Shorten the Activity / Job design docs while preserving required structure.
-- **[T20260509-2]** — Split the v2 job executor into responsibility-focused modules without changing runtime behavior.
-- **[ORB-00374]** — Remove the `shell` activity variant and `run_shell` dispatch (fail-closed resolution of security bug [ORB-00363]).
+- **[T20260509-2]** — split the v2 job executor into responsibility-focused modules without changing runtime behavior.
+- **[ORB-00374]** — Remove the Shell activity variant and run_shell dispatch from the v2 orchestrator.
+- [ORB-10801] — Make job runs asynchronous by default and retire agent backend selection.
+- [ORB-19983] — Define script manifests, target parsing and the operator grant store.
+- [ORB-19985] — Execute granted Linux script steps under linux-bwrap-script-v1.
+- [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
+- [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
+- [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
+- [ORB-20397] — Expose accepted-result history through condition success facts (someday).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
