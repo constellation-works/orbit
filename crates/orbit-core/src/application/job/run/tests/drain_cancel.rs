@@ -426,6 +426,7 @@ fn admission(
         caller_before_pr: false,
         review_gate: false,
         selective_review: false,
+        visual_resolution: 0,
         ..admission_request(
             format!("request-{}", owner.receipts.lock().unwrap().len()),
             AdmissionRunContext {

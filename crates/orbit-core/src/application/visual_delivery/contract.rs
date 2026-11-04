@@ -97,6 +97,7 @@ impl OrbitRuntime {
         Ok(Some(VisualReviewContract {
             task_id: task.id.clone(),
             mode: settings.mode,
+            resolution_schema: None,
             default_width: settings.default_width,
             max_mocks: settings.max_mocks,
             reviewer: settings.reviewer,
@@ -120,6 +121,15 @@ impl OrbitRuntime {
             return Ok(None);
         }
         self.visual_review_contract_for(task, MockDigestSource::Current)
+            .map(|contract| {
+                contract.map(|mut contract| {
+                    if contract.mode == orbit_types::task::VisualReviewMode::Live {
+                        contract.resolution_schema =
+                            Some(orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA);
+                    }
+                    contract
+                })
+            })
             .map_err(|detail| {
                 OrbitError::PolicyDenied(format!(
                     "task '{}' is not admitted: its visual review contract cannot be captured: \
@@ -200,10 +210,26 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> Result<Option<VisualReviewContract>, OrbitError> {
         let leaf = self.current_claimed_leaf()?;
-        Ok(leaf
-            .admission
-            .receipt
-            .and_then(|receipt| receipt.visual_review)
-            .filter(|contract| contract.task_id == task_id))
+        let receipt = leaf.admission.receipt;
+        let contract = receipt
+            .as_ref()
+            .and_then(|receipt| receipt.visual_review.clone())
+            .filter(|contract| contract.task_id == task_id);
+        if contract.as_ref().is_some_and(|contract| {
+            contract.mode == orbit_types::task::VisualReviewMode::Live
+                && (contract.resolution_schema
+                    != Some(orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA)
+                    || receipt.as_ref().is_none_or(|receipt| {
+                        receipt.request.visual_resolution
+                            != orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA
+                            || receipt.request.ship.mode != "pr"
+                    }))
+        }) {
+            return Err(OrbitError::PolicyDenied(
+                "visual_live_claim_unsupported: no supported negotiated visual-resolution contract"
+                    .into(),
+            ));
+        }
+        Ok(contract)
     }
 }

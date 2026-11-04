@@ -136,6 +136,7 @@ impl Leaf {
             caller_before_pr: true,
             review_gate: true,
             selective_review: false,
+            visual_resolution: 0,
             ..admission_request(
                 "request-1".into(),
                 AdmissionRunContext {

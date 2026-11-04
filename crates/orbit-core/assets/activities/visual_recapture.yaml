@@ -18,7 +18,10 @@ spec:
     final candidate lacks complete evidence for each budgeted mock
     (`visual_review.max_mocks`), the run ends held
     (`delivery_visual_review_unresolved`) with the candidate preserved for the
-    operator. Every other delivery reports `applies: false`.
+    operator. A negotiated claimed live leaf also seals the owner-verifiable
+    evidence bundle in `visual/resolution.json` and returns its digest reference
+    for handoff. It uses the owner's captured contract. Every other delivery
+    reports `applies: false`.
   input_schema_json:
     type: object
     required: [workspace_path]
@@ -37,6 +40,12 @@ spec:
     properties:
       applies:
         type: boolean
+      capture_artifact:
+        type: string
+        description: Negotiated live resolution bundle attached on the owner.
+      capture_sha256:
+        type: string
+        description: Digest of the resolution bundle the handoff pins.
       resolved:
         type: array
         items:

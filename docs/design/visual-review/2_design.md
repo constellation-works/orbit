@@ -534,11 +534,43 @@ delivery is resumed on a host with a kit.
 
 ### 6.2 Claimed runs
 
-The following capture protocol is supported in `shadow`. Claimed `live` delivery is
-held as `visual_live_claim_unsupported` at owner admission, handoff observation and
-landing, including already accepted claims. A negotiated, owner-verifiable resolution
-of the exact final candidate is required before claimed live delivery can be supported.
-This repair neither enables live mode nor establishes a completed live experiment.
+Claimed live PR delivery requires mutual support for resolution bundle schema 1.
+The claimed-local pipeline does not produce this bundle and remains held at admission
+and landing as an unsupported route; schema 1 does not authorize it. The
+executor declares `AdmissionRequest.visual_resolution = 1`; absent/zero or an unknown
+version retains the visible `visual_live_claim_unsupported` admission hold. The request
+field participates in the type-derived protocol fingerprint: mismatched builds stop
+before admission. Historical requests deserialize with zero capability. The owner returns
+`VisualReviewContract.resolution_schema = 1` only for live claims; it omits this optional
+field on shadow/local contracts, preserving their preceding strict readers. An old live
+receipt without negotiation cannot be upgraded by returning newer evidence.
+
+After the final reviewer and validation, the claimed pipeline runs `visual_recapture`
+against the receipt's contract, irrespective of the replica's settings. It system-writes
+`visual/resolution.json` and pins its digest in `TaskHandoff.visual` (shadow still pins
+`visual/capture.json`). The bundle binds task, claim, leaf run, final candidate and the
+serialized frozen contract digest, plus digest references to the initial capture, final
+capture/checks, and comparison review. Changed heads require a complete recapture;
+unchanged heads reuse the original complete capture. Every budgeted mock must appear
+exactly once, rendered at the exact head, with the original mock/manifest identities,
+matching stored image bytes and the pinned browser kit. Over-budget mocks remain excluded.
+
+The owner independently re-reads these records at acceptance, landing-context creation,
+and every merge-intent/completion authority decision. Missing, partial, changed, stale,
+foreign or unsupported evidence holds with `delivery_visual_review_unresolved`; no stored
+acceptance grants a permanent pass. A changed head must be the reviewer's final commit
+above the comparison head. For blocking findings the owner checks the pinned review
+manifest/report and exact attempt, finding identity and `fixed` resolution, final
+recapture/checks, or an operator acceptance in **owner history**. A worker's
+`dispute_accepted` label grants nothing. The existing active-claim write fence still
+applies to the operator: settle/release the held leaf before accepting its dispute, then
+resume through a fresh claim. With no configured review layer, confirmed
+blocking findings retain the existing high-follow-up policy; a configured but absent or
+incomplete reviewer resolution is held conservatively. Clean-base no-diff deliveries
+still run their ordinary owner verifier and exact-base checks, without a visual change
+to capture. Exact-head certificates, validation, approvals and hosted checks remain
+separate requirements. This implementation changes no live setting, launches no
+experiment and makes no promotion claim.
 
 A shadow claim captures the owner's review contract. Visual review adds to it: the
 `visual_review` settings, the manifest bytes and revision read at the claim base, the mocks'
@@ -551,9 +583,9 @@ own settings.
   `capture.json`, every `commit` is the handed-off head (or its review commit), the manifest
   and mock digests are the captured contract's, and the kit pin is this build's. A mismatch
   refuses the handoff with `visual_capture_mismatch`; the owner never relabels an image.
-- **Review and verification** run on the leaf when the leaf runs the pre-landing review.
-  Otherwise they run on the owner after handoff, from the returned artifacts and the owner's
-  copy of the mocks.
+- **Review and verification** run on the leaf before its handoff; the owner checks
+  their returned records and the pinned code-review evidence, rather than trusting a
+  resolution boolean or rerunning a model at landing.
 - **A leaf without a kit** returns `not_established`.
 
 ### 6.3 Remote and cloud runs
@@ -910,12 +942,9 @@ readout says so.
 - Live visual records and landing obligations require workspace layout 6 (Breaking;
   existing records are preserved). Guarded upgrade must fence every older live client
   before opening the new store; an operator warning is not the fence.
-- Claimed `live` delivery is explicitly unavailable pending negotiated, owner-verifiable
-  final-candidate visual-resolution proof. Owner admission holds these tasks, and old
-  live handoffs are refused at observation and landing. Shadow claimed captures remain
-  supported. This safety repair does not establish the full claimed live design or a
-  completed live experiment; those require a subsequent supported proof seam and
-  controlled evaluation.
+- Claimed live delivery uses the negotiated schema-1 proof seam in §6.2. Unsupported
+  executors and old unnegotiated live receipts remain held; shadow/off behavior remains
+  unchanged. This establishes capability, not a completed live experiment or promotion.
 - Follow-ups use a durable per-task/candidate/finding action key. Retry completes missing
   required images and verification history on the same task before recording it filed.
 - The shipped experiment is `orbit experiment create <name> --template visual-review`. The
@@ -1037,6 +1066,6 @@ workspace with visual review `live`, and remains for everything else.
 - [ORB-20529] — Add design-rule and quality-floor review question 9 and verifier excerpts.
 - [ORB-20926] — Enforce the aggregate design-rule excerpt byte budget.
 - [ORB-21365] — Record per-crew probe canary misses without failing the whole probe run.
-- [ORB-21963] — Complete owner-verifiable final-candidate visual proof for claimed live delivery (proposed).
+- [ORB-21963] — Complete negotiated owner-verifiable final-candidate visual proof for claimed live delivery.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

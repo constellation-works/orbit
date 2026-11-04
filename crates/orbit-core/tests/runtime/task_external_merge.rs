@@ -346,6 +346,7 @@ impl Fixture {
             caller_before_pr: false,
             review_gate: true,
             selective_review: false,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: format!("drain-{number}"),
                 job_name: "workspace_pull_pipeline".into(),

@@ -146,6 +146,7 @@ pub(super) fn capture_task(
                 Some(VisualReviewContract {
                     task_id: task.id.clone(),
                     mode: settings.mode,
+                    resolution_schema: None,
                     default_width: settings.default_width,
                     max_mocks: settings.max_mocks,
                     reviewer: settings.reviewer,

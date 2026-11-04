@@ -193,34 +193,38 @@ fn visual_followup_retry_completes_existing_task_evidence() {
 fn live_claim_without_owner_visual_resolution_proof_is_held() {
     let config = CONFIG.replace("shadow", "live");
     let (pair, _kit) = prepared_mock_pair(&config);
-    let drain = pair.run_drain();
-    let pass = pair.pass_with(&drain, 1);
-    assert_eq!(
-        pass["admitted"], 0,
-        "unsupported live proof must not mint a leaf: {pass}"
-    );
-    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
-    let admissions = pair.follower_jobs.local_pull_admissions().unwrap();
-    assert!(
-        admissions
-            .iter()
-            .all(
-                |admission| admission.receipt.as_ref().is_some_and(|receipt| receipt
-                    .claim
-                    .is_none()
-                    && receipt
-                        .deferred_conflicts
-                        .iter()
-                        .any(|hold| hold.task_id == pair.tasks[0]
-                            && hold.reason.starts_with("visual_live_claim_unsupported:")))
-                    && admission.leaf_run_id.is_none()
-                    && admission.phase == LocalPullPhase::Idle
-            ),
-        "live admission must be idle: {admissions:?}"
-    );
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    for (index, capability) in [None, Some(0), Some(99)].into_iter().enumerate() {
+        let mut request = json!({
+            "request_id":format!("unsupported-visual-{index}"), "caller_version":probe["binary_version"],
+            "caller_schema":orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            "caller_fingerprint":orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+            "caller_before_pr":false,"review_gate":true,"ship":probe["ship"],
+            "browser_kit":true,"os":"linux",
+            "run_context":{"run_id":"visual-drain","job_name":"workspace_pull_pipeline"}
+        });
+        if let Some(capability) = capability {
+            request["visual_resolution"] = json!(capability);
+        }
+        let response = pair.wire.call("", "orbit.task.pull", request).unwrap();
+        assert!(response["receipt"]["claim"].is_null(), "{response}");
+        assert!(
+            response["receipt"]["deferred_conflicts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hold| hold["task_id"] == pair.tasks[0]
+                    && hold["reason"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("visual_live_claim_unsupported:")),
+            "{response}"
+        );
+        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    }
 }
 
-fn system_records(runtime: &OrbitRuntime, task: &str, artifacts: Vec<TaskArtifact>) {
+pub(super) fn system_records(runtime: &OrbitRuntime, task: &str, artifacts: Vec<TaskArtifact>) {
     use orbit_store::contracts::TaskArtifactUpdateParams;
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
