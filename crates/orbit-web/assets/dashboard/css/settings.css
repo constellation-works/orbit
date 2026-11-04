@@ -293,6 +293,20 @@
   color: var(--fg-mute); font-size: 12px;
 }
 .all-keys-search { flex: 1 1 220px; min-width: 160px; }
+/* Workflow section navigation: sticky inside the scrolling content pane so
+   the jump, search and collapse controls stay reachable without leaving the
+   pane; every control wraps inside the pane at phone width. */
+.workflow-nav {
+  position: sticky; top: 0; z-index: 6; max-width: 100%; box-sizing: border-box;
+  box-shadow: 0 1px 0 var(--hair);
+}
+.workflow-nav-label { color: var(--fg-dim); font-weight: 600; }
+.workflow-nav-link, .workflow-section-toggle { white-space: nowrap; }
+.workflow-search { flex: 1 1 180px; min-width: 140px; max-width: 100%; box-sizing: border-box; }
+.workflow-nav .config-action:focus-visible, .workflow-search:focus-visible,
+.workflow-section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.topic-page .config-section { scroll-margin-top: 64px; }
+.config-section-body[hidden] { display: none; }
 .all-keys-pager {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px;
   border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev);

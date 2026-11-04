@@ -9,6 +9,8 @@ let layerFilter = 'all';
 let topicFilter = 'all';
 let allKeysQuery = '';
 let allKeysPage = 0;
+let workflowQuery = '';
+let workflowCollapsed = new Set();
 // The deep key each source (the ?key= link, the open drawer) last landed the
 // All keys pager on, so later renders leave the pager where the user moved it.
 let allKeysLanded = { link: null, drawer: null };
@@ -18,7 +20,7 @@ let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; workflowQuery = ''; workflowCollapsed = new Set(); allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -182,10 +184,28 @@ function weightBar(values) {
   for (const p of parts) { const s = el('span', { class: 'topic-pool-seg', text: `${p.n} ${total ? Math.round((p.weight / total) * 100) : 0}%` }); s.style.flexGrow = String(p.weight); wrap.appendChild(s); }
   return wrap;
 }
-function section(title, rows, context, opts) {
+function sectionSlug(title) {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+function section(title, rows, context, opts = {}) {
   const sec = el('section', { class: 'panel config-section' });
-  sec.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: title }), el('span', { class: 'count', text: `${rows.length} keys` })]));
+  if (opts.id) sec.id = opts.id;
+  const bodyId = opts.id ? `${opts.id}-body` : null;
+  const collapsed = Boolean(opts.collapsible && opts.collapsed);
+  const headerRight = [el('span', { class: 'count', text: `${rows.length} keys` })];
+  if (opts.collapsible) {
+    const toggle = el('button', { class: 'config-action ghost workflow-section-toggle', text: collapsed ? 'Expand' : 'Collapse' });
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    if (bodyId) toggle.setAttribute('aria-controls', bodyId);
+    toggle.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${title}`);
+    toggle.addEventListener('click', () => opts.onToggle?.());
+    headerRight.push(toggle);
+  }
+  sec.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: title }), el('span', { class: 'config-header-right' }, headerRight)]));
   const body = el('div', { class: 'config-section-body' });
+  if (bodyId) body.id = bodyId;
+  if (collapsed) body.hidden = true;
   if (!rows.length) body.appendChild(el('div', { class: 'config-empty', text: 'No keys in this section.' }));
   for (const r of rows) body.appendChild(rowNode(r, context, opts));
   sec.appendChild(body); return sec;
@@ -292,15 +312,75 @@ function finish(body, payload, context, nodes) {
 
 export function renderWorkflow(body, payload, context) {
   const rows = flatten(payload).filter((r) => topicOf(r.key) === 'workflow' && !r.key.startsWith('workflow.resource_throttle.'));
-  const used = new Set(); const nodes = [];
-  const binding = payload.workspace_binding;
-  if (binding) nodes.push(el('div', { class: 'config-note', text: `Registry: base_branch ${binding.base_branch || '–'} · ship_mode ${binding.ship_mode || '–'}` }));
+  const used = new Set();
+  const groups = [];
   for (const [title, pred] of WORKFLOW_SECTIONS) {
     const sec = rows.filter((r) => pred(r.key, payload)); sec.forEach((r) => used.add(r.key));
-    nodes.push(section(title, sec, context));
+    groups.push({ title, id: `workflow-section-${sectionSlug(title)}`, rows: sec });
   }
   const rest = rows.filter((r) => !used.has(r.key));
-  if (rest.length) nodes.push(section('Other workflow keys', rest, context));
+  if (rest.length) groups.push({ title: 'Other workflow keys', id: `workflow-section-${sectionSlug('Other workflow keys')}`, rows: rest });
+  const query = workflowQuery.trim().toLowerCase();
+  const matches = (r) => !query || `${r.key} ${r.label || ''} ${display(r.value)}`.toLowerCase().includes(query);
+  const shown = groups
+    .map((g) => ({ ...g, rows: query ? g.rows.filter(matches) : g.rows }))
+    .filter((g) => !query || g.rows.length);
+  const nodes = [];
+  const binding = payload.workspace_binding;
+  if (binding) nodes.push(el('div', { class: 'config-note', text: `Registry: base_branch ${binding.base_branch || '–'} · ship_mode ${binding.ship_mode || '–'}` }));
+  // Direct navigation inside the pane: jump to any section (expanding it),
+  // filter to matching keys, or collapse sections to a bounded subset. Every
+  // control is a native button/input so the whole set is keyboard reachable.
+  const nav = el('nav', { class: 'topic-controls workflow-nav' });
+  nav.setAttribute('aria-label', 'Workflow sections');
+  nav.appendChild(el('span', { class: 'workflow-nav-label', text: 'Sections' }));
+  for (const g of shown) {
+    const jump = el('button', { class: 'config-action ghost workflow-nav-link', text: g.title });
+    jump.type = 'button';
+    jump.dataset.workflowTarget = g.id;
+    jump.addEventListener('click', () => {
+      workflowCollapsed.delete(g.id);
+      context.rerender?.();
+      const target = document.getElementById(g.id);
+      if (!target) return;
+      target.scrollIntoView({ block: 'start' });
+      target.querySelector('.workflow-section-toggle')?.focus({ preventScroll: true });
+    });
+    nav.appendChild(jump);
+  }
+  const search = el('input', { class: 'config-filter workflow-search' });
+  search.type = 'search'; search.placeholder = 'Search key, label or value…'; search.value = workflowQuery;
+  search.setAttribute('aria-label', 'Search workflow keys');
+  search.addEventListener('input', () => {
+    workflowQuery = search.value; context.rerender?.();
+    const rebuilt = document.querySelector('input.workflow-search');
+    if (rebuilt) { rebuilt.focus({ preventScroll: true }); rebuilt.setSelectionRange(rebuilt.value.length, rebuilt.value.length); }
+  });
+  nav.append(el('span', { text: 'Search' }), search);
+  const expandAll = el('button', { class: 'config-action ghost workflow-expand-all', text: 'Expand all' }); expandAll.type = 'button';
+  expandAll.addEventListener('click', () => { workflowCollapsed = new Set(); context.rerender?.(); });
+  const collapseAll = el('button', { class: 'config-action ghost workflow-collapse-all', text: 'Collapse all' }); collapseAll.type = 'button';
+  collapseAll.addEventListener('click', () => { workflowCollapsed = new Set(groups.map((g) => g.id)); context.rerender?.(); });
+  nav.append(expandAll, collapseAll);
+  nodes.push(nav);
+  if (query && !shown.length) {
+    const empty = el('section', { class: 'panel config-section' });
+    empty.appendChild(el('div', { class: 'config-empty', text: 'No workflow keys match this search. Clear the search to show every key.' }));
+    nodes.push(empty);
+  }
+  for (const g of shown) {
+    nodes.push(section(g.title, g.rows, context, {
+      id: g.id,
+      collapsible: true,
+      collapsed: !query && workflowCollapsed.has(g.id),
+      onToggle: () => {
+        if (workflowCollapsed.has(g.id)) workflowCollapsed.delete(g.id); else workflowCollapsed.add(g.id);
+        context.rerender?.();
+        const toggle = document.getElementById(g.id)?.querySelector('.workflow-section-toggle');
+        toggle?.focus({ preventScroll: true });
+      },
+    }));
+  }
   finish(body, payload, context, nodes);
 }
 export function renderExecution(body, payload, context) {
