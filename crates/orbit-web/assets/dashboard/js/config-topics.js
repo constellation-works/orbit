@@ -10,7 +10,8 @@ let topicFilter = 'all';
 let allKeysQuery = '';
 let allKeysPage = 0;
 let workflowQuery = '';
-let workflowCollapsed = new Set();
+let workflowCollapsed = new Set(); // the saved layout, in force when no search is active
+let workflowSearchCollapsed = new Set(); // sections collapsed while a search is active
 // The deep key each source (the ?key= link, the open drawer) last landed the
 // All keys pager on, so later renders leave the pager where the user moved it.
 let allKeysLanded = { link: null, drawer: null };
@@ -20,7 +21,7 @@ let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; workflowQuery = ''; workflowCollapsed = new Set(); allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -316,6 +317,13 @@ function finish(body, payload, context, nodes) {
   body.appendChild(wrap);
 }
 
+// The collapsed sections in force. A search keeps its own set: its matches open
+// for discoverability, explicit collapses made during it stay in that set, and
+// the saved layout is untouched until the search clears.
+function workflowCollapsedSet() {
+  return workflowQuery.trim() ? workflowSearchCollapsed : workflowCollapsed;
+}
+
 export function renderWorkflow(body, payload, context) {
   const rows = flatten(payload).filter((r) => topicOf(r.key) === 'workflow' && !r.key.startsWith('workflow.resource_throttle.'));
   const used = new Set();
@@ -345,7 +353,7 @@ export function renderWorkflow(body, payload, context) {
     jump.type = 'button';
     jump.dataset.workflowTarget = g.id;
     jump.addEventListener('click', () => {
-      workflowCollapsed.delete(g.id);
+      workflowCollapsedSet().delete(g.id);
       context.rerender?.();
       const target = document.getElementById(g.id);
       if (!target) return;
@@ -359,15 +367,27 @@ export function renderWorkflow(body, payload, context) {
   search.type = 'search'; search.placeholder = 'Search key, label or value…'; search.value = workflowQuery;
   search.setAttribute('aria-label', 'Search workflow keys');
   search.addEventListener('input', () => {
-    workflowQuery = search.value; context.rerender?.();
+    workflowQuery = search.value;
+    if (!workflowQuery.trim()) workflowSearchCollapsed = new Set();
+    context.rerender?.();
     const rebuilt = document.querySelector('input.workflow-search');
     if (rebuilt) { rebuilt.focus({ preventScroll: true }); rebuilt.setSelectionRange(rebuilt.value.length, rebuilt.value.length); }
   });
   nav.append(el('span', { text: 'Search' }), search);
   const expandAll = el('button', { class: 'config-action ghost workflow-expand-all', text: 'Expand all' }); expandAll.type = 'button';
-  expandAll.addEventListener('click', () => { workflowCollapsed = new Set(); context.rerender?.(); });
+  // Expand all and Collapse all act on the sections the view shows, so a search
+  // collapses only its matches. Each keeps keyboard focus on its own button.
+  expandAll.addEventListener('click', () => {
+    workflowCollapsedSet().clear(); context.rerender?.();
+    document.querySelector('button.workflow-expand-all')?.focus({ preventScroll: true });
+  });
   const collapseAll = el('button', { class: 'config-action ghost workflow-collapse-all', text: 'Collapse all' }); collapseAll.type = 'button';
-  collapseAll.addEventListener('click', () => { workflowCollapsed = new Set(groups.map((g) => g.id)); context.rerender?.(); });
+  collapseAll.addEventListener('click', () => {
+    const collapsed = workflowCollapsedSet();
+    collapsed.clear(); for (const g of shown) collapsed.add(g.id);
+    context.rerender?.();
+    document.querySelector('button.workflow-collapse-all')?.focus({ preventScroll: true });
+  });
   nav.append(expandAll, collapseAll);
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => syncWorkflowNavOffset(nav)).observe(nav);
   nodes.push(nav);
@@ -380,9 +400,10 @@ export function renderWorkflow(body, payload, context) {
     nodes.push(section(g.title, g.rows, context, {
       id: g.id,
       collapsible: true,
-      collapsed: !query && workflowCollapsed.has(g.id),
+      collapsed: workflowCollapsedSet().has(g.id),
       onToggle: () => {
-        if (workflowCollapsed.has(g.id)) workflowCollapsed.delete(g.id); else workflowCollapsed.add(g.id);
+        const collapsed = workflowCollapsedSet();
+        if (collapsed.has(g.id)) collapsed.delete(g.id); else collapsed.add(g.id);
         context.rerender?.();
         const toggle = document.getElementById(g.id)?.querySelector('.workflow-section-toggle');
         toggle?.focus({ preventScroll: true });
