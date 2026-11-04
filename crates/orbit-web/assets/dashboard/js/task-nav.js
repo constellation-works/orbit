@@ -55,10 +55,18 @@ function waitingCountFromTasks(context) {
 // count stored when /api/decisions answered went stale for the 15 s throttle
 // whenever the task list changed after it (a human-crew task arriving in a
 // later poll read as 0). Open decisions for tasks outside the loaded list still
-// count, by id.
+// count, by id. A cached id for a task the list shows counts only while that task
+// is open, so a failed read that keeps the ids cannot count a settled task.
 function waitingCountNow(context) {
   if (isAggregateView() || !waitingDecisionTaskIds) return waitingCountFromTasks(context);
-  return new Set([...waitingDecisionTaskIds, ...taskList(context).filter(taskWaitsOnYou).map((t) => t.id)]).size;
+  const tasks = taskList(context);
+  const listed = new Map(tasks.map((t) => [t.id, t]));
+  const ids = new Set(tasks.filter(taskWaitsOnYou).map((t) => t.id));
+  for (const id of waitingDecisionTaskIds) {
+    const live = listed.get(id);
+    if (!live || isOpenTask(live)) ids.add(id);
+  }
+  return ids.size;
 }
 // The cache holds the ids of the workspace and moment it was read; forget it so
 // the next chip refresh reads /api/decisions again.
