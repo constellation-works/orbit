@@ -1277,6 +1277,51 @@ fn ambient_activity_mcp_toolset_does_not_change_default_tools_list() {
 }
 
 #[test]
+fn mcp_repeated_field_metadata_stays_within_context_budget() {
+    let (_workspace, mut client) = McpWorkspace::served();
+    let listed = client.tools_list();
+    let mut workspace_bytes = 0;
+    let mut model_bytes = 0;
+    for tool in tools_array(&listed) {
+        let properties = &tool["inputSchema"]["properties"];
+        let workspace_description_bytes = properties["workspace"]["description"]
+            .as_str()
+            .map_or(0, str::len);
+        assert!(
+            workspace_description_bytes <= 120,
+            "ORB-21943: each workspace field must stay concise, got {workspace_description_bytes} bytes for {}",
+            tool["name"]
+        );
+        workspace_bytes += workspace_description_bytes;
+        if matches!(
+            tool["name"].as_str(),
+            Some("orbit_attention" | "orbit_decision_raise")
+        ) {
+            let description_bytes = tool["description"]
+                .as_str()
+                .expect("tool description")
+                .len();
+            assert!(
+                description_bytes <= 300,
+                "ORB-21943: long tool policy belongs in installed references, got {description_bytes} bytes for {}",
+                tool["name"]
+            );
+        }
+        for keyword in ["description", "pattern"] {
+            model_bytes += properties["model"][keyword].as_str().map_or(0, str::len);
+        }
+    }
+    assert!(
+        workspace_bytes <= 4_434,
+        "ORB-21943: repeated workspace metadata must use at most half the observed 8,868 bytes, got {workspace_bytes}"
+    );
+    assert!(
+        model_bytes <= 6_000,
+        "ORB-21943: repeated model metadata must shrink from the observed 8,732 bytes, got {model_bytes}"
+    );
+}
+
+#[test]
 fn mcp_model_schema_admits_full_model_strings_and_call_succeeds() {
     let (_workspace, mut client) = McpWorkspace::served();
     let listed = client.tools_list();

@@ -38,7 +38,7 @@ const HOST_PARAM: ParamSpec = cli_only(
 const WORKSPACE_PARAM: ParamSpec = mcp_only(
     "workspace",
     ParamType::String,
-    "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+    "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
 );
 
 const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {

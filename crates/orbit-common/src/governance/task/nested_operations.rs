@@ -63,7 +63,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
         both(
             "model",
             ParamType::String,
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+            "Agent family or full model ID for provenance.",
             CliArgKind::flag("model"),
             "Explicit agent model to persist on the task artifact update",
         ),
@@ -129,10 +129,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
         &[mcp_only(
             "workspace",
             ParamType::String,
-            "Optional explicit workspace filter. `id` is resolved globally by \
-                default; when supplied, a registered workspace name, logical workspace ID \
-                (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that \
-                does not own the task returns not-found.",
+            "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
         )],
     ],
     at_least_one_of: &[],

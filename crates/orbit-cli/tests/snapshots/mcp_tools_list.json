@@ -1,7 +1,7 @@
 [
   {
     "name": "orbit_attention",
-    "description": "List read-only operator waits: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, notice_open, resident_stalled (active mandate with no checkpoint for twice its heartbeat or three incomplete cycles), and host_unhealthy. Decisions fold into their hold, block or review. Filters AND across fields and OR within repeated values; kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or changed items; expired, invalid or unsupported cursors restart the full list. Federated calls without a host-qualified workspace read every host; unreadable hosts produce host_unhealthy items and degraded entries. No session hooks or background work run. Bound MCP sessions cannot widen scope using all, host or another workspace. Runtime kinds require Operator capability; other sessions receive degraded code capability for unreadable kinds. Recovery and cancellation in next are suggestions only. ci_red reads the cached, timeout-bounded provider for the base head; missing authentication or timeouts degrade as source_unavailable, and excluding ci_red skips the read. Its since is the failing run's updated_at (an onset proxy). friction_untriaged lists open friction records.",
+    "description": "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -17,7 +17,7 @@
               "type": "string"
             }
           ],
-          "description": "Registered workspace names or ids; accepts one string or an array. Conflicts with all."
+          "description": "Registered workspace names or IDs, as one string or an array; conflicts with all."
         },
         "all": {
           "type": "boolean",
@@ -279,7 +279,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -320,7 +320,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": true
@@ -462,12 +462,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -516,12 +516,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": true
@@ -555,12 +555,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -612,12 +612,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -654,12 +654,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": true
@@ -670,7 +670,7 @@
   },
   {
     "name": "orbit_decision_raise",
-    "description": "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. The operator answers, or a current corpus rule the operator marked auto answers an exact topic match and records that answer as precedent: either way the answer is in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+    "description": "Raise a multiple-choice request on a human-crew task when an operator decision is needed to proceed. Answering and limits: installed Orbit skill `references/tool-surface.md#raising-a-decision`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -695,12 +695,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -726,12 +726,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -790,12 +790,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
           "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)"
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -870,7 +870,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -958,12 +958,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": true,
@@ -1015,7 +1015,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd."
+          "description": "Registered workspace name, ID or path, defaulting to a bound session's workspace."
         },
         "acceptance_criteria": {
           "anyOf": [
@@ -1274,8 +1274,8 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field: the agent family (codex, claude, gemini, grok, or muse) or a full model string such as `claude-opus-5-5`. `created_by` records the family; a full model string is also recorded once as `created_by_model`. A value that names no known family is refused."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         }
       },
       "required": [
@@ -1358,12 +1358,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found."
+          "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
         }
       },
       "required": [
@@ -1397,12 +1397,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -1426,7 +1426,7 @@
       "properties": {
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
+          "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound."
         },
         "action": {
           "type": "string",
@@ -1477,8 +1477,8 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         }
       },
       "required": [
@@ -1531,12 +1531,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": false
@@ -1672,12 +1672,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "additionalProperties": false
@@ -1707,8 +1707,8 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "fields": {
           "anyOf": [
@@ -1734,7 +1734,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name."
+          "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
         },
         "view": {
           "type": "string",
@@ -2170,12 +2170,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
@@ -2294,7 +2294,7 @@
         "workspace": {
           "type": "string",
           "minLength": 1,
-          "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd."
+          "description": "Explicit registered workspace name, ID or absolute checkout path."
         },
         "id": {
           "type": "string",
@@ -2345,7 +2345,7 @@
         "workspace": {
           "type": "string",
           "minLength": 1,
-          "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd."
+          "description": "Explicit registered workspace name, ID or absolute checkout path."
         },
         "id": {
           "type": "string",
@@ -2410,12 +2410,12 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
+          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
+          "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [

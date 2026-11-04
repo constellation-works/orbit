@@ -65,7 +65,7 @@ const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
 const WRITE_MODEL_PARAM: ParamSpec = both(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+    "Agent family or full model ID for provenance.",
     CliArgKind::flag("model"),
     "Explicit agent model to persist on the task artifact",
 );
@@ -75,7 +75,7 @@ const WRITE_MODEL_PARAM: ParamSpec = both(
 const ADD_MODEL_PARAM: ParamSpec = both(
     "model",
     ParamType::String,
-    "Preferred provenance field: the agent family (codex, claude, gemini, grok, or muse) or a full model string such as `claude-opus-5-5`. `created_by` records the family; a full model string is also recorded once as `created_by_model`. A value that names no known family is refused.",
+    "Agent family or full model ID for provenance.",
     CliArgKind::flag("model"),
     "Creator's agent family or full model id (e.g. claude-opus-5-5); created_by records the family and a full model id is also kept as created_by_model",
 );
@@ -223,7 +223,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd.",
+                "Registered workspace name, ID or path, defaulting to a bound session's workspace.",
             ),
             free_text(both(
                 "acceptance_criteria",

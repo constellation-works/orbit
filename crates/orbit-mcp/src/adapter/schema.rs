@@ -59,63 +59,38 @@ pub(crate) enum WorkspaceBinding {
     Unbound,
 }
 
-const BOUND_SESSION_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this \
-     session, which is already bound to a workspace — by `orbit mcp serve --workspace` at \
-     launch or `_meta.orbit.workspace` at initialize. Pass it to address a different \
-     registered workspace; never inferred from the server process cwd.";
+const BOUND_SESSION_SELECTOR_DESCRIPTION: &str =
+    "Optional in this session; select another registered workspace by name, ID or path.";
 
-const UNBOUND_SESSION_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Required in this \
-     session, which is bound to no workspace, so a call that omits it is refused. Sessions \
-     bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at \
-     initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. \
-     If none is listed, run `orbit init` and then `orbit workspace init` from the project \
-     directory. Never inferred from the server process cwd.";
+const UNBOUND_SESSION_SELECTOR_DESCRIPTION: &str =
+    "Required in this session; copy a workspace ID from orbit_workspace_list.";
 
 /// Federated callers copy the list token; they must not mint a v1 local form.
-const FEDERATED_SELECTOR_DESCRIPTION: &str = "Copy the `selector` field from federated `orbit.workspace.list` to address a workspace. \
-     Do not parse or construct the token. A call without a host-qualified selector is refused.";
+const FEDERATED_SELECTOR_DESCRIPTION: &str =
+    "Copy the opaque host-qualified selector from orbit_workspace_list.";
 
 /// An id-routed task tool on a bound authoritative session: the binding is
 /// the default, and a remote prefix is refused rather than relayed.
-const ID_ROUTED_BOUND_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this \
-     session, which is already bound to a workspace — by `orbit mcp serve --workspace` at \
-     launch or `_meta.orbit.workspace` at initialize. Pass it to address a different \
-     registered workspace. An id whose prefix belongs to another registered host is refused \
-     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
-     from the server process cwd.";
+const ID_ROUTED_BOUND_SELECTOR_DESCRIPTION: &str =
+    "Optional in this session; select another registered workspace by name, ID or path.";
 
 /// An id-routed task tool on an unbound authoritative session: the id
 /// addresses the task, so the selector is optional.
-const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str = "Optional workspace selector for the authoritative server: a registered workspace \
-     name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. \
-     Omitted, this session, which is bound to no workspace, resolves the task id through this \
-     server's task registry. An id whose prefix belongs to another registered host is refused \
-     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
-     from the server process cwd.";
+const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str =
+    "Optional workspace filter; omit to resolve the task ID on this server.";
 
 /// An id-routed task tool on the federated mux: an id-only call goes to the
 /// host the id's prefix names.
-const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional. Omit it to deliver the call to the host the task id's prefix names. To address \
-     a specific workspace instead, copy the `selector` field from federated \
-     `orbit.workspace.list`; do not parse or construct the token. A read there may be another \
-     host's mirror, and that host refuses a write to a task it does not hold.";
+const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional host-qualified workspace selector; omit to route by the task ID prefix, or copy `selector` from orbit_workspace_list.";
 
 /// A workspace-optional tool on the federated mux: omitted, the mux
 /// aggregates every owner it reaches.
-const FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION: &str = "Optional. Omit it to read every workspace on every owner this session reaches, merged \
-     into one answer with any unreachable owner reported as degraded, unless this session is \
-     already bound to one workspace. To address one workspace instead, copy the `selector` \
-     field from federated `orbit.workspace.list`; do not parse or construct the token.";
+const FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION: &str =
+    "Optional host-qualified workspace selector; omit to read all reachable owners unless bound.";
 
 /// A workspace-optional tool on an authoritative server: omitted, the
 /// server reads every workspace homed on it.
-const WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION: &str = "Optional workspace selector for the authoritative server: a registered workspace \
-     name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. \
-     Omitted, a bound session reads its bound workspace and an unbound session reads every \
-     workspace homed on this server. Never inferred from the server process cwd.";
+const WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION: &str = "Optional workspace selector; omit to read the bound workspace or all local workspaces if unbound.";
 
 /// How this session advertises the workspace selector on workspace-scoped tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
