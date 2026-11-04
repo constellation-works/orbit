@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, STATUS_LABELS } from './task-shared.js';
-import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord } from './task-data.js';
+import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
 
@@ -314,10 +314,15 @@ export function collapseTask(taskId) {
 // A task the filter or page hides is fetched and pinned instead, so following
 // a link never rewrites the saved status or search filter.
 export function resolvePendingOpenTask(tasks, context) {
-  const taskId = taskState.pendingOpenTaskId;
+  const filtered = filterTasks(tasks, context);
+  // The page's route keeps owning its task after a status edit or a refreshed
+  // list drops its row. Promote its last full record to the existing pinned
+  // path, which also re-reads filtered-out tasks on subsequent refreshes.
+  const taskId = taskState.pendingOpenTaskId || (taskState.taskPageId && taskState.selectedTaskId === taskState.taskPageId &&
+    !filtered.some((task) => task.id === taskState.taskPageId) ? taskState.taskPageId : null);
   if (!taskId) return;
   taskState.pendingOpenTaskId = null;
-  if (filterTasks(tasks, context).some((task) => task.id === taskId)) {
+  if (filtered.some((task) => task.id === taskId)) {
     // A route replay for the row already selected leaves the list where it
     // is, and coming back from the full page restores the list's own scroll.
     const settled = taskState.selectedTaskId === taskId || (taskState.listRestore && taskState.listRestore.id === taskId);
@@ -325,7 +330,12 @@ export function resolvePendingOpenTask(tasks, context) {
     taskState.pinnedExternalTask = null;
     if (!settled) revealTaskRow(taskId, "center");
   } else if (!(taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) {
-    pinOpenTask(taskId, context);
+    const cached = taskState.taskPageId === taskId ? taskDetailSnapshot(taskId) : null;
+    // Retire the list selection once it becomes a pin, including while its
+    // first read is pending or failed; ordinary renders must not retry it.
+    if (taskState.taskPageId === taskId) taskState.selectedTaskId = null;
+    if (cached) taskState.pinnedExternalTask = { task: cached, id: taskId };
+    else pinOpenTask(taskId, context);
   }
 }
 

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkTaskPresentation } from './dashboard_task_presentation_browser.mjs';
 import { checkTaskSaveRefresh } from './dashboard_task_save_refresh_browser.mjs';
+import { checkTaskPageFilter } from './dashboard_task_page_filter_browser.mjs';
 import { checkDrainActionReadiness } from './dashboard_drain_action_browser.mjs';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
@@ -116,7 +117,8 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/tasks' || api === '/api/tasks/all') {
     const selected = !panelFixture.omitBundledDetail && tasks.find(task => task.id === url.searchParams.get('detail'));
     // Serialize before the barrier, as a server response computed before PATCH.
-    const response = json({ items: api.endsWith('/all') ? tasks.map(task => ({ ...task, ...(task.id === 'PANEL-3' ? { external_refs: [] } : {}), workspace_id: 'one', workspace_name: 'one' })) : tasks, total: tasks.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
+    const listed = tasks.filter(task => !panelFixture.omittedTaskIds?.includes(task.id));
+    const response = json({ items: api.endsWith('/all') ? listed.map(task => ({ ...task, ...(task.id === 'PANEL-3' ? { external_refs: [] } : {}), workspace_id: 'one', workspace_name: 'one' })) : listed, total: listed.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
     if (globalThis.panelFixture.holdTaskList) {
       globalThis.panelFixture.holdTaskList = false;
       await new Promise(resolve => { globalThis.panelFixture.releaseTaskList = resolve; });
@@ -1515,11 +1517,14 @@ async function checkDrainReadinessFailureStandIn() {
 }
 
 try {
-  if (!process.argv.includes('--save-refresh')) await checkDrainActionReadiness({ openPage, row, pane, waitShown, capture, results, evidence });
-  if (!process.argv.includes('--save-refresh')) await checkDrainReadinessFailureStandIn();
-  if (!process.argv.includes('--drain-actions')) {
-    await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
-    if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
+  await checkTaskPageFilter({ openPage, row, pane, waitShown, capture, results });
+  if (!process.argv.includes('--page-filter')) {
+    if (!process.argv.includes('--save-refresh')) await checkDrainActionReadiness({ openPage, row, pane, waitShown, capture, results, evidence });
+    if (!process.argv.includes('--save-refresh')) await checkDrainReadinessFailureStandIn();
+    if (!process.argv.includes('--drain-actions')) {
+      await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
+      if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
+    }
   }
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));
   console.log('Dashboard task panel browser checks passed.');

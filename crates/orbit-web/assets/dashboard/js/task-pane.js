@@ -15,10 +15,12 @@ import { buildRelationRow, drainDependencyIds, relationTargets } from './task-re
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
+import { retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
 
 // A detail kept for an open draft can refresh its read-only readiness and
 // selector displays without touching the editor holding that draft.
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
+  retireClosedDecisionCards(wrap, readinessTask);
   for (const readout of wrap.querySelectorAll(".task-os-readout")) {
     readout.textContent = osReadoutText(task);
     const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
@@ -173,6 +175,7 @@ export function renderTaskPane(filtered, context) {
   const pane = $("task-detail-pane");
   const paneBody = $("task-detail-body");
   if (!pane || !paneBody) return;
+  const restoreDecisionNotes = retainDecisionNotes(paneBody);
   const ptask = taskState.pinnedExternalTask && taskState.pinnedExternalTask.task ? taskState.pinnedExternalTask.task : null;
   const listTask = !ptask && taskState.selectedTaskId ? filtered.find((task) => task.id === taskState.selectedTaskId) || null : null;
   const shown = ptask || listTask;
@@ -195,6 +198,7 @@ export function renderTaskPane(filtered, context) {
     nodes.push(buildTaskPagePlaceholder(context));
   }
   syncNodes(paneBody, nodes);
+  restoreDecisionNotes();
   const open = nodes.length > 0;
   pane.hidden = !open;
   const main = $("tasks-main");

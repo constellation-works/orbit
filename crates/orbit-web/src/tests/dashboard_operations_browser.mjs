@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
+import { checkResidentForms } from './dashboard_residents_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -262,6 +263,7 @@ let browser;
 let page;
 try {
   browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
+  await checkResidentForms(browser, path.join(evidence, 'residents'));
   // ORB-19679: the auto-task policy lines get a page of their own, ahead of the
   // main flow so this check does not wait on that flow's unrelated assertions.
   const policyPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });

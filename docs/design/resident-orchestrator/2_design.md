@@ -425,6 +425,12 @@ The dashboard runs the tools with its own session envelope (Agent, plus Operator
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
 unchanged.
 
+The creation form offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
+the API validates the submitted tier. Repeating a widening whose rights and workspaces are
+already held reports unchanged authority and records no grant request. Applied widening is
+reported as an answered request; a combined deadline change reports its separate outcome,
+including a refused narrowing after an applied or unchanged widening.
+
 **Takeover.** `takeover` sets the resident to `taken_over`: no fires until `release`. The interactive
 session works in the same assignment task and comments as usual. On `release`, the next cycle reads
 those comments as new non-resident comments and resumes from them; a takeover needs no export or

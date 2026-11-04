@@ -38,6 +38,8 @@ export function disclosedDecisions(task) {
 // `open_decisions`. The option id stays the submitted key.
 export function buildDecisionCard(task, request, detail, context) {
   const card = el("div", { class: "decision-card" });
+  card.dataset.key = `decision-${task.id}-${request.id}`;
+  card.dataset.requestId = request.id;
   if (request.summary) card.appendChild(el("p", { class: "decision-summary", text: request.summary }));
   if (request.human_action) {
     card.appendChild(el("p", { class: "decision-human-action" }, [
@@ -87,6 +89,36 @@ export function buildDecisionCard(task, request, detail, context) {
   }
   card.appendChild(list);
   return card;
+}
+
+// Notes belong to the mounted request, so a refresh may rebuild its card
+// without losing evidence or freezing its task data. A removed/answered card
+// or a navigation away has no counterpart and naturally retires the draft.
+export function retainDecisionNotes(container) {
+  const drafts = new Map(Array.from(container.querySelectorAll(".decision-card"))
+    .map(card => {
+      const note = card.querySelector(".decision-note");
+      return [card.dataset.key, note ? { value: note.value, selection: document.activeElement === note ? [note.selectionStart, note.selectionEnd] : null } : null];
+    }));
+  return () => {
+    for (const card of container.querySelectorAll(".decision-card")) {
+      const note = card.querySelector(".decision-note");
+      const draft = drafts.get(card.dataset.key);
+      if (note && draft) {
+        note.value = draft.value;
+        if (document.activeElement === note && draft.selection) note.setSelectionRange(...draft.selection);
+      }
+    }
+  };
+}
+
+// Another editor can retain the whole detail node; closed requests must still
+// retire their answer controls and notes inside that retained node.
+export function retireClosedDecisionCards(container, task) {
+  const open = new Set(openDecisions(task).map(request => request.id));
+  for (const card of container.querySelectorAll(".decision-card")) {
+    if (!open.has(card.dataset.requestId)) card.remove();
+  }
 }
 
 // Answered decisions for a task, read from the closed-inclusive list:

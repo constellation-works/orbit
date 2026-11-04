@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { checkDecisionNoteRefresh } from './dashboard_decision_notes_browser.mjs';
 
 const { dashboardFile } = await import(process.env.ORBIT_DASHBOARD_FIXTURE_MODULE || '../../src/tests/dashboard_static.mjs');
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -49,9 +50,18 @@ const tasks = [
     { at: '2026-10-19T12:00:00Z', by: 'system', message: 'An older block has already been resolved.' },
     { at: '${at}', by: 'system', message: 'Final recovery requires operator attention.\\n\\n${reason}\\n\\n${nextAction}' },
   ], ...task }));
-globalThis.fetch = async input => {
+tasks.find(task => task.id === 'BLOCK-3').open_decisions = [{ ...tasks.find(task => task.id === 'BLOCK-4').open_decisions[0], id: 'DR-DISCLOSED', gate: 'operator_question' }];
+globalThis.blockFixture = { tasks, answers: [], refuseAnswer: false };
+globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
   const json = body => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  if (url.pathname.startsWith('/api/decisions/') && options.method === 'POST') {
+    if (blockFixture.refuseAnswer) return new Response(JSON.stringify({ error: 'Answer refused for fixture' }), { status: 403 });
+    const id = decodeURIComponent(url.pathname.split('/')[3]);
+    blockFixture.answers.push({ id, ...JSON.parse(options.body) });
+    for (const task of tasks) task.open_decisions = (task.open_decisions || []).filter(request => request.id !== id);
+    return json({});
+  }
   if (url.pathname === '/api/workspaces') return json([{ id: 'one', name: 'one', is_default: true, status: 'active' }]);
   if (url.pathname === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
   if (url.pathname === '/api/tasks') return json({ items: tasks, total: tasks.length, limit: 50, truncated: false });
@@ -76,7 +86,8 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  for (const width of [1440, 375]) {
+  if (!before) await checkDecisionNoteRefresh({ browser, origin: `http://127.0.0.1:${server.address().port}/?workspace=one`, evidence });
+  for (const width of (process.argv.includes('--notes') ? [] : [1440, 375])) {
     const page = await browser.newPage({ viewport: { width, height: width === 375 ? 812 : 900 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -151,7 +162,7 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   }
-  fs.writeFileSync(path.join(evidence, 'results.json'), JSON.stringify({ before, widths: [1440, 375], views: ['dock', 'page'], recordedReason: !before, missingReason: !before, otherStatuses: !before, evidenceNavigation: !before }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'results.json'), JSON.stringify({ before, widths: [1440, 375], views: ['dock', 'page'], decisionNotes: !before, recordedReason: !before, missingReason: !before, otherStatuses: !before, evidenceNavigation: !before }, null, 2));
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));

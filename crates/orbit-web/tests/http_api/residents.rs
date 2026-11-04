@@ -136,6 +136,55 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
                 audits(&fixture, "resident.grant", AuditEventStatus::Success),
                 1
             );
+            let repeated = json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{id}/grant{WS}"),
+                json!({"add": ["dispatch", "promote"], "workspaces": ["fixture"],
+                       "quote": "Dispatch and promote in fixture."}),
+            ));
+            assert_eq!(repeated["outcome"], "unchanged", "{repeated}");
+            assert!(repeated["request"].is_null(), "{repeated}");
+            let after = json_ok(server.get(&format!("/api/residents/{id}{WS}")));
+            assert_eq!(after["authority"], shown["authority"], "{after}");
+            assert_eq!(after["effective_authority"], shown["effective_authority"]);
+        },
+    );
+}
+
+#[test]
+fn dashboard_creates_every_offered_assessed_complexity() {
+    isolated(
+        "residents::dashboard_creates_every_offered_assessed_complexity",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            for complexity in ["low", "medium", "hard", "xhard"] {
+                let created = json_ok(server.send(
+                    "POST",
+                    &format!("/api/residents{WS}"),
+                    json!({"complexity": complexity, "mandate": mandate("Keep release green.")}),
+                ));
+                let id = created["task_id"].as_str().unwrap();
+                let task = json_ok(server.get(&format!("/api/tasks/{id}{WS}")));
+                assert_eq!(task["complexity"], complexity, "{task}");
+            }
+            let refused = server.send(
+                "POST",
+                &format!("/api/residents{WS}"),
+                json!({"complexity": "high", "mandate": mandate("Invalid tier.")}),
+            );
+            assert_eq!(refused.status().as_u16(), 400);
+            let refused: Value = refused.json().unwrap();
+            assert_eq!(
+                refused["error"], "unknown task complexity: high",
+                "{refused}"
+            );
+            assert_eq!(
+                resident_tasks(&fixture),
+                4,
+                "Invalid complexity creates nothing"
+            );
         },
     );
 }
