@@ -237,6 +237,10 @@ invocation has no terminal, so it needs the variable. Don't pass `model`,
 because naming an agent makes the write an agent's. Without the summary, from
 an agent, or without operator capability, the write starts work. While a
 claim overlaps, that start is refused with the claim's task and run named.
+The refusal covers the whole write: field edits sent with the start (a
+title, a plan, artifacts) do not persist, so there is nothing to inspect
+or revert afterwards. Send an edit on its own when it should land whether
+or not the start does.
 
 The CLI subcommand also closes without `--force`: run
 `orbit task update <task-id> --status in-progress --execution-summary "<…>"`,
