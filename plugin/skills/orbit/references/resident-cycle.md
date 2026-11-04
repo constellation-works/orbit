@@ -2,8 +2,9 @@
 
 A resident owns coordination for one mandate: an `[orchestration]` assignment
 task tagged `resident`, with a `resident/mandate.json` artifact and an
-authority record. It holds no process, worktree or state between cycles. The
-clock fires one bounded cycle when the mandate is due; each cycle reads its
+authority record. It holds no process, worktree or state between cycles. Core
+owns the assignment's status: `in-progress` while the mandate is active, then
+`review` on a `handoff` checkpoint or a stop. The clock fires one bounded cycle when the mandate is due; each cycle reads its
 brief from Orbit, does one unit of coordination, and writes exactly one
 checkpoint. The next cycle trusts checkpoints, task state, decision records
 and the action ledger — never a previous cycle's final message.
@@ -144,8 +145,10 @@ reference forward when you resume), and one outcome:
 - `waiting` — only open requests remain.
 - `handoff` — exit criteria met or deadline passed: stop dispatching, write
   the assignment's execution summary (what was done, what is open, which
-  decisions are pending, which costs recurred) and move the assignment itself
-  to `review`. Never move your own assignment past `review`; closing a
+  decisions are pending, which costs recurred), and checkpoint. Do not change
+  the assignment's status: your run owns it, so that write is refused. The
+  finalize step moves it to `review` and no further cycle runs. An exit
+  criterion that names this move is met by the `handoff` checkpoint. Closing a
   mandate is the human's call.
 - `ended` — the mandate was stopped or taken over for good.
 

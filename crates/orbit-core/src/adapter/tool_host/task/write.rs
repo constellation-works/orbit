@@ -18,6 +18,7 @@ use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
 };
+use orbit_types::workflow::RESIDENT_MANDATE_ARTIFACT;
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
@@ -437,7 +438,11 @@ pub(super) fn artifact_put(
         && caller.session_context.transport.is_none()
         && caller.session_context.worker_invocation.is_none();
     let screen = write_screen(native_operator, false, caller.reservation_owner);
-    let written = if native_operator {
+    let attaches_mandate = params
+        .upsert_artifacts
+        .iter()
+        .any(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT);
+    let mut written = if native_operator {
         runtime.update_task_screened(
             &id,
             params,
@@ -456,6 +461,9 @@ pub(super) fn artifact_put(
             None,
         )?
     };
+    if attaches_mandate && let Some(task) = runtime.activate_resident_assignment(&written.task.id) {
+        written.task = task;
+    }
     screened_write_response(runtime, written, None)
 }
 

@@ -40,7 +40,7 @@ pub(crate) enum ResidentCallClass {
     Open,
     /// A write that needs this right.
     Gated(ResidentRight),
-    /// Moving the cycle's own assignment to `review`: the handoff.
+    /// Moving a task to `review`: refused, naming the route that does it.
     Handoff,
     /// A write no resident cycle may make.
     Refused,
@@ -231,12 +231,12 @@ impl OrbitRuntime {
         match class {
             ResidentCallClass::Read | ResidentCallClass::Open => {}
             ResidentCallClass::Handoff => {
-                if subject_of(input).as_deref() != Some(task_id.as_str()) {
-                    return Err(refused(
-                        "resident_tool_refused",
-                        format!("`{tool}` may move only the resident's own assignment to review"),
-                    ));
-                }
+                return Err(refused(
+                    "resident_handoff_by_checkpoint",
+                    format!(
+                        "a cycle does not move tasks to review; checkpoint with outcome `handoff` and finalize moves assignment {task_id}"
+                    ),
+                ));
             }
             ResidentCallClass::Gated(right) => {
                 if !grant.rights.contains(&right) {

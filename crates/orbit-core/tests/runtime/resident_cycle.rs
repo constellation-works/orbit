@@ -6,6 +6,7 @@
 //! synthesized `incomplete` checkpoint and its recovery never repeats an
 //! action the dead cycle completed.
 
+mod assignment_lifecycle;
 mod control_admission;
 
 use std::path::PathBuf;
@@ -238,6 +239,11 @@ impl Fixture {
 
     /// The agent's checkpoint for the cycle `brief` started.
     fn checkpoint(&self, brief: &Value, run_id: &str) {
+        self.checkpoint_with_outcome(brief, run_id, "idle");
+    }
+
+    /// The agent's checkpoint naming `outcome`.
+    fn checkpoint_with_outcome(&self, brief: &Value, run_id: &str, outcome: &str) {
         let mandate = brief["task_id"].as_str().unwrap();
         self.runtime
             .append_resident_checkpoint(
@@ -252,7 +258,7 @@ impl Fixture {
                     "actions": [], "decisions": [], "requests": [], "costs": [],
                     "notes": "Nothing to do yet.",
                     "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
-                    "continuity": "rebuilt", "outcome": "idle", "probe": false
+                    "continuity": "rebuilt", "outcome": outcome, "probe": false
                 }),
                 Some("codex".into()),
                 None,
