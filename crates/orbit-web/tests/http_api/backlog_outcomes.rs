@@ -384,6 +384,119 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
     );
 }
 
+#[test]
+fn whole_forecast_baseline_scores_without_filling_withheld_adjusted_totals() {
+    isolated(
+        "backlog_outcomes::whole_forecast_baseline_scores_without_filling_withheld_adjusted_totals",
+        || {
+            let fixture = Fixture::new();
+            let version = forecast(&fixture)["model_version"].as_u64().unwrap() as u32;
+            let at = Utc::now() - Duration::days(100);
+            let delivered = dated_task(
+                &fixture,
+                TaskStatus::Done,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (at + Duration::hours(1), TaskStatus::Done),
+                ],
+            );
+            // Use a model priced at this mature snapshot's historical date.
+            invocation_model(
+                &fixture,
+                &delivered,
+                at + Duration::hours(1),
+                1,
+                1.0,
+                "claude-opus-4-7",
+            );
+            let baseline = json!({
+                "time_to_drain_hours": {"p50": 0.5, "p90": 8.0},
+                "tokens": {"p50": 0.0, "p90": 1_000_000.0},
+                "usd": {"p50": 0.5, "p90": 2.0},
+            });
+            let withheld = json!({"p50": null, "p90": null});
+            let adjusted = json!({
+                "time_to_drain_hours": {"p50": 8.0, "p90": 8.0},
+                "tokens": {"p50": 1_000_000.0, "p90": 1_000_000.0},
+                "usd": {"p50": 2.0, "p90": 2.0},
+            });
+            let store = |when, result: Value| {
+                assert!(fixture.runtime.record_backlog_forecast(
+                    StoredBacklogForecast {
+                        workspace_id: String::new(),
+                        forecast_at: when,
+                        model_version: version,
+                        inputs_json: "{}".into(),
+                        result_json: result.to_string(),
+                        tasks_json: json!([{"id": delivered, "complexity": "medium", "forecast": {}}]).to_string(),
+                    },
+                    Duration::minutes(1),
+                ).unwrap());
+            };
+            store(
+                at - Duration::hours(2),
+                json!({
+                    "time_to_drain_hours": withheld, "tokens": withheld, "usd": withheld,
+                    "pre_regression_baseline": baseline,
+                }),
+            );
+            let body = forecast(&fixture);
+            let calibration = &body["calibration"];
+            let level = &calibration["forecast_level"];
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(
+                    level["pre_regression_baseline"][metric],
+                    json!({"n": 1, "under_p50": 0.0, "under_p90": 1.0}),
+                    "{body}"
+                );
+                assert_eq!(
+                    level["adjusted"][metric],
+                    json!({"n": 0, "under_p50": null, "under_p90": null}),
+                    "{body}"
+                );
+                assert_eq!(
+                    calibration["forecasts"][0]["forecast"][metric], withheld,
+                    "{body}"
+                );
+                assert_eq!(
+                    level[metric], level["adjusted"][metric],
+                    "legacy metrics retain adjusted semantics"
+                );
+            }
+            assert_eq!(level["settled"], 1);
+            assert_eq!(calibration["by_model_version"][0]["forecast_level"], *level);
+
+            // An adjusted-only stored row scores as before and contributes
+            // no invented baseline. A young baseline stays provisional.
+            store(at - Duration::hours(1), adjusted);
+            store(
+                Utc::now() - Duration::days(1),
+                json!({
+                    "time_to_drain_hours": withheld, "tokens": withheld, "usd": withheld,
+                    "pre_regression_baseline": baseline,
+                }),
+            );
+            let body = forecast(&fixture);
+            let level = &body["calibration"]["forecast_level"];
+            assert_eq!(level["settled"], 2);
+            assert_eq!(body["calibration"]["forecasts"][0]["provisional"], true);
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(
+                    level["adjusted"][metric],
+                    json!({"n": 1, "under_p50": 1.0, "under_p90": 1.0}),
+                    "{body}"
+                );
+                assert_eq!(
+                    level["pre_regression_baseline"][metric],
+                    json!({"n": 1, "under_p50": 0.0, "under_p90": 1.0}),
+                    "{body}"
+                );
+                assert_eq!(level[metric], level["adjusted"][metric]);
+            }
+        },
+    );
+}
+
 /// One blocked episode that returns `delay` after leaving the queue, then
 /// one delivery. A zero delay is a return at the same instant as the block.
 fn block_that_returned(fixture: &Fixture, delay: Duration) {
@@ -776,6 +889,17 @@ fn attempt_limit_is_the_mean_of_caps_the_drain_started() {
 
 /// One `hours`-long invocation of task `id` ending at `end`, costing `usd`.
 fn invocation(fixture: &Fixture, id: &str, end: DateTime<Utc>, hours: u64, usd: f64) {
+    invocation_model(fixture, id, end, hours, usd, "gpt-6.1-sol");
+}
+
+fn invocation_model(
+    fixture: &Fixture,
+    id: &str,
+    end: DateTime<Utc>,
+    hours: u64,
+    usd: f64,
+    model: &str,
+) {
     let run = format!("run-{id}-{}", end.timestamp());
     fixture
         .runtime
@@ -786,7 +910,7 @@ fn invocation(fixture: &Fixture, id: &str, end: DateTime<Utc>, hours: u64, usd: 
             activity_id: "implement_one".into(),
             agent: "codex".into(),
             provider: None,
-            model: Some("gpt-6.1-sol".into()),
+            model: Some(model.into()),
             task_ids: vec![id.to_string()],
             trace: InvocationTrace {
                 duration_ms: hours * 3_600_000,

@@ -801,3 +801,34 @@ await test('stored calibration history pages every forecast with its column cont
   clickForecastControl('Newer forecasts');
   assert.equal(body().querySelector('.fc-history-table-wrap tbody tr').querySelectorAll('th, td')[2].textContent, '51/61', 'Newer returns to the preceding forecast page');
 });
+
+await test('whole-forecast calibration labels baseline separately from withheld adjusted scores', async () => {
+  const empty = { n: 0, under_p50: null, under_p90: null };
+  const scored = { n: 4, under_p50: 0.25, under_p90: 0.75 };
+  const level = {
+    adjusted: { time_to_drain_hours: empty, usd: empty, tokens: empty },
+    pre_regression_baseline: { time_to_drain_hours: scored, usd: scored, tokens: scored },
+    settled: 4, not_drained: 0,
+  };
+  const stored = { ...payload(), calibration: { model_version: 18, forecasts: [{}], forecast_level: level } };
+  common.setWorkspace('ws-baseline-calibration');
+  await render(stored);
+  const measures = () => [...body().querySelectorAll('.fc-cal')];
+  for (const metric of ['drain time', 'cost', 'tokens']) {
+    const baseline = measures().find(node => node.getAttribute('aria-label') === `Baseline ${metric}`);
+    assert.ok(baseline, `baseline ${metric} is explicitly labelled`);
+    assert.match(baseline.textContent, /4 scored/);
+    assert.match(baseline.textContent, /25%/);
+    assert.match(baseline.textContent, /75%/);
+    const adjusted = measures().find(node => node.getAttribute('aria-label') === `Adjusted ${metric}`);
+    assert.match(adjusted.textContent, /0 scored/);
+    assert.doesNotMatch(adjusted.textContent, /25%|75%/);
+  }
+  assert.match(body().querySelector('.fc-settlement').textContent, /Baseline whole-backlog/);
+
+  // Present adjusted scores keep their own values, independently of baseline.
+  level.adjusted = Object.fromEntries(['time_to_drain_hours', 'usd', 'tokens'].map(key => [key, { n: 2, under_p50: 0.5, under_p90: 1 }]));
+  await render(stored);
+  assert.match(measures().find(node => node.getAttribute('aria-label') === 'Adjusted cost').textContent, /2 scored.*50%.*100%/);
+  assert.match(measures().find(node => node.getAttribute('aria-label') === 'Baseline cost').textContent, /4 scored.*25%.*75%/);
+});
