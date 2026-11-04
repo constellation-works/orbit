@@ -72,7 +72,7 @@ pub use projection::{
 };
 pub use root_cause::{
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
-    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
+    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents, run_upgrade_paused,
 };
 pub use types::{
     JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,

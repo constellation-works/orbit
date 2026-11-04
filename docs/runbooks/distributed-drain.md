@@ -1453,10 +1453,12 @@ Claims settled before the owner kept settlements read `unrecorded` unless
 their release kept a typed class; the task's history note carries the reason.
 
 Each settlement's `accounting` (`outcome`, `counts_as_failure`, `reason`) is how
-the scan counts it, derived from the typed kind, class and
-`review_decision_pending` flag, never from the reason text [ORB-21840].
+the scan counts it, derived from the typed kind, class,
+`review_decision_pending` flag and the leaf's recorded step code, never from the
+reason text [ORB-21840].
 `review_decision_hold` (a failed `candidate` settlement awaiting a recorded
-landing decision), `evidence_hold` and `operator_cancel` are held, not failed;
+landing decision), `evidence_hold`, `operator_cancel` and `upgrade_paused` (a
+`transient` settlement whose leaf recorded `upgrade_quiesce`) are held, not failed;
 `failure`, `baseline_red` and legacy `unrecorded` count. The flag on any other
 settlement stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting is read-only:

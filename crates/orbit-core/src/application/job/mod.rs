@@ -94,7 +94,7 @@ pub use run::{
     RunFailureContextProfile, RunFailureContextWarning, RunFailureEvidence, RunFailureRead,
     RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf, fold_run_incidents,
     job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_display_steps,
-    run_error_step,
+    run_error_step, run_upgrade_paused,
 };
 pub(crate) use run::{
     RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness,

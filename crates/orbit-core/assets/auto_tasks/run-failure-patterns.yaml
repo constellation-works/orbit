@@ -69,7 +69,11 @@ template:
     ## 2. Measure the rate
 
     For every job with runs in the window, compute runs, failed (`failed` or `interrupted`, and
-    `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. Add
+    `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. A history
+    row with `upgrade_paused: true` is an Orbit upgrade's designed pause, which the clock resumes,
+    or a parent that only echoes one: the run stays `interrupted`, but count one per root in the
+    job's `held_7d` under `upgrade_paused`, not as a failure. A lost or killed worker has no such
+    flag and stays a failure. Add
     follower leaf failures from `orbit run settlements`: each settlement whose `settled_at`
     falls in the window is one occurrence in its `leaf_run_id` on its host, attributed to the
     claimed pipeline job. Account for each settlement by its typed `accounting` field, never by
@@ -77,8 +81,9 @@ template:
     `accounting.counts_as_failure` is true (`failure`, `baseline_red`, and the explicit
     `unrecorded` legacy outcome). `review_decision_hold` (a before-landing review refusal awaiting
     a recorded decision: its `kind` stays `fail`, `failure_class` stays `candidate`, its claim
-    still blocks the task and its pull request stays open), `evidence_hold` and `operator_cancel`
-    are designed outcomes: count them per outcome in the job's `held_7d` counter, not as
+    still blocks the task and its pull request stays open), `evidence_hold`, `operator_cancel` and
+    `upgrade_paused` (an Orbit upgrade paused the leaf; its `accounting.reason` is
+    `upgrade_quiesce`) are designed outcomes: count them per outcome in the job's `held_7d` counter, not as
     failures. A `failure` whose `accounting.reason` is
     `review_decision_pending_without_candidate_failure` carries the flag on a settlement that
     cannot be that hold: keep it counted and name the reason. A record from a build without
@@ -253,7 +258,7 @@ template:
     {"schema_version": 2, "scan_start": "<RFC 3339>", "head": "<sha>",
      "jobs": [{"job": "...", "runs_7d": 0, "occurrences_raw_7d": 0, "failed_raw_7d": 0,
                "failed_folded_7d": 0, "held_7d": 0,
-               "held_by_outcome_7d": {"review_decision_hold": 0, "evidence_hold": 0, "operator_cancel": 0},
+               "held_by_outcome_7d": {"review_decision_hold": 0, "evidence_hold": 0, "operator_cancel": 0, "upgrade_paused": 0},
                "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0}],
      "prior_cursor": "<RFC 3339 or null>",
      "classes": [{"job": "...", "signature": "...", "occurrences_7d": 0, "new_since_cursor": 0,

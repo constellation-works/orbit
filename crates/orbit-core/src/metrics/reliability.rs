@@ -20,6 +20,7 @@
 //! |---|---|---|
 //! | [`RunOutcome::Succeeded`] | `success` | yes |
 //! | [`RunOutcome::Failed`] | `failed`, `timeout`, `interrupted` | yes |
+//! | [`RunOutcome::UpgradePaused`] | `interrupted` under `upgrade_quiesce` | no |
 //! | [`RunOutcome::Cancelled`] | `cancelled` | no |
 //! | [`RunOutcome::Skipped`] | `skipped` | no |
 //! | [`RunOutcome::Held`] | `held` | no |
@@ -33,7 +34,14 @@
 //! deliberate operator action, so counting it as a failure would make manual
 //! intervention look like breakage. `skipped` never ran.
 //!
-//! Because five of the seven outcomes sit outside the denominator, and a
+//! An `interrupted` run whose recorded error code is `upgrade_quiesce` is a
+//! designed pause, not a lost owner: an Orbit upgrade stopped it at a step
+//! boundary and the clock resumes it, so it counts as
+//! [`OutcomeCounts::upgrade_paused`]. The state alone cannot say so, so
+//! [`RunOutcome::classify`] still reads such a run as failed and the fold below
+//! separates it.
+//!
+//! Because six of the eight outcomes sit outside the denominator, and a
 //! wrapper that failed only because its child failed is rolled out of
 //! `failed` into [`OutcomeCounts::cascaded`], `succeeded + failed` does
 //! **not** equal the run count in general. Callers render
@@ -52,7 +60,8 @@
 //! counts once. Every other echo is [`OutcomeCounts::cascaded`] and sits
 //! outside both the numerator and the denominator. The same fold feeds the
 //! by-job rows, the over-time series, and, by summing those already-folded
-//! workspace counts, the fleet totals.
+//! workspace counts, the fleet totals. A delivery paused by an upgrade folds
+//! the same way, with its representative in [`OutcomeCounts::upgrade_paused`].
 //!
 //! # Recovery attribution
 //!
@@ -73,6 +82,7 @@ use orbit_store::contracts::{ActivityInvocationCount, InvocationRunCoverage, Job
 use orbit_types::workflow::{JobActivityRoles, JobRunState};
 
 use crate::runtime::OrbitRuntime;
+use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
 /// Row cap for the per-run fact read backing the failure rate. Reaching it
 /// sets [`JobRunReliability::truncated`]; the cap is never applied silently.
@@ -146,6 +156,9 @@ impl ReliabilityWindow {
 pub enum RunOutcome {
     Succeeded,
     Failed,
+    /// Never returned by [`Self::classify`], which reads only the state: an
+    /// upgrade's designed pause is told apart by its recorded error code.
+    UpgradePaused,
     Cancelled,
     Skipped,
     Held,
@@ -187,6 +200,9 @@ pub struct OutcomeCounts {
     /// child's [`Self::failed`] count and omitted from [`Self::settled`] and
     /// [`Self::excluded`], so `total = settled + excluded + cascaded`.
     pub cascaded: u64,
+    /// Deliveries an Orbit upgrade paused for the clock to resume. Outside the
+    /// failure rate, and counted in [`Self::excluded`].
+    pub upgrade_paused: u64,
     pub cancelled: u64,
     pub skipped: u64,
     pub held: u64,
@@ -200,6 +216,7 @@ impl OutcomeCounts {
         match outcome {
             RunOutcome::Succeeded => self.succeeded += 1,
             RunOutcome::Failed => self.failed += 1,
+            RunOutcome::UpgradePaused => self.upgrade_paused += 1,
             RunOutcome::Cancelled => self.cancelled += 1,
             RunOutcome::Skipped => self.skipped += 1,
             RunOutcome::Held => self.held += 1,
@@ -217,15 +234,20 @@ impl OutcomeCounts {
     ///
     /// This is the rate's `n`: successes plus one count per failed delivery.
     /// It is smaller than [`OutcomeCounts::total`] whenever runs were
-    /// cancelled, skipped, held, still in flight, unrecognized, or rolled up
-    /// as wrapper echoes.
+    /// cancelled, skipped, held, paused by an upgrade, still in flight,
+    /// unrecognized, or rolled up as wrapper echoes.
     pub fn settled(&self) -> u64 {
         self.succeeded + self.failed
     }
 
     /// Runs excluded from the denominator, for the "not counted" disclosure.
     pub fn excluded(&self) -> u64 {
-        self.cancelled + self.skipped + self.held + self.in_flight + self.unknown
+        self.upgrade_paused
+            + self.cancelled
+            + self.skipped
+            + self.held
+            + self.in_flight
+            + self.unknown
     }
 
     /// Failure rate over settled runs, or `None` when nothing settled.
@@ -373,8 +395,8 @@ impl OrbitRuntime {
             window.until,
             MAX_JOB_RUN_FACTS,
         )?;
-        let echoed_leaves = self.failure_echoes(&facts.facts)?;
-        let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated, &echoed_leaves);
+        let echoes = self.failure_echoes(&facts.facts)?;
+        let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated, &echoes);
 
         let counts =
             store.count_invocations_by_activity(&workspace_id, window.since, window.until)?;
@@ -396,24 +418,21 @@ impl OrbitRuntime {
         })
     }
 
-    /// `run_id -> leaf_run_id` for failed runs that recorded a root cause.
+    /// The leaf each failed run that recorded a root cause echoes.
     ///
     /// One batch read of the failed ids only. Runs that failed on their own,
     /// and runs whose stored state is missing or unreadable, are absent: they
     /// stay their own leaf.
-    fn failure_echoes(
-        &self,
-        facts: &[JobRunOutcomeFact],
-    ) -> Result<BTreeMap<String, String>, OrbitError> {
+    fn failure_echoes(&self, facts: &[JobRunOutcomeFact]) -> Result<FailureEchoes, OrbitError> {
         let failed_ids = facts
             .iter()
             .filter(|fact| RunOutcome::classify(&fact.state) == RunOutcome::Failed)
             .map(|fact| fact.run_id.clone())
             .collect::<Vec<_>>();
         if failed_ids.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(FailureEchoes::default());
         }
-        let mut echoed = BTreeMap::new();
+        let mut echoes = FailureEchoes::default();
         for (run_id, state) in self.read_run_states(&failed_ids)? {
             let Some(cause) = state.and_then(|state| state.root_cause) else {
                 continue;
@@ -421,43 +440,68 @@ impl OrbitRuntime {
             if cause.leaf_run_id.is_empty() || cause.leaf_run_id == run_id {
                 continue;
             }
-            echoed.insert(run_id, cause.leaf_run_id);
+            if cause.code.as_deref() == Some(UPGRADE_QUIESCE_ERROR_CODE) {
+                echoes.upgrade_paused.insert(run_id.clone());
+            }
+            echoes.leaves.insert(run_id, cause.leaf_run_id);
         }
-        Ok(echoed)
+        Ok(echoes)
     }
+}
+
+/// What failed runs recorded about the leaf they only echo.
+#[derive(Debug, Clone, Default)]
+pub struct FailureEchoes {
+    /// `run_id -> leaf_run_id`. A failed run absent from it is its own leaf.
+    pub leaves: BTreeMap<String, String>,
+    /// The echoes whose recorded root cause is an upgrade's pause. Decides a
+    /// delivery whose leaf is not in the window, as on another host; a leaf in
+    /// the window decides for itself.
+    pub upgrade_paused: BTreeSet<String>,
+}
+
+/// How one failed run counts once its delivery is folded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureFold {
+    Cascaded,
+    Failed,
+    UpgradePaused,
 }
 
 /// Buckets and totals the per-run facts.
 ///
-/// `echoed_leaves` maps a failed run id to the leaf it echoes. A failed run
-/// absent from the map is its own leaf. Facts are otherwise unchanged: the
-/// store projection stays identifiers, state, and a timestamp.
+/// `echoes` names the leaf each echoing failed run stands for. Facts are
+/// otherwise unchanged.
 pub fn aggregate_job_runs(
     facts: &[JobRunOutcomeFact],
     window: &ReliabilityWindow,
     truncated: bool,
-    echoed_leaves: &BTreeMap<String, String>,
+    echoes: &FailureEchoes,
 ) -> JobRunReliability {
     let mut overall = OutcomeCounts::default();
     let mut by_job: BTreeMap<String, OutcomeCounts> = BTreeMap::new();
     let mut by_bucket: BTreeMap<DateTime<Utc>, OutcomeCounts> = BTreeMap::new();
     let mut observed_states: BTreeMap<String, u64> = BTreeMap::new();
-    let representative = failure_representatives(facts, echoed_leaves);
+    let folds = failure_folds(facts, echoes);
 
     for (index, fact) in facts.iter().enumerate() {
         *observed_states.entry(fact.state.clone()).or_default() += 1;
         let outcome = RunOutcome::classify(&fact.state);
-        if outcome == RunOutcome::Failed && !representative[index] {
-            record_cascaded(&mut overall, &mut by_job, &mut by_bucket, window, fact);
-        } else {
-            record_outcome(
+        let counted = match (outcome, folds[index]) {
+            (RunOutcome::Failed, FailureFold::Cascaded) => None,
+            (RunOutcome::Failed, FailureFold::UpgradePaused) => Some(RunOutcome::UpgradePaused),
+            _ => Some(outcome),
+        };
+        match counted {
+            Some(counted) => record_outcome(
                 &mut overall,
                 &mut by_job,
                 &mut by_bucket,
                 window,
                 fact,
-                outcome,
-            );
+                counted,
+            ),
+            None => record_cascaded(&mut overall, &mut by_job, &mut by_bucket, window, fact),
         }
     }
 
@@ -482,42 +526,56 @@ pub fn aggregate_job_runs(
     }
 }
 
-/// True for the one failed run that represents each delivery.
+/// How each failed run counts: the one that represents its delivery as failed
+/// or paused by an upgrade, every other as cascaded.
 ///
 /// The leaf itself represents the delivery when it is in `facts`. Otherwise
 /// the latest echo does, so a leaf outside this store still counts once and
-/// the extra echoes stay cascaded. Ties break on run id.
-fn failure_representatives(
-    facts: &[JobRunOutcomeFact],
-    echoed_leaves: &BTreeMap<String, String>,
-) -> Vec<bool> {
+/// the extra echoes stay cascaded. Ties break on run id. A leaf in `facts`
+/// decides from its own recorded code, so an echo cannot hide a real
+/// interruption; without one, any echo naming an upgrade's pause decides.
+fn failure_folds(facts: &[JobRunOutcomeFact], echoes: &FailureEchoes) -> Vec<FailureFold> {
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, fact) in facts.iter().enumerate() {
         if RunOutcome::classify(&fact.state) != RunOutcome::Failed {
             continue;
         }
-        let key = failure_key(&fact.run_id, echoed_leaves);
+        let key = failure_key(&fact.run_id, &echoes.leaves);
         groups.entry(key).or_default().push(index);
     }
-    let mut representative = vec![false; facts.len()];
+    let mut folds = vec![FailureFold::Cascaded; facts.len()];
     for (key, indexes) in groups {
-        let chosen = indexes
+        let leaf = indexes
             .iter()
             .copied()
-            .find(|index| facts[*index].run_id == key)
-            .or_else(|| {
-                indexes.iter().copied().max_by(|left, right| {
-                    facts[*left]
-                        .created_at
-                        .cmp(&facts[*right].created_at)
-                        .then_with(|| facts[*right].run_id.cmp(&facts[*left].run_id))
-                })
-            });
+            .find(|index| facts[*index].run_id == key);
+        let upgrade_paused = leaf.map_or_else(
+            || {
+                indexes
+                    .iter()
+                    .any(|index| echoes.upgrade_paused.contains(&facts[*index].run_id))
+            },
+            |leaf| {
+                facts[leaf].interrupted_error_code.as_deref() == Some(UPGRADE_QUIESCE_ERROR_CODE)
+            },
+        );
+        let chosen = leaf.or_else(|| {
+            indexes.iter().copied().max_by(|left, right| {
+                facts[*left]
+                    .created_at
+                    .cmp(&facts[*right].created_at)
+                    .then_with(|| facts[*right].run_id.cmp(&facts[*left].run_id))
+            })
+        });
         if let Some(chosen) = chosen {
-            representative[chosen] = true;
+            folds[chosen] = if upgrade_paused {
+                FailureFold::UpgradePaused
+            } else {
+                FailureFold::Failed
+            };
         }
     }
-    representative
+    folds
 }
 
 /// Follows recorded echoes to the leaf, stopping on a cycle or a run that

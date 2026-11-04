@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::job::JobPullSettlementPort;
 use crate::runtime::audit::run::RunAuditStep;
+use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
 use super::projection::{job_run_task_ids, run_error_step};
 
@@ -34,6 +35,33 @@ pub struct RunIncident {
     /// Every other listed run whose recorded root cause is this leaf, in
     /// listing order.
     pub cascaded_run_ids: Vec<String>,
+    /// An Orbit upgrade's designed pause, not a failure: the listed leaf says
+    /// so, or with no leaf listed, an echo does. See [`run_upgrade_paused`].
+    pub upgrade_paused: bool,
+}
+
+/// Whether `run` stands for an Orbit upgrade's designed pause, which the clock
+/// resumes, rather than a failure: it is `interrupted` under
+/// `upgrade_quiesce`, or it failed only because it echoes a leaf that was.
+/// A lost or killed worker records another code and stays a failure.
+pub fn run_upgrade_paused(run: &JobRun, state: Option<&PipelineState>) -> bool {
+    if !matches!(
+        run.state,
+        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+    ) {
+        return false;
+    }
+    let code = match state
+        .and_then(|state| state.root_cause.as_ref())
+        .filter(|cause| cause.leaf_run_id != run.run_id)
+    {
+        Some(cause) => cause.code.as_deref(),
+        None if run.state == JobRunState::Interrupted => {
+            run_error_step(run).and_then(|step| step.error_code.as_deref())
+        }
+        None => None,
+    };
+    code == Some(UPGRADE_QUIESCE_ERROR_CODE)
 }
 
 /// Fold a run listing into one entry per incident, in listing order of each
@@ -55,12 +83,14 @@ pub fn fold_run_incidents(runs: &[JobRun], states: &[Option<&PipelineState>]) ->
     let mut by_leaf: HashMap<&str, usize> = HashMap::new();
     for (index, run) in runs.iter().enumerate() {
         let leaf = leaf_of(index);
+        let upgrade_paused = run_upgrade_paused(run, states.get(index).copied().flatten());
         let Some(&slot) = by_leaf.get(leaf) else {
             by_leaf.insert(leaf, incidents.len());
             incidents.push(RunIncident {
                 index,
                 leaf_run_id: leaf.to_string(),
                 cascaded_run_ids: Vec::new(),
+                upgrade_paused,
             });
             continue;
         };
@@ -70,7 +100,10 @@ pub fn fold_run_incidents(runs: &[JobRun], states: &[Option<&PipelineState>]) ->
             let echo = runs[incident.index].run_id.clone();
             incident.cascaded_run_ids.insert(0, echo);
             incident.index = index;
+            incident.upgrade_paused = upgrade_paused;
         } else {
+            incident.upgrade_paused |=
+                upgrade_paused && runs[incident.index].run_id.as_str() != leaf;
             incident.cascaded_run_ids.push(run.run_id.clone());
         }
     }
