@@ -1546,6 +1546,30 @@ await settleReads();
 assert.ok(waitingReads.at(-1).includes('workspace=ws_waiting_b'), 'the next workspace reads its own decisions');
 waitingBox.querySelector('.waiting-filter').dispatch('click');
 
+// The count follows the live task list, not the list as it stood when the open
+// decisions were read: a human-crew task that arrives in a later poll, inside the
+// read's throttle window, counts at once instead of showing 0 until the next read.
+const lateHuman = task(601, { status: 'in-progress', crew: 'daniel', human_crew: { name: 'daniel', description: 'Operator work' } });
+const readsBeforeLate = waitingReads.length;
+waitingTasks = [quietTask, lateHuman];
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeLate, 'the late task arrives inside the throttle window');
+assert.equal(waitingCount(), '1', 'an in-progress human-crew task counts as soon as it is listed');
+waitingTasks = [quietTask];
+renderTasks(waitingTasks, waitingContext);
+assert.equal(waitingCount(), '0', 'the count drops with the task');
+
+// A `[resident]: <title>` title moves the bracket to a chip and leaves no
+// separator at the start of the title.
+waitingTasks = [task(602, { title: '[resident]: orbit-graph - sol' })];
+renderTasks(waitingTasks, waitingContext);
+const prefixedRow = taskRows().find(row => row.dataset.key === 'task-ORB-602');
+assert.equal(prefixedRow.querySelector('.title').textContent, 'orbit-graph - sol', 'the title starts with its own words');
+assert.deepEqual(prefixedRow.querySelectorAll('.title-tag').map(chip => chip.textContent), ['resident'], 'the bracket becomes a chip');
+waitingTasks = [quietTask];
+renderTasks(waitingTasks, waitingContext);
+
 // Human-crew work is classified by the server from the task's own workspace
 // (`human_crew` on the row), so it survives the aggregate view, which has no
 // crew registry, and a crew name that is human in one workspace and an agent

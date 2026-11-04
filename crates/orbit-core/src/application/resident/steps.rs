@@ -61,6 +61,20 @@ impl OrbitRuntime {
         }
     }
 
+    /// The cycle agent runs the mandate's crew, an explicit activity crew, while
+    /// the run was admitted with the assignment task's own `crew` field. Record
+    /// the crew that runs, so the run's Resolved Run Crew and recorded model
+    /// match the agent's.
+    fn record_resident_cycle_run_crew(
+        &self,
+        run_id: &str,
+        mandate: &orbit_types::workflow::ResidentMandate,
+    ) -> Result<(), OrbitError> {
+        let crew = self.resolve_crew_for_task(Some(&mandate.crew), None)?;
+        self.stores().jobs().record_job_run_crew(run_id, &crew)?;
+        Ok(())
+    }
+
     /// `resident_observe`: start this run's cycle for its mandate, or report
     /// why it does not (`cycle_count: 0`). A dead predecessor first gets its
     /// synthesized `incomplete` checkpoint, and this cycle recovers it.
@@ -96,6 +110,7 @@ impl OrbitRuntime {
             && live.run_id == run_id
             && let Some(grant) = cycle_grant(&history, &live.cycle)
         {
+            self.record_resident_cycle_run_crew(run_id, &mandate)?;
             return self.resident_brief(&task_id, &mandate, &grant, &history, None);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
@@ -118,6 +133,7 @@ impl OrbitRuntime {
         if due.reasons.is_empty() {
             return Ok(skipped(&task_id, "not_due"));
         }
+        self.record_resident_cycle_run_crew(run_id, &mandate)?;
         let recovery_of = match &due.dead_cycle {
             Some(dead) => {
                 self.synthesize_resident_checkpoint(

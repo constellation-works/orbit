@@ -133,7 +133,10 @@ function splitTitlePrefix(title) {
   const match = /^((?:\[[^\]]+\]\s*)+)(.*)$/.exec(String(title || ""));
   if (!match || !match[2]) return [[], String(title || "")];
   const labels = [...match[1].matchAll(/\[([^\]]+)\]/g)].map((part) => part[1].trim()).filter(Boolean);
-  return [labels, match[2]];
+  // `[resident]: title` keeps its separator after the chip; drop it.
+  const rest = match[2].replace(/^[\s:]+/, "");
+  if (!rest) return [[], String(title || "")];
+  return [labels, rest];
 }
 
 // Where a running or blocked task's run is and what it holds: the host, the

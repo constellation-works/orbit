@@ -1914,3 +1914,20 @@ sys.exit(1)
     assert_ne!(outcome, Ok(true), "the failure must surface");
     assert_eq!(calls.len(), 1, "the brief was silently re-run: {calls:?}");
 }
+
+/// The cycle agent runs the mandate's crew; the run's Resolved Run Crew and
+/// recorded model must name that crew, not the assignment task's own field.
+#[test]
+fn a_cycle_run_records_the_mandate_crew_that_runs() {
+    let fx = fixture();
+    let watched = fx.task("Ship scribe v2 slice 5");
+    let mandate = fx.mandate(&watched);
+    let run = fx.cycle_run(&mandate, "resident-cycle-crew");
+    let before = fx.jobs.get_job_run(&run).unwrap().unwrap();
+    assert_eq!(before.resolved_crew, None);
+    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    assert_eq!(brief["crew"], "sol", "{brief}");
+    let recorded = fx.jobs.get_job_run(&run).unwrap().unwrap();
+    assert_eq!(recorded.resolved_crew.as_deref(), Some("sol"));
+    assert_eq!(recorded.crew_model.as_deref(), Some("test"));
+}
