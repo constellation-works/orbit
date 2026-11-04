@@ -1,6 +1,6 @@
 //! The `orbit.agents.*` tools: one scan per call, sliced by role and selection.
 use crate::OrbitRuntime;
-use crate::application::agents::{AgentQuery, AgentRole};
+use crate::application::agents::{AgentDetailSurface, AgentQuery, AgentRole};
 use orbit_common::{
     OrbitError,
     governance::{agents::AgentsVerb, operation::OperationVerb},
@@ -11,6 +11,7 @@ pub(super) fn dispatch(
     runtime: &OrbitRuntime,
     verb: AgentsVerb,
     input: Value,
+    surface: AgentDetailSurface,
 ) -> Result<Value, OrbitError> {
     let input = verb.spec().parse_input(input)?;
     let role = AgentRole::parse(&input.required_string("role")?)?;
@@ -53,11 +54,12 @@ pub(super) fn dispatch(
             runtime.agent_by_type_scorecard(&query)
         }
         AgentsVerb::Scorecard => runtime.agent_role_scorecard(role, &query),
-        AgentsVerb::Show => runtime.agent_role_detail(
+        AgentsVerb::Show => runtime.agent_role_detail_for_surface(
             role,
             &query,
             &input.required_string("crew")?,
             input.optional_string("row_model")?.as_deref(),
+            surface,
         ),
     }
 }

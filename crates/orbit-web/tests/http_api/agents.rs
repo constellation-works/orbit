@@ -1588,7 +1588,27 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 format!("/api/agents/implementers/detail?{WS}&crew=nobody"),
                 format!("/api/agents/attribution?{WS}&window=1y"),
             ] {
-                assert_eq!(server.get(&refused).status().as_u16(), 400, "{refused}");
+                let response = server.get(&refused);
+                assert_eq!(response.status().as_u16(), 400, "{refused}");
+                if refused.contains("crew=nobody") {
+                    let body: Value = response.json().unwrap();
+                    let message = body["error"].as_str().unwrap();
+                    let role = if refused.contains("/implementers/") {
+                        "implementers"
+                    } else {
+                        "orchestrators"
+                    };
+                    for part in [
+                        format!("/api/agents/{role}/scorecard"),
+                        "window query parameter".into(),
+                        "no work in the window has no row".into(),
+                    ] {
+                        assert!(message.contains(&part), "{body}");
+                    }
+                    for part in ["--window", "orbit agents", "orbit_agents_", "orbit.agents."] {
+                        assert!(!message.contains(part), "{body}");
+                    }
+                }
             }
         },
     );
