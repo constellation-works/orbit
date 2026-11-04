@@ -524,7 +524,7 @@
         "## What other work owns"
       ],
       "digest": "32f5927fa4542c7659b8c679e9432377351fc895968c7b5096106e28c77e4908",
-      "revision": "72e32655f5febcb6b31ba3f398e1355d4babee45",
+      "revision": "fa1da9facf8bbb7bc40d628f475a428b0c60cc12",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -2189,6 +2189,31 @@
         "## Select a batch",
         "## Validate and record"
       ],
+      "digest": "a0bb1a039fa0649f11e3df068194ef33a61e50082d3d6c97d3f2be0f79d872f3",
+      "revision": "b7a27e60e2b3e7d0ab4455fd67dfc82aee3909a0",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch edits only docs/ and the tracked top-level README/CONTRIBUTING",
+        "# documents its brief validates, so the minted task locks just that scope",
+        "# instead of the whole tree (a dir:. lock starves on a busy drain).",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
       "digest": "cb7ee8891058765c89ee0c0c1eb7931c87e01549dc2e72b84197f567c64caecf",
       "revision": "4aef4eb55b9c1b6bad4d54c0990775d8955fb728",
       "settings": {
@@ -3129,6 +3154,32 @@
         "## Safe evidence",
         "## Windows, signatures and recurrence"
       ],
+      "digest": "235bab9796dc58085fb123cfc54e574333fa1e5b0e1a6f2f4bc3e1dc77710d32",
+      "revision": "d0f99d14459ed86fb0873a5b49c18a3f13c22cc3",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
       "digest": "b0854dd74649335ced56c259ab8cf9e0c325cc883378e90384712534f6fd24ed",
       "revision": "a9fb991e3c53da61b874a87133c1f69756d72ec4",
       "settings": {
@@ -3262,6 +3313,31 @@
         "## 6. Corpus proposal, report and cursor",
         "## Rules and command surfaces"
       ],
+      "digest": "ccf4c744e0bc240c372a01d85e4373870fcb55b4b09b1802abc95c51fd10ec78",
+      "revision": "b7a27e60e2b3e7d0ab4455fd67dfc82aee3909a0",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
       "digest": "eba98d7549890535ee4f2e4d64042e51fd8df426636a072f272c39031023a932",
       "revision": "5df2d4f60072866fff8d9cb90e335b766fe4d20f",
       "settings": {
@@ -3279,6 +3355,32 @@
     }
   ],
   "qa-full-sweep": [
+    {
+      "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "01e862fb627a788057b3c0a35eb2639a53a7164b2a2b32c4a089f5ab17eeef1f",
+      "revision": "49c72a851efd9826473127460032c60b6805dd06",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
     {
       "comments": [
         "## File one surface-QA task per area",
@@ -4190,6 +4292,32 @@
         "## 6. Report and cursor",
         "## Rules and command surfaces"
       ],
+      "digest": "48ac649ca64ecaad5e89de9587f1dc57e46a89f9f4a4ef20c0f1e0615b4639ca",
+      "revision": "9ab7579b0e805f1eb058f11c2f1ffc1efcccf036",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
       "digest": "6aef74de96a9cedcf5def415dba69bf9b725aa4105be14ea82a0050431830d11",
       "revision": "0244fbcf8be2d0c60c3225cbe94a4907ea5e9cac",
       "settings": {
@@ -4334,6 +4462,32 @@
       ],
       "digest": "9b81f2feac58a43e3962b89191564af51cb9abd0584f44621f60e4feeaa73c36",
       "revision": "2fc392151b33d73e0d2285a804b5f712b4a0bd06",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "9ccd7281337032cb596c38b009ad676790bcdadc4e93f871f95156d3bd103fc5",
+      "revision": "86e8b6697b53ae67d3d818c8bb6393bcd2b68c34",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
