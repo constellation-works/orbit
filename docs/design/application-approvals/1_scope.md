@@ -1,10 +1,10 @@
 ---
 title: "Scope: bounded application approvals"
 owner: claude
-last_updated: 2026-11-03
-last_validated: 2026-11-01
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
-stage: designing
+stage: building
 next: "Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043"
 feature: application-approvals
 doc_role: scope
@@ -16,7 +16,7 @@ tags: [application-approvals, application-authority, plugins, security]
 # Scope: bounded application approvals
 
 This folder is the design deliverable of [ORB-20852]. Orbit implementation slices 1-5
-have shipped as [ORB-21038] through [ORB-21042]: schema v2, constrained entries, bound
+have shipped as [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042]: schema v2, constrained entries, bound
 and read callbacks, audit fields, and payload-bound auto-task callbacks. The office
 profile remains [ORB-20363]; compatibility retirement is [ORB-21043]. Like
 [human-decision-channel](../human-decision-channel/1_scope.md),
@@ -183,7 +183,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
 
 ## Phasing
 
-Slices 1-5 below are implemented ([ORB-21038] through [ORB-21042]). The descriptions
+Slices 1-5 below are implemented ([ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041], [ORB-21042]). The descriptions
 record the delivery sequence; admission no longer waits for those slices. Slice 6 is
 [ORB-20363], and slice 7 is [ORB-21043].
 

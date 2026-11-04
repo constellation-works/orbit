@@ -1,7 +1,7 @@
 ---
 title: "Bounded application approvals — Design"
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-04
 last_validated: 2026-11-01
 status: Draft
 feature: application-approvals
@@ -21,7 +21,7 @@ three candidate flows and states the chosen flow's threat model, consent schema,
 admission algorithm and audit record. It then maps each office app approval action to
 allowed or refused, gives the migration for existing consents, and lists the
 implementation slices. The original refusal snapshot is `9a03c7cc5` (2026-11-01).
-Orbit slices 1-5 have since shipped as ORB-21038 through ORB-21042; §1 describes current
+Orbit slices 1-5 have since shipped as [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042]; §1 describes current
 admission, while §6 retains the original office action map. Line numbers refer to the
 original layout and are for orientation; the symbols are the anchors. orbit-office
 paths are from that repository at `b5654763e`, written as `orbit-office/<path>`.
@@ -594,9 +594,9 @@ profile in slice 6. Until then its exact consents, if any, behave as today.
 
 ## 9. Implementation slices
 
-The original delivery sequence is retained below. Slices 1-5 shipped as ORB-21038,
-ORB-21039, ORB-21040, ORB-21041 and ORB-21042, respectively. Slice 6 remains ORB-20363
-(`someday`), and slice 7 is ORB-21043 (`someday`, compatibility window outstanding).
+The original delivery sequence is retained below. Slices 1-5 shipped as [ORB-21038],
+[ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042], respectively. Slice 6 remains [ORB-20363]
+(`someday`), and slice 7 is [ORB-21043] (`someday`, compatibility window outstanding).
 Slices 1-5 and 7 belong to `ws_orbit`, slice 6 to `ws_orbit-office`. Statements about a
 slice's future work below describe its original deliverable, not a current admission
 restriction.
@@ -673,7 +673,11 @@ restriction.
 - [ORB-20363] — wires the office app's approval actions to application authority;
   office profile integration remains outstanding (slice 6).
 - [ORB-20852] — this design.
-- ORB-21038 through ORB-21042 — shipped Orbit slices 1-5.
-- ORB-21043 — compatibility retirement (slice 7).
+- [ORB-21038] — shipped Orbit slice 1 (schema and consent-time validation).
+- [ORB-21039] — shipped Orbit slice 2 (constrained entry admission).
+- [ORB-21040] — shipped Orbit slice 3 (bound and read callbacks).
+- [ORB-21041] — shipped Orbit slice 4 (audit fields and documentation).
+- [ORB-21042] — shipped Orbit slice 5 (payload-bound auto-task callbacks).
+- [ORB-21043] — compatibility retirement (slice 7).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
