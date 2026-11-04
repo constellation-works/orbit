@@ -1,8 +1,8 @@
 ---
 title: Operator Attention — Vision
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 feature: operator-attention
 doc_role: vision
@@ -17,7 +17,7 @@ related_artifacts: [ORB-21164]
 # Operator Attention — Vision
 
 This document records what v1 does not build and what the design deliberately keeps open.
-Everything here is speculation labelled as such; the committed scope is in
+The remaining questions are speculative; the committed scope is in
 [2_design.md](./2_design.md).
 
 ## 1. Open Questions
@@ -61,8 +61,8 @@ Everything here is speculation labelled as such; the committed scope is in
 9. **Resident orchestrators as a source.** The rewritten
    [resident-orchestrator](../resident-orchestrator/2_design.md#6-the-manager--resident-channel)
    design reports through attention: resident escalations are `decision_open`, handoffs
-   `review_waiting`, and it proposes one new kind, `resident_stalled` (no checkpoint for twice the
-   heartbeat, or three incomplete cycles in a row), filed as [ORB-21245]. The manager session reads
+   `review_waiting`, and it added one kind, `resident_stalled` (no checkpoint for twice the
+   heartbeat, or three incomplete cycles in a row), implemented by [ORB-21245]. The manager session reads
    attention instead of keeping an inbox.
 
 ## 2. Prior Work
@@ -97,9 +97,11 @@ shared store.
   [plugins](../plugins/1_scope.md).
 - External: none.
 
+[ORB-21164] recorded these deferred directions.
+
 ## Task References
 
-- [ORB-21245] — resident-orchestrator slice 4: proposes the `resident_stalled` attention kind
+- [ORB-21245] — implemented the `resident_stalled` attention kind
 - [ORB-21164] — recorded the deferred directions
 - [ORB-21091] — added decision-request risk tier and category
 

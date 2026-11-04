@@ -1,9 +1,9 @@
 ---
 title: Operator Attention — Overview
 owner: claude
-last_updated: 2026-11-03
-last_validated: 2026-11-03
-status: Implemented
+last_updated: 2026-11-04
+last_validated: 2026-11-04
+status: Draft
 stage: shipped
 next: "—"
 feature: operator-attention
@@ -20,8 +20,8 @@ related_artifacts: [ORB-21164, ORB-21165]
 
 `orbit attention` is one read-only list of every item in the workspaces a host reaches that is
 waiting on an operator: pilot warnings and holds, blocked tasks, open decisions, failed or
-stuck runs, stale claims, reviews awaiting a verdict, a red base branch, untriaged friction
-and unhealthy hosts. It is derived from existing state on every call (no inbox, no new
+stuck runs, stale claims, reviews awaiting a verdict, a red base branch, untriaged friction,
+unhealthy hosts, open fleet notices and stalled resident mandates. It is derived from existing state on every call (no inbox, no new
 store), every item names the exact command that resolves it, and a stateless cursor lets a
 caller request only what is new or changed. The CLI is `orbit attention`; the tool is
 `orbit.attention`.
@@ -34,11 +34,11 @@ Work that needs an operator is recorded in many places, each with its own query:
 `orbit host list`, `orbit doctor`. Nothing asks the combined question, so items go
 unnoticed until someone opens the dashboard.
 
-On 2026-11-01 four proposed tasks (ORB-21114, ORB-21118, ORB-21127, ORB-20363) carried
+On 2026-11-01 four proposed tasks ([ORB-21114], [ORB-21118], [ORB-21127], [ORB-20363]) carried
 pilot warnings that hold promotion, and ORB-20363 also carried a contract-mismatch
 finding. None surfaced until Daniel saw them in the UI. [ORB-21164] records his ask: "a
 holistic summary of issues that requires operator attention", available to orchestrators,
-initially injected through a hook, and filterable (for example by workspace). Daniel subsequently dropped the session hook; its task is archived and it is no dependency or deliverable. He chose the name
+initially injected through a hook, and filterable (for example by workspace). Daniel subsequently dropped the session hook; [ORB-21165] is archived and it is no dependency or deliverable. He chose the name
 `attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_scope.md))
 solves the last mile for decisions it can email; this feature covers everything else and
 gives the orchestrator one place to look.
@@ -50,7 +50,7 @@ gives the orchestrator one place to look.
   `fingerprint`. Schema: [attention-item](./specs/attention-item.md).
 - **Kind**: the closed enum of reasons (`pilot_warning`, `pilot_hold`, `blocked`,
   `decision_open`, `run_failed`, `run_stuck`, `claim_stale`, `review_waiting`, `ci_red`,
-  `friction_untriaged`, `host_unhealthy`). Each kind has exactly one source of truth that
+  `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`). Each kind has exactly one source of truth that
   already exists.
 - **Derived view**: the list is rebuilt from the sources on each call. An item exists
   exactly while its source condition holds; resolving the source removes the item.
@@ -76,7 +76,7 @@ gives the orchestrator one place to look.
 | Rejected alternatives and standing rules | [4_decisions.md](./4_decisions.md) | [ORB-21164] |
 | Deferred directions (ack/snooze, dashboard, notifications, plugin kinds) | [3_vision.md](./3_vision.md) | [ORB-21164] |
 
-All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed;
+All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed; [ORB-21215] added `notice_open` and [ORB-21245] added `resident_stalled`;
 [2_design.md §6](./2_design.md#6-slices) orders them.
 
 ## Task References
@@ -86,6 +86,12 @@ All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed
 - [ORB-21169] — slice 2: runtime kinds
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation and `host_unhealthy`
-- [ORB-21165] — archived session-hook proposal; not a dependency or deliverable
+- [ORB-21165] — archived the session-hook proposal; it is not a dependency or deliverable
+- [ORB-21215] — added the open-notice attention kind
+- [ORB-21245] — added the stalled-resident attention kind
+- [ORB-21114] — carried a pilot warning in the motivating example
+- [ORB-21118] — carried a pilot warning in the motivating example
+- [ORB-21127] — carried a pilot warning in the motivating example
+- [ORB-20363] — carried a pilot warning and contract finding in the motivating example
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
