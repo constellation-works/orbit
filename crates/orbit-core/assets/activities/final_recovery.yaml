@@ -583,6 +583,7 @@ spec:
     - orbit.workflow.run.resume
     - orbit.workflow.run.show
     - orbit.workflow.run.list
+    - orbit.workflow.land
     - orbit.workflow.ship
     - orbit.task.add
     - orbit.task.update

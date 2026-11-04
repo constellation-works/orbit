@@ -122,6 +122,7 @@ spec:
     - orbit.command.exec
     - orbit.pipeline.invoke
     - orbit.workflow.run.resume
+    - orbit.workflow.land
     - orbit.workflow.ship
     - orbit.task.add
     - orbit.task.update

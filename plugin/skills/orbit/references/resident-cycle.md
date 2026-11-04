@@ -63,7 +63,7 @@ escalations and your checkpoint need no right.
 |---|---|
 | `dispatch` | Start a leaf run with `orbit.workflow.ship`; move work to `in-progress` |
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
-| `merge` | Land a reviewed delivery; move the delivered task to `done` |
+| `merge` | Land a reviewed delivery with `orbit.workflow.land`; move a task with no open pull request to `done` |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 Core enforces the grant on every call, not the prompt: a write without this
@@ -83,6 +83,15 @@ through its own workspace. `orbit.task.requeue`, `orbit.task.repilot`,
 `orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke`
 stay operator-only and answer `capability_denied` even with the right: record
 that as a cost and leave them to the operator or the scheduler.
+To land, call `orbit.workflow.land` with the mandate's own workspace and the
+`task_id` of a task in `review`. It
+merges the task's delivery pull request under the forge's branch protection and
+moves the task to `done`. Anything that holds it back answers
+`task_landing_refused` with the reason and leaves the task in `review`: record it
+as `refused`, and never merge any other way. When a call's outcome is unknown,
+repeat it: a pull request that already merged settles without merging again.
+A task whose pull request is still open cannot be moved to `done` directly; the
+update answers `resident_done_pr_open`.
 Tasks you file stay `proposed` unless you hold `promote`. Name every task you
 file or dispatch in the checkpoint's `actions[]` and `notes`, so later cycles
 can find it again.

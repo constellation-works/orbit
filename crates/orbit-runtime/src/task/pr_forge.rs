@@ -9,7 +9,9 @@
 //! the failed checks on a blocked task's PR head. Those policies only need a few
 //! forge operations, so they reach them through [`TaskPrForge`] rather than
 //! the `gh` CLI directly: production uses [`GhTaskPrForge`], and fixtures
-//! inject a fake forge. No operation deletes a branch.
+//! inject a fake forge. A resident holding the merge right lands a task's
+//! delivery PR through it (`application::task::external_merge`). No operation
+//! deletes a branch.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -81,9 +83,25 @@ pub struct CheckRerunOutcome {
     pub uncertain: Option<(u64, String, String)>,
 }
 
+/// How a request to merge a pull request ended when the forge answered it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullRequestMergeOutcome {
+    /// The forge merged it synchronously.
+    Merged {
+        /// The commit it merged as.
+        merge_commit: String,
+    },
+    /// The forge refused it, so nothing merged: branch protection, a moved
+    /// head, a method the repository forbids or a caller it does not permit.
+    Refused {
+        /// The forge's own reason.
+        reason: String,
+    },
+}
+
 /// Forge operations behind closing a task's PRs on a terminal decision,
-/// settling a task from its merged delivery PR, and finding the merge
-/// blockers an out-of-run auto-fix repairs.
+/// settling a task from its merged delivery PR, landing one, and finding the
+/// merge blockers an out-of-run auto-fix repairs.
 pub trait TaskPrForge: Send + Sync {
     /// The PR for this binding, including an unmerged PR. `None` proves the
     /// branch has no PR; errors must never fall back to ancestry. The caller
@@ -162,6 +180,22 @@ pub trait TaskPrForge: Send + Sync {
     ) -> Result<CheckRerunOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot re-request the checks of pull request #{number}"
+        )))
+    }
+
+    /// Merge pull request `number` at exactly commit `head_sha`, under every
+    /// rule the forge enforces. An error means the outcome is unknown or no
+    /// request was made; a refusal the forge answered is
+    /// [`PullRequestMergeOutcome::Refused`]. The default refuses before a
+    /// request.
+    fn merge_pull_request(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_sha: &str,
+    ) -> Result<PullRequestMergeOutcome, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot merge pull request #{number}"
         )))
     }
 
@@ -440,6 +474,64 @@ impl TaskPrForge for GhTaskPrForge {
         })
     }
 
+    fn merge_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_sha: &str,
+    ) -> Result<PullRequestMergeOutcome, OrbitError> {
+        if !matches!(head_sha.len(), 40 | 64) || !head_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(OrbitError::InvalidInput(format!(
+                "merging pull request #{number} requires its exact head commit"
+            )));
+        }
+        let stdout = run_gh(
+            orbit_tools::github_cli::repository_merge_methods_request(),
+            repo_root,
+            "gh repo view",
+        )?;
+        let methods = orbit_tools::github_cli::parse_gh_json(&stdout, "gh repo view")?;
+        let Some(method) = [
+            ("squashMergeAllowed", "squash"),
+            ("rebaseMergeAllowed", "rebase"),
+            ("mergeCommitAllowed", "merge"),
+        ]
+        .into_iter()
+        .find_map(|(field, method)| {
+            (methods.get(field).and_then(Value::as_bool) == Some(true)).then_some(method)
+        }) else {
+            return Ok(PullRequestMergeOutcome::Refused {
+                reason: "the repository permits no merge method".to_string(),
+            });
+        };
+        let mut request =
+            orbit_tools::github_cli::merge_pull_request_at_head_request(number, head_sha, method);
+        request.current_dir = Some(repo_root.to_string_lossy().into_owned());
+        let result = run_process(&request, &NoSandbox)?;
+        if !result.success {
+            // This text is returned to an agent's call.
+            let stderr =
+                orbit_common::security::redaction::redact_all_and_home(result.stderr.trim());
+            if !result.timed_out && forge_refused_request(&stderr) {
+                return Ok(PullRequestMergeOutcome::Refused { reason: stderr });
+            }
+            return Err(OrbitError::Execution(format!(
+                "gh api merge of pull request #{number} failed: {stderr}"
+            )));
+        }
+        let answer = orbit_tools::github_cli::parse_gh_json(&result.stdout, "gh api merge")?;
+        match answer.get("sha").and_then(Value::as_str) {
+            Some(merge_commit) if answer.get("merged").and_then(Value::as_bool) == Some(true) => {
+                Ok(PullRequestMergeOutcome::Merged {
+                    merge_commit: merge_commit.to_string(),
+                })
+            }
+            _ => Err(OrbitError::Execution(format!(
+                "gh api merge of pull request #{number} did not confirm a merge"
+            ))),
+        }
+    }
+
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
         let stdout = run_gh(
             orbit_tools::github_cli::authenticated_login_request(),
@@ -477,6 +569,18 @@ fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError>
         "gh pr view",
     )?;
     orbit_tools::github_cli::parse_gh_json(&stdout, "gh pr view")
+}
+
+/// Whether a failed `gh api` call's stderr is the forge's own rejection of the
+/// request: an HTTP 4xx, which `gh` reports as `gh: <reason> (HTTP 405)`. A
+/// timed-out request or rate limit, a server error and a transport failure
+/// leave the outcome unknown or say nothing about the request.
+fn forge_refused_request(stderr: &str) -> bool {
+    stderr
+        .rsplit_once("(HTTP ")
+        .and_then(|(_, status)| status.split_once(')'))
+        .and_then(|(status, _)| status.parse::<u16>().ok())
+        .is_some_and(|status| (400..500).contains(&status) && !matches!(status, 408 | 429))
 }
 
 fn has_state(entry: &Value, state: &str) -> bool {

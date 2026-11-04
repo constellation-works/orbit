@@ -274,6 +274,7 @@ spec:
     - orbit.workflow.run.show
     - orbit.workflow.run.list
     - orbit.workflow.run.resume
+    - orbit.workflow.land
     - orbit.workflow.ship
   proc_disallowed_programs:
     - sudo

@@ -57,6 +57,16 @@ pub(super) fn dispatch(
         WorkflowVerb::RunObserve => show(runtime, input, true),
         WorkflowVerb::RunShow => show(runtime, input, false),
         WorkflowVerb::Ship => ship(runtime, input, agent, model, trigger),
+        WorkflowVerb::Land => {
+            let id = orbit_common::protocol::tool_input::required_string(
+                &input,
+                &["task_id"],
+                "task_id",
+            )?;
+            let actor = actor(runtime, agent.as_deref(), model.as_deref());
+            let landing = runtime.land_task_pull_request(&id, Some(&actor))?;
+            serde_json::to_value(landing).map_err(serialize_error("serialize landing"))
+        }
     }
 }
 

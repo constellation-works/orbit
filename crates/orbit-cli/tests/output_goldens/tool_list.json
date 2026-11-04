@@ -4436,6 +4436,29 @@
     "mcp_toolset": "dispatch"
   },
   {
+    "name": "orbit.workflow.land",
+    "description": "Land a task in review: merge its one open delivery pull request at the head whose required checks were just read, then move the task to done. The forge's branch protection decides: nothing bypasses it, and any refusal answers `task_landing_refused` with the reason and changes nothing. A pull request that already merged settles without another merge, so a call whose reply was lost may be repeated. Requires operator capability or a resident cycle holding the `merge` right.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "task_id",
+        "description": "The task in review whose delivery pull request lands.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "dispatch"
+  },
+  {
     "name": "orbit.workflow.run.list",
     "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
     "enabled": true,

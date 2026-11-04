@@ -356,6 +356,7 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.pipeline.wait",
         "orbit.search",
         "orbit.workflow.ship",
+        "orbit.workflow.land",
         "orbit.workflow.run.show",
         "orbit.workflow.run.list",
         "orbit.workflow.run.resume",

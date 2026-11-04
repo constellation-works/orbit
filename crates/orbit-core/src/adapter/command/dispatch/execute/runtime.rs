@@ -160,9 +160,12 @@ impl OrbitRuntime {
         // A resident cycle's ship is brokered for the same reason: the leaf's
         // worker must start beside the cycle's sandbox, not inside it. Its
         // decision raise is brokered because the raise's lock lies in the
-        // `.orbit` that sandbox mounts read-only.
+        // `.orbit` that sandbox mounts read-only. Its landing and its move of
+        // a task to `done` are brokered because they reach the forge with the
+        // host's `gh` credentials.
         #[cfg(unix)]
-        let resident_call = crate::runtime::plugin::broker::is_brokered_resident_tool(name)
+        let resident_call = (crate::runtime::plugin::broker::is_brokered_resident_tool(name)
+            || crate::runtime::plugin::broker::is_brokered_resident_completion(name, &input))
             && self.caller_is_resident_cycle();
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")

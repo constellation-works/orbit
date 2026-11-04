@@ -80,7 +80,7 @@ fn task_update_class(input: &Value) -> ResidentCallClass {
         None => ResidentCallClass::Open,
         Some("backlog") => ResidentCallClass::Gated(ResidentRight::Promote),
         Some("in-progress") => ResidentCallClass::Gated(ResidentRight::Dispatch),
-        Some("done") => ResidentCallClass::Gated(ResidentRight::Merge),
+        Some("done") => ResidentCallClass::CompleteTask,
         // Refused with the route that does it: a `handoff` checkpoint.
         Some("review") => ResidentCallClass::Handoff,
         Some(_) => ResidentCallClass::Refused,
@@ -134,6 +134,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto | WorkflowVerb::Ship | WorkflowVerb::RunResume => Gated(Dispatch),
+            WorkflowVerb::Land => Gated(Merge),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => Read,
         },
         OrbitBuiltinAction::Drain(verb) => match verb {

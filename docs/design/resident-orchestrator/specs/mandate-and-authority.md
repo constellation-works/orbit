@@ -103,7 +103,7 @@ grantable to a resident in v1.
 | none | read tools; `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact.put`; `orbit.friction.add`; `orbit.evolution.add`; `orbit.decision.raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.agent.invoke`, `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
-| `merge` | `orbit.task.update` to `done`, `orbit.task.retry_handoff`, `orbit.task.reconcile_review` |
+| `merge` | `orbit.workflow.land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.retry_handoff`, `orbit.task.reconcile_review` |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
 
 The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
@@ -127,7 +127,19 @@ exception and the tool a resident dispatches with: a cycle's run passes its oper
 and the guard decides the live cycle, the right and the workspace. A sandboxed cycle's ship goes through
 its run's broker, so the leaf's worker starts on the host beside the cycle's read-only sandbox, not
 inside it. A sandboxed cycle's `orbit.decision.raise` goes through the same broker, because its lock
-lies in the `.orbit` that sandbox mounts read-only. A write from a resident cycle run that
+lies in the `.orbit` that sandbox mounts read-only.
+
+`orbit.workflow.land` is how a resident lands a delivery, and passes the operator row and managed-run
+refusal the same way. It merges the `review` task's one open delivery pull request at the head whose
+required checks it has just read, then settles the task to `done` from that merge. Nothing bypasses the
+forge's branch protection. Any refusal, by Orbit or the forge, answers `task_landing_refused` with the
+reason, leaves the task in `review`, and records a `refused` row in the action ledger; a merge whose
+reply was lost settles on a repeated call without merging again. `orbit.task.update` to `done` answers
+`resident_done_pr_open` while a pull request recorded for the task is open, and `resident_lookup_refused`
+when the forge cannot say. Both go through the run's broker, because they read the forge with the host's
+credentials.
+
+A write from a resident cycle run that
 this workspace does not hold (one started in another catalog workspace) is refused as
 `resident_scope_refused`; slice 3 does not support cross-workspace writes. `orbit.evolution.add`
 arrives with [ORB-21248].

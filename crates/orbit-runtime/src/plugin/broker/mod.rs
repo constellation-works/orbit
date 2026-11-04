@@ -70,9 +70,30 @@ pub const BROKERED_RESIDENT_SHIP_TOOL: &str = crate::authorization::WORKFLOW_SHI
 /// which the cycle's sandbox mounts read-only.
 pub const BROKERED_RESIDENT_RAISE_TOOL: &str = "orbit.decision.raise";
 
-/// Whether `tool` is a built-in the broker runs for a resident cycle's run.
+/// The built-in a sandboxed resident cycle lands a delivery through. The broker
+/// runs it on the host, because the merge needs the host's `gh` credentials.
+pub const BROKERED_RESIDENT_LAND_TOOL: &str = crate::authorization::WORKFLOW_LAND_OPERATION_ID;
+
+/// The built-in a resident cycle moves a task to `done` through. Only that move
+/// is brokered ([`is_brokered_resident_completion`]): the guard asks the forge,
+/// with the host's `gh` credentials, whether the task's pull request is open.
+pub const BROKERED_RESIDENT_TASK_UPDATE_TOOL: &str = "orbit.task.update";
+
+/// Whether `tool` is a built-in the broker runs for a resident cycle's run,
+/// whatever its input.
 pub fn is_brokered_resident_tool(tool: &str) -> bool {
-    tool == BROKERED_RESIDENT_SHIP_TOOL || tool == BROKERED_RESIDENT_RAISE_TOOL
+    tool == BROKERED_RESIDENT_SHIP_TOOL
+        || tool == BROKERED_RESIDENT_RAISE_TOOL
+        || tool == BROKERED_RESIDENT_LAND_TOOL
+}
+
+/// Whether this call is a resident cycle's move of a task to `done`.
+pub fn is_brokered_resident_completion(tool: &str, input: &serde_json::Value) -> bool {
+    tool == BROKERED_RESIDENT_TASK_UPDATE_TOOL
+        && input
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|status| status.trim() == "done")
 }
 
 /// Executes one authenticated request for the run a broker serves.
