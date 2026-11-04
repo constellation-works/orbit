@@ -2,7 +2,7 @@
 //! orchestrators role, with a note naming the replacement. Removed in the
 //! release after the agents tools ship.
 use crate::OrbitRuntime;
-use crate::application::agents::{AgentQuery, AgentRole};
+use crate::application::agents::{AgentDetailSurface, AgentQuery, AgentRole};
 use orbit_common::{
     OrbitError,
     governance::{operation::OperationVerb, orchestrator::OrchestratorVerb},
@@ -13,6 +13,7 @@ pub(super) fn dispatch(
     runtime: &OrbitRuntime,
     verb: OrchestratorVerb,
     input: Value,
+    surface: AgentDetailSurface,
 ) -> Result<Value, OrbitError> {
     let input = verb.spec().parse_input(input)?;
     let query = AgentQuery::parse(
@@ -25,11 +26,12 @@ pub(super) fn dispatch(
             "`orbit agents scorecard --role orchestrators` or the `orbit.agents.scorecard` tool with role orchestrators",
         ),
         OrchestratorVerb::Show => (
-            runtime.agent_role_detail(
+            runtime.agent_role_detail_for_surface(
                 AgentRole::Orchestrators,
                 &query,
                 &input.required_string("orchestrator")?,
                 input.optional_string("row_model")?.as_deref(),
+                surface,
             )?,
             "`orbit agents show --role orchestrators --crew <name>` or the `orbit.agents.show` tool with role orchestrators and the name as crew",
         ),

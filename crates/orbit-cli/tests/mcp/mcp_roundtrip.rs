@@ -946,10 +946,18 @@ fn agents_show_missing_row_names_scorecard_and_window_recovery() {
             "no work in the window has no row",
         ],
     );
-    for part in ["unconfigured", "not configured", "unknown crew"] {
+    for part in [
+        "unconfigured",
+        "not configured",
+        "unknown crew",
+        "--window",
+        "orbit agents",
+        "orbit.agents.",
+        "dashboard",
+    ] {
         assert!(
             !message_contains(&refused, part),
-            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+            "the MCP refusal excludes other surfaces and configuration diagnoses ({part}): {refused}"
         );
     }
 }

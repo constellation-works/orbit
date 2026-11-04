@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::agents::AgentDetailSurface;
 use crate::application::resident::ResidentCallAdmission;
 use crate::runtime::authorization::resolved_caller_capabilities;
 
@@ -30,6 +31,18 @@ fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
         JobRunTrigger::mcp()
     } else {
         JobRunTrigger::cli()
+    }
+}
+
+/// Native commands have no transport; `tool run` supplies a local one.
+/// MCP (including local stdio) always mints an origin session id.
+fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
+    if session.origin_session_id.is_some() || session.transport == Some(McpTransport::SshMcp) {
+        AgentDetailSurface::Mcp
+    } else if session.transport.is_some() {
+        AgentDetailSurface::ToolRun
+    } else {
+        AgentDetailSurface::Cli
     }
 }
 
@@ -127,7 +140,12 @@ fn execute_admitted(
         OrbitBuiltinAction::DesktopTaskWrite => {
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
-        OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(
+            runtime,
+            verb,
+            input,
+            agent_detail_surface(session_context),
+        ),
         OrbitBuiltinAction::Attention(_) => {
             crate::application::attention::attention_query(runtime, input, session_context)
         }
@@ -152,9 +170,12 @@ fn execute_admitted(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::Orchestrator(verb) => {
-            super::orchestrator_tools::dispatch(runtime, verb, input)
-        }
+        OrbitBuiltinAction::Orchestrator(verb) => super::orchestrator_tools::dispatch(
+            runtime,
+            verb,
+            input,
+            agent_detail_surface(session_context),
+        ),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::Drain(verb) => {
             super::drain_tools::dispatch(runtime, session_context, verb, input)
