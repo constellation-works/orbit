@@ -49,6 +49,22 @@ function metricsWindow(url) {
 function fixture(url) {
   const workspace = url.searchParams.get('workspace');
   switch (url.pathname) {
+    case '/api/dashboard/chrome': {
+      // Scheduled polls carry the same logical reads as explicit refreshes,
+      // including their scope, summary window and read counters.
+      const component = (path, since = null) => {
+        const componentUrl = new URL(path, url);
+        if (workspace !== null) componentUrl.searchParams.set('workspace', workspace);
+        if (since !== null) componentUrl.searchParams.set('since', since);
+        return { status: 200, body: JSON.stringify(fixture(componentUrl)) };
+      };
+      return {
+        notices: component('/api/notices'),
+        summary: component('/api/audit/summary', url.searchParams.get('since') || '24h'),
+        routines: url.searchParams.get('routines') === 'true' ? component('/api/routines') : null,
+        failures: url.searchParams.get('failures') === 'true' ? component('/api/jobs/failure-streaks') : null,
+      };
+    }
     case '/api/workspaces': return ['one', 'two'].map(id => ({ id, name: id, status: 'active', is_default: id === 'one' }));
     case '/api/tasks': {
       if (mutationTask) return list([mutationTask]);
@@ -762,6 +778,9 @@ check(!node('refresh-btn').disabled, 'timeout leaves retry available');
 globalThis.setTimeout = realTimeout;
 globalThis.fetch = realFetch;
 const realClearTimeout = globalThis.clearTimeout;
+const realDateNow = Date.now;
+let pollTime = realDateNow();
+Date.now = () => pollTime;
 const scheduledPolls = [];
 globalThis.setTimeout = (fn, ms, ...args) => {
   if (ms === 0) return realTimeout(fn, ms, ...args);
@@ -778,6 +797,8 @@ const runPoll = async () => {
   const poll = activePoll();
   check(poll, 'refresh poll must be scheduled');
   poll.handle.cancelled = true;
+  // Honor elapsed poll time so recent-read sharing expires as in the browser.
+  pollTime += poll.ms;
   poll.fn(...poll.args);
   await settle();
 };
@@ -850,6 +871,7 @@ check(liveTimers().some(entry => entry !== polls[0] && entry.ms === 30000), 'una
 globalThis.fetch = fetchDuringHostHang;
 globalThis.setTimeout = realTimeout;
 globalThis.clearTimeout = realClearTimeout;
+Date.now = realDateNow;
 
 // The Knowledge row stays mounted while its change-hash is unchanged. Identity,
 // status, tags, and created_at stay fixed; each painted field must repaint alone.
