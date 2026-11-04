@@ -19,6 +19,10 @@
 //     file uncreated, and global or existing-file writes keep a plain Save.
 // (h) a key deep link (?key=) or an open drawer lands on its All keys page
 //     once; Next, Previous and closing the drawer do not snap the page back.
+// (j) Workflow sections are directly navigable: the in-pane nav jumps to a
+//     section (expanding it), sections collapse to a bounded subset, and the
+//     search filters keys; controls stay inside the pane at 375px and every
+//     key returns when the search is cleared and sections are expanded.
 // (i) with review.timing off, the Before landing rows keep their text and
 //     enabled Edit control at WCAG AA contrast after opacity is composited,
 //     at 1440 and 375 px; they still show the reason and stay distinct from
@@ -392,6 +396,47 @@ try {
   // Wait for the workflow section and rows to render
   const arrayRow = page.locator('.topic-row[data-key="workflow.required_validation_commands"]');
   await arrayRow.waitFor({ state: 'visible' });
+
+  // -------------------------------------------------------------------------
+  // Case (j): Workflow nav jumps/collapses/searches without scrolling past
+  // every preceding row, at desktop and phone widths (ORB-21992)
+  // -------------------------------------------------------------------------
+  const workflowNav = page.locator('nav.workflow-nav');
+  await workflowNav.waitFor({ state: 'visible' });
+  for (const title of ['Shipping', 'Crew routing', 'Task pilot', 'Recovery', 'Steering & exploration', 'Other workflow keys']) {
+    assert.equal(await workflowNav.locator(`button.workflow-nav-link:has-text("${title}")`).count(), 1, `nav offers a direct jump to ${title}`);
+  }
+  await workflowNav.locator('button.workflow-collapse-all').click();
+  await page.waitForFunction(() => document.querySelector('#workflow-section-shipping .config-section-body')?.hidden === true);
+  assert.equal(await arrayRow.isVisible(), false, 'Collapse all hides Shipping rows for a bounded subset');
+  await workflowNav.locator('button.workflow-nav-link:has-text("Steering & exploration")').click();
+  const steeringRow = page.locator('.topic-row[data-key="workflow.mid_run_steering.max_rounds"]');
+  await steeringRow.waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Collapse Steering & exploration', 'a section jump expands the section and moves keyboard focus to its toggle');
+  assert.equal(await page.evaluate(() => {
+    const r = document.getElementById('workflow-section-steering-exploration')?.getBoundingClientRect();
+    return Boolean(r && r.top < window.innerHeight && r.bottom > 0);
+  }), true, 'a section jump brings the target section into the viewport');
+  const workflowSearch = page.locator('input.workflow-search');
+  await workflowSearch.click();
+  await workflowSearch.pressSequentially('usage_pressure');
+  await page.waitForFunction(() => document.querySelectorAll('.topic-row[data-key="workflow.usage_pressure_cap"]').length === 1
+    && document.querySelectorAll('.topic-row[data-key="workflow.required_validation_commands"]').length === 0);
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Search workflow keys', 'typing in workflow search keeps keyboard focus');
+  await page.locator('input.workflow-search').fill('');
+  await workflowNav.locator('button.workflow-expand-all').click();
+  await arrayRow.waitFor({ state: 'visible' });
+  await steeringRow.waitFor({ state: 'visible' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  assert.equal(await page.evaluate(() => {
+    const nav = document.querySelector('nav.workflow-nav');
+    const r = nav?.getBoundingClientRect();
+    return Boolean(r && r.left >= 0 && r.right <= window.innerWidth + 1 && nav.scrollWidth <= nav.clientWidth + 1);
+  }), true, 'workflow nav controls remain inside the content pane at 375px');
+  await page.screenshot({ path: path.join(evidence, 'config-workflow-nav-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await workflowNav.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'config-workflow-nav-dark-1440.png') });
 
   // -------------------------------------------------------------------------
   // Case (a): array<string> with commas survives save without edit
