@@ -27,6 +27,10 @@
 //     scrolls through jumps and wheel scrolling, its controls stay reachable
 //     by Tab without moving the pane, and a jump leaves the target heading and
 //     focused toggle below the wrapped navigation at 1440 and 375 px (ORB-22013).
+//     While a search is active, a section's Collapse and the Collapse all /
+//     Expand all controls act on the matching sections, keeping the query and
+//     keyboard focus, and clearing the search restores the saved layout
+//     (ORB-22014).
 // (i) with review.timing off, the Before landing rows keep their text and
 //     enabled Edit control at WCAG AA contrast after opacity is composited,
 //     at 1440 and 375 px; they still show the reason and stay distinct from
@@ -504,7 +508,63 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.topic-row[data-key="workflow.usage_pressure_cap"]').length === 1
     && document.querySelectorAll('.topic-row[data-key="workflow.required_validation_commands"]').length === 0);
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Search workflow keys', 'typing in workflow search keeps keyboard focus');
-  await page.locator('input.workflow-search').fill('');
+  // ORB-22014: the collapse controls act while a search is active. A matching
+  // section opens for discoverability; its Collapse hides the matching rows and
+  // sets aria-expanded, Expand restores them, and Collapse all / Expand all act
+  // on the matching sections only. The query and keyboard focus stay put, and
+  // searching does not change the saved layout.
+  const bodyHidden = (id) => page.locator(`#${id}-body`).evaluate((b) => b.hidden);
+  const toggleOf = (id) => page.locator(`#${id} .workflow-section-toggle`);
+  const focusedLabel = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null);
+  const focusedIsClass = (cls) => page.evaluate((c) => Boolean(document.activeElement?.classList.contains(c)), cls);
+  const usageRow = page.locator('.topic-row[data-key="workflow.usage_pressure_cap"]');
+  const otherId = 'workflow-section-other-workflow-keys';
+  assert.equal(await bodyHidden(otherId), false, 'a search opens its matching section for discoverability');
+  assert.equal(await usageRow.isVisible(), true, 'the matching row is visible while its search is active');
+  await toggleOf(otherId).click();
+  assert.equal(await bodyHidden(otherId), true, 'Collapse hides a matching section while a search is active');
+  assert.equal(await toggleOf(otherId).getAttribute('aria-expanded'), 'false', 'Collapse sets aria-expanded=false during a search');
+  assert.equal(await usageRow.isVisible(), false, 'the collapsed matching section hides its row');
+  assert.equal(await focusedLabel(), 'Expand Other workflow keys', 'Collapse keeps keyboard focus on the section toggle');
+  assert.equal(await workflowSearch.inputValue(), 'usage_pressure', 'Collapse keeps the search text');
+  await toggleOf(otherId).click();
+  assert.equal(await bodyHidden(otherId), false, 'Expand restores the matching section during a search');
+  assert.equal(await toggleOf(otherId).getAttribute('aria-expanded'), 'true', 'Expand sets aria-expanded=true during a search');
+  assert.equal(await usageRow.isVisible(), true, 'Expand restores the matching row');
+  await workflowNav.locator('button.workflow-collapse-all').click();
+  assert.equal(await bodyHidden(otherId), true, 'Collapse all hides the matching section during a search');
+  assert.equal(await toggleOf(otherId).getAttribute('aria-expanded'), 'false', 'Collapse all sets aria-expanded=false during a search');
+  assert.equal(await focusedIsClass('workflow-collapse-all'), true, 'Collapse all keeps keyboard focus');
+  assert.equal(await workflowSearch.inputValue(), 'usage_pressure', 'Collapse all keeps the search text');
+  await workflowNav.locator('button.workflow-expand-all').click();
+  assert.equal(await bodyHidden(otherId), false, 'Expand all restores the matching section during a search');
+  assert.equal(await usageRow.isVisible(), true, 'Expand all restores the matching row');
+  assert.equal(await focusedIsClass('workflow-expand-all'), true, 'Expand all keeps keyboard focus');
+  // "filler" matches keys in four sections and none in Shipping, so Collapse all
+  // and Expand all must act on the four matching sections and leave Shipping out.
+  const fillerSections = ['workflow-section-crew-routing', 'workflow-section-task-pilot', 'workflow-section-steering-exploration', otherId];
+  await workflowSearch.fill('filler');
+  for (const id of fillerSections) assert.equal(await bodyHidden(id), false, `${id} opens its matches for a search`);
+  assert.equal(await page.locator('#workflow-section-shipping').count(), 0, 'a search leaves out sections without matches');
+  await workflowNav.locator('button.workflow-collapse-all').click();
+  for (const id of fillerSections) assert.equal(await bodyHidden(id), true, `Collapse all hides ${id} during a search`);
+  assert.equal(await focusedIsClass('workflow-collapse-all'), true, 'Collapse all keeps keyboard focus across several matching sections');
+  assert.equal(await workflowSearch.inputValue(), 'filler', 'Collapse all keeps the search text across several matching sections');
+  await toggleOf('workflow-section-crew-routing').click();
+  assert.equal(await bodyHidden('workflow-section-crew-routing'), false, 'Expand reopens one matching section during a search');
+  for (const id of fillerSections.slice(1)) assert.equal(await bodyHidden(id), true, `${id} stays collapsed while another matching section is expanded`);
+  assert.equal(await focusedLabel(), 'Collapse Crew routing', 'a section toggle keeps keyboard focus during a search');
+  await workflowNav.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'workflow-search-collapse-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await workflowNav.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'workflow-search-collapse-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Clearing the search restores the saved layout: Shipping was collapsed before
+  // the search, and nothing done while searching changed that.
+  await workflowSearch.fill('');
+  assert.equal(await bodyHidden('workflow-section-shipping'), true, 'clearing the search restores the saved layout; searching did not change it');
+  await steeringRow.waitFor({ state: 'visible' });
   await workflowNav.locator('button.workflow-expand-all').click();
   await arrayRow.waitFor({ state: 'visible' });
   await steeringRow.waitFor({ state: 'visible' });
