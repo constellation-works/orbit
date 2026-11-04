@@ -575,7 +575,22 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
 /// Workspace discovery, generation admission and runtime-less surfaces share
 /// this path interpretation; it does not require the root to exist.
 pub fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {
-    paths::resolve_path_value(raw, base_dir, "root path")
+    let root = paths::resolve_path_value(raw, base_dir, "root path")?;
+    Ok(resolve_existing_root_traversal(root))
+}
+
+/// Resolve parent components of an existing root while preserving missing roots.
+pub fn resolve_existing_root_traversal(root: PathBuf) -> PathBuf {
+    // Resolve existing roots through the filesystem so `..` respects symlinks.
+    // Keep missing roots intact for initialization and its existing errors.
+    if root
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        root.canonicalize().unwrap_or(root)
+    } else {
+        root
+    }
 }
 
 /// Like `resolve_initialize_roots` but never falls through to the
