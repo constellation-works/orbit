@@ -1,7 +1,7 @@
 ---
 type: issue
 applies_to: [final_recovery]
-status: active
+status: resolved
 links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21229, ORB-21876]
 ---
 
@@ -21,7 +21,7 @@ Check whether an operator cancelled it on purpose before resuming. When a contra
 
 ## Fix task
 
-ORB-21876 (proposed, tagged `run-failure-patterns`) owns investigation and repair of the recurring Orbit-origin SIGTERM episodes. The initiating operation is unconfirmed; sender command and zero resource-limit counters do not establish why it sent the signal.
+ORB-21876 (done 2026-11-04T08:37Z, PR #8082, tagged `run-failure-patterns`) changed job-run reconcile and drain-cancel handling. Effectiveness is too early to judge: under three days have passed and no occurrence after landing has been read. The initiating operation is unconfirmed; sender command and zero resource-limit counters do not establish why it sent the signal.
 
 ## Occurrences
 
