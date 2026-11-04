@@ -66,6 +66,11 @@ const profiles = [
   },
   profile('no-diff', 'medium', 5, false, 15, 18, 0.8, 1),
 ];
+const manyProfiles = [
+  profile('change', 'low', 12, false, 30, 40, 2, 2),
+  profile('no-diff', 'medium', 5, false, 15, 18, 0.8, 1),
+  ...Array.from({ length: 45 }, (_, i) => profile(`auto-task:template-${String(i + 1).padStart(2, '0')}`, null, 4, false, 20, 24, 1, 1)),
+];
 const report = (workspace, list, last) => ({
   workspace_id: workspace,
   built_at: '2026-10-17T12:00:00Z',
@@ -88,6 +93,7 @@ function payloadFor(url) {
     case '/api/workspaces': return [
       { id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true },
       { id: 'ws_empty', name: 'empty', status: 'active', is_default: false },
+      { id: 'ws_many', name: 'many', status: 'active', is_default: false },
     ];
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
@@ -96,7 +102,7 @@ function payloadFor(url) {
       requests.push(workspace);
       const last = url.searchParams.get('last');
       histories.push(last);
-      return report(workspace, workspace === 'ws_fixture' ? profiles : [], last);
+      return report(workspace, workspace === 'ws_fixture' ? profiles : (workspace === 'ws_many' ? manyProfiles : []), last);
     }
     default: return { items: [], total: 0, limit: 100, truncated: false };
   }
@@ -144,9 +150,12 @@ try {
   pass('subtab opens the view', { hash: new URL(page.url()).hash });
 
   // Change overlays its complexities in order, each with its delivery count.
-  const classes = await body.locator('.rp-classes button').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, pressed: node.getAttribute('aria-pressed'), disabled: node.disabled })));
+  const classSelect = body.locator('.rp-class-select');
+  const classes = await classSelect.locator('option').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, value: node.value, selected: node.selected, disabled: node.disabled })));
   assert.deepEqual(classes.map(c => c.text), ['Change', 'No-diff', 'qa-sweep']);
-  assert.equal(classes[0].pressed, 'true');
+  assert.deepEqual(classes.map(c => c.value), ['change', 'no-diff', 'auto-task:qa-sweep']);
+  assert.equal(classes[0].selected, true);
+  assert.ok(classes.every(c => !c.disabled), 'every listed class is selectable');
   const cards = await body.locator('.mx-sc').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.equal(cards.length, 3);
   assert.match(cards[0], /^Low2\.0 cores.*12 deliveries · to \+30m$/);
@@ -231,13 +240,23 @@ try {
   pass('percent of host with thresholds');
 
   // No-diff has one complexity; a template is one series without complexity.
-  await body.getByRole('button', { name: 'No-diff', exact: true }).click();
+  await classSelect.selectOption('no-diff');
   assert.deepEqual(await body.locator('.mx-sc .mx-sc-label').allTextContents(), ['Medium']);
-  await body.getByRole('button', { name: 'qa-sweep', exact: true }).click();
+  await classSelect.selectOption('auto-task:qa-sweep');
   assert.deepEqual(await body.locator('.mx-sc .mx-sc-label').allTextContents(), ['qa-sweeptemplate']);
   assert.equal(await body.locator('.rp-area-cpu g.rp-s-template').count(), 1);
   await shot('resources-template-1440.png');
-  await body.getByRole('button', { name: 'Change', exact: true }).click();
+  // Keyboard: arrows step through every class in the native select.
+  await classSelect.selectOption('change');
+  await classSelect.focus();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await classSelect.inputValue(), 'no-diff', 'ArrowDown selects the next work class');
+  assert.deepEqual(await body.locator('.mx-sc .mx-sc-label').allTextContents(), ['Medium']);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await classSelect.inputValue(), 'auto-task:qa-sweep', 'ArrowDown reaches the template class');
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await classSelect.inputValue(), 'no-diff', 'ArrowUp selects the previous work class');
+  await classSelect.selectOption('change');
   const rows = await body.locator('.mx-table tbody tr').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, dim: node.classList.contains('mx-dim') })));
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map(row => row.dim), [false, false, true], 'the sparse row is dimmed');
@@ -291,6 +310,33 @@ try {
   await page.waitForFunction(() => document.querySelector('.rp-history [data-history="window"]')?.getAttribute('aria-pressed') === 'true');
   assert.equal(histories.at(-1), null);
 
+  // 47 work classes: the filter stays one bounded control, so the first
+  // result is in the first viewport at 375px and the filter is a small
+  // fraction of the viewport at 1440px; the last class stays selectable.
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.goto(`${base}?workspace=ws_many#analytics/resources`);
+  await body.locator('.mx-sc').first().waitFor();
+  const manySelect = body.locator('.rp-class-select');
+  assert.equal(await manySelect.locator('option').count(), 47, 'all 47 work classes are listed');
+  assert.ok(await manySelect.locator('option').evaluateAll(nodes => nodes.every(node => !node.disabled)), 'every one of the 47 classes is selectable');
+  const boundsAt = () => page.evaluate(() => {
+    const filter = document.querySelector('#resources-body .rp-class').getBoundingClientRect();
+    const first = document.querySelector('#resources-body .mx-sc').getBoundingClientRect();
+    return { filterHeight: filter.height, firstTop: first.top, firstBottom: first.bottom, viewport: window.innerHeight, scrollY: window.scrollY };
+  });
+  const phoneFilter = await boundsAt();
+  assert.ok(phoneFilter.filterHeight <= 40, `work class filter is bounded at 375px: ${JSON.stringify(phoneFilter)}`);
+  assert.ok(phoneFilter.scrollY === 0 && phoneFilter.firstTop >= 0 && phoneFilter.firstBottom <= phoneFilter.viewport, `first result is visible in the first 375px viewport without scrolling: ${JSON.stringify(phoneFilter)}`);
+  await page.screenshot({ path: path.join(evidence, 'resources-workclass-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const wideFilter = await boundsAt();
+  assert.ok(wideFilter.filterHeight <= wideFilter.viewport * 0.1, `work class filter is a small fraction of the 1440px viewport: ${JSON.stringify(wideFilter)}`);
+  assert.ok(wideFilter.firstBottom <= wideFilter.viewport, `first result is visible in the first 1440px viewport: ${JSON.stringify(wideFilter)}`);
+  await page.screenshot({ path: path.join(evidence, 'resources-workclass-dark-1440.png'), animations: 'disabled' });
+  await manySelect.selectOption('auto-task:template-45');
+  assert.equal(await manySelect.inputValue(), 'auto-task:template-45', 'the last of the 47 classes is selectable');
+  pass('bounded work class filter with 47 classes', { phoneFilter, wideFilter });
+
   // A workspace whose host has no profiles yet says so.
   await page.goto(`${base}?workspace=ws_empty#analytics/resources`);
   await body.getByText('No resource profiles on this host for this workspace yet').waitFor();
@@ -306,7 +352,7 @@ try {
   await shot('resources-aggregate-1440.png');
   pass('aggregate placeholder');
 
-  assert.ok(requests.every(workspace => workspace === 'ws_fixture' || workspace === 'ws_empty'), JSON.stringify(requests));
+  assert.ok(requests.every(workspace => workspace === 'ws_fixture' || workspace === 'ws_empty' || workspace === 'ws_many'), JSON.stringify(requests));
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'resources-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
   console.log(`PASS: ${assertions.length} Analytics › Resources scenarios.`);
