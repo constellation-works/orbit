@@ -1831,12 +1831,13 @@ one. From then on:
     spent). Candidate failures keep their candidate repair/requeue route,
     and inherited failures keep their base update/wait route. Other failure
     classes stop in review naming the read failure, not `waiting_for_base`.
-    Without decisive evidence, `handoff_land` stops in review after
-    `max_base_ci_cycles` (default 3) observation cycles or the existing
-    `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
+    Without decisive evidence, `handoff_land` holds the candidate in review
+    as `delivery_base_checks_pending` after `max_base_ci_cycles` (default 3)
+    observation cycles or the existing `max_wait_seconds` deadline (default
+    3600 seconds), whichever comes first.
     A cycle is one landing poll that rechecks the same failed job against the
     accepted base ancestry.
-    Its stop evidence names the check, signature and missing rerun or base
+    Its hold evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.
   - **candidate**: anything else. The landing stops for the claim's one
