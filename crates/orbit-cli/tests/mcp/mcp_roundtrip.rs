@@ -2639,7 +2639,7 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
     assert_eq!(
         missing_task,
-        json!({ "code": "not_found", "message": format!("task not found: {unknown}") }),
+        json!({ "code": "not_found", "message": format!("task not found: {unknown}; see `orbit task list` or `orbit.task.list` for valid task IDs") }),
         "a missing task is not reported as a missing artifact"
     );
     assert_eq!(refused["code"], "not_found", "{refused}");
