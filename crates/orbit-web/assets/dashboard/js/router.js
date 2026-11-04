@@ -808,6 +808,11 @@ function initTabsImpl(ctx) {
   // Native focus scrolling can leave half a button outside the phone's
   // overflow row when its centre is already visible. Reveal the whole entry
   // on keyboard focus, without changing the route or moving focus elsewhere.
+  document.querySelector(".topbar")?.addEventListener("focusin", (event) => {
+    if (event.target.matches("button:focus-visible, a:focus-visible")) {
+      event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  });
   $("tabs")?.addEventListener("focusin", (event) => {
     if (event.target.matches('.tab, .subtab')) {
       event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
