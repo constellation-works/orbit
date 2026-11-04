@@ -215,7 +215,7 @@ and expiry. Its **Notices** link opens this view. The banner hides when no open
 incident or maintenance notices remain and clears when the selected workspace
 changes.
 For posting, closing, and scope rules, see [Post and retire fleet
-notices](fleet-notices.md).
+notices](../fleet-notices/).
 
 ## Tasks
 
