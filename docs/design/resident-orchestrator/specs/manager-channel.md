@@ -77,8 +77,9 @@ comment is in the wake digest. CLI: `orbit resident relay <task> --quote … --s
 Input: `{task_id, action: pause|resume|stop|wake|takeover|release, reason: string, status_request?: bool, by_session?: string}`
 plus `orchestrator?` and `model?`.
 Output: `{task_id, action, state, effective_at, by}`, and for `stop` a `handoff` of `review`,
-`cycle_live` (finalize hands off), `already` or `refused: <why>` (the lifecycle refused the move,
-for example from `proposed`; the operator moves the assignment). `status_request` applies only to
+`cycle_live` (finalize hands off), `already` or `refused: <why>` (the lifecycle refused the move;
+the operator moves the assignment). An open assignment, including `proposed`, is walked through
+`in-progress` to `review`. `status_request` applies only to
 `wake`. CLI: `orbit resident control <task> <action> --reason … [--status-request] [--by-session …]`.
 
 Each action appends a `resident_control` history entry whose note is
