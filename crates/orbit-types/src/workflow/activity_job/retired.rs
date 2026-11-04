@@ -40,7 +40,7 @@ fn validate_step(step: &JobV2Step, asset_path: &str) -> Result<(), RetiredFeatur
         JobV2StepBody::TargetRef(target_ref) => {
             // A ref carries its own `session:` through resolution, so check it
             // here too: an unresolved ref is structural breakage the
-            // dispatcher's `UnresolvedTargetRef` surfaces separately.
+            // dispatcher's `JobValidation` surfaces separately.
             reject_session(&target_ref.session, &step.id, asset_path)
         }
         JobV2StepBody::Parallel { parallel } => {
