@@ -21,12 +21,17 @@ pub(crate) fn run() {
     orbit_core::mark_process_as_pipeline_worker_binary();
     // Provider lines are retained for `run logs --follow`, while diagnostics
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
-    let root_override = cli_root_override_from_argv();
-    orbit_common::observability::logging::init_subscriber_with_file_filter_at_root(
-        "warn",
-        "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info",
-        root_override.as_deref(),
-    );
+    let file_filter =
+        "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info";
+    if let Some(root) = cli_root_override_from_argv() {
+        orbit_common::observability::logging::init_subscriber_with_file_filter_for_explicit_cli_root(
+            "warn",
+            file_filter,
+            &root,
+        );
+    } else {
+        orbit_common::observability::logging::init_subscriber_with_file_filter("warn", file_filter);
+    }
     output::pipe::install_handler();
 
     let (mut cli, requested_format, legacy_json, header) = parse_cli();
