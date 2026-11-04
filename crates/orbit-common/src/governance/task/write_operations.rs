@@ -24,8 +24,8 @@ use super::operations::{
 };
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD, Redaction,
-    RetiredField, UnknownFields, both, cli_only, defaulted, free_text, mcp_only, preserve_empty,
-    required,
+    RetiredField, UnknownFields, both, cli_only, cli_required, defaulted, free_text, mcp_only,
+    preserve_empty, required,
 };
 
 /// The hidden wire field that carries `orbit task add` and `orbit task update`
@@ -206,7 +206,8 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             ))),
             // Not wire-required: the operator command defaults it to empty, so
             // the MCP tool's `description` requirement lives in the schema
-            // extension and `shape_input`, as `complexity`'s does.
+            // extension and `shape_input`. Complexity separately requires its
+            // CLI flag without changing its conditional wire requirement.
             free_text(defaulted(
                 both(
                     "description",
@@ -290,13 +291,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ),
                 "medium",
             ),
-            both(
+            cli_required(both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
                 "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
-                CliArgKind::flag("complexity"),
+                flag_named("complexity", "low|medium|hard|xhard"),
                 "Task complexity (low, medium, hard, or xhard). Required",
-            ),
+            )),
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),

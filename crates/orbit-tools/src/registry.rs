@@ -238,6 +238,14 @@ impl ToolRegistry {
         self.tools.get(name).map(|entry| entry.tool.schema())
     }
 
+    /// The tool's full declared input schema, including conditional requirements.
+    /// Inspection includes inactive tools, just as [`Self::get_schema`] does.
+    pub fn get_input_schema(&self, name: &str) -> Option<Value> {
+        self.tools
+            .get(name)
+            .and_then(|entry| entry.tool.input_schema())
+    }
+
     pub fn get_active_schema(&self, name: &str) -> Option<ToolSchema> {
         self.tools
             .get(name)
