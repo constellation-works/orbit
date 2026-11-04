@@ -189,9 +189,10 @@ A mandate ends when one of these is recorded, and the cycle that sees it writes 
 with `outcome: ended` and the reason:
 
 - **exit criteria met**, judged by the resident and verified against task state where the criterion
-  is checkable (all watched tasks `done`, for example). The resident moves the assignment to
-  `review` with an execution summary; the human closes it.
-- **deadline passed**. The resident stops dispatching, writes a handoff and moves to `review`.
+  is checkable (all watched tasks `done`, for example). The resident writes an execution summary
+  and a `handoff` checkpoint; `resident_finalize` moves the assignment to `review` and the human
+  closes it.
+- **deadline passed**. The resident stops dispatching and writes the same handoff.
 - **human stop** (`orbit resident control stop`, through the manager or directly). The stop then
   hands the assignment to `review`.
 - **takeover**. The human or an interactive session takes the mandate; firing stops until `release`
@@ -204,7 +205,11 @@ cycle boundary, within at most one agent budget.
 ### 4.5 Handoff to the human
 
 A handoff is the final checkpoint plus the assignment's execution summary: what was done, what is
-open, which decisions are pending, which costs recurred. The resident then sets `review`. The
+open, which decisions are pending, which costs recurred. Core, not the resident, sets `review`: the
+cycle's own run owns the task, so `resident_finalize` settles the `handoff` checkpoint, and
+`resident_observe` settles one whose finalize never ran. Reopening the assignment resumes its cycles.
+While the mandate is active core keeps the assignment `in-progress`, set when the mandate is created
+or attached and at the latest when a cycle starts: `backlog` would offer it to drains. The
 manager surfaces it in the next digest and `orbit attention` lists the review as `review_waiting`.
 
 ## 5. The cycle
@@ -344,9 +349,9 @@ pass; every write needs this run's live, unexpired cycle (else `resident_cycle_s
 `workspace`/`workspaces` input must resolve to a granted workspace or the assignment's own (else
 `resident_scope_refused`), and a right-gated write needs its right (else `resident_right_refused`,
 naming the observe-only cause when narrowed). The rights mapping is
-[mandate-and-authority](./specs/mandate-and-authority.md#rights--tools). Moving a task to `review`
-is allowed only for the assignment itself (the handoff); everything else that writes and is not in
-the mapping is refused as `resident_tool_refused`. Lint without restoration remains a read;
+[mandate-and-authority](./specs/mandate-and-authority.md#rights--tools). A cycle cannot move a task
+to `review` (`resident_handoff_by_checkpoint`): it hands off with a checkpoint
+([§4.5](#45-handoff-to-the-human)). Everything else that writes and is not in the mapping is refused as `resident_tool_refused`. Lint without restoration remains a read;
 `orbit.task.lint` with `restore_pruned: true` is refused for both a named task and a sweep, including
 through native `orbit task lint --restore-pruned`. Context maintenance has no resident right;
 operator restoration outside a cycle is unchanged.

@@ -1,8 +1,8 @@
 //! The resident cycle's deterministic steps: `resident_observe` takes the
 //! cycle lease, recovers a dead predecessor, records the cycle's grant and
 //! builds the brief; `resident_finalize` closes the cycle, synthesizing an
-//! `incomplete` checkpoint when the agent wrote none, and hands a stopped
-//! mandate's assignment off to review.
+//! `incomplete` checkpoint when the agent wrote none, and moves the assignment
+//! to review when the agent checkpointed `handoff` or the mandate was stopped.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -99,6 +99,19 @@ impl OrbitRuntime {
             return self.resident_brief(&task_id, &mandate, &grant, &history, None);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
+        // A `handoff` checkpoint whose finalize never ran (the agent step
+        // failed after writing it) or whose move was refused: it ends the
+        // cycles, so settle it instead of starting another one.
+        if (live.is_none() || due.dead_cycle.is_some())
+            && let Some(handoff) = self.settle_resident_handoff(&task_id)?
+        {
+            if let Some(dead) = &due.dead_cycle {
+                self.set_resident_live_cycle(&task_id, Some(&dead.cycle), None)?;
+            }
+            let mut result = skipped(&task_id, "handoff_settled");
+            result["handoff"] = json!(handoff);
+            return Ok(result);
+        }
         if let Some(reason) = &due.withheld {
             return Ok(skipped(&task_id, reason));
         }
@@ -178,6 +191,8 @@ impl OrbitRuntime {
             serde_json::to_string(&grant)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))?,
         )?;
+        // A mandate attached before core owned this status starts here.
+        self.activate_resident_assignment(&task_id);
         let history = self.get_task_history(&task_id)?;
         self.resident_brief(&task_id, &mandate, &grant, &history, Some(&due.notices))
     }
@@ -456,8 +471,10 @@ impl OrbitRuntime {
     }
 
     /// `resident_finalize`: close this run's cycle. A cycle that wrote no
-    /// checkpoint gets a synthesized `incomplete` one first. A run that holds
-    /// no live cycle (it skipped, or a newer cycle replaced it) changes nothing.
+    /// checkpoint gets a synthesized `incomplete` one first. A `handoff`
+    /// checkpoint moves the assignment to review, as does a stop while the
+    /// cycle ran. A run that holds no live cycle (it skipped, or a newer cycle
+    /// replaced it) changes nothing.
     pub fn finish_resident_cycle(&self, run_id: &str) -> Result<Value, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let task_id = self.resident_cycle_mandate_of_run(run_id)?;
@@ -473,8 +490,11 @@ impl OrbitRuntime {
             None,
         )?;
         self.set_resident_live_cycle(&task_id, Some(&live.cycle), None)?;
-        // A mandate stopped while this cycle ran hands off now.
-        let handoff = self.hand_off_stopped_resident(&task_id)?;
+        // The agent handed off, or the mandate was stopped while this cycle ran.
+        let handoff = match self.settle_resident_handoff(&task_id)? {
+            Some(handoff) => handoff,
+            None => self.hand_off_stopped_resident(&task_id)?,
+        };
         Ok(json!({
             "task_id": task_id,
             "finalized": true,

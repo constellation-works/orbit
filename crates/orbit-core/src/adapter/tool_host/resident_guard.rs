@@ -81,7 +81,7 @@ fn task_update_class(input: &Value) -> ResidentCallClass {
         Some("backlog") => ResidentCallClass::Gated(ResidentRight::Promote),
         Some("in-progress") => ResidentCallClass::Gated(ResidentRight::Dispatch),
         Some("done") => ResidentCallClass::Gated(ResidentRight::Merge),
-        // Handing off is moving its own assignment to review.
+        // Refused with the route that does it: a `handoff` checkpoint.
         Some("review") => ResidentCallClass::Handoff,
         Some(_) => ResidentCallClass::Refused,
     }

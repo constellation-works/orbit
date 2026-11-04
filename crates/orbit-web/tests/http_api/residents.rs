@@ -168,6 +168,7 @@ fn dashboard_creates_every_offered_assessed_complexity() {
                 let id = created["task_id"].as_str().unwrap();
                 let task = json_ok(server.get(&format!("/api/tasks/{id}{WS}")));
                 assert_eq!(task["complexity"], complexity, "{task}");
+                assert_eq!(task["status"], "in-progress", "{task}");
             }
             let refused = server.send(
                 "POST",
@@ -583,6 +584,7 @@ fn every_resident_action_runs_through_its_tool_and_is_audited() {
 
             let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
             assert_eq!(shown["state"], "ended", "{shown}");
+            assert_eq!(shown["status"], "review", "{shown}");
             assert_eq!(
                 shown["authority"]["rights"],
                 json!(["dispatch", "merge"]),
