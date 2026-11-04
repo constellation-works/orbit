@@ -1,11 +1,11 @@
 ---
 title: "Scope: bounded application approvals"
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-03
 last_validated: 2026-11-01
 status: Draft
 stage: designing
-next: "Daniel reviews the design; then file the slices in 2_design.md §9 (none filed yet)"
+next: "Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043"
 feature: application-approvals
 doc_role: scope
 type: design
@@ -15,9 +15,11 @@ tags: [application-approvals, application-authority, plugins, security]
 
 # Scope: bounded application approvals
 
-Status: proposed. This folder is the design deliverable of [ORB-20852]. It contains no
-code. Implementation waits for Daniel's review, because the design widens what an
-application credential may do. Like [human-decision-channel](../human-decision-channel/1_scope.md),
+This folder is the design deliverable of [ORB-20852]. Orbit implementation slices 1-5
+have shipped as [ORB-21038] through [ORB-21042]: schema v2, constrained entries, bound
+and read callbacks, audit fields, and payload-bound auto-task callbacks. The office
+profile remains [ORB-20363]; compatibility retirement is [ORB-21043]. Like
+[human-decision-channel](../human-decision-channel/1_scope.md),
 the folder pairs this scope doc with [2_design.md](./2_design.md), which holds the
 mechanisms, and with [4_decisions.md](./4_decisions.md). That pairing is the task's own
 acceptance shape. It deviates from the two tracks in [CONVENTIONS.md](../CONVENTIONS.md) §1
@@ -28,16 +30,19 @@ consents, once, to an application id, an expiry and a list of exact operations, 
 one workspace id and checkout root. Orbit mints a credential that the service passes to
 CLI children through an inherited descriptor. Authority lives in a SQLite row plus an
 owner-only witness file, so a modified row alone grants nothing. Every call is audited
-with an `application` object. Inside an app-bound plugin call, the plugin's Orbit
-callbacks are admitted only when they exactly equal a listed completion callback. The
+with an `application` object. Exact scopes keep their original matching; constrained
+scopes admit entries and callbacks against typed fields and current task state. The
 contract is documented for users in the installed `orbit-setup` skill reference
 `applications.md`. The admission code is `crates/orbit-runtime/src/application_consent/invocation.rs`.
 
 ## Problem
 
-The orbit-office app (the user's Today and Needs-you screens) cannot carry the user's
-approval clicks through application authority. [ORB-20363] is blocked on this, and
-friction F2026-11-006 holds the evidence. Three facts about the current code cause it:
+The original problem was that the orbit-office app (the user's Today and Needs-you
+screens) could not carry the user's approval clicks through application authority.
+Friction F2026-11-006 records that problem. The first two restrictions below describe
+the exact-only baseline at `9a03c7cc5`, before slices 1-5 shipped; they are not current
+limits on constrained scopes. Routine control remains refused. The office integration
+is still tracked by [ORB-20363].
 
 1. **Admission matches the whole input exactly.** A direct call is admitted only when a
    consented scope has the same tool and a structurally equal input
@@ -61,8 +66,9 @@ friction F2026-11-006 holds the evidence. Three facts about the current code cau
    `orbit.auto_task.mint` fall to the "does not support application consent" arm
    (`application_authority.rs:298-302`).
 
-The only way the app accepts proposals today is with `ORBIT_OPERATOR`. That is a standing
-operator grant to a login service, which ORB-20363 rules out.
+The original app integration used `ORBIT_OPERATOR` to accept proposals. That standing
+operator grant to a login service is what ORB-20363 rules out; the scoped office profile
+is the remaining integration work.
 
 ## Goal
 
@@ -131,7 +137,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
 | Limit | Value | Meaning |
 |---|---|---|
 | Consented operation size | 8 KiB per operation in a v2 consent; a v1 (exact-only) request keeps its 4 KiB total | A constrained profile for one app is about 3-5 KiB |
-| Plugin callback session record | 16 KiB (was 8 KiB) | Holds the invocation, now including its bindings |
+| Plugin callback session record | 8 KiB | Current `MAX_SESSION_BYTES` in `crates/orbit-tools/src/plugin/callback/session.rs`; the proposed 16 KiB increase has not shipped |
 | Constrained-scope consent expiry | `machine.application_consent_max_days`, default 30 days (1-365) | Renewed with `orbit application rotate` |
 | Scope rate limit | optional `rate_limit`, default none | `admissions` (1-10000) per `window_seconds` (1-86400) |
 | `text` / `token` maxima | 4096 chars / 128 bytes | Per field |
@@ -177,6 +183,10 @@ supply), so a checkout cannot lengthen the authority it is granted.
 
 ## Phasing
 
+Slices 1-5 below are implemented ([ORB-21038] through [ORB-21042]). The descriptions
+record the delivery sequence; admission no longer waits for those slices. Slice 6 is
+[ORB-20363], and slice 7 is [ORB-21043].
+
 1. **Schema and consent-time validation.** Constrained scopes parse and validate against
    the ceiling table. Admission still refuses them.
 2. **Entry admission.** Direct constrained calls (dismiss, send-back) and plugin entries
@@ -192,7 +202,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
 7. **Compatibility retirement.** After the 30-day window, the writer emits v2 records
    only.
 
-[2_design.md §9](./2_design.md#9-implementation-slices) lists them as proposed tasks.
+[2_design.md §9](./2_design.md#9-implementation-slices) records the slices and task IDs.
 
 ## Open questions
 
@@ -231,7 +241,9 @@ None open. Daniel answered all three on 2026-11-01; his words are quoted verbati
 
 - [ORB-20362] — shipped scoped, audited application authority (orbit 0.41.0).
 - [ORB-20363] — wires the office app's approval actions to application authority;
-  blocked on this design.
+  office profile integration remains outstanding.
 - [ORB-20852] — this design.
+- [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041], [ORB-21042] — shipped Orbit slices 1-5.
+- [ORB-21043] — retire v1-only consent writing after the compatibility window.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
