@@ -551,8 +551,8 @@ spec:
       has no symbols (Markdown, config, manifests, generated output, data,
       goldens). Never declare a symbol that does not exist yet.
     - Omit read-only context: tests and fixtures only consulted, and shared
-      reference docs that need at most an incidental line update. Never list
-      `docs/CONFIG.md`. The implementer still updates such docs in the same PR.
+      reference docs that need at most an incidental line update. The
+      implementer still updates such docs in the same PR.
     - Derive targets from evidence, never by sweeping a directory or crate. For
       a removal or rename, propose the files that reference the symbol
       (`rg -l '<symbol>'` at `source_revision`), not every module in the crate
