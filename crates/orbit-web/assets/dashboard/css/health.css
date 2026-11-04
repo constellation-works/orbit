@@ -851,7 +851,10 @@ td .rel-rate { font-size: 12px; }
 .rp-s-template { --mx-c: var(--mx-template); }
 .rp-card { gap: 16px; }
 .rp-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
-.rp-classes { flex-wrap: wrap; max-width: 100%; }
+.rp-class { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.rp-class-label { color: var(--fg-dim); font: 13px var(--font-sans); white-space: nowrap; }
+.rp-class-select { max-width: min(240px, 52vw); }
+.rp-class-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mx-seg-btn:disabled { color: var(--fg-disabled); cursor: default; }
 .mx-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rp-n.low { color: #f2c46d; }
