@@ -3,9 +3,9 @@ summary: "Lexical task search using SQLite FTS5 BM25."
 type: design
 title: "Task Search — Overview"
 owner: codex
-last_updated: 2026-09-23
-last_validated: 2026-11-01
-status: Accepted
+last_updated: 2026-11-04
+last_validated: 2026-11-04
+status: Implemented
 stage: shipped
 next: "—"
 feature: orbit-search
@@ -13,7 +13,20 @@ doc_role: overview
 tags: ["orbit-search"]
 ---
 
-# Task search
+# Task Search — Overview
+
+Orbit's lexical task search is shipped. [ORB-12742] removed the semantic
+stack while retaining SQLite FTS5 BM25; [ORB-11027] delivered cross-workspace
+search, and [ORB-14596] added the labelled partial-match fill. No committed
+implementation slice remains pending.
+
+## 1. Motivation
+
+Task lookup and duplicate checks need ranked, non-adjacent word matching without
+an inference service. The index is disposable: task records remain authoritative,
+and a rebuild restores search coverage after an import or restore.
+
+## 2. Core Concepts
 
 `orbit-search` owns a regenerable SQLite index of task text. Task mutations
 synchronously replace the title, description, acceptance criteria, plan, and
@@ -35,8 +48,10 @@ ordered by the number of query terms matched in the best chunk, then BM25 and
 chunk id. Term counts use FTS5 itself, preserving its token and phrase semantics.
 The CLI MATCH column and `orbit.search`'s `matched_by` labels identify partial
 hits and their counts (for example `["partial", "terms:3/6"]`). A full page skips
-the OR pass. Frictions retain case-insensitive substring matching, requiring
-adjacent words. Empty multi-word results and partial task results explain these
+the OR pass. [ORB-14790] bounded that pass to one query of at most 20 ranked
+chunks per requested result; partial matches beyond that window are not offered
+when filters reject the window. Frictions retain case-insensitive substring
+matching, requiring adjacent words. Empty multi-word results and partial task results explain these
 per-kind semantics in `notes`.
 Federation interleaves per-workspace rankings and attributes each hit.
 
@@ -48,3 +63,25 @@ See [upgrade guidance](../../runbooks/upgrades.md#lexical-search-migration).
 
 The public query mode is lexical. There is no inference backend, download,
 background worker, or separate executable. Friction retrieval is unchanged.
+
+## 3. At a Glance
+
+All rows describe landed behavior at the current integration checkout.
+
+| Concern | Current source | Task |
+|---------|----------------|------|
+| Lexical index, transactional replacement/rebuild, chunking and legacy-schema migration | [lexical/](../../../crates/orbit-search/src/lexical/) | [ORB-12742] removed the semantic stack and retained lexical search |
+| Ranked task candidates, bundle supplementation and partial-match labels | [search/candidates.rs](../../../crates/orbit-core/src/application/search/candidates.rs) | [ORB-14596] added partial matches; [ORB-14790] bounded their scan |
+| Workspace-scoped fan-out and interleaving | [search/federated.rs](../../../crates/orbit-core/src/application/search/federated.rs) | [ORB-11027] delivered federated search |
+| Reindex and unified task/friction search entry points | [search/runtime.rs](../../../crates/orbit-core/src/application/search/runtime.rs) | [ORB-12742] retained the lexical query and rebuild surfaces |
+| CLI/MCP operation declaration | [governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] migrated search to the operation registry |
+
+## Task References
+
+- [ORB-11027] — delivered cross-workspace federated search with workspace attribution.
+- [ORB-12742] — removed semantic inference and retained synchronously maintained FTS5 task search.
+- [ORB-14596] — added partial task matches and accurate per-kind query notes.
+- [ORB-14790] — bounded the partial-match scan without changing full-match priority.
+- [ORB-15942] — derived the search CLI and tool surfaces from the operation registry.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

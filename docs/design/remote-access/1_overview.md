@@ -1,9 +1,9 @@
 ---
 title: "Remote Access — Overview"
 owner: codex
-last_updated: 2026-10-28
+last_updated: 2026-11-04
 last_validated: 2026-11-01
-status: Accepted
+status: Implemented
 stage: shipped
 next: "—"
 feature: remote-access
@@ -25,6 +25,12 @@ Remote access has three Web-owned surfaces:
 - `/api/on/<host>/<path>` on a serving dashboard forwards a request to a registered host's own dashboard, over an SSH forward that dashboard opens on demand.
 
 Both commands are runtime-free CLI entry points, so they can start outside a workspace. The remote machine remains authoritative for every workspace and mutation it serves.
+
+The committed scope is shipped. [ORB-10708] delivered attach-first connection;
+[ORB-14679] delivered the on-demand host forward. [ORB-16130] repaired its
+initial port-bind collision handling, and [ORB-18488] added optional browser
+session tickets. Background reconnect and replication remain vision, not pending
+implementation slices.
 
 ## Multi-workspace Web state
 
@@ -51,3 +57,20 @@ Orbit Web has no per-user login and refuses non-loopback binds. Its Origin check
 The Web API includes mutations. A forwarded client can use whatever server-wide authority is enabled on the remote process; if it was started with operator capability, anyone on that tunnel can invoke governed writes. `orbit web connect` passes `--operator` by default unless `--no-operator` is set. Through the host forward, the serving dashboard passes its operator capability only when it starts a remote dashboard; an already-running dashboard keeps its own setting. The serving host's SSH identity limits which registered hosts it can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
 
 See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for evolution gates, [4_decisions.md](./4_decisions.md) for current choices, [specs/ssh-tunnel.md](./specs/ssh-tunnel.md) for the tunnel contract, and [specs/host-forward.md](./specs/host-forward.md) for the host forward.
+
+## At a Glance
+
+| Concern | Current source | Delivery |
+|---------|----------------|----------|
+| Attach-first foreground connection | [connect.rs](../../../crates/orbit-web/src/connect.rs), [ssh_tunnel.rs](../../../crates/orbit-web/src/ssh_tunnel.rs) | [ORB-10708] delivered attach before spawn |
+| Registered-host forwarding and identity checks | [api/forward.rs](../../../crates/orbit-web/src/api/forward.rs), [host_tunnels.rs](../../../crates/orbit-web/src/host_tunnels.rs) | [ORB-14679] delivered the host forward; [ORB-16130] repaired initial bind collisions |
+| Optional browser-session ticket acquisition over SSH | [connect.rs](../../../crates/orbit-web/src/connect.rs), [browser_session.rs](../../../crates/orbit-web/src/browser_session.rs) | [ORB-18488] delivered browser credentials without changing existing API authorization |
+
+## Task References
+
+- [ORB-10708] — made remote connection attach before starting a dashboard.
+- [ORB-14679] — delivered on-demand forwarding to registered hosts with identity and authority checks.
+- [ORB-16130] — repaired initial host-forward port-bind races while preserving child ownership.
+- [ORB-18488] — added optional browser-session credentials and ticket acquisition through SSH.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
