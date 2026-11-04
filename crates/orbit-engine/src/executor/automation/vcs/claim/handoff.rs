@@ -200,7 +200,16 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
 /// or `None` when the claim's visual review did not apply (or the step was
 /// skipped for a no-diff candidate).
 fn handoff_visual(input: &Value) -> Result<Option<HandoffArtifactRef>, OrbitError> {
-    let Some(visual) = input.get("visual").filter(|visual| !visual.is_null()) else {
+    let Some(visual) = input
+        .get("visual_resolution")
+        .filter(|value| {
+            value
+                .get("capture_artifact")
+                .and_then(Value::as_str)
+                .is_some()
+        })
+        .or_else(|| input.get("visual").filter(|visual| !visual.is_null()))
+    else {
         return Ok(None);
     };
     if visual.get("applies").and_then(Value::as_bool) != Some(true) {

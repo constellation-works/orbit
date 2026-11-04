@@ -628,8 +628,9 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
 /// carries the settled verdict as before-landing evidence. Without a fix the
 /// pre-publication validation is carried through unchanged.
 fn a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled() {
-    for fix in [true, false] {
-        let host = LeafHost::approving(fix);
+    for (fix, visual) in [(true, false), (false, false), (true, true)] {
+        let mut host = LeafHost::approving(fix);
+        host.visual = visual;
         let audit_root = tempfile::tempdir().expect("audit tempdir");
         let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), RUN);
         let result = execute_job_with_resume(
@@ -677,6 +678,29 @@ fn a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled() {
         let pushes = inputs_of(&calls, "test_stub_git_push");
         let handoff = &inputs_of(&calls, "test_stub_claim_handoff")[0];
         assert_eq!(handoff["review_evidence"], Value::Null);
+        assert_eq!(handoff["visual_resolution"]["applies"], visual);
+        if visual {
+            assert_eq!(
+                handoff["visual_resolution"]["capture_artifact"],
+                "visual/resolution.json"
+            );
+            let resolved = actions
+                .iter()
+                .position(|action| *action == "test_stub_visual_recapture")
+                .unwrap();
+            let settled = actions
+                .iter()
+                .rposition(|action| *action == "test_stub_review_gate_settle")
+                .unwrap();
+            let handed = actions
+                .iter()
+                .position(|action| *action == "test_stub_claim_handoff")
+                .unwrap();
+            assert!(
+                settled < resolved && resolved < handed,
+                "final visual proof follows review and reaches handoff: {actions:?}"
+            );
+        }
         if fix {
             assert_eq!(pin["prevalidated"]["tested_head"], "landing-fix");
             assert_eq!(pushes.len(), 2);
@@ -759,6 +783,7 @@ fn shipped_leaf() -> orbit_types::workflow::JobV2 {
 /// reviewer commits a fix when `fix` is set.
 struct LeafHost {
     fix: bool,
+    visual: bool,
     /// Decision the before-landing admit stub returns.
     landing_decision: &'static str,
     /// The reviewer stub fails if called.
@@ -770,6 +795,7 @@ impl LeafHost {
     fn approving(fix: bool) -> Self {
         Self {
             fix,
+            visual: false,
             landing_decision: "admitted",
             reviewer_fails: false,
             calls: Mutex::default(),
@@ -780,6 +806,7 @@ impl LeafHost {
     fn landing(decision: &'static str, reviewer_fails: bool) -> Self {
         Self {
             fix: false,
+            visual: false,
             landing_decision: decision,
             reviewer_fails,
             calls: Mutex::default(),
@@ -902,7 +929,14 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             }),
             "test_stub_pr_open" => json!({ "pr_number": "41" }),
             "test_stub_claim_handoff" => json!({ "handed_off": true, "merged": false }),
-            "test_stub_visual_capture" => json!({ "applies": false, "captures": [] }),
+            "test_stub_visual_capture" => {
+                json!({ "applies": self.visual, "captures": [], "capture_artifact":"visual/capture.json", "capture_sha256":"1".repeat(64) })
+            }
+            "test_stub_visual_checks" | "test_stub_visual_settle" => json!({"applies":self.visual}),
+            "test_stub_visual_recapture" if self.visual => {
+                json!({"applies":true,"resolved":[],"capture_artifact":"visual/resolution.json","capture_sha256":"2".repeat(64)})
+            }
+            "test_stub_visual_recapture" => json!({ "applies": false, "resolved": [] }),
             "test_stub_visual_review_prepare" => {
                 json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
             }

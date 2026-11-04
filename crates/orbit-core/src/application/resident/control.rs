@@ -344,7 +344,8 @@ impl OrbitRuntime {
     /// retrying this handoff recovers a stop whose cycle never finalized.
     /// Returns what happened: `review`, `cycle_live`, `already`,
     /// `not_stopped` or `refused: <why>` when the lifecycle does not allow
-    /// the move (a `proposed` assignment, say); the operator moves it then.
+    /// the move. An assignment still `proposed` is walked through
+    /// `in-progress`, so a stop always settles it.
     pub(crate) fn hand_off_stopped_resident(&self, task_id: &str) -> Result<String, OrbitError> {
         self.hand_off_stopped_resident_at(task_id, Utc::now())
     }
@@ -388,20 +389,7 @@ impl OrbitRuntime {
             at.to_rfc3339(),
             entry.reason
         );
-        // Deterministic machinery: the lifecycle table still applies, but the
-        // stopping cycle's own run (finalize runs inside it) must not block it.
-        match self.update_task_as_system(
-            task_id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Review),
-                execution_summary: Some(summary),
-                ..Default::default()
-            },
-            None,
-        ) {
-            Ok(_) => Ok("review".into()),
-            Err(error) => Ok(format!("refused: {error}")),
-        }
+        self.move_resident_assignment_to_review(task_id, Some(summary))
     }
 
     /// `orbit.resident.relay`: write one `resident.answer` comment carrying

@@ -26,7 +26,9 @@ use crate::OrbitRuntime;
 use crate::application::plugin::{
     PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin, set_plugin_secret,
 };
-use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
+use crate::runtime::plugin::broker::{
+    BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch, BrokerRequest, PeerAnchor, PluginBroker,
+};
 use crate::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 
 const RUN_ID: &str = "jrun-broker-run";
@@ -487,5 +489,341 @@ fn an_explorer_submission_reaches_explorer_admission_for_the_served_run() {
             .as_str()
             .is_some_and(|message| message.contains("does not wait")),
         "a wait stays with the caller and never holds the broker connection: {waiting}"
+    );
+}
+
+/// A cycle's `dispatch` grant on `fixture`'s workspace, as a served run record
+/// whose worktree is this process's cwd (a nested caller sends it). The run is
+/// a live `resident_cycle_pipeline` run holding `rights`.
+fn resident_cycle_run(
+    fixture: &Fixture,
+    runtime: &OrbitRuntime,
+    rights: &[&str],
+) -> PluginBrokerRun {
+    use crate::application::task::{TaskAddParams, TaskUpdateParams};
+    use orbit_types::task::TaskArtifact;
+    use orbit_types::tool::{McpCapability, ToolSessionContext};
+
+    let mandate = runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: broker - sol".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .expect("assignment")
+        .id
+        .to_string();
+    let workspace = runtime.workspace_id().expect("workspace id");
+    let body = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Ship the leaf",
+        "exit_criteria": ["The leaf is done"],
+        "workspaces": [workspace],
+        "watch": {"tasks": [], "tags": []},
+        "crew": "sol",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    runtime
+        .update_task_as_human(
+            &mandate,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    body.to_string(),
+                )],
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .expect("mandate");
+    runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.resident.grant",
+            json!({"task_id": mandate, "add": rights, "workspaces": [workspace]}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext {
+                effective_capabilities: [McpCapability::Operator].into(),
+                ..Default::default()
+            },
+        )
+        .expect("grant");
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().expect("store"),
+        workspace,
+    );
+    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(job_run) = jobs
+        .insert_automation_job_run(
+            "resident_cycle_pipeline",
+            json!({"task_ids": [mandate]}),
+            &format!("broker-{}", rights.join("-")),
+        )
+        .expect("cycle run")
+    else {
+        panic!("a fresh run key admits its run");
+    };
+    runtime
+        .begin_resident_cycle(&job_run.run_id, chrono::Utc::now())
+        .expect("begin cycle");
+    let mut run = fixture.run(&[BROKERED_RESIDENT_SHIP_TOOL]);
+    run.job_run_id = Some(job_run.run_id);
+    run.task_id = Some(mandate);
+    run.activity_name = "resident_cycle".to_string();
+    run.caller.worktree = std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .expect("test cwd");
+    run
+}
+
+/// A sandboxed cycle's ship reaches the host through its broker [ORB-21968], so
+/// the leaf's worker starts beside the cycle's read-only sandbox. The broker
+/// serves a cycle's run alone, for the run it was started for, and the cycle
+/// guard still decides the right there.
+#[test]
+fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime();
+    let ship = json!({"task_ids": ["ORB-1"], "mode": "local", "model": "codex"});
+
+    // A run that is no cycle gets no ship, whatever the request says.
+    let serving = serve(&fixture, fixture.run(&[BROKERED_RESIDENT_SHIP_TOOL]));
+    let refused = serving.call(request(
+        BROKERED_RESIDENT_SHIP_TOOL,
+        ship.clone(),
+        &fixture.worktree,
+    ));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("only a resident cycle's run")),
+        "{refused}"
+    );
+
+    // The nested caller forwards, as the cycle's process envelope names it.
+    let dispatching = resident_cycle_run(&fixture, &runtime, &["dispatch"]);
+    let served = resident_cycle_run(&fixture, &runtime, &["promote"]);
+    let cycle = served.job_run_id.clone().expect("cycle run");
+    let serving = serve(&fixture, served);
+    // SAFETY: the fixture's scoped environment holds the process-wide env
+    // lock until it drops, and restores these variables when it does.
+    unsafe {
+        std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
+        std::env::set_var(
+            crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
+            "1",
+        );
+        std::env::set_var("ORBIT_RUN_ID", &cycle);
+    }
+    let error = runtime
+        .execute_tool_command_dispatch(
+            BROKERED_RESIDENT_SHIP_TOOL,
+            ship,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect_err("promote does not dispatch")
+        .to_string();
+    assert!(error.contains("resident_right_refused"), "{error}");
+    let rows = serving.rows(BROKERED_RESIDENT_SHIP_TOOL);
+    assert_eq!(rows.len(), 2, "the broker audits each call: {rows:?}");
+    assert!(rows.iter().all(|row| row.brokered), "{rows:?}");
+
+    // With the right, the guard admits it and the submission itself judges the
+    // request: here, that the named task does not exist.
+    let cycle = dispatching.job_run_id.clone().expect("cycle run");
+    let serving = serve(&fixture, dispatching);
+    // SAFETY: as above.
+    unsafe {
+        std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
+        std::env::set_var("ORBIT_RUN_ID", &cycle);
+    }
+    let error = runtime
+        .execute_tool_command_dispatch(
+            BROKERED_RESIDENT_SHIP_TOOL,
+            json!({"task_ids": ["ORB-1"], "mode": "local", "model": "codex"}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect_err("the named task does not exist")
+        .to_string();
+    assert!(
+        !error.contains("refused") && !error.contains("capability denied"),
+        "the grant admits the ship: {error}"
+    );
+    assert!(error.contains("ORB-1"), "{error}");
+}
+
+/// The sandbox's view of a served run: `.orbit` is read-only for the nested
+/// caller, as the cycle's `--ro-bind` makes it, and writable only while the
+/// broker's host process runs a call.
+struct HostWritableOrbit {
+    dispatch: RunDispatch,
+    orbit_dir: PathBuf,
+}
+
+impl HostWritableOrbit {
+    fn set_mode(orbit_dir: &Path, mode: u32) {
+        std::fs::set_permissions(
+            orbit_dir,
+            std::os::unix::fs::PermissionsExt::from_mode(mode),
+        )
+        .expect("chmod .orbit");
+    }
+}
+
+impl BrokerDispatch for HostWritableOrbit {
+    fn call(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Value, OrbitError> {
+        Self::set_mode(&self.orbit_dir, 0o755);
+        let result = self.dispatch.call(request, peer_pid, cancelled);
+        Self::set_mode(&self.orbit_dir, 0o555);
+        result
+    }
+}
+
+/// Restores `.orbit` so the fixture's tree can be removed, however a test ends.
+struct RestoreOrbitMode(PathBuf);
+
+impl Drop for RestoreOrbitMode {
+    fn drop(&mut self) {
+        HostWritableOrbit::set_mode(&self.0, 0o755);
+    }
+}
+
+/// A sandboxed cycle's raise takes its workspace raise lock on the host, through
+/// its broker: the nested process cannot create that lock on its read-only
+/// `.orbit`, which left a resident's escalation as a plain comment. The host
+/// still judges the target, and files the request under the run's own identity.
+#[test]
+fn a_sandboxed_resident_raise_creates_the_request_through_its_broker() {
+    use crate::application::task::TaskAddParams;
+    use orbit_types::task::DecisionGate;
+    use orbit_types::workflow::ActivityToolDenyPolicy;
+
+    const RAISE: &str = "orbit.decision.raise";
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.workspace_root.join("config.toml"),
+        "[crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n",
+    )
+    .expect("human crew");
+    let runtime = fixture.runtime();
+    let raise_on = |crew: &str, title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Which export format ships first?".into(),
+                acceptance_criteria: vec!["Decided".into()],
+                crew: Some(crew.into()),
+                ..Default::default()
+            })
+            .expect("task")
+            .id
+            .to_string()
+    };
+    let human_task = raise_on("dk", "Decide the export format");
+    let agent_task = raise_on("sol", "Build the export");
+    let workspace = runtime.workspace_id().expect("workspace id");
+    let raise = |task_id: &str| {
+        json!({
+            "workspace": workspace,
+            "task_id": task_id,
+            // The run record names the filer, whatever the input claims.
+            "model": "gemini",
+            "question": "Which export format ships first?",
+            "options": [
+                {"label": "CSV", "consequence": "The export writes CSV.", "recommended": true},
+                {"label": "JSON", "consequence": "The export writes JSON."},
+            ],
+        })
+    };
+
+    // Served as the step runner serves a cycle: the activity's deny list, with
+    // the nested caller named by its process envelope.
+    let mut cycle = resident_cycle_run(&fixture, &runtime, &["promote"]);
+    cycle.workspace = Some(workspace.clone());
+    cycle.allowed_tools = Vec::new();
+    cycle.tool_deny_policy = Some(ActivityToolDenyPolicy {
+        activity: "resident_cycle".to_string(),
+        disallow_list: vec!["orbit.command.exec".to_string()],
+    });
+    let run_id = cycle.job_run_id.clone().expect("cycle run");
+    let dispatch = Arc::new(HostWritableOrbit {
+        dispatch: RunDispatch::new(runtime.clone(), cycle),
+        orbit_dir: fixture.workspace_root.clone(),
+    });
+    let broker = PluginBroker::start(&fixture.global_root, RUN_ID, dispatch).expect("start broker");
+    broker.bind_anchor(PeerAnchor::Ancestor(
+        process_start_key(std::process::id()).expect("own start key"),
+    ));
+    let serving = Serving {
+        broker,
+        runtime: runtime.clone(),
+    };
+    // SAFETY: the fixture's scoped environment holds the process-wide env lock
+    // until it drops, and restores these variables when it does.
+    unsafe {
+        std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
+        std::env::set_var(
+            crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
+            "1",
+        );
+        std::env::set_var("ORBIT_RUN_ID", &run_id);
+    }
+    let restore = RestoreOrbitMode(fixture.workspace_root.clone());
+    HostWritableOrbit::set_mode(&fixture.workspace_root, 0o555);
+
+    let raised = runtime
+        .execute_tool_command_dispatch(RAISE, raise(&human_task), None, None, ToolEntryPoint::Mcp)
+        .expect("the host raises the request")
+        .value;
+
+    assert_eq!(raised["task_id"], human_task.as_str(), "{raised}");
+    assert!(raised["resident_action_key"].is_string(), "{raised}");
+    let requests = runtime
+        .list_decision_requests(Some(DecisionGate::AgentRequest), Some(&human_task), false)
+        .expect("decision requests");
+    assert_eq!(
+        requests.len(),
+        1,
+        "the operator's views show it: {requests:?}"
+    );
+    assert_eq!(requests[0].filer.as_deref(), Some("codex"));
+    let rows = serving.rows(RAISE);
+    assert_eq!(rows[0].status, AuditEventStatus::Success, "{rows:?}");
+    assert!(rows[0].brokered, "the broker ran the raise: {rows:?}");
+
+    // The host applies the same refusal to a task no human crew holds.
+    let error = runtime
+        .execute_tool_command_dispatch(RAISE, raise(&agent_task), None, None, ToolEntryPoint::Mcp)
+        .expect_err("not a human-crew task")
+        .to_string();
+    assert!(error.contains("not assigned to a human crew"), "{error}");
+    assert!(
+        runtime
+            .list_decision_requests(Some(DecisionGate::AgentRequest), Some(&agent_task), false)
+            .expect("decision requests")
+            .is_empty(),
+        "nothing was written"
+    );
+
+    // A run that is no cycle cannot raise through a broker.
+    drop(restore);
+    let mut not_a_cycle = fixture.run(&[RAISE]);
+    not_a_cycle.workspace = Some(workspace.clone());
+    let serving = serve(&fixture, not_a_cycle);
+    let refused = serving.call(request(RAISE, raise(&human_task), &fixture.worktree));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("only a resident cycle's run")),
+        "{refused}"
     );
 }

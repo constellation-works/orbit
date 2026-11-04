@@ -5,8 +5,8 @@ use orbit_config::CrewPerformanceType;
 use serde_json::{Value, json};
 
 use super::performance::{
-    Fleet, MIN_TIER_TASKS, TERMS, admitted_tags, compute_tallies, configured_type, path_prefixes,
-    tier, work_by_row,
+    self, Fleet, MIN_TIER_TASKS, TERMS, admitted_tags, compute_tallies, configured_type,
+    path_prefixes, tier, work_by_row,
 };
 use crate::application::agents::attribution::{Charge, Credit};
 use crate::application::agents::facts::TaskFacts;
@@ -15,8 +15,9 @@ use crate::application::agents::{AgentFacts, ExecutionScope};
 
 /// One row per implemented task and the row (crew, model) that worked it:
 /// the task's configured type, its tags as admitted, its context-file
-/// selectors and top-level path prefixes, and its per-term counts under
-/// that row. Summed per `(crew, model, tier, type)`, the counts reproduce
+/// selectors and top-level path prefixes, its reviewed population (0 or 1),
+/// and its per-term counts under that row. Summed per `(crew, model, tier,
+/// type)`, the counts and reviewed population reproduce
 /// the by-type cells' `n` and, through [`raw_against`] with the same fleet
 /// references, their `raw` values. Read-only: it only slices the scan the
 /// scorecard already made.
@@ -58,6 +59,7 @@ pub(in crate::application::agents::roles) fn per_task_rows(
                 "context_files": task.context_files,
                 "path_prefixes": path_prefixes(task),
                 "counts": counts,
+                "reviewed_units": usize::from(performance::first_implementer_review(task, row, since).is_some()),
             }));
         }
     }
@@ -82,6 +84,7 @@ fn raw_against(
     tallies: &BTreeMap<&'static str, Tally<'_>>,
     tasks: &[&TaskFacts],
     fleet: &Fleet,
+    reviewed: usize,
 ) -> Option<f64> {
     if tasks.is_empty() || fleet.units == 0 {
         return None;
@@ -90,8 +93,16 @@ fn raw_against(
     let mut raw = 100.0;
     for term in TERMS {
         let actual = tallies.get(term.key).map_or(0.0, Tally::count);
-        let rate = fleet.counts.get(term.key).copied().unwrap_or(0.0) / fleet.units as f64;
-        raw += term.weight * (actual - rate * n) * 100.0 / n;
+        let (units, fleet_units) = if performance::is_implementer_review_term(term.key) {
+            (reviewed as f64, fleet.reviewed_units)
+        } else {
+            (n, fleet.units)
+        };
+        if units == 0.0 || fleet_units == 0 {
+            continue;
+        }
+        let rate = fleet.counts.get(term.key).copied().unwrap_or(0.0) / fleet_units as f64;
+        raw += term.weight * (actual / units - rate) * 100.0;
     }
     Some(raw)
 }
@@ -123,13 +134,16 @@ pub(in crate::application::agents::roles) fn by_type_cells(
     let task_type = |task: &TaskFacts| configured_type(task, since, types);
     let mut fleet_tier: BTreeMap<&str, Fleet> = BTreeMap::new();
     let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
-    for tasks in work.values() {
+    for (row, tasks) in &work {
         for task in tasks {
-            fleet_tier.entry(tier(task)).or_default().units += 1;
-            fleet_cell
-                .entry((tier(task), task_type(task)))
-                .or_default()
-                .units += 1;
+            let reviewed =
+                usize::from(performance::first_implementer_review(task, row, since).is_some());
+            let tier_fleet = fleet_tier.entry(tier(task)).or_default();
+            tier_fleet.units += 1;
+            tier_fleet.reviewed_units += reviewed;
+            let cell_fleet = fleet_cell.entry((tier(task), task_type(task))).or_default();
+            cell_fleet.units += 1;
+            cell_fleet.reviewed_units += reviewed;
         }
     }
     for (row, tasks) in &work {
@@ -170,7 +184,17 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 tier_tasks.get(tier_name).cloned().unwrap_or_default();
             let n_tier = tier_subset.len();
             let tier_tallies = compute_tallies(row, &tier_subset, &charges, &credits, since);
-            let raw_tier = raw_against(&tier_tallies, &tier_subset, &fleet_tier[tier_name]);
+            let raw_tier = raw_against(
+                &tier_tallies,
+                &tier_subset,
+                &fleet_tier[tier_name],
+                tier_subset
+                    .iter()
+                    .filter(|task| {
+                        performance::first_implementer_review(task, row, since).is_some()
+                    })
+                    .count(),
+            );
             let crew_mean = raw_tier.map_or(100.0, |raw| {
                 (n_tier as f64 * raw + CELL_SHRINKAGE * 100.0) / (n_tier as f64 + CELL_SHRINKAGE)
             });
@@ -190,7 +214,18 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                     &fleet_tier[tier_name]
                 };
                 let cell_tallies = compute_tallies(row, &subset, &charges, &credits, since);
-                let raw = raw_against(&cell_tallies, &subset, reference).unwrap_or(crew_mean);
+                let raw = raw_against(
+                    &cell_tallies,
+                    &subset,
+                    reference,
+                    subset
+                        .iter()
+                        .filter(|task| {
+                            performance::first_implementer_review(task, row, since).is_some()
+                        })
+                        .count(),
+                )
+                .unwrap_or(crew_mean);
                 let score =
                     (n as f64 * raw + CELL_SHRINKAGE * crew_mean) / (n as f64 + CELL_SHRINKAGE);
                 cells.push(json!({

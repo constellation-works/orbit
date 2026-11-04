@@ -1,9 +1,11 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
 //! host's `gh` credentials, one of a claimed worker's owner calls that need
-//! the claim's owner route, or a read-only explorer submission whose sandbox
-//! cannot nest inside the caller's [ORB-20566] — through the audited dispatch,
-//! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
+//! the claim's owner route, a read-only explorer submission whose sandbox
+//! cannot nest inside the caller's [ORB-20566], a resident cycle's ship whose
+//! leaf worker must not start inside the cycle's sandbox, or a resident cycle's
+//! decision raise whose lock that sandbox mounts read-only — through the audited
+//! dispatch, under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
 //! identity, filesystem profile and program policy — comes from the
@@ -16,8 +18,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::governance::decision::DecisionVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_engine::PluginBrokerRun;
-use orbit_tools::{ActivityBinding, ToolContext};
+use orbit_tools::{ActivityBinding, OrbitBuiltinAction, ToolContext};
 use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::tool_allowed;
@@ -26,12 +30,22 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::runtime::authorization::ManagedRunCaller;
 use crate::runtime::plugin::broker::{
-    BROKERED_EXPLORER_TOOL, BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
+    BROKERED_EXPLORER_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
+    BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
 use super::execute::{BrokeredAudit, ToolEntryPoint};
+
+/// The action a resident cycle's brokered built-in runs on the tool host.
+fn brokered_resident_action(tool: &str) -> Option<OrbitBuiltinAction> {
+    match tool {
+        BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
+        BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
+        _ => None,
+    }
+}
 
 /// Executes a broker's requests for the one run it serves.
 pub(crate) struct RunDispatch {
@@ -242,6 +256,45 @@ impl BrokerDispatch for RunDispatch {
                             actor.as_deref(),
                         );
                     }
+                    // A resident cycle's leaf run starts on the host, and its
+                    // decision raise locks and writes there. Only a run the
+                    // host dispatched as a cycle gets here; the tool host's
+                    // cycle guard then decides its live grant, any right the
+                    // call needs and the workspace, for that run and never one
+                    // the request names. The filer is the run's identity too.
+                    if let Some(action) = brokered_resident_action(&tool) {
+                        self.runtime.check_tool_enabled(&tool)?;
+                        self.runtime.ensure_tool_agent_facing(&tool)?;
+                        self.refuse_outside_activity_policy(&tool)?;
+                        if let Some(policy) = &run.tool_deny_policy
+                            && policy.denies(&tool)
+                        {
+                            return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
+                        }
+                        let run_id = run
+                            .job_run_id
+                            .as_deref()
+                            .filter(|run_id| self.runtime.is_resident_cycle_run(run_id))
+                            .ok_or_else(|| {
+                                OrbitError::CapabilityDenied(format!(
+                                    "only a resident cycle's run may call '{tool}' through \
+                                         its broker"
+                                ))
+                            })?;
+                        return crate::adapter::tool_host::build_orbit_tool_host(
+                            &self.runtime,
+                            run.task_id.clone(),
+                            Some(run_id.to_string()),
+                            session_context,
+                        )
+                        .execute(
+                            action,
+                            input,
+                            run.agent_name.clone(),
+                            run.model_name.clone(),
+                            None,
+                        );
+                    }
                     // A built-in tool is answered by the nested `orbit`
                     // itself; the broker exists to run plugin backends and
                     // the closed set of reads that need the host's `gh`
@@ -251,8 +304,9 @@ impl BrokerDispatch for RunDispatch {
                     {
                         return Err(OrbitError::PolicyDenied(format!(
                             "the plugin broker runs plugin tools, the read-only github.* tools, \
-                             a claimed worker's owner calls and explorer submissions only; \
-                             '{tool}' is none of these"
+                             a claimed worker's owner calls, explorer submissions and a \
+                             resident cycle's ship and decision raise only; '{tool}' is none of \
+                             these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;

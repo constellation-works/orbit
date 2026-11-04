@@ -681,6 +681,17 @@ spec:
         revalidate: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }}"
         implementation: "{{ steps.implement_one.output }}"
 
+    # Resolve on the exact final head after either review layer. Run for
+    # every diff leaf so handoff can read this output in off/shadow mode too;
+    # those modes return applies:false and keep their capture-only handoff.
+    - id: visual_recapture
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
     - id: landing_push
       when: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }} == true"
       target: activity:git_push
@@ -733,6 +744,7 @@ spec:
         # The capture of record, already attached on the owner, or
         # `applies: false` when the claim captured no visual review contract.
         visual: "{{ steps.visual_capture.output }}"
+        visual_resolution: "{{ steps.visual_recapture.output }}"
 
     # No branch publication, PR or reviewer is needed for a verified clean base.
     # [ORB-14791] A `no-diff-expected` review reaches here with no report: the

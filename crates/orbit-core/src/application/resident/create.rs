@@ -7,7 +7,8 @@
 //! comes here instead: the draft is judged first by
 //! [`OrbitRuntime::check_resident_mandate`], the rule every mandate read
 //! applies, and nothing is written when it fails. The authority starts
-//! empty; widening stays on `orbit.resident.grant`.
+//! empty; widening stays on `orbit.resident.grant`. The assignment leaves
+//! here `in-progress`, as an attached mandate leaves the terminal path.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskOrigin};
@@ -33,7 +34,7 @@ pub struct ResidentMandateCreateParams {
 impl OrbitRuntime {
     /// Create a mandate's assignment and attach its artifact. A draft the
     /// mandate rules refuse fails with their message and writes nothing.
-    /// Returns `{task_id, mandate}`.
+    /// Returns `{task_id, status, mandate}`.
     pub fn create_resident_mandate(
         &self,
         params: ResidentMandateCreateParams,
@@ -77,6 +78,9 @@ impl OrbitRuntime {
                     task.id
                 ))
             })?;
-        Ok(json!({"task_id": task.id, "mandate": mandate}))
+        let status = self
+            .activate_resident_assignment(&task.id)
+            .map_or(task.status, |activated| activated.status);
+        Ok(json!({"task_id": task.id, "status": status, "mandate": mandate}))
     }
 }

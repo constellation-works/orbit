@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 
 use crate::application::agents::attribution::{Charge, Credit, Owner, row_key};
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
-use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
+use crate::application::agents::score::{
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+};
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope};
 
 pub(super) const TERMS: &[Term] = &[
@@ -61,6 +63,17 @@ pub(super) const TERMS: &[Term] = &[
         group: "problem",
     },
 ];
+
+/// Terms whose counts and expectations are rated per reviewed delivery.
+pub(super) const REVIEW_TERM_UNITS: &[(&str, &str)] = &[
+    ("first_pass_accepts", "reviewed deliveries"),
+    ("review_rejects", "reviewed deliveries"),
+    ("reviewer_repairs", "reviewed deliveries"),
+];
+
+pub(super) fn is_implementer_review_term(key: &str) -> bool {
+    REVIEW_TERM_UNITS.iter().any(|(term, _)| *term == key)
+}
 
 pub(super) type Key = (String, String);
 
@@ -130,9 +143,12 @@ pub(super) fn rows(
         .collect();
     let expected_regressions = super::context::append_diff_context(facts, since, &work, &mut rows);
     let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
-    for tasks in work.values() {
+    for (row, tasks) in &work {
         for task in tasks {
-            fleet.entry(tier(task)).or_default().units += 1;
+            let stats = fleet.entry(tier(task)).or_default();
+            stats.units += 1;
+            stats.reviewed_units +=
+                usize::from(first_implementer_review(task, row, since).is_some());
         }
     }
     for row in &rows {
@@ -165,14 +181,13 @@ pub(super) fn rows(
         for (&tier, stats) in &fleet {
             let pool = pools.entry(pool_key(tier)).or_default();
             pool.units += stats.units;
+            pool.reviewed_units += stats.reviewed_units;
             for (&term, &count) in &stats.counts {
                 *pool.counts.entry(term).or_default() += count;
             }
         }
-        for ((row, tasks), regressions) in rows
-            .iter_mut()
-            .zip(work.values())
-            .zip(&expected_regressions)
+        for ((row, (key, tasks)), regressions) in
+            rows.iter_mut().zip(&work).zip(&expected_regressions)
         {
             row.expected = Some(
                 TERMS
@@ -183,12 +198,21 @@ pub(super) fn rows(
                         if term.key == ESCAPED_REGRESSIONS {
                             return (term.key, *regressions);
                         }
+                        let review_term = is_implementer_review_term(term.key);
                         let expected = tasks
                             .iter()
+                            .filter(|task| {
+                                !review_term || first_implementer_review(task, key, since).is_some()
+                            })
                             .map(|task| {
                                 let pool = &pools[pool_key(tier(task))];
+                                let units = if review_term {
+                                    pool.reviewed_units
+                                } else {
+                                    pool.units
+                                };
                                 pool.counts.get(term.key).copied().unwrap_or(0.0)
-                                    / pool.units as f64
+                                    / units.max(1) as f64
                             })
                             .sum();
                         (term.key, expected)
@@ -264,7 +288,11 @@ pub(super) fn execution_header(
 }
 
 /// A later accept cannot erase an earlier reject of this row's candidate.
-fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Option<&'a Review> {
+pub(super) fn first_implementer_review<'a>(
+    task: &'a TaskFacts,
+    row: &Key,
+    since: DateTime<Utc>,
+) -> Option<&'a Review> {
     task.reviews.iter().find(|review| {
         task.attempt_at(review.at).is_some_and(|index| {
             let attempt = &task.attempts[index];
@@ -382,6 +410,7 @@ pub(super) const MIN_TIER_TASKS: usize = 30;
 #[derive(Default)]
 pub(super) struct Fleet {
     pub(super) units: usize,
+    pub(super) reviewed_units: usize,
     pub(super) counts: BTreeMap<&'static str, f64>,
 }
 
@@ -395,7 +424,7 @@ pub(super) fn compute_tallies<'a>(
 ) -> BTreeMap<&'static str, Tally<'a>> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
     for &task in tasks {
-        if let Some(review) = first_review(task, row, since)
+        if let Some(review) = first_implementer_review(task, row, since)
             && review.verdict == ReviewVerdict::Accept
         {
             tallies.entry("first_pass_accepts").or_default().add(
@@ -489,12 +518,11 @@ fn row_input<'a>(
     credits: &BTreeMap<&str, Vec<&Credit>>,
 ) -> RowInput<'a> {
     let tallies = compute_tallies(&row, tasks, charges, credits, since);
-    // Reviewed tasks of this row: the denominator review-derived rates
-    // need to tell a measured zero from no review at all. Display only;
-    // it never enters `denominators`, so scores are unchanged.
+    // Review coverage determines the review terms' population, including
+    // the tier mix of their expectations, rather than credit or penalty.
     let reviewed_units = tasks
         .iter()
-        .filter(|task| first_review(task, &row, since).is_some())
+        .filter(|task| first_implementer_review(task, &row, since).is_some())
         .count();
     let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
@@ -569,7 +597,20 @@ fn row_input<'a>(
         Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
     };
     RowInput {
-        denominators: BTreeMap::new(),
+        denominators: REVIEW_TERM_UNITS
+            .iter()
+            .map(|(key, _)| {
+                (
+                    *key,
+                    Denominator {
+                        units: reviewed_units,
+                        // Any observed review is measured; zero reviews is unmeasured,
+                        // not a provisional estimate or a measured zero.
+                        min_support: 0,
+                    },
+                )
+            })
+            .collect(),
         reviewed_units: Some(reviewed_units),
         unjudged: false,
         crew: row.0,

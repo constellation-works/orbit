@@ -269,6 +269,7 @@ pub(crate) fn pull_refill(
                         // ship contract captures [ORB-13908].
                         review_gate: true,
                         selective_review: true,
+                        visual_resolution: orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             // The job that runs this action, so the owner's

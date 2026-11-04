@@ -86,9 +86,11 @@ the **Score breakdown** beside it carries those exact contributions.
   review-derived axes (`first_pass_accepts`, `review_rejects` and
   `reviewer_repairs`) are gaps with the reason **no reviewed deliveries**,
   never a centre (worst) or rim (best) zero. `reviewed_units` is a
-  display-only count of the row's tasks with a settled first review; it
-  never enters `denominators`, so it makes no term provisional and changes
-  no score. Reviewers' pending
+  count of the row's tasks with a settled first review and the scoring
+  denominator for those three terms. With none, the ranking cells also say
+  **no reviewed deliveries**, API rates are null, and contributions are zero.
+  Any positive reviewed count is measured, without a separate provisional
+  threshold. Reviewers' pending
   `provisional` reviews make the missed-regressions axis provisional, while
   their other observed terms remain available. An explicitly unmeasured
   missed-scope-block source is also a gap. Unsupported rates never enter the
@@ -104,8 +106,8 @@ the **Score breakdown** beside it carries those exact contributions.
   gaps carry no contribution), raw count, denominator and evidence state.
   The SVG has an accessible name and a visually hidden table carries the
   same numbers, with weight and contribution versus the fleet median as
-  columns. No chart library is needed; the one backend addition is the
-  implementers' `reviewed_units` field.
+  columns. No chart library is needed; the implementers' `reviewed_units`
+  and `term_units` fields name the review denominator.
 
 ## 2. Ranking Unit
 
@@ -189,7 +191,7 @@ One module computes every role's score. A role supplies its unit of work, its te
 
 ### 4.1 Rates and the raw score
 
-Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' calibration term is rated per 100 placed tasks, and warning terms per 100 settled assessments (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of observations cannot swing a rank. Every other term, and every other role, uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' calibration term is rated per 100 placed tasks, and warning terms per 100 settled assessments (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of observations cannot swing a rank. The implementers' three review terms use reviewed deliveries (§5.2), with zero reviews unmeasured and neutral. Every other term uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
 
 Implementers instead start at 100 and sum weighted actual-minus-expected rates for their tier mix (§5.2).
 
@@ -297,11 +299,13 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
 | Escaped regressions | −0.5 | `regression_from` links with escape `no_test` against the row's landed tasks (§3.1), mostly delivery-review findings, each at its severity weight (§4.6), so a `medium` one costs as much as a review reject. Expected counts are size-adjusted (below). A link whose defect site a pre-landing review already charged is not counted again [ORB-21789]. |
 
-Every scored term uses a fleet expectation for the row's **same task mix**; escaped regressions refine it to the same tier and expected change size (below):
+Every scored term uses a fleet expectation for the row's **same task mix**. First-pass accepts, review rejects and reviewer repairs use only **reviewed deliveries** for both the row and fleet populations. Escaped regressions refine their implemented-task reference to the same tier and expected change size (below):
 
 ```
-expected(row, term) = Σ tier [row_tasks(tier) × fleet_count(term, tier) / fleet_tasks(tier)]
-raw = 100 + Σ term [weight(term) × (actual(row, term) − expected(row, term)) × 100 / row_tasks]
+term_units = reviewed tasks for the three review terms, implemented tasks otherwise
+expected(row, term) = Σ tier [row_term_units(tier) × fleet_count(term, tier) / fleet_term_units(tier)]
+contribution(row, term) = weight(term) × (actual(row, term) − expected(row, term)) × 100 / row_term_units
+raw = 100 + Σ term contribution(row, term)
 ```
 
 Positive credit above expectation raises the score; problems above expectation
@@ -310,19 +314,29 @@ mix, including when tiers have different landing or first-pass acceptance
 rates. The fleet includes the row itself and below-support and `model unknown`
 rows. Its unit is a **row-task observation**: a task implemented by two crew/model
 rows contributes once to each row and once to each corresponding fleet
-observation. The denominator includes unreviewed and unlanded implemented tasks,
-not just tasks with the outcome. Repeated rejects can exceed one per task.
+observation. For review terms, only observations with a settled first review
+enter the denominator or expectation; unreviewed work supplies neither credit
+nor penalty. Zero reviewed deliveries gives a zero expected count and neutral
+contribution, with a null rate rather than a measured zero. Repeated rejects
+can exceed one per reviewed task. Other terms include unreviewed and unlanded
+implemented tasks, not just tasks with the outcome.
 
 **Sparse tiers:** a tier with fewer than 30 fleet observations joins the largest
 tier's pool; ties for largest use the lexically first tier name. All sparse
 tiers join that same pool, including unassessed. Supported tiers otherwise keep
 their own rates. If all tiers are sparse, the pool is the entire fleet. Both
-counts and denominators are pooled before division, so a rare tier cannot set
-an extreme reference from one task, and no empty denominator is used. Within
+counts and their matching denominators are pooled before division, and no
+empty denominator is used. Within
 that pool the comparison is approximate by design: exact tier-mix invariance
 applies to the reference pools, not to distinct rates inside a sparse pool.
-Pooling conserves expected counts across the fleet, so its units-weighted raw
-average is 100. An empty fleet has no rows or fleet average.
+Pooling conserves expected counts across the fleet within each term's population.
+The 30-observation pooling threshold still counts all implemented tasks; review
+rates inside each pool divide only by reviewed observations. Even a supported
+tier can have few reviews; this adds no separate review-support threshold.
+With different
+review coverage, the implemented-task-weighted raw average need not be 100;
+shrinkage still uses that actual fleet average. An empty fleet has no rows or
+fleet average.
 
 This replaces complexity-weighted landed credit and unadjusted problem rates.
 Complexity pools choose a crew's tier mix, so the old ranking largely measured
@@ -343,9 +357,13 @@ model attribution are unchanged.
 
 The historical payload keys `weighted_landed` and `cost_per_weighted_landed`
 remain for compatibility; both now use **unit landings**, with labels **Landed**
-and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, the count of its tasks with a settled first review (display only, §1.1), `expected`, a map
-of term keys to expected counts, and `score_base: 100`. Actual `counts` and
-`per_100` remain actuals; detail term `contribution` is weight times the
+and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, the count of its tasks with a settled first review (§1.1), `term_units` naming
+that denominator for each review term, `expected`, a map
+of term keys to expected counts on the same term population, and `score_base: 100`.
+The term metadata names `unit: "reviewed deliveries"` for the three review terms;
+`per_100` is per 100 of that unit and `expected × 100 / term_units` is its
+expected rate. With zero reviewed deliveries, those rates are null and each
+contribution is zero. Actual `counts` remain counts; detail term `contribution` is weight times the
 actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
 rounding. Other roles have neither additive field and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
@@ -453,7 +471,9 @@ tier, type)`, where the type comes from the ordered
 `tags` it carries or whose `paths` globs match its `context_files`, else
 `other`. Each cell's raw score uses the formula above with the fleet
 expectation taken from the same `(tier, type)` fleet cell; a `(tier, type)`
-fleet cell under 30 observations falls back to the tier's rates. Cells are
+fleet cell under 30 observations falls back to the tier's rates. Review terms
+use reviewed deliveries in both the cell and its reference, with neutral
+contributions for cells without reviews, just like headline scores. Cells are
 small, so the matrix applies a two-sided, two-level shrinkage with K = 30:
 `crew_mean = (n_tier × raw_tier + 30 × 100) / (n_tier + 30)`, then
 `score = (n_cell × raw_cell + 30 × crew_mean) / (n_cell + 30)`. A cell with
@@ -602,7 +622,7 @@ GET /api/agents/implementers/size-curves?window=&complexity=&execution=
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`;
 - implementers only: `execution_split` (§5.2).
 
-Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
+Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` (term key to number) and `per_100` (term key to number, or null for an implementer review term with no reviewed deliveries), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: the scoring denominator for the three review terms and their expectations (§5.2). A row of a role with per-term denominators (implementers and pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Implementer review terms have no additional minimum support: zero reviewed deliveries is unmeasured, not provisional. Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 

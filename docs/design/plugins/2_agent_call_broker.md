@@ -167,6 +167,19 @@ worker then starts beside the caller's sandbox and creates its own. Only the sub
 brokered: the broker refuses `wait_seconds`, and the nested `orbit` waits for the answer itself
 by reading the run record, so a long wait holds no broker connection.
 
+**A resident cycle's ship.** A resident cycle's `orbit.workflow.ship` is brokered for a similar
+reason: started inside the cycle's read-only sandbox, the leaf's worker could neither write its
+worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the managed-run envelope
+naming a resident cycle's run, the nested `orbit` forwards the call. The broker refuses it unless the
+job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
+decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
+
+**A resident cycle's decision raise.** A cycle escalates with `orbit.decision.raise`, whose
+workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested
+`orbit` forwards the raise on the same terms as the ship, and the broker runs it through the tool host
+for the run it serves. The sandbox gains no write grant. The handler still refuses a task no human crew
+holds, and the request's filer is the run's identity, never one the input names.
+
 **Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
 `orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,

@@ -121,8 +121,8 @@ pub(super) struct RowInput<'a> {
     /// per 100 of `units`.
     pub(super) denominators: BTreeMap<&'static str, Denominator>,
     /// Tasks with a settled review behind them (implementers only):
-    /// a display-only denominator for review-derived rates, never a
-    /// scoring denominator, so it never makes a term provisional.
+    /// the population of the review terms' rates and expectations.
+    /// Zero means unmeasured, with null rates and neutral contributions.
     pub(super) reviewed_units: Option<usize>,
     /// No unit of the row has been judged yet (reviewers only): it gets no
     /// score or rank, is listed last, and stays out of the fleet average.
@@ -233,9 +233,9 @@ pub(super) fn score<'a>(
 }
 
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
-/// while the term is below its own minimum support.
+/// while the term has no units or is below its own minimum support.
 fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, term: &Term) -> f64 {
-    if input.provisional_term(term.key) {
+    if input.provisional_term(term.key) || input.units_of(term.key) == 0 {
         return 0.0;
     }
     let expected = input
@@ -261,7 +261,7 @@ impl Scored<'_> {
         let per_100: serde_json::Map<String, Value> = self
             .per_100
             .iter()
-            .map(|(key, rate)| ((*key).to_string(), number(*rate)))
+            .map(|(key, rate)| ((*key).to_string(), self.measured_rate(key, *rate)))
             .collect();
         let mut payload = json!({
             "crew": self.input.crew,
@@ -344,7 +344,7 @@ impl Scored<'_> {
                     "weight": term.weight,
                     "group": term.group,
                     "count": number(self.count(term.key)),
-                    "per_100": number(self.per_100[term.key]),
+                    "per_100": self.measured_rate(term.key, self.per_100[term.key]),
                     "contribution": number(self.contribution(term)),
                     "tasks": tasks.iter().map(|tally| json!({
                         "task_id": tally.task.id,
@@ -365,6 +365,14 @@ impl Scored<'_> {
                 payload
             })
             .collect()
+    }
+
+    fn measured_rate(&self, key: &str, rate: f64) -> Value {
+        if self.input.reviewed_units == Some(0) && self.input.denominators.contains_key(key) {
+            Value::Null
+        } else {
+            number(rate)
+        }
     }
 
     fn count(&self, key: &str) -> f64 {

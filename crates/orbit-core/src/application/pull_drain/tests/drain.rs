@@ -382,6 +382,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             caller_before_pr: false,
             review_gate: false,
             selective_review: false,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),

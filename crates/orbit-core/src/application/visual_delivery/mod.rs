@@ -12,10 +12,14 @@
 //!
 //! A shadow claimed leaf captures against the visual review contract its owner
 //! captured at admission, and the owner checks what the leaf returns before
-//! it accepts the handoff (`visual_capture_mismatch`).
+//! it accepts the handoff (`visual_capture_mismatch`). Negotiated live PR
+//! claims additionally return a resolution bundle; the owner checks complete
+//! exact-head captures, review resolutions and operator history on acceptance
+//! and every landing authority decision. Unsupported routes remain held.
 
 mod capture;
 mod checks;
+mod claimed;
 mod contract;
 mod handoff;
 mod landed;

@@ -594,3 +594,5 @@ crate::scenario_table!(
 );
 
 mod live;
+
+mod claimed_resolution;

@@ -29,11 +29,11 @@ use super::super::recheck::{complete_recheck, mark_full};
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    FINDING_INVALID, PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, contract_conflicts,
-    normalize_evidence_gaps, post_deploy, required_machine, required_os, required_string,
-    required_string_array, retained_review_evidence, review_filed, reviewed_evidence_drops,
-    unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
-    validate_recommendations,
+    FINDING_INVALID, PILOT_NORMALIZATIONS, SelectorCheck, VALIDATION_TOOL_WARNINGS,
+    contract_conflicts, normalize_evidence_gaps, post_deploy, required_machine, required_os,
+    required_string, required_string_array, retained_review_evidence, review_filed,
+    reviewed_evidence_drops, unauthorized_missing_targets, user_facing_ui,
+    validate_after_selectors, validate_recommendations,
 };
 use super::admission::{
     Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
@@ -234,14 +234,16 @@ fn scope_with(
     };
     let authorized_creation = creation.selectors();
     let mut selectors = validate_after_selectors(
-        action,
-        task_id,
-        &disposition,
-        assessment,
+        SelectorCheck {
+            action,
+            task_id,
+            disposition: &disposition,
+            assessment,
+            workspace_root: context.workspace_root,
+            source: context.source,
+            authorized_creation,
+        },
         &proposed_after,
-        context.workspace_root,
-        context.source,
-        authorized_creation,
     )
     .map_err(refused(task_id, "invalid"))?;
     if !authorized_creation.is_empty()
@@ -377,14 +379,16 @@ fn landed_creation_scope(
     // No missing-target exception: a grant authorizes future creation, but
     // does not establish that the target already exists at this revision.
     let selectors = validate_after_selectors(
-        context.action,
-        task.id.as_str(),
-        "selectors",
-        assessment,
+        SelectorCheck {
+            action: context.action,
+            task_id: task.id.as_str(),
+            disposition: "selectors",
+            assessment,
+            workspace_root: context.workspace_root,
+            source: Some(source),
+            authorized_creation: &[],
+        },
         &paths,
-        context.workspace_root,
-        Some(source),
-        &[],
     )
     .map_err(invalid)?;
     let finding = VerifiedNoDiff::from_landed_evidence(assessment);
@@ -755,16 +759,18 @@ fn admit(
                 })
         }
         PromotionAuthority::Drain(drain) => drain_promotion::assess_drain_admission(
-            context.action,
-            task_id,
-            snapshot,
-            current,
-            &assessed.assessment,
-            &assessed.after,
-            assessed.complexity,
+            drain_promotion::DrainAdmissionTask {
+                action: context.action,
+                task_id,
+                snapshot,
+                current,
+                assessment: &assessed.assessment,
+                selectors: &assessed.after,
+                complexity: assessed.complexity,
+                dependencies: &dependencies,
+                is_done: &is_done,
+            },
             drain,
-            &dependencies,
-            &is_done,
         )
         .map(|decision| CheckedAdmission::Apply(Some(Admission::Drain(decision)))),
         PromotionAuthority::None => Ok(CheckedAdmission::Apply(None)),

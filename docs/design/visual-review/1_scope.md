@@ -5,7 +5,7 @@ last_updated: 2026-11-03
 last_validated: 2026-11-03
 status: Draft
 stage: building
-next: "Support claimed live proof (ORB-21963); evaluate the live experiment before default promotion"
+next: "Evaluate the live experiment before default promotion"
 feature: visual-review
 doc_role: scope
 type: design
@@ -15,11 +15,10 @@ tags: [visual-review, ui, mocks, review-gate, task-artifacts, finding-verificati
 
 # Scope: visual review of UI changes
 
-Status: phases 1–6 have landed, but committed claimed-live support remains incomplete:
-[ORB-20264] safely refuses it until owner-verifiable final-candidate resolution is
-supported ([ORB-21963], proposed). Local live delivery and claimed shadow capture are
-implemented; the experiment machinery is built, not evidence that its promotion gate
-passed. Phase 7 remains later work. This scope states the problem, the shape and the phasing;
+Status: phases 1–6 support local live delivery and negotiated claimed live PR resolution
+([ORB-21963]). Legacy claims without the supported proof contract remain safely held
+([ORB-20264]); claimed shadow capture remains supported. The experiment machinery is
+built, without evidence that its promotion gate passed. Phase 7 remains later work. This scope states the problem, the shape and the phasing;
 [2_design.md](./2_design.md) specifies each mechanism. The feature keeps both files (rather
 than the scope track's single file) because the mock convention, capture, the implementer's
 self-check, checks, image delivery, findings and measurement are separate mechanisms that
@@ -116,7 +115,7 @@ The mechanisms, each specified in [2_design.md](./2_design.md):
 | View manifest | Workspace-owned TOML naming how to reach each view: route, fixture, setup, ready selector, states, themes, design rules and tokens. Mock names select views; the manifest only says how to render them. | [§3](./2_design.md#3-the-view-manifest) |
 | Capture | Deterministic Playwright capture from the browser kit at the mock's width and theme, frozen clock, animations and caret off, bundled fonts, double capture with a pixel diff. Metadata in a system-written `visual/capture.json`. | [§4](./2_design.md#4-capture) |
 | Implementer self-check | `orbit visual capture` renders the working tree's view for each mock and writes the mock, the capture and a side-by-side image to scratch, so the implementer sees its build next to the mock while it works. Not evidence of record. | [§5](./2_design.md#5-the-implementers-self-check) |
-| Hosts and claims | `verify-mock-ui` routes like `ui`, to kit hosts. A host without a verified kit records `not_established` with a reason, never a pass. Claimed shadow leaves return system-attributed images; claimed live delivery is held pending owner-verifiable resolution ([ORB-20264], [ORB-21963]). | [§6](./2_design.md#6-hosts-claimed-and-remote-runs) |
+| Hosts and claims | `verify-mock-ui` routes like `ui`, to kit hosts. A host without a verified kit records `not_established` with a reason, never a pass. Claimed shadow leaves return system-attributed images; claimed live PR leaves negotiate schema 1 and return an owner-verifiable final-candidate resolution bundle. Older or incompatible claims remain held ([ORB-20264], [ORB-21963]). | [§6](./2_design.md#6-hosts-claimed-and-remote-runs) |
 | Checks | The workspace's [UX rules](../ux-rules/1_scope.md) for `ui`, run on the candidate captures before any model call, plus capture-only checks (render timeout, setup failure, instability). | [§7](./2_design.md#7-deterministic-checks) |
 | Comparison review | Each mock beside its capture, the declared deviations, the check findings, the precedence rule and fixed questions; one finding per difference, anchored to regions in both images. | [§8](./2_design.md#8-the-comparison-review) |
 | Image delivery | Images are staged as files and reach the model through the executor's declared `image_input`. A canary image proves the model saw them. A crew without the declaration is refused before launch. | [§9](./2_design.md#9-image-delivery-per-provider) |
@@ -232,12 +231,12 @@ view manifests, browser-context settings and the UI rules this design reuses.
    batches of five, `visual_verify` judges them with the region-extended verdict schema
    (one escalation on low confidence, else `unverified`), and `visual_settle` writes
    `visual/review.json`, which the reviewer scorecard reads under purpose `visual_review`.
-6. **Live and experiment — landed ([ORB-19982]), with claimed-live completion pending.** `block_at` and `file_at` take effect in the treatment arm; the
+6. **Live and experiment — implemented ([ORB-19982], [ORB-21963]).** `block_at` and `file_at` take effect in the treatment arm; the
    code reviewer receives must-address findings; `visual_recapture` after the review commit;
    the post-landing measurement comparison; the experiment (§12). If the ship gate passes,
    `visual_review.reviewer = true` with `mode = "live"` becomes the recommended setting
-   through the experiment's promotion task. The safety repair [ORB-20264] leaves claimed
-   live delivery unavailable; [ORB-21963] tracks its remaining proof contract. A completed
+   through the experiment's promotion task. [ORB-21963] adds the negotiated owner-verifiable
+   proof contract while retaining [ORB-20264]'s hold for unsupported claims. A completed
    live evaluation and promotion are not established by the implementation tasks.
 7. **Later.** Each filed only when needed: before/after review of UI changes without mocks
    (§13), Orbit rendering HTML mocks, and the dashboard side-by-side view.
@@ -294,6 +293,6 @@ configurable (`visual_review.block_at`).
 - [ORB-19982] — Deliver phase 6 local live resolution, measurement and experiment machinery.
 - [ORB-19975] — Deliver view manifests, browser-context settings and executable UI rules.
 - [ORB-20264] — Fence live visual evidence and safely refuse unsupported claimed-live delivery.
-- [ORB-21963] — Complete owner-verifiable final-candidate visual proof for claimed live delivery (proposed).
+- [ORB-21963] — Complete negotiated owner-verifiable final-candidate visual proof for claimed live delivery.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

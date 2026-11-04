@@ -187,7 +187,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     assert_eq!(
                         as_f64(&r["expected"][key]),
                         as_f64(&r["counts"][key]),
-                        "all terms use the same tier-task denominator"
+                        "all terms use the same tier population when every task was reviewed"
                     );
                 }
             }
@@ -320,7 +320,17 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                         None,
                         Some(TaskStatus::Done),
                     );
-                    if crew != "dense" {
+                    if crew == "dense" {
+                        // The reference must contain measured clean reviews;
+                        // unreviewed work is outside the review population.
+                        comment(
+                            &fixture,
+                            &id,
+                            &format!(
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                            ),
+                        );
+                    } else {
                         for review in 0..5 {
                             comment(
                                 &fixture,
@@ -610,70 +620,139 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
 }
 
 #[test]
-fn implementers_report_zero_reviewed_units_without_making_review_terms_provisional() {
+fn implementers_review_terms_ignore_review_coverage() {
     isolated(
-        "agents_implementers::implementers_report_zero_reviewed_units_without_making_review_terms_provisional",
+        "agents_implementers::implementers_review_terms_ignore_review_coverage",
         || {
             let fixture = Fixture::new();
-            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
-            for crew in ["reviewed", "unreviewed"] {
-                for index in 0..4 {
+            for (crew, reviewed) in [
+                ("dense", 8),
+                ("sparse", 4),
+                ("unreviewed", 0),
+                ("reference", 8),
+            ] {
+                for index in 0..8 {
                     let id = landed_with_tags(
                         &fixture,
                         &format!("jrun-{crew}-{index}"),
                         crew,
                         Vec::new(),
                     );
-                    if crew == "reviewed" {
+                    if index < reviewed {
+                        let verdict = if crew == "reference" || index % 4 < 2 {
+                            "accept"
+                        } else if index % 4 == 2 {
+                            "reject"
+                        } else {
+                            "accept_with_fixes"
+                        };
                         comment(
                             &fixture,
                             &id,
                             &format!(
-                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **{verdict}**\n- Reviewer: crew `reviewer` (codex / review-model)"
                             ),
                         );
                     }
                 }
             }
-            let facts = fixture.runtime.agent_scan().unwrap();
-            let card = agent_scorecard(
-                &facts,
-                AgentRole::Implementers,
-                &query,
-                std::time::Duration::ZERO,
-            );
-            assert_eq!(row(&card, "reviewed")["reviewed_units"], 4, "{card}");
-            let unreviewed = row(&card, "unreviewed");
-            assert_eq!(unreviewed["reviewed_units"], 0, "{card}");
-            assert_eq!(unreviewed["counts"]["first_pass_accepts"], 0, "{card}");
-            assert!(
-                unreviewed.get("term_units").is_none()
-                    && unreviewed.get("provisional_terms").is_none(),
-                "reviewed_units is display-only and never a scoring denominator: {unreviewed}"
-            );
-            // The unreviewed row's first-pass term still contributes its
-            // actual-minus-expected amount: making it provisional would
-            // zero the contribution and change the score.
-            let detail = agent_detail(
-                &facts,
-                AgentRole::Implementers,
-                &query,
-                "unreviewed",
-                Some("model"),
-                std::time::Duration::ZERO,
-            )
-            .unwrap();
-            let first_pass = detail["terms"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|term| term["key"] == "first_pass_accepts")
+            let export = fixture
+                .runtime
+                .agent_per_task_export(&AgentQuery::parse(Some("30d"), Some(1)).unwrap())
                 .unwrap();
-            assert!(
-                as_f64(&first_pass["contribution"]) < 0.0,
-                "an unreviewed row keeps its scored first-pass contribution: {first_pass}"
+            for (crew, reviewed) in [("dense", 8), ("sparse", 4), ("unreviewed", 0)] {
+                let count: u64 = export["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|task| task["crew"] == crew)
+                    .map(|task| task["reviewed_units"].as_u64().unwrap())
+                    .sum();
+                assert_eq!(
+                    count, reviewed,
+                    "the per-task export preserves the scored review population"
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            let detail = |crew| {
+                json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&window=30d&min_support=1&crew={crew}&model=model")))
+            };
+            let dense = detail("dense");
+            let sparse = detail("sparse");
+            let unreviewed = detail("unreviewed");
+            for key in ["first_pass_accepts", "review_rejects", "reviewer_repairs"] {
+                let term = |detail: &Value| {
+                    detail["terms"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|term| term["key"] == key)
+                        .unwrap()
+                        .clone()
+                };
+                assert_eq!(
+                    term(&dense)["contribution"],
+                    term(&sparse)["contribution"],
+                    "equal reviewed outcomes must have equal contributions: {key}"
+                );
+                assert_ne!(
+                    as_f64(&term(&dense)["contribution"]),
+                    0.0,
+                    "the reference crew makes the coverage comparison non-neutral"
+                );
+                for (crew, units) in [("dense", 8), ("sparse", 4), ("unreviewed", 0)] {
+                    assert_eq!(row(&card, crew)["term_units"][key], units);
+                    assert_eq!(
+                        card["terms"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|term| term["key"] == key)
+                            .unwrap()["unit"],
+                        "reviewed deliveries"
+                    );
+                }
+                assert_eq!(
+                    row(&card, "dense")["per_100"][key],
+                    row(&card, "sparse")["per_100"][key]
+                );
+                assert_eq!(
+                    as_f64(&row(&card, "dense")["expected"][key]),
+                    2.0 * as_f64(&row(&card, "sparse")["expected"][key])
+                );
+                assert_eq!(row(&card, "unreviewed")["reviewed_units"], 0);
+                assert!(
+                    row(&card, "unreviewed")["per_100"][key].is_null(),
+                    "no reviewed deliveries is not a measured zero"
+                );
+                assert!(term(&unreviewed)["per_100"].is_null());
+                assert_eq!(term(&unreviewed)["units"], 0);
+                assert_eq!(term(&unreviewed)["contribution"], 0);
+                assert_eq!(row(&card, "unreviewed")["expected"][key], 0);
+            }
+            assert_eq!(row(&card, "dense")["raw"], row(&card, "sparse")["raw"]);
+            assert_eq!(row(&card, "unreviewed")["raw"], 100);
+            let matrix = json_ok(server.get(&format!(
+                "/api/agents/implementers/by-type?{WS}&window=30d&min_support=1"
+            )));
+            let cell = |crew| {
+                matrix["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|cell| cell["crew"] == crew && cell["n"] == 8)
+                    .unwrap()
+                    .clone()
+            };
+            assert_eq!(
+                cell("dense")["raw"],
+                cell("sparse")["raw"],
+                "tier scores must also ignore review coverage"
             );
-            assert_eq!(detail["row"], *unreviewed, "{detail}");
+            assert_eq!(cell("unreviewed")["raw"], 100);
         },
     );
 }

@@ -15,8 +15,10 @@
 #    the cycle's grant and keys each write `resident:<mandate>:<cycle>:<n>`.
 #    It ends by writing one checkpoint through `orbit.resident.checkpoint`.
 # 3. finalize synthesizes an `incomplete` checkpoint when the agent wrote
-#    none, and clears the live cycle. When the agent step fails, finalize does
-#    not run; the next observe treats the cycle as dead and recovers it.
+#    none, clears the live cycle, and moves the assignment to `review` on a
+#    `handoff` checkpoint or a stop. When the agent step fails, finalize does
+#    not run; the next observe treats the cycle as dead and recovers it,
+#    settling a `handoff` checkpoint instead of starting another cycle.
 
 schemaVersion: 2
 kind: Job

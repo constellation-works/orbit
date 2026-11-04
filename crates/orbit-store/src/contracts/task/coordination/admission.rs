@@ -571,6 +571,10 @@ pub struct AdmissionRequest {
     /// selective policy refuses it rather than dropping the policy.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selective_review: bool,
+    /// Supported claimed live visual-resolution bundle schema. Zero or absent
+    /// declares no support. This participates in the request fingerprint.
+    #[serde(default, skip_serializing_if = "is_zero_visual_resolution")]
+    pub visual_resolution: u32,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and
@@ -602,6 +606,10 @@ pub struct AdmissionRequest {
     /// complexity is admissible, as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admissible: Option<AdmissionWorkFit>,
+}
+
+fn is_zero_visual_resolution(version: &u32) -> bool {
+    *version == 0
 }
 
 impl AdmissionRequest {

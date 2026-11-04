@@ -12,6 +12,9 @@ use super::log::pipeline_worker_file_name;
 use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
+use orbit_common::security::child_env::{
+    MCP_MANAGED_BINDING_ENV_VARS, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Set only by a production Orbit binary's `main` before it can submit runs.
@@ -415,6 +418,22 @@ impl WorkerCommandConfig {
     /// An edit already on `command`, including a removal, keeps precedence over
     /// the policy snapshot.
     fn apply_launch_environment(&self, command: &mut Command) {
+        // A worker is its own run. Submitted from a managed process (a resident
+        // cycle outside a sandbox, say), it must not inherit that run's binding
+        // and activity policy, or its own tool calls would be judged as the
+        // submitter's. The workspace and registry locators stay.
+        if crate::runtime::run_input::managed_run_context_from_env() {
+            for name in MCP_MANAGED_BINDING_ENV_VARS
+                .iter()
+                .copied()
+                .filter(|name| {
+                    ![MCP_MANAGED_WORKSPACE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV].contains(name)
+                })
+                .chain(["ORBIT_TASK_ID", "ORBIT_ACTIVE_TASK_ID"])
+            {
+                command.env_remove(name);
+            }
+        }
         if let Some(policy) = &self.environment {
             // Crew `env` sources ride along under their own names: the worker
             // composes each crew's agent environment from its own process

@@ -25,6 +25,16 @@ impl GuardedModes for WorkflowVerb {
                 })
                 .err()
                 .map(Err),
+            // A resident cycle is a managed run whose mandate is to dispatch;
+            // its grant is checked on the host, under its cycle guard.
+            WorkflowVerb::Ship
+                if ctx
+                    .orbit_host
+                    .as_ref()
+                    .is_some_and(|host| host.scope_is_resident_cycle()) =>
+            {
+                None
+            }
             WorkflowVerb::Ship | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => None,
         }

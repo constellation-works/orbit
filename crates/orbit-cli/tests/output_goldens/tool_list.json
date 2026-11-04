@@ -3598,6 +3598,12 @@
         "required": false
       },
       {
+        "name": "visual_resolution",
+        "description": "Supported claimed live visual-resolution bundle schema. Schema 1 returns owner-verifiable evidence for the exact final candidate. Omitted or zero declares no support; unsupported live claims stay held.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
         "name": "caller_review_policy",
         "description": "Deprecated and ignored: the review-policy label distributed-drain protocol revisions before 5 sent. Accepted only so an older caller is refused as `protocol_mismatch` rather than for an unknown field.",
         "param_type": "string",

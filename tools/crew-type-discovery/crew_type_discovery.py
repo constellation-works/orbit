@@ -14,9 +14,12 @@ Target: a task's score relative to its crew's own tier mean (the
 comparative-advantage target). A task's raw score is recomputed from
 its per-term counts with the implementer weights, against the fleet
 rates for its tier, exactly as the scorecard's tier raw is computed:
-``raw = 100 + sum(weight * (actual - fleet_rate * 1) * 100)`` for one
-task. The mean of those raw scores over a crew's tier tasks is that
-crew's tier raw, so the relative target averages to zero per group.
+``raw = 100 + sum(weight * (actual - fleet_rate) * 100)`` for one
+task. Review terms use the fleet's reviewed population and contribute
+only on reviewed tasks, scaled by the crew tier's tasks / reviewed tasks.
+The mean of those raw scores over a crew's tier tasks is that crew's
+tier raw, so the relative target averages to zero per group. Exports
+without reviewed_units retain their historical all-task population.
 
 Features are the task's tags and its top-level context-file path
 prefixes. No machine-learning dependency is used.
@@ -59,13 +62,26 @@ def load_rows(source: str | None) -> tuple[list[dict], dict[str, float]]:
     return rows, weights
 
 
-def task_raw(row: dict, fleet_rates: dict[str, dict[str, float]], weights: dict[str, float]) -> float:
+REVIEW_TERMS = {"first_pass_accepts", "review_rejects", "reviewer_repairs"}
+
+
+def crew_tier_key(row: dict) -> tuple[str, str, str]:
+    return (str(row.get("crew", "")), str(row.get("model", "")), str(row.get("tier", "")))
+
+
+def task_raw(
+    row: dict,
+    fleet_rates: dict[str, dict[str, float]],
+    weights: dict[str, float],
+    review_scale: float,
+) -> float:
     counts = row.get("counts") or {}
     rates = fleet_rates.get(str(row.get("tier", "")), {})
     raw = 100.0
     for key, weight in weights.items():
+        scale = review_scale * row.get("reviewed_units", 1) if key in REVIEW_TERMS else 1.0
         actual = float(counts.get(key, 0) or 0)
-        raw += weight * (actual - rates.get(key, 0.0)) * 100.0
+        raw += scale * weight * (actual - rates.get(key, 0.0)) * 100.0
     return raw
 
 
@@ -250,17 +266,29 @@ def analyse(rows, weights, group_by, max_depth, min_leaf, margin):
     # Fleet rates per tier over every exported row.
     tier_counts: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     tier_n: dict[str, int] = defaultdict(int)
+    tier_reviewed: dict[str, int] = defaultdict(int)
+    crew_n: dict[tuple, int] = defaultdict(int)
+    crew_reviewed: dict[tuple, int] = defaultdict(int)
     for row in rows:
         tier = str(row.get("tier", ""))
         tier_n[tier] += 1
+        reviewed = row.get("reviewed_units", 1)
+        tier_reviewed[tier] += reviewed
+        crew_n[crew_tier_key(row)] += 1
+        crew_reviewed[crew_tier_key(row)] += reviewed
         for key, val in (row.get("counts") or {}).items():
             tier_counts[tier][str(key)] += float(val or 0)
     fleet_rates = {
-        tier: {k: v / tier_n[tier] for k, v in counts.items()} for tier, counts in tier_counts.items()
+        tier: {
+            key: count / max(1, tier_reviewed[tier] if key in REVIEW_TERMS else tier_n[tier])
+            for key, count in counts.items()
+        }
+        for tier, counts in tier_counts.items()
     }
     enriched = []
     for row in rows:
-        raw = task_raw(row, fleet_rates, weights)
+        key = crew_tier_key(row)
+        raw = task_raw(row, fleet_rates, weights, crew_n[key] / max(1, crew_reviewed[key]))
         enriched.append((row, raw))
     crew_mean: dict[tuple[str, str, str], float] = {}
     crew_groups: dict[tuple[str, str, str], list[float]] = defaultdict(list)

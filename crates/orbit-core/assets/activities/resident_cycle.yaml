@@ -115,5 +115,6 @@ spec:
     Use `outcome: idle` when you woke and had nothing to do; when
     `brief.status_request` is true the manager asked for status, so say in
     `notes` where the mandate stands. When the exit
-    criteria hold, move your assignment to `review` and checkpoint
-    `handoff`.
+    criteria hold, write the assignment's execution summary and checkpoint
+    `handoff`; finalize moves the assignment to `review`, and a status write
+    of your own is refused.

@@ -89,9 +89,14 @@ A **cell** is `(crew, model, tier, type)`. Its raw score uses the implementer fo
 with the fleet expectation taken from the same `(tier, type)` cell instead of the tier alone:
 
 ```
-expected(cell, term) = n(cell) × fleet_count(term, tier, type) / fleet_tasks(tier, type)
-raw(cell) = 100 + Σ term [weight(term) × (actual − expected) × 100 / n(cell)]
+term_units = reviewed tasks for first-pass accepts, rejects and repairs; all tasks otherwise
+expected(cell, term) = term_units(cell) × fleet_count(term, tier, type) / fleet_term_units(tier, type)
+raw(cell) = 100 + Σ term [weight(term) × (actual − expected) × 100 / term_units(cell)]
 ```
+
+Review terms contribute zero when the cell has no reviewed tasks. Both actual
+and expected review rates use the same reviewed population, so different
+review coverage alone gives no credit or penalty.
 
 100 means the crew matches the fleet on that type in that tier. Sparse `(tier, type)` fleet
 cells, under 30 observations, fall back to the tier's rate, as sparse tiers already pool today.
@@ -215,8 +220,9 @@ combination.
 
 `orbit agents scorecard --role implementers --per-task --json` exports one row per
 implemented task in the window: its crew, model, tier, currently configured type, tags,
-context-file selectors and top-level path prefixes, and its per-term counts under the
-existing term definitions and weights. Summed per `(crew, model, tier, type)`, those rows
+context-file selectors and top-level path prefixes, `reviewed_units` (0 or 1),
+and its per-term counts under the existing term definitions and weights.
+Summed per `(crew, model, tier, type)`, those rows
 reproduce the `--by-type` cells' `n` and raw values on the same scan. The export is
 read-only: it writes no snapshot and refreshes no cache beyond the scan the scorecard
 already makes.
@@ -224,7 +230,12 @@ already makes.
 The standalone script in `tools/crew-type-discovery` [ORB-18143] (not part of the workspace build)
 reads that export from a file or stdin and, per `(crew, model, tier)` (or per tier with
 `--group-by tier`), fits a shallow regression tree on each task's score relative to its
-crew's own tier mean — the comparative-advantage target above. Features are tags and
+crew's own tier mean — the comparative-advantage target above. Review terms use
+only reviewed observations for the fleet reference. A reviewed task's review
+contribution is scaled by its crew tier's task count divided by reviewed count;
+unreviewed tasks contribute zero for those terms. This keeps the per-task mean
+equal to the tier raw score. Older exports without `reviewed_units` retain their
+historical all-task population. Features are tags and
 top-level path prefixes. It prints each leaf with its `n`, mean relative score and the
 predicate that reaches it, then a ready-to-paste `[[workflow.crew_performance_types]]`
 block for each leaf that passes its thresholds: at least `--min-leaf` tasks (default 30,

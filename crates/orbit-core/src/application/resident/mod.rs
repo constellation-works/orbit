@@ -12,8 +12,10 @@
 //! A cycle fires through the `resident_due` state trigger (`due`), runs
 //! as `resident_cycle_pipeline` (`steps`) and reaches tools only through
 //! the cycle guard (`guard`). The manager pauses, stops, wakes or takes a
-//! mandate over and relays the human's words to it through `control`.
+//! mandate over and relays the human's words to it through `control`. Core
+//! alone moves the assignment's status across the mandate's life (`assignment`).
 
+mod assignment;
 mod comments;
 mod control;
 mod create;

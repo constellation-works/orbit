@@ -6,6 +6,7 @@
 //! synthesized `incomplete` checkpoint and its recovery never repeats an
 //! action the dead cycle completed.
 
+mod assignment_lifecycle;
 mod control_admission;
 
 use std::path::PathBuf;
@@ -238,6 +239,11 @@ impl Fixture {
 
     /// The agent's checkpoint for the cycle `brief` started.
     fn checkpoint(&self, brief: &Value, run_id: &str) {
+        self.checkpoint_with_outcome(brief, run_id, "idle");
+    }
+
+    /// The agent's checkpoint naming `outcome`.
+    fn checkpoint_with_outcome(&self, brief: &Value, run_id: &str, outcome: &str) {
         let mandate = brief["task_id"].as_str().unwrap();
         self.runtime
             .append_resident_checkpoint(
@@ -252,7 +258,7 @@ impl Fixture {
                     "actions": [], "decisions": [], "requests": [], "costs": [],
                     "notes": "Nothing to do yet.",
                     "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
-                    "continuity": "rebuilt", "outcome": "idle", "probe": false
+                    "continuity": "rebuilt", "outcome": outcome, "probe": false
                 }),
                 Some("codex".into()),
                 None,
@@ -536,6 +542,132 @@ fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
         .expect_err("a finished cycle may only read");
         assert!(error.contains("resident_cycle_stale"), "{error}");
     });
+}
+
+/// A resident's `dispatch` right starts a leaf run through the tool the cycle
+/// reference names (ORB-21968): it used to be refused as `capability_denied`
+/// whatever the grant. The grant still decides: no right, a foreign workspace,
+/// a lapsed cycle and a managed run that is no cycle start nothing. The worker
+/// is its own run, so it does not inherit the cycle's run binding.
+#[test]
+fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
+    let fx = fixture();
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &fx.global,
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let worker_env = fx._root.path().join("worker.env");
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "sh".to_string(),
+        "-c".to_string(),
+        format!("env > {0}.tmp && mv {0}.tmp {0}", worker_env.display()),
+    ]);
+    let leaf = |title: &str| {
+        fx.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let workspace = fx.runtime.workspace_id().unwrap();
+    let ship = |task: &str, workspace: &str| {
+        call(
+            &fx.runtime,
+            "orbit.workflow.ship",
+            json!({"task_ids": [task], "mode": "local", "workspace": workspace, "model": "codex"}),
+            McpCapability::Agent,
+        )
+    };
+    let leaf_runs = || {
+        fx.runtime
+            .list_job_runs(orbit_core::application::job::JobRunListParams::default())
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.job_id != "resident_cycle_pipeline")
+            .map(|run| run.run_id)
+            .collect::<Vec<_>>()
+    };
+
+    let task = leaf("Leaf");
+    let mandate = fx.mandate(&task);
+    fx.grant(&mandate, &["dispatch"]);
+    let run = fx.cycle_run(&mandate, "resident-cycle-ship");
+    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let shipped = fx.as_cycle_agent(&run, || {
+        let error = ship(&task, "ws_not_granted").expect_err("a foreign workspace is refused");
+        assert!(error.contains("resident_scope_refused"), "{error}");
+        assert!(leaf_runs().is_empty(), "a refused ship starts nothing");
+        ship(&task, &workspace).expect("a live dispatch grant starts the leaf run")
+    });
+    let shipped_run = shipped["run_id"].as_str().expect("the leaf's run id");
+    assert_eq!(leaf_runs(), [shipped_run], "{shipped}");
+    assert!(
+        shipped["resident_action_key"]
+            .as_str()
+            .is_some_and(|key| key.starts_with(&format!("resident:{mandate}:"))),
+        "the write is on the cycle's ledger: {shipped}"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !worker_env.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the leaf's worker never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let inherited = std::fs::read_to_string(&worker_env).unwrap();
+    for name in ["ORBIT_MANAGED_RUN_CONTEXT=", "ORBIT_RUN_ID="] {
+        assert!(
+            !inherited.lines().any(|line| line.starts_with(name)),
+            "a leaf worker judged as the cycle that started it loses its own tool calls to \
+             the cycle guard: {name}"
+        );
+    }
+
+    // After its cycle, the same run is no longer dispatching anything.
+    let later = leaf("After the cycle");
+    fx.runtime.finish_resident_cycle(&run).unwrap();
+    fx.as_cycle_agent(&run, || {
+        let error = ship(&later, &workspace).expect_err("a lapsed cycle may only read");
+        assert!(error.contains("resident_cycle_stale"), "{error}");
+    });
+
+    // A live cycle without the right.
+    let promote_only = fx.mandate(&later);
+    fx.grant(&promote_only, &["promote"]);
+    let run = fx.cycle_run(&promote_only, "resident-cycle-no-dispatch");
+    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    fx.as_cycle_agent(&run, || {
+        let error = ship(&later, &workspace).expect_err("promote does not dispatch");
+        assert!(error.contains("resident_right_refused"), "{error}");
+        assert!(error.contains("dispatch"), "{error}");
+    });
+
+    // Any other managed run stays held to the operator row.
+    let KeyedJobRunAdmission::Admitted(other) = fx
+        .jobs
+        .insert_automation_job_run("agent_explore_pipeline", json!({}), "not-a-cycle")
+        .unwrap()
+    else {
+        panic!("a fresh run key admits its run");
+    };
+    fx.as_cycle_agent(&other.run_id, || {
+        let error = ship(&later, &workspace).expect_err("only a cycle holds a grant");
+        assert!(
+            error.contains("requires the `operator` capability"),
+            "{error}"
+        );
+    });
+    assert_eq!(leaf_runs().len(), 2, "only the granted ship started a leaf");
 }
 
 /// Restoring lint is context maintenance, not a resident read (ORB-21580).

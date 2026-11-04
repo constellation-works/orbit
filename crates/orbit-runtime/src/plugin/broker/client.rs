@@ -173,6 +173,7 @@ pub fn forward_call_with_status(
             }
             let kind = if super::is_host_credentialed_read(tool)
                 || orbit_types::tool::is_claimed_owner_tool(tool)
+                || super::is_brokered_resident_tool(tool)
             {
                 "brokered tool"
             } else {
