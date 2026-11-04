@@ -7,7 +7,9 @@
 //! write needs the run to hold its mandate's live cycle and a recorded grant;
 //! a right-gated write needs the right in that grant (observe-only grants
 //! hold none), and any `workspace` the call names must be the assignment's
-//! own workspace or one the grant covers. Each admitted write gets the next
+//! own workspace or one the grant covers. Moving a task to `done` also needs
+//! its recorded pull requests closed: `orbit.workflow.land` is how a cycle lands
+//! an open one. Each admitted write gets the next
 //! `resident:<mandate>:<cycle>:<n>` key and a `started` row before it runs,
 //! then one result row. In a recovery cycle, a call identical (tool and
 //! canonical input) to one the dead cycle completed returns `already_done`
@@ -40,6 +42,9 @@ pub(crate) enum ResidentCallClass {
     Open,
     /// A write that needs this right.
     Gated(ResidentRight),
+    /// Moving a task to `done`: needs the `merge` right and no open pull
+    /// request recorded for the task.
+    CompleteTask,
     /// Moving a task to `review`: refused, naming the route that does it.
     Handoff,
     /// A write no resident cycle may make.
@@ -122,8 +127,31 @@ fn named_workspaces(input: &Value) -> Vec<String> {
 /// The checkpoint tool's name.
 const RESIDENT_CHECKPOINT_TOOL: &str = "orbit.resident.checkpoint";
 
+/// The refusal of a resident's move to `done` while the task's PR is open.
+const RESIDENT_DONE_PR_OPEN: &str = "resident_done_pr_open";
+
 fn refused(code: &str, detail: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!("{code}: {detail}"))
+}
+
+/// Refuse a right-gated write the grant does not hold the right for.
+fn require_right(
+    grant: &ResidentCycleGrant,
+    tool: &str,
+    right: ResidentRight,
+) -> Result<(), OrbitError> {
+    if grant.rights.contains(&right) {
+        return Ok(());
+    }
+    let why = grant
+        .narrowed_by
+        .as_deref()
+        .map(|cause| format!(" (observe-only: {cause})"))
+        .unwrap_or_default();
+    Err(refused(
+        "resident_right_refused",
+        format!("`{tool}` needs the `{}` right{why}", right.as_str()),
+    ))
 }
 
 impl OrbitRuntime {
@@ -238,18 +266,10 @@ impl OrbitRuntime {
                     ),
                 ));
             }
-            ResidentCallClass::Gated(right) => {
-                if !grant.rights.contains(&right) {
-                    let why = grant
-                        .narrowed_by
-                        .as_deref()
-                        .map(|cause| format!(" (observe-only: {cause})"))
-                        .unwrap_or_default();
-                    return Err(refused(
-                        "resident_right_refused",
-                        format!("`{tool}` needs the `{}` right{why}", right.as_str()),
-                    ));
-                }
+            ResidentCallClass::Gated(right) => require_right(&grant, tool, right)?,
+            ResidentCallClass::CompleteTask => {
+                require_right(&grant, tool, ResidentRight::Merge)?;
+                self.refuse_done_with_open_pull_request(input)?;
             }
             ResidentCallClass::Refused => {
                 return Err(refused(
@@ -259,6 +279,36 @@ impl OrbitRuntime {
             }
         }
         self.open_resident_action(&task_id, &grant, tool, input, &history)
+    }
+
+    /// A task whose delivery has not landed is not done: refuse the move while
+    /// a pull request recorded for it is open. A forge that cannot answer
+    /// refuses too. An unknown task is the update's own error to report.
+    fn refuse_done_with_open_pull_request(&self, input: &Value) -> Result<(), OrbitError> {
+        let Some(id) = subject_of(input) else {
+            return Ok(());
+        };
+        let task = match self.get_task(&id) {
+            Ok(task) => task,
+            Err(OrbitError::NotFound { .. }) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let open = self.open_recorded_pull_requests(&task).map_err(|error| {
+            refused(
+                "resident_lookup_refused",
+                format!("could not verify that task `{id}` has no open pull request: {error}"),
+            )
+        })?;
+        match open.as_slice() {
+            [] => Ok(()),
+            open => Err(refused(
+                RESIDENT_DONE_PR_OPEN,
+                format!(
+                    "task `{id}` still has open pull requests {open:?}; land it with \
+                     `orbit.workflow.land` instead of marking it done"
+                ),
+            )),
+        }
     }
 
     /// Every workspace the call names must be the assignment's own or one

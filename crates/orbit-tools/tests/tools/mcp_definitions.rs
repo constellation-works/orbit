@@ -137,6 +137,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.update",
             "orbit.visual.capture",
             "orbit.workflow.auto",
+            "orbit.workflow.land",
             "orbit.workflow.run.list",
             "orbit.workflow.run.observe",
             "orbit.workflow.run.resume",

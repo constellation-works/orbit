@@ -62,10 +62,15 @@
 //! one, so a merge older than that listing settles too; the dashboard's
 //! batch settlement runs that per-task read over every candidate and
 //! reports each skip instead of refusing the batch.
+//!
+//! `orbit.workflow.land` merges the delivery PR of a task in `review` and then
+//! settles it here ([`land`]), so a landing and an observed merge complete a
+//! task the same way.
 
 mod candidate;
 mod entry;
 mod handoff;
+mod land;
 mod model;
 mod persistence;
 mod refusal;
@@ -73,6 +78,7 @@ mod rescued;
 
 use crate::runtime::task_pr_forge::MergedPullRequest;
 use candidate::{RevokedHandoff, names_delivery};
+pub use land::{TASK_LANDING_REFUSED, TaskPullRequestLanding};
 pub use model::ExternalMergeBatchSettlement;
 pub use model::ExternalMergeSettlement;
 pub use model::ExternalMergeSettlementProfile;

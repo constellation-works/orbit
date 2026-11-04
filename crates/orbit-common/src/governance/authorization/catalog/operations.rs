@@ -288,6 +288,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "routine observation and controls require an operator session",
     },
     GovernedOperation {
+        id: "orbit.workflow.land",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "landing merges a delivery pull request and completes its task",
+    },
+    GovernedOperation {
         id: "orbit.workflow.ship",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

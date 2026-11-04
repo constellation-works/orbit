@@ -102,6 +102,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.routine.control"
         | "orbit.agent.invoke"
         | "orbit.command.exec"
+        | "orbit.workflow.land"
         | "orbit.workflow.run.resume"
         | "orbit.workflow.ship" => A::OPEN_WORLD,
 

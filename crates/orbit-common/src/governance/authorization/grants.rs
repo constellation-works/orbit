@@ -51,6 +51,7 @@ const AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS: &[(&str, ToolGrantClassificati
     ("orbit.auto_task.update", GRANTABLE_MUTATION),
     ("orbit.command.exec", OPERATOR_MUTATION),
     ("orbit.pipeline.invoke", OPERATOR_MUTATION),
+    ("orbit.workflow.land", OPERATOR_MUTATION),
     ("orbit.workflow.run.resume", OPERATOR_MUTATION),
     ("orbit.workflow.ship", OPERATOR_MUTATION),
 ];

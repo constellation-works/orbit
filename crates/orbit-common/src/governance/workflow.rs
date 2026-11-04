@@ -20,6 +20,8 @@ operation_registry! {
     {
         /// `orbit.workflow.auto`.
         Auto => AUTO,
+        /// `orbit.workflow.land`.
+        Land => LAND,
         /// `orbit.workflow.run.list`.
         RunList => RUN_LIST,
         /// `orbit.workflow.run.observe`.
@@ -189,6 +191,29 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
     // The control always refused fields outside its schema, `agent` included.
     retired_fields: &[RetiredField::verbatim("agent", "unknown field 'agent'")],
     unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const LAND: OperationSpec<WorkflowVerb> = OperationSpec {
+    verb: WorkflowVerb::Land,
+    cli_path: &[],
+    tool_name: "orbit.workflow.land",
+    tool_description: "Land a task in review: merge its one open delivery pull request at the head whose required checks were just read, then move the task to done. The forge's branch protection decides: nothing bypasses it, and any refusal answers `task_landing_refused` with the reason and changes nothing. A pull request that already merged settles without another merge, so a call whose reply was lost may be repeated. Requires operator capability or a resident cycle holding the `merge` right.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        required(mcp_only(
+            "task_id",
+            ParamType::String,
+            "The task in review whose delivery pull request lands.",
+        )),
+        MODEL_PARAM,
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };

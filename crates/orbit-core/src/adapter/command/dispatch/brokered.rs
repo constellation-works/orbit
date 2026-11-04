@@ -3,8 +3,9 @@
 //! host's `gh` credentials, one of a claimed worker's owner calls that need
 //! the claim's owner route, a read-only explorer submission whose sandbox
 //! cannot nest inside the caller's [ORB-20566], a resident cycle's ship whose
-//! leaf worker must not start inside the cycle's sandbox, or a resident cycle's
-//! decision raise whose lock that sandbox mounts read-only — through the audited
+//! leaf worker must not start inside the cycle's sandbox, a resident cycle's
+//! decision raise whose lock that sandbox mounts read-only, or a resident
+//! cycle's landing or move to `done` that reads the forge — through the audited
 //! dispatch, under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_engine::PluginBrokerRun;
 use orbit_tools::{ActivityBinding, OrbitBuiltinAction, ToolContext};
@@ -30,8 +32,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::runtime::authorization::ManagedRunCaller;
 use crate::runtime::plugin::broker::{
-    BROKERED_EXPLORER_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
-    BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
+    BROKERED_EXPLORER_TOOL, BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL,
+    BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch, BrokerRequest, EntryPoint,
+    is_brokered_resident_completion, is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -39,10 +42,14 @@ use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
 use super::execute::{BrokeredAudit, ToolEntryPoint};
 
 /// The action a resident cycle's brokered built-in runs on the tool host.
-fn brokered_resident_action(tool: &str) -> Option<OrbitBuiltinAction> {
+fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAction> {
     match tool {
         BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
         BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
+        BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
+        _ if is_brokered_resident_completion(tool, input) => {
+            Some(OrbitBuiltinAction::Task(TaskVerb::Update))
+        }
         _ => None,
     }
 }
@@ -256,13 +263,14 @@ impl BrokerDispatch for RunDispatch {
                             actor.as_deref(),
                         );
                     }
-                    // A resident cycle's leaf run starts on the host, and its
-                    // decision raise locks and writes there. Only a run the
+                    // A resident cycle's leaf run starts on the host, its
+                    // decision raise locks and writes there, and its landing
+                    // and move to `done` read the forge there. Only a run the
                     // host dispatched as a cycle gets here; the tool host's
                     // cycle guard then decides its live grant, any right the
                     // call needs and the workspace, for that run and never one
                     // the request names. The filer is the run's identity too.
-                    if let Some(action) = brokered_resident_action(&tool) {
+                    if let Some(action) = brokered_resident_action(&tool, &input) {
                         self.runtime.check_tool_enabled(&tool)?;
                         self.runtime.ensure_tool_agent_facing(&tool)?;
                         self.refuse_outside_activity_policy(&tool)?;
@@ -305,8 +313,8 @@ impl BrokerDispatch for RunDispatch {
                         return Err(OrbitError::PolicyDenied(format!(
                             "the plugin broker runs plugin tools, the read-only github.* tools, \
                              a claimed worker's owner calls, explorer submissions and a \
-                             resident cycle's ship and decision raise only; '{tool}' is none of \
-                             these"
+                             resident cycle's ship, decision raise, landing and move to done \
+                             only; '{tool}' is none of these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;

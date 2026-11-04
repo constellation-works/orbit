@@ -27,7 +27,11 @@ pub use crate::builtin::github::dependabot_alerts::{
     project_pull_request as project_dependabot_pull_request, project_secret_location,
     project_secret_scanning_alert,
 };
-pub use crate::builtin::github::landing::commit_pull_requests as commit_pull_requests_request;
+pub use crate::builtin::github::landing::{
+    commit_pull_requests as commit_pull_requests_request,
+    merge_pull_request_at_head as merge_pull_request_at_head_request,
+    repository_merge_methods as repository_merge_methods_request,
+};
 pub use crate::builtin::github::logs::{
     LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,
     SOURCE_RUN_LOG, log_selection_from_input, read_run_log, read_run_log_guarded,
