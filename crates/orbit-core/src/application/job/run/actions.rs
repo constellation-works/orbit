@@ -4,6 +4,8 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::collections::HashSet;
 
+#[cfg(unix)]
+use chrono::DateTime;
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -39,6 +41,12 @@ pub(crate) const CANCELLATION_SIGNAL_AUDIT: &str = "pipeline.run.cancel.signal_a
 pub(crate) const CANCELLATION_COMPLETION_AUDIT: &str = "pipeline.run.cancel.completed";
 #[cfg(unix)]
 pub(crate) const CANCELLATION_WORKER_EXIT_AUDIT: &str = "pipeline.run.cancel.worker_exit";
+/// How long a cancellation request keeps a run's terminal outcome for its
+/// canceller. Far past a normal settle (a TERM and KILL grace per stopped
+/// process, then a failure handoff) and short enough that a canceller that
+/// crashed leaves the run only briefly unreconciled.
+#[cfg(unix)]
+const CANCELLATION_SETTLE_GRACE_SECONDS: i64 = 120;
 
 pub(super) fn cancellation_note(actor: &str, reason: Option<&str>) -> String {
     match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
@@ -900,6 +908,36 @@ pub(crate) fn active_cancellation_request(
     audit_events: &dyn AuditEventStoreBackend,
     run_id: &str,
 ) -> Result<Option<String>, OrbitError> {
+    Ok(newest_active_cancellation(audit_events, run_id)?.map(|active| active.request_id))
+}
+
+/// Whether a cancellation of `run_id` may still finish and record its outcome.
+/// Its signal is what makes the owner read as gone, so reconciliation asks this
+/// before treating a dead owner as worker loss. Limited to
+/// [`CANCELLATION_SETTLE_GRACE_SECONDS`] so a canceller that died without
+/// reporting cannot hold the run; reconciliation then finalizes it as usual.
+#[cfg(unix)]
+pub(super) fn cancellation_is_settling(
+    audit_events: &dyn AuditEventStoreBackend,
+    run_id: &str,
+) -> Result<bool, OrbitError> {
+    let settle_grace = chrono::Duration::seconds(CANCELLATION_SETTLE_GRACE_SECONDS);
+    Ok(newest_active_cancellation(audit_events, run_id)?
+        .and_then(|active| active.requested_at)
+        .is_some_and(|requested_at| Utc::now().signed_duration_since(requested_at) < settle_grace))
+}
+
+#[cfg(unix)]
+struct ActiveCancellation {
+    request_id: String,
+    requested_at: Option<DateTime<Utc>>,
+}
+
+#[cfg(unix)]
+fn newest_active_cancellation(
+    audit_events: &dyn AuditEventStoreBackend,
+    run_id: &str,
+) -> Result<Option<ActiveCancellation>, OrbitError> {
     let audits = audit_events.list_audit_events(&AuditEventFilter {
         job_run_id: Some(run_id.to_string()),
         limit: 200,
@@ -934,7 +972,14 @@ pub(crate) fn active_cancellation_request(
                     .or_insert_with(|| outcome.to_string());
             }
         } else {
-            requests.push(request_id.to_string());
+            requests.push(ActiveCancellation {
+                request_id: request_id.to_string(),
+                requested_at: arguments
+                    .get("requested_at")
+                    .and_then(Value::as_str)
+                    .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                    .map(|at| at.with_timezone(&Utc)),
+            });
         }
     }
     let inactive: HashSet<&str> = completions
@@ -945,5 +990,5 @@ pub(crate) fn active_cancellation_request(
         .collect();
     Ok(requests
         .into_iter()
-        .find(|request_id| !inactive.contains(request_id.as_str())))
+        .find(|request| !inactive.contains(request.request_id.as_str())))
 }
