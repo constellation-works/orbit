@@ -3,6 +3,28 @@
 use super::*;
 
 #[test]
+fn malformed_duration_errors_show_accepted_format_without_submitting_a_run() {
+    if !isolated_run_observation(
+        "run_observation::drain_window::malformed_duration_errors_show_accepted_format_without_submitting_a_run",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let before = fixture.snapshot();
+    for duration in ["bogus", "12", ""] {
+        let args = ["run", "auto", "--for", duration, "--json"];
+        let output = fixture.orbit().args(args).output().unwrap();
+        assert!(
+            !output.status.success(),
+            "{args:?} accepted malformed input"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("30m"), "{args:?}: {stderr}");
+        assert_eq!(fixture.snapshot(), before, "{args:?} must submit no run");
+    }
+}
+
+#[test]
 fn oversized_windows_create_no_run_and_single_pass_still_submits() {
     if !isolated_run_observation(
         "run_observation::drain_window::oversized_windows_create_no_run_and_single_pass_still_submits",
