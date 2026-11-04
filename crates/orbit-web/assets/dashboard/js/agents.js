@@ -11,7 +11,7 @@
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
-import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, clockStamp, relativeTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
@@ -243,7 +243,7 @@ export function fetchAndRenderAgents() {
     setRoleCount(activeRole, payload);
     syncSelection();
     render();
-  }, COUNT_ID);
+  }, COUNT_ID, scanSettledNote);
 }
 
 // Every role tab counts its ranked rows. The active role's count comes with
@@ -401,6 +401,66 @@ function windowLabel() {
     : `${scorecard.window} (${scorecard.requested_window})`;
 }
 
+// Scan freshness. A scorecard says when its scan ran (`computed_at`) and how
+// long the server counts it current (`cache_ttl_seconds`). Past that window the
+// server still serves the scan and may refresh it in the background; this page
+// cannot see that refresh, so a stale scan is never presented as current. A
+// scan stamped a little ahead of this browser's clock counts as just taken;
+// further ahead, its age is not judged. A missing or malformed time or window
+// makes no fresh or stale claim.
+const SCAN_CLOCK_SKEW_MS = 60_000;
+
+function scanFreshness(payload, now = Date.now()) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const at = typeof source.computed_at === "string" ? Date.parse(source.computed_at) : NaN;
+  if (Number.isNaN(at)) return { state: "unreported" };
+  const ageMs = now - at;
+  if (ageMs < -SCAN_CLOCK_SKEW_MS) return { state: "ahead", at: source.computed_at };
+  // Read in the past tense, so a scan within the skew reads "just now".
+  const ago = relativeTime(source.computed_at, at + Math.max(0, ageMs));
+  const ttl = source.cache_ttl_seconds;
+  if (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl < 0) return { state: "unjudged", at: source.computed_at, ago };
+  return { state: ageMs > ttl * 1000 ? "stale" : "fresh", at: source.computed_at, ago, ttl };
+}
+
+const SCAN_QUALIFIERS = {
+  fresh: (scan) => `current, within its ${scan.ttl} s cache window`,
+  stale: (scan) => `stale, past its ${scan.ttl} s cache window; a background refresh may be running or may have failed`,
+  unjudged: () => "no cache window reported, so freshness is not judged",
+  ahead: () => "ahead of this browser's clock, so freshness is not judged",
+};
+
+// The header line beside the window: the scan's time on the dashboard clock,
+// its age, and whether the server still counts it current.
+function scanNode(payload) {
+  const scan = scanFreshness(payload);
+  const node = el("span", { class: `agents-scan agents-scan-${scan.state}` });
+  node.dataset.freshness = scan.state;
+  if (scan.state === "unreported") {
+    node.append("Scan time not reported · freshness not judged");
+    return node;
+  }
+  const time = el("time", { text: formatDateTime(scan.at) });
+  time.setAttribute("datetime", scan.at);
+  clockStamp(time, scan.at);
+  node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, ` · ${SCAN_QUALIFIERS[scan.state](scan)}`);
+  return node;
+}
+
+// The panel's status note once a response settles, in place of "Updated.". It
+// is the live region's reading of the scan; the header line above shows it.
+const SCAN_SETTLED = {
+  fresh: "Scan current.",
+  stale: "Scan stale: past its cache window.",
+  unjudged: "Scan time shown; freshness not judged.",
+  ahead: "Scan time ahead of this clock; freshness not judged.",
+  unreported: "Scan time not reported.",
+};
+
+function scanSettledNote([payload] = []) {
+  return SCAN_SETTLED[scanFreshness(payload).state];
+}
+
 function roleHref(forRole) {
   return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}&span=${encodeURIComponent(agentWindow())}`;
 }
@@ -445,6 +505,7 @@ function render() {
         + (ranking.some((row) => row.unjudged) ? " · unjudged rows are listed last, without a score" : "")
         + (role === "implementers" ? ` · counting ${EXECUTION_LABELS[scorecard.execution] || "managed"} tasks` : "")
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
+    meta.append(" · ", scanNode(scorecard));
   }
   const panel = ROLE_PANELS[role];
   const nodes = [stripNode()];

@@ -6,7 +6,8 @@
 // Implementers regression-by-size panel in its row under the disclosure with
 // its default series drawn and sparse buckets hollow, the Reviewers provisional
 // banner, `accepts often` tag, unjudged row and verdict-outcome bars, the Pilots
-// tier-calibration matrices, the empty state, and the 375px layout (ranking
+// tier-calibration matrices, the header's scan line (stale beside its ranks,
+// then replaced by a newer scan), the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets). The
 // Implementers regression measures document and active-pane overflow with a
 // selected radar at 1440, 1166 and 375, including after control changes, and
@@ -106,7 +107,8 @@ const JUDGED_REVIEWERS = REVIEWER_ROWS.filter(row => !row.unjudged);
 const REVIEWER_FLEET = Math.round((JUDGED_REVIEWERS.reduce((sum, row) => sum + row.units * row.raw, 0) / JUDGED_REVIEWERS.reduce((sum, row) => sum + row.units, 0)) * 100) / 100;
 for (const row of JUDGED_REVIEWERS) row.score = Math.round(Math.min(row.raw, (row.units * row.raw + 30 * REVIEWER_FLEET) / (row.units + 30)) * 100) / 100;
 JUDGED_REVIEWERS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
-let computedAt = '2026-10-19T08:00:00.000Z';
+// Current when the run starts; the scan-freshness check below makes it stale on purpose.
+let computedAt = new Date(Date.now() - 30_000).toISOString();
 const requests = [];
 let matrixUnavailable = false;
 const scorecardWindows = [];
@@ -415,7 +417,7 @@ try {
   await body.locator('.agents-how > summary').click();
   assert.equal(await body.locator('.agents-how').evaluate(node => node.open), true);
   assert.match(await body.locator('.agents-how').textContent(), /score = min\(raw, \(owned tasks × raw \+ 30 × fleet average\)/);
-  computedAt = '2026-10-19T08:05:00.000Z';
+  computedAt = new Date().toISOString();
   await page.locator('#refresh-btn').click();
   await page.waitForTimeout(100);
   assert.equal(await body.locator('.agents-penalty').count(), 0);
@@ -423,6 +425,37 @@ try {
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'codex-orchestrator', 'the selection survives a poll');
   await shot('agents-orchestrators-how-dark-1440');
   pass('disclosure survives a refresh', { panel: await assertPanelOccupiesItsRow('orchestrators') });
+
+  // The header names the scan behind the ranking. A scan past its cache window
+  // keeps its ranks on screen and is shown as stale, at both widths; a refresh
+  // that brings a current scan replaces that qualification.
+  const scan = page.locator('#agents-meta .agents-scan');
+  computedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+  await page.locator('#refresh-btn').click();
+  await page.waitForFunction(() => document.querySelector('#agents-meta .agents-scan')?.dataset.freshness === 'stale');
+  assert.equal(await scan.locator('time').getAttribute('datetime'), computedAt, 'the header names the scan’s computed_at');
+  assert.equal(await scan.locator('time').isVisible(), true, 'the scan time is visible');
+  assert.equal(await scan.isVisible(), true, 'the stale qualification is visible');
+  assert.notEqual(await body.locator('[data-panel-status]').textContent(), 'Updated.', 'a stale scan is not reported as Updated');
+  assert.equal(await body.locator('.agents-row').first().isVisible(), true, 'the ranks stay visible beside a stale scan');
+  assert.equal(await body.locator('.agents-row-select[aria-pressed="true"]').count(), 1, 'the detail column stays selected beside a stale scan');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(50);
+  assert.equal(await scan.isVisible(), true, 'the stale qualification is visible at 375px');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'the scan line fits 375px');
+  await page.locator('#agents-controls').scrollIntoViewIfNeeded();
+  await shot('agents-orchestrators-scan-stale-dark-375');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.locator('#agents-controls').scrollIntoViewIfNeeded();
+  await shot('agents-orchestrators-scan-stale-dark-1440');
+  computedAt = new Date().toISOString();
+  await page.locator('#refresh-btn').click();
+  await page.waitForFunction(() => document.querySelector('#agents-meta .agents-scan')?.dataset.freshness === 'fresh');
+  assert.equal(await scan.locator('time').getAttribute('datetime'), computedAt, 'a newer scan names its own time');
+  assert.equal(await body.locator('.agents-row').first().isVisible(), true, 'the ranks stay visible beside a current scan');
+  await page.locator('#agents-controls').scrollIntoViewIfNeeded();
+  await shot('agents-orchestrators-scan-fresh-dark-1440');
+  pass('scan freshness shows stale, then the newer scan replaces it', { stale: 'stale', fresh: 'fresh' });
 
   // Reviewers: the provisional banner under the strip, the ranking with the
   // `accepts often` tag and the unjudged row last, the detail and each
@@ -824,6 +857,7 @@ try {
       await page.waitForTimeout(50);
       roleContainment.push({ role, ...(await viewportMetrics()) });
       await shot(`agents-role-${role}-selected-dark-${width}`);
+      await page.locator('#agents-controls').screenshot({ path: path.join(evidence, `agents-role-${role}-scan-header-dark-${width}.png`), animations: 'disabled' });
     }
   }
   fs.writeFileSync(path.join(evidence, 'agents-role-containment.json'), JSON.stringify(roleContainment, null, 2));

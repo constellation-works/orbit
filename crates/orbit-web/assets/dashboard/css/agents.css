@@ -84,6 +84,10 @@
 .agents-body h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
 .agents-muted { margin: 4px 0 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 .agents-error { margin: 4px 0 0; color: var(--status-blocked); font-size: 12px; }
+/* The scan behind the ranking, in the header beside its window. A stale scan is
+   also named in its text, so the warning colour is never the only signal. */
+.agents-scan { color: var(--fg-mute); }
+.agents-scan-stale { color: var(--warn-fg); font-weight: 600; }
 
 /* Owners share one palette across the strip, its legend and the panels. */
 .agents-owner-orchestrators { --owner: var(--status-proposed); }

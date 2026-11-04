@@ -562,7 +562,7 @@ function panelMessage(bodyId, state) {
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {
-    note.textContent = "Updated.";
+    note.textContent = state.settledText || "Updated.";
   }
   if (host !== body && !quiet && note.textContent !== previousText) raiseMessageSlot(note);
 }
@@ -627,7 +627,9 @@ export function isPanelPoll() {
   return pollingPanels;
 }
 
-export async function requestPanel(bodyId, scope, request, render, countId) {
+// `settledNote(payload)`, when given, is the text the panel status note shows
+// once this request settles, in place of "Updated."; it must not throw.
+export async function requestPanel(bodyId, scope, request, render, countId, settledNote = null) {
   const revision = getWorkspaceRevision();
   const previous = panelRequests.get(bodyId);
   if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
@@ -640,6 +642,7 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
     if (!current()) return;
     state.loaded = true;
     state.pending = false;
+    state.settledText = settledNote ? settledNote(payload) : null;
     render(payload);
   } catch (error) {
     if (!current()) return;
