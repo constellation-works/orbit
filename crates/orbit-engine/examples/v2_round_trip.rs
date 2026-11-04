@@ -89,7 +89,6 @@ fn main() -> ExitCode {
         }
     }
 
-    // Kind-mismatch smoke.
     let mismatch_yaml = r#"schemaVersion: 2
 kind: Job
 metadata:
