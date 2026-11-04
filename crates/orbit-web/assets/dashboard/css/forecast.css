@@ -47,6 +47,7 @@
 .fc-tasks .fc-table { min-width: 680px; }
 .fc-tasks .fc-table tbody th { min-width: 220px; white-space: normal; }
 .fc-sub { display: block; margin-top: 2px; color: var(--fg-mute); font: 12px var(--font-sans); white-space: nowrap; }
+.fc-sub.fc-thin { color: var(--warn-fg); }
 .fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
 .fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }

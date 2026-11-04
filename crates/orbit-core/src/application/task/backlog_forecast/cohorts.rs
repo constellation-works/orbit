@@ -76,6 +76,9 @@ pub(super) fn prepare_forecast_cohorts(
                     start,
                     end,
                     tokens: spend.normalized_tokens.map(|tokens| tokens as f64),
+                    // Measured provider cost only [ORB-21948]: derived
+                    // estimates are not drawn as cost support, so a missing
+                    // cost stays missing rather than invented.
                     usd: spend.provider_cost_usd,
                 });
             }

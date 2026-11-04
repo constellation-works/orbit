@@ -53,6 +53,8 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
         ("fallback_workspace", 0),
         ("uncovered_model", 0),
         ("uncosted", 0),
+        ("thin_tokens", 0),
+        ("thin_cost", 0),
         ("no_history", 0),
         ("dependency_unforecastable", 0),
         ("unverifiable_dependencies", 0),
@@ -168,6 +170,12 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
         if resolved.uncosted() {
             bump("uncosted");
         }
+        if resolved.thin_tokens() {
+            bump("thin_tokens");
+        }
+        if resolved.thin_cost() {
+            bump("thin_cost");
+        }
     }
     let mut coverage: serde_json::Map<String, Value> = counts
         .into_iter()
@@ -213,6 +221,7 @@ pub(super) fn forecast_inputs(context: &ForecastProjection) -> Value {
             .map(|(factor, revision)| (factor.to_string(), json!(revision)))
             .collect::<serde_json::Map<String, Value>>(),
         "min_cell_samples": model::MIN_CELL_SAMPLES,
+        "min_metric_samples": model::MIN_METRIC_SAMPLES,
         "correction": context.correction.to_json(),
         "gap_bridge_hours": GAP_BRIDGE_HOURS,
         "history_deliveries": history.len(),

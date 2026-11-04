@@ -306,6 +306,10 @@ impl Outcome {
                     "review_mode_source": item.review_mode_source,
                     "review_mode_fallback": resolved[index].review_mode_fallback,
                     "cell_samples": resolved[index].cell_samples,
+                    "token_samples": resolved[index].token_sample_count(),
+                    "cost_samples": resolved[index].cost_sample_count(),
+                    "thin_tokens": resolved[index].thin_tokens(),
+                    "thin_cost": resolved[index].thin_cost(),
                     "unforecastable": reasons[index],
                     "profile_source": scenario
                         .admission

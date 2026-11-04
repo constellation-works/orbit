@@ -956,11 +956,41 @@ function startsCell(row) {
   ]);
 }
 
+export function forecastMetricThin(row, metric) {
+  if (!row) return false;
+  const flag = metric === "tokens" ? row.thin_tokens : row.thin_cost;
+  if (typeof flag === "boolean") return flag;
+  const count = num(metric === "tokens" ? row.token_samples : row.cost_samples);
+  if (count == null || count === 0) return false;
+  const min = num(lastPayload?.inputs?.min_metric_samples) ?? num(lastPayload?.inputs?.min_cell_samples) ?? 5;
+  return count < min;
+}
+
+function metricSupportLine(row) {
+  const parts = [];
+  if (row.cost_samples != null) {
+    const count = forecastCount(row.cost_samples);
+    parts.push(`${count} cost sample${count === 1 ? "" : "s"}`);
+  }
+  if (row.token_samples != null) {
+    const count = forecastCount(row.token_samples);
+    parts.push(`${count} token sample${count === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) return null;
+  const thin = [];
+  if (forecastMetricThin(row, "usd")) thin.push("cost");
+  if (forecastMetricThin(row, "tokens")) thin.push("tokens");
+  return thin.length ? `thin ${thin.join(" & ")} · ${parts.join(" · ")}` : parts.join(" · ");
+}
+
 function costCell(row) {
   const tokens = quantilePair(row.tokens) ? `${formatForecastQuantileRange(row.tokens, formatForecastTokens)} tokens` : null;
+  const support = metricSupportLine(row);
+  const thin = forecastMetricThin(row, "usd") || forecastMetricThin(row, "tokens");
   return el("td", { class: "num" }, [
     formatForecastQuantileRange(row.usd, formatForecastUsd),
     tokens ? el("span", { class: "fc-sub", text: tokens }) : null,
+    support ? el("span", { class: thin ? "fc-sub fc-thin" : "fc-sub", text: support }) : null,
   ]);
 }
 
@@ -1108,6 +1138,10 @@ function coverageItems() {
     ...unreadableItems,
     ["uncovered_model", "Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["uncosted", "Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
+    ...(["thin_tokens", "thin_cost"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
+      ["thin_tokens", "Thin token support", coverage.thin_tokens, `Some but fewer than ${lastPayload.inputs?.min_metric_samples ?? min} measured token samples in the sampled pool: the token range rests on very few measured deliveries (one sample gives the same p50 and p90). Counted separately from the time-sample count.`],
+      ["thin_cost", "Thin cost support", coverage.thin_cost, `Some but fewer than ${lastPayload.inputs?.min_metric_samples ?? min} measured provider-cost samples in the sampled pool: the cost range rests on very few measured deliveries (one sample gives the same p50 and p90). Counted separately from the time-sample count.`],
+    ] : []),
     ["no_history", "No history", coverage.no_history, "Nothing to sample at all."],
     ["dependency_unforecastable", "Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
     ["unverifiable_dependencies", "Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
