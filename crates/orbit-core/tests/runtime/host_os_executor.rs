@@ -1151,8 +1151,12 @@ fn serving_host_draws_respect_effective_task_os_tags() {
 
 /// Show/list expose admission's constraints without persisting derived data.
 fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
-    let config = format!("{POOL}\n[crews.gone]\nmodel = \"gpt-6.1-sol\"\nprovider = \"codex\"\n");
+    let config = format!(
+        "{POOL}\n[crews.gone]\nmodel = \"gpt-6.1-sol\"\nprovider = \"codex\"\n\n[crews.dk]\nkind = \"human\"\n"
+    );
     let (_root, runtime) = runtime_on(HostOs::Linux, &config);
+    let human = add(&runtime, "readout-human", Some("dk"), &[]).unwrap();
+    let human_tagged = add(&runtime, "readout-human-linux", Some("dk"), &["os:linux"]).unwrap();
     let mac = add(&runtime, "readout-mac", Some("muse-wonder"), &[]).unwrap();
     let linux = add(&runtime, "readout-linux", Some("sol"), &["os:linux"]).unwrap();
     let plain = add(&runtime, "readout-plain", Some("sol"), &[]).unwrap();
@@ -1195,6 +1199,12 @@ fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
         json!(["os:linux"])
     );
     assert!(show(&runtime, &plain).get("os_requirement").is_none());
+    // A human crew is configured on this host and has no executor: it never
+    // reads as unresolved, and only the task's own OS tags bind it.
+    assert!(show(&runtime, &human).get("os_requirement").is_none());
+    let human_tagged = show(&runtime, &human_tagged);
+    assert_eq!(human_tagged["os_requirement"]["state"], "restricted");
+    assert_eq!(human_tagged["os_requirement"]["any_of"], json!(["linux"]));
 
     // Removing a configured crew makes its stored assignment unresolved.
     std::fs::write(runtime.paths().orbit_dir.join("config.toml"), POOL).unwrap();
