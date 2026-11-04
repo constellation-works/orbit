@@ -377,8 +377,9 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
             assert_eq!(current["time_to_drain_hours"]["n"], 0);
             assert_eq!(current["settled"], 1);
             assert_eq!(current["not_drained"], 1);
-            // The delivered task is scored in both model-5 forecasts.
-            assert_eq!(five["task_level"]["hours"]["n"], 2);
+            // The delivered task is in both model-5 forecasts and counts
+            // once, from the first of them.
+            assert_eq!(five["task_level"]["hours"]["n"], 1);
         },
     );
 }
@@ -447,7 +448,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 17);
+                assert_eq!(forecast["model_version"], 18);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -535,7 +536,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 17, "{label}");
+    assert_eq!(forecast["model_version"], 18, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -858,7 +859,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
             let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
-            assert_eq!(stored.model_version, 17);
+            assert_eq!(stored.model_version, 18);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
             assert_eq!(tasks[0]["id"], queued.as_str());

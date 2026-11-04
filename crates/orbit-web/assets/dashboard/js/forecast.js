@@ -1323,8 +1323,31 @@ function calibrationCard() {
       calibrationMeasure("Task cost", taskLevel.usd),
       calibrationMeasure("Task tokens", taskLevel.tokens),
     ]),
+    populationLine(calibration),
+    complexityHits(calibration),
     settlementLine(calibration),
   ], "fc-calibration");
+}
+
+const TASK_POPULATIONS = {
+  first_not_started_forecast_per_task: "Each task counts once, from its first stored forecast taken before work started.",
+};
+
+function populationLine(calibration) {
+  const text = TASK_POPULATIONS[calibration.task_population];
+  return text ? el("p", { class: "fc-line", text }) : null;
+}
+
+// Task hit rates per complexity: under p50 · under p90 (scored).
+function complexityHits(calibration) {
+  const rows = (calibration.task_level_by_complexity || []).filter((row) => row.hours?.n || row.usd?.n || row.tokens?.n);
+  if (!rows.length) return null;
+  return table("Task calibration by complexity", [["Complexity"], ["Task hours", true], ["Task cost", true], ["Task tokens", true]], rows.map((row) => el("tr", {}, [
+    el("th", { scope: "row", text: row.complexity }),
+    el("td", { class: "num", text: versionHits(row.hours) }),
+    el("td", { class: "num", text: versionHits(row.usd) }),
+    el("td", { class: "num", text: versionHits(row.tokens) }),
+  ])), "By complexity, under p50 · under p90 (scored).");
 }
 
 // ---- residuals -------------------------------------------------------------

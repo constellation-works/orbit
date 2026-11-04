@@ -36,6 +36,16 @@
 //! ratios are signed around zero and comparable across task sizes; a value
 //! is absent where the actual or the p50 is not positive.
 //!
+//! Task-level hit rates count each task once per model version
+//! [ORB-21949]: its first stored forecast of that version taken while it
+//! had not started ([`TASK_POPULATION`]), among the forecasts that score it.
+//! A forecast taken after work started predicts only the rest, and every
+//! hourly snapshot of a task would otherwise count as another task. The
+//! residual correction trains on the same population. `task_level` holds
+//! the version's rates and `task_level_by_complexity` the same rates per
+//! complexity bucket. Each forecast row's `residual` still reads every
+//! task that forecast scored.
+//!
 //! Hits are kept per model version: a version's quantiles mean something
 //! different from another's, so the top-level hit rates describe the
 //! current version alone and `by_model_version` holds every version's own.
@@ -44,7 +54,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::StoredBacklogForecast;
-use orbit_types::task::{Task, TaskRelationType, TaskStatus, complexity_bucket};
+use orbit_types::task::{
+    Task, TaskRelationType, TaskStatus, complexity_bucket, complexity_bucket_ord,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -57,7 +69,21 @@ struct StoredTask {
     id: String,
     complexity: String,
     #[serde(default)]
+    in_progress: bool,
+    #[serde(default)]
     forecast: Value,
+}
+
+/// The forecasts task-level calibration and the residual correction read:
+/// per task, the first stored forecast taken while it had not started.
+pub(super) const TASK_POPULATION: &str = "first_not_started_forecast_per_task";
+
+/// One task's scored forecast: when it was taken, its complexity, and per
+/// metric the actual and the quantiles it was scored against.
+struct TaskScore {
+    forecast_at: DateTime<Utc>,
+    complexity: String,
+    scored: [Option<(f64, Value)>; 3],
 }
 
 const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
@@ -208,6 +234,7 @@ fn round(value: f64) -> f64 {
 struct VersionHits {
     forecasts: u64,
     task: [Hits; 3],
+    task_by_complexity: BTreeMap<String, [Hits; 3]>,
     total: [Hits; 3],
     /// Settled forecasts, and those of them that never drained.
     settled: u64,
@@ -222,6 +249,38 @@ impl VersionHits {
             "tokens": self.task[1].to_json(),
             "usd": self.task[2].to_json(),
         })
+    }
+
+    fn task_level_by_complexity(&self) -> Value {
+        let mut rows: Vec<(&String, &[Hits; 3])> = self.task_by_complexity.iter().collect();
+        rows.sort_by(|left, right| {
+            complexity_bucket_ord(left.0).cmp(&complexity_bucket_ord(right.0))
+        });
+        Value::Array(
+            rows.into_iter()
+                .map(|(complexity, hits)| {
+                    json!({
+                        "complexity": complexity,
+                        "hours": hits[0].to_json(),
+                        "tokens": hits[1].to_json(),
+                        "usd": hits[2].to_json(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn add_task(&mut self, score: &TaskScore) {
+        let by_complexity = self
+            .task_by_complexity
+            .entry(score.complexity.clone())
+            .or_default();
+        for (index, scored) in score.scored.iter().enumerate() {
+            if let Some((actual, quantiles)) = scored {
+                self.task[index].add(*actual, quantiles);
+                by_complexity[index].add(*actual, quantiles);
+            }
+        }
     }
 
     fn forecast_level(&self) -> Value {
@@ -250,6 +309,9 @@ pub(super) fn score_backlog_forecasts(
     let mut versions: BTreeMap<u32, VersionHits> = BTreeMap::new();
     let mut all_excluded = Excluded::default();
     let mut forecasts = Vec::new();
+    // Task-level population: per (version, task), the first not-started
+    // forecast that scores it.
+    let mut task_scores: BTreeMap<(u32, String), TaskScore> = BTreeMap::new();
     for forecast in stored {
         let hits = versions.entry(forecast.model_version).or_default();
         hits.forecasts += 1;
@@ -328,11 +390,31 @@ pub(super) fn score_backlog_forecasts(
             };
             let actuals = [Some(hours), used.tokens, used.usd];
             let keys = [hours_key, METRICS[1], METRICS[2]];
+            let mut scored: [Option<(f64, Value)>; 3] = [None, None, None];
             for (index, key) in keys.iter().enumerate() {
                 if let Some(actual) = actuals[index] {
-                    hits.task[index].add(actual, &stored_task.forecast[*key]);
+                    scored[index] = Some((actual, stored_task.forecast[*key].clone()));
                     task_residuals[index].extend(log_residual(actual, &stored_task.forecast[*key]));
                 }
+            }
+            let not_started = !stored_task.in_progress
+                && done_at
+                    .get(&stored_task.id)
+                    .is_none_or(|at| *at > forecast.forecast_at);
+            let key = (forecast.model_version, stored_task.id.clone());
+            if not_started
+                && task_scores
+                    .get(&key)
+                    .is_none_or(|kept| forecast.forecast_at < kept.forecast_at)
+            {
+                task_scores.insert(
+                    key,
+                    TaskScore {
+                        forecast_at: forecast.forecast_at,
+                        complexity: stored_task.complexity.clone(),
+                        scored,
+                    },
+                );
             }
         }
         let mut settled = pending == 0 && done + abandoned > 0;
@@ -416,6 +498,9 @@ pub(super) fn score_backlog_forecasts(
             "residual": residual,
         }));
     }
+    for ((version, _), score) in &task_scores {
+        versions.entry(*version).or_default().add_task(score);
+    }
     let current = versions.remove(&current_version).unwrap_or_default();
     let mut by_model_version: Vec<Value> = versions
         .iter()
@@ -427,7 +512,9 @@ pub(super) fn score_backlog_forecasts(
                 "model_version": version,
                 "forecasts": hits.forecasts,
                 "task_hours_measure": task_hours_measure(version),
+                "task_population": TASK_POPULATION,
                 "task_level": hits.task_level(),
+                "task_level_by_complexity": hits.task_level_by_complexity(),
                 "forecast_level": hits.forecast_level(),
                 "regression_rework": {"followups": hits.rework[0].to_json(), "work_hours": hits.rework[1].to_json(), "tokens": hits.rework[2].to_json(), "usd": hits.rework[3].to_json()},
             })
@@ -440,7 +527,9 @@ pub(super) fn score_backlog_forecasts(
         "mature_forecasts": stored.iter().filter(|row| row.model_version >= 9 && row.forecast_at + Duration::days(90) <= now).count(),
         "forecasts": forecasts,
         "task_hours_measure": task_hours_measure(current_version),
+        "task_population": TASK_POPULATION,
         "task_level": current.task_level(),
+        "task_level_by_complexity": current.task_level_by_complexity(),
         "forecast_level": current.forecast_level(),
         "by_model_version": by_model_version,
         "excluded": all_excluded.to_json(),

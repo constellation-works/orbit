@@ -16,9 +16,17 @@
 //! mix.
 //!
 //! A model version only learns from its own scored tasks. Each distinct
-//! task contributes one residual per metric: the latest eligible stored
-//! forecast before it was done. `n` is that task count, so hourly snapshots
-//! of one task cannot meet the minimum on their own. Bumping the version
+//! task contributes one forecast, and so one residual per metric: the first
+//! eligible stored forecast taken while the task had not started
+//! ([`scoring::TASK_POPULATION`], the population task-level calibration
+//! scores). A forecast taken after work started predicts only what was
+//! left, so it is not a residual. `n` is that task count, so hourly
+//! snapshots of one task cannot meet the minimum on their own.
+//!
+//! A cohort that meets the minimum is checked out of sample before it is
+//! applied: each kept task's base p90 is corrected by the cohort fitted
+//! without it, and when that leave-one-out p90 coverage is below both the
+//! base coverage and the 90% target the cohort is withheld. Bumping the version
 //! starts the correction over. Rows written by this version store each
 //! task's uncorrected quantiles under `forecast.base`; the fit reads those,
 //! so a later forecast does not treat an already-corrected quantile as the
@@ -52,9 +60,66 @@ const MAX_LOG_ADJUST: f64 = std::f64::consts::LN_10;
 const MIN_LOG_RATIO: f64 = 0.05;
 const METRICS: [&str; 3] = ["work_hours", "tokens", "usd"];
 
+/// Coverage the p90 is meant to reach; a holdout below it and below the
+/// base withholds the cohort.
+const P90_TARGET: f64 = 0.9;
+/// Relative slack when comparing an actual with a quantile, so a corrected
+/// quantile that reproduces the actual through `ln`/`exp` still counts.
+const HIT_TOLERANCE: f64 = 1e-9;
+
+/// Why a cohort with residuals is not applied.
+#[derive(Clone, Copy)]
+enum Withheld {
+    BelowMinN,
+    P90Holdout,
+}
+
+impl Withheld {
+    fn key(self) -> &'static str {
+        match self {
+            Self::BelowMinN => "below_min_n",
+            Self::P90Holdout => "p90_holdout",
+        }
+    }
+}
+
+/// Leave-one-out p90 coverage of a cohort: how many held-out tasks fell at
+/// or under the base p90, and under the p90 corrected without them.
+#[derive(Clone, Copy)]
+struct Holdout {
+    n: u64,
+    base_hits: u64,
+    corrected_hits: u64,
+}
+
+impl Holdout {
+    fn share(self, hits: u64) -> Option<f64> {
+        (self.n > 0).then(|| hits as f64 / self.n as f64)
+    }
+
+    /// The corrected p90 covers less than the base and less than the target.
+    fn lowers_p90(self) -> bool {
+        match (self.share(self.corrected_hits), self.share(self.base_hits)) {
+            (Some(corrected), Some(base)) => corrected < base && corrected < P90_TARGET,
+            _ => false,
+        }
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+            "method": "leave_one_out",
+            "n": self.n,
+            "base_under_p90": self.share(self.base_hits).map(round3),
+            "corrected_under_p90": self.share(self.corrected_hits).map(round3),
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Term {
     applied: bool,
+    withheld: Option<Withheld>,
+    holdout: Option<Holdout>,
     n: u64,
     weight: f64,
     bias: Option<f64>,
@@ -69,6 +134,8 @@ impl Default for Term {
     fn default() -> Self {
         Self {
             applied: false,
+            withheld: None,
+            holdout: None,
             n: 0,
             weight: 0.0,
             bias: None,
@@ -83,7 +150,15 @@ impl Default for Term {
 
 impl Term {
     fn apply(self, value: f64) -> f64 {
-        if !self.applied || value <= 0.0 || !value.is_finite() {
+        if !self.applied {
+            return value;
+        }
+        self.map(value)
+    }
+
+    /// The log-affine map, whether or not the cohort is applied.
+    fn map(self, value: f64) -> f64 {
+        if value <= 0.0 || !value.is_finite() {
             return value;
         }
         let center = if self.center > 0.0 { self.center } else { 1.0 };
@@ -114,6 +189,8 @@ impl Correction {
                     "n": term.n,
                     "weight": round3(term.weight),
                     "applied": term.applied,
+                    "withheld": term.withheld.map(Withheld::key),
+                    "holdout": term.holdout.map(Holdout::to_json),
                     "bias": term.bias.map(round3),
                     "p50_log_adjust": estimated.then(|| round3(term.p50_log_adjust)),
                     "p90_log_adjust": estimated.then(|| round3(term.p90_log_adjust)),
@@ -128,6 +205,8 @@ impl Correction {
             "window_days": WINDOW_DAYS,
             "min_n": MIN_COHORT_N,
             "max_abs_log_adjust": round3(MAX_LOG_ADJUST),
+            "population": scoring::TASK_POPULATION,
+            "p90_holdout_target": P90_TARGET,
             "cohorts": cohorts,
         })
     }
@@ -156,13 +235,17 @@ struct StoredTask {
     id: String,
     complexity: String,
     #[serde(default)]
+    in_progress: bool,
+    #[serde(default)]
     forecast: Value,
 }
 
 struct Sample {
+    actual: f64,
     e50: f64,
     e90: Option<f64>,
     base_p50: f64,
+    base_p90: Option<f64>,
     ratio: Option<f64>,
     weight: f64,
 }
@@ -180,9 +263,11 @@ pub(super) fn fit_correction(inputs: &CorrectionInputs<'_>) -> Correction {
         .iter()
         .map(|item| item.complexity.clone())
         .collect();
-    // One residual per (metric, complexity, task). A later eligible forecast
-    // replaces an earlier one; the same timestamp keeps the first residual.
-    let mut kept: BTreeMap<(usize, String, String), (DateTime<Utc>, Sample)> = BTreeMap::new();
+    // One forecast per (complexity, task): its first eligible stored
+    // forecast taken before work started. An earlier one replaces a later
+    // one; the same timestamp keeps the first read.
+    type Kept = (DateTime<Utc>, [Option<Sample>; 3]);
+    let mut kept: BTreeMap<(String, String), Kept> = BTreeMap::new();
     for forecast in inputs.stored {
         if forecast.model_version != model::MODEL_VERSION || forecast.forecast_at >= inputs.now {
             continue;
@@ -190,70 +275,47 @@ pub(super) fn fit_correction(inputs: &CorrectionInputs<'_>) -> Correction {
         let stored_tasks: Vec<StoredTask> =
             serde_json::from_str(&forecast.tasks_json).unwrap_or_default();
         for stored_task in stored_tasks {
+            if stored_task.in_progress {
+                continue;
+            }
+            let key = (stored_task.complexity.clone(), stored_task.id.clone());
+            if kept
+                .get(&key)
+                .is_some_and(|(forecast_at, _)| *forecast_at <= forecast.forecast_at)
+            {
+                continue;
+            }
             let Some(sample_at) = eligible_done(inputs, forecast, &stored_task, &cohort_ids) else {
                 continue;
             };
             let Some(actual) = task_actual(inputs, forecast, &stored_task.id, sample_at) else {
                 continue;
             };
-            let weight = residual_weight(sample_at, inputs.now);
-            let Some(weight) = weight else {
+            let Some(weight) = residual_weight(sample_at, inputs.now) else {
                 continue;
             };
             let actuals = [Some(actual.0), actual.1, actual.2];
+            let mut samples: [Option<Sample>; 3] = [None, None, None];
             for (metric, actual) in actuals.into_iter().enumerate() {
-                let Some(actual) = actual.filter(|value| value.is_finite() && *value > 0.0) else {
-                    continue;
-                };
-                let Some((base_p50, base_p90)) =
-                    base_quantile(&stored_task.forecast, METRICS[metric])
-                else {
-                    continue;
-                };
-                let e50 = (actual / base_p50).ln();
-                if !e50.is_finite() {
-                    continue;
-                }
-                let e90 = base_p90
-                    .map(|p90| (actual / p90).ln())
-                    .filter(|e| e.is_finite());
-                let ratio = base_p90
-                    .filter(|p90| *p90 > base_p50)
-                    .map(|p90| p90 / base_p50);
-                let key = (
-                    metric,
-                    stored_task.complexity.clone(),
-                    stored_task.id.clone(),
-                );
-                if kept
-                    .get(&key)
-                    .is_some_and(|(forecast_at, _)| *forecast_at >= forecast.forecast_at)
-                {
-                    continue;
-                }
-                complexities.insert(key.1.clone());
-                kept.insert(
-                    key,
-                    (
-                        forecast.forecast_at,
-                        Sample {
-                            e50,
-                            e90,
-                            base_p50,
-                            ratio,
-                            weight,
-                        },
-                    ),
-                );
+                samples[metric] = residual_sample(&stored_task.forecast, metric, actual, weight);
             }
+            if samples.iter().all(Option::is_none) {
+                continue;
+            }
+            complexities.insert(key.0.clone());
+            kept.insert(key, (forecast.forecast_at, samples));
         }
     }
     let mut samples: BTreeMap<(usize, String), Vec<Sample>> = BTreeMap::new();
-    for ((metric, complexity, _), (_, sample)) in kept {
-        samples
-            .entry((metric, complexity))
-            .or_default()
-            .push(sample);
+    for ((complexity, _), (_, metrics)) in kept {
+        for (metric, sample) in metrics.into_iter().enumerate() {
+            if let Some(sample) = sample {
+                samples
+                    .entry((metric, complexity.clone()))
+                    .or_default()
+                    .push(sample);
+            }
+        }
     }
     let mut by_complexity: BTreeMap<String, [Term; 3]> = complexities
         .iter()
@@ -268,6 +330,37 @@ pub(super) fn fit_correction(inputs: &CorrectionInputs<'_>) -> Correction {
         fit_ms: started.elapsed().as_secs_f64() * 1000.0,
         by_complexity,
     }
+}
+
+/// One metric's residual against the stored base, when both sides are
+/// positive numbers.
+fn residual_sample(
+    forecast: &Value,
+    metric: usize,
+    actual: Option<f64>,
+    weight: f64,
+) -> Option<Sample> {
+    let actual = actual.filter(|value| value.is_finite() && *value > 0.0)?;
+    let (base_p50, base_p90) = base_quantile(forecast, METRICS[metric])?;
+    let e50 = (actual / base_p50).ln();
+    if !e50.is_finite() {
+        return None;
+    }
+    let e90 = base_p90
+        .map(|p90| (actual / p90).ln())
+        .filter(|e| e.is_finite());
+    let ratio = base_p90
+        .filter(|p90| *p90 > base_p50)
+        .map(|p90| p90 / base_p50);
+    Some(Sample {
+        actual,
+        e50,
+        e90,
+        base_p50,
+        base_p90,
+        ratio,
+        weight,
+    })
 }
 
 /// Sum of one uncorrected script's spend. The schedule may charge only the
@@ -343,8 +436,61 @@ pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &m
 }
 
 /// Fit one cohort. `samples` holds one residual per distinct task, so `n`
-/// is that count and the cohort applies only at [`MIN_COHORT_N`] tasks.
+/// is that count and the cohort applies only at [`MIN_COHORT_N`] tasks,
+/// and only when its leave-one-out p90 coverage does not fall below both
+/// the base and [`P90_TARGET`].
 fn fit_term(samples: &[Sample]) -> Term {
+    let refs: Vec<&Sample> = samples.iter().collect();
+    let mut term = estimate_term(&refs);
+    if term.n == 0 {
+        return term;
+    }
+    if samples.len() < MIN_COHORT_N {
+        term.withheld = Some(Withheld::BelowMinN);
+        return term;
+    }
+    let holdout = leave_one_out_p90(samples);
+    term.holdout = holdout;
+    if holdout.is_some_and(Holdout::lowers_p90) {
+        term.withheld = Some(Withheld::P90Holdout);
+    } else {
+        term.applied = true;
+    }
+    term
+}
+
+/// Each task whose base p90 is known, scored against the base p90 and
+/// against that p90 corrected by the cohort fitted without it.
+fn leave_one_out_p90(samples: &[Sample]) -> Option<Holdout> {
+    let mut holdout = Holdout {
+        n: 0,
+        base_hits: 0,
+        corrected_hits: 0,
+    };
+    for (index, sample) in samples.iter().enumerate() {
+        let Some(base_p90) = sample.base_p90 else {
+            continue;
+        };
+        let rest: Vec<&Sample> = samples
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .map(|(_, other)| other)
+            .collect();
+        let without = estimate_term(&rest);
+        if without.n == 0 {
+            continue;
+        }
+        let hit = |p90: f64| sample.actual <= p90 * (1.0 + HIT_TOLERANCE);
+        holdout.n += 1;
+        holdout.base_hits += u64::from(hit(base_p90));
+        holdout.corrected_hits += u64::from(hit(without.map(base_p90)));
+    }
+    (holdout.n > 0).then_some(holdout)
+}
+
+/// The cohort's terms, unapplied.
+fn estimate_term(samples: &[&Sample]) -> Term {
     let weight: f64 = samples.iter().map(|sample| sample.weight).sum();
     if samples.is_empty() || weight <= 0.0 {
         return Term::default();
@@ -382,7 +528,9 @@ fn fit_term(samples: &[Sample]) -> Term {
         .filter(|ratio| ratio.ln() > MIN_LOG_RATIO)
         .map_or(0.0, |ratio| (q90 - q50) / ratio.ln());
     Term {
-        applied: samples.len() >= MIN_COHORT_N,
+        applied: false,
+        withheld: None,
+        holdout: None,
         n: samples.len() as u64,
         weight,
         bias: bias.is_finite().then_some(bias),
