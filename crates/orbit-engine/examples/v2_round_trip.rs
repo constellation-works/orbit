@@ -7,23 +7,18 @@
     clippy::unwrap_used
 )]
 
-//! Round-trip smoke for v2 reference YAMLs (closes T20260418-2010 AC1).
+//! Round-trip smoke for the v2 activity reference YAMLs, plus a kind-mismatch check.
 //!
-//! For each v2 reference under `crates/orbit-core/assets/activities/`:
-//!   1. Load the YAML through `load_activity_asset` → `ActivityV2`.
-//!   2. Re-serialize via `ResourceEnvelope<ActivityV2>` back to YAML.
-//!   3. Parse both the source YAML and the re-serialized YAML as `serde_yaml::Value`s.
-//!   4. Assert the two `Value`s compare equal (**semantic** round-trip — stricter
-//!      byte-identical YAML would require controlling quoting/ordering choices
-//!      in `serde_yaml`'s emitter; the AC bar is "equal modulo trailing
-//!      whitespace" which we interpret as semantic equality).
+//! Each reference under `crates/orbit-core/assets/activities/` must load through
+//! `load_activity_asset`, re-serialize as a `ResourceEnvelope<ActivityV2>` and parse
+//! back to an equal YAML value. The comparison is semantic, not byte-level: byte
+//! identity would depend on `serde_yaml`'s quoting and key-order choices.
 //!
-//! Also covers the kind-mismatch validation case (AC11): attempts to load an
-//! in-memory YAML with `kind: Job` as an Activity and asserts the loader
-//! returns `AssetLoadError::KindMismatch`.
+//! An in-memory YAML with `kind: Job` must fail to load as an Activity with
+//! `AssetLoadError::KindMismatch`.
 //!
 //! Usage:
-//!     cargo run -p orbit-common --example v2_round_trip
+//!     cargo run -p orbit-engine --example v2_round_trip
 
 use std::fs;
 use std::path::PathBuf;
@@ -93,7 +88,7 @@ fn main() -> ExitCode {
         }
     }
 
-    // AC11 kind-mismatch smoke.
+    // Kind-mismatch smoke.
     let mismatch_yaml = r#"schemaVersion: 2
 kind: Job
 metadata:
