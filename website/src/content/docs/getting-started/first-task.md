@@ -97,7 +97,8 @@ Every step has a CLI equivalent. The same task, end to end:
 TASK_ID=$(orbit task add --title "Create orbit-hello.txt" \
   --acceptance-criteria "orbit-hello.txt exists at the repository root." \
   --acceptance-criteria "It contains the text 'hello from orbit'." \
-  --complexity low --workspace .)
+  --complexity low --workspace . \
+  --context file:orbit-hello.txt --allow-missing-context)
 orbit task lint "$TASK_ID"               # flag vague criteria or unusable scope
 orbit task update "$TASK_ID" --approve   # proposed → backlog
 orbit run ship "$TASK_ID"                # prints a run ID and returns
@@ -106,9 +107,11 @@ orbit task update "$TASK_ID" --approve   # after you merge: review → done
 orbit task settle-merged "$TASK_ID"      # or let Orbit settle it once merged
 ```
 
-`orbit task add` prints only the new task ID. `--title` and `--complexity` are
-required. `--context` names the files and directories the task expects to
-change. Orbit locks them, so an overlapping task waits, and Markdown files are
+With a context declared, `orbit task add` prints only the new task ID (with
+none, it first warns that the task holds no file lock). `--title` and
+`--complexity` are required. `--context` names the files and directories the
+task expects to change; `--allow-missing-context` covers a file the task will
+create, as here. Orbit locks them, so an overlapping task waits, and Markdown files are
 shared rather than locked by default. It is a starting point, not a limit: a
 run that changes other files still delivers, Orbit adds them to the task's
 context, and the run is recorded as a footprint miss. See
