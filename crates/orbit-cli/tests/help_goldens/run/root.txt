@@ -37,33 +37,11 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Workflow entrypoints:
-  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
-  orbit run auto --stop
-  orbit run ship [task_id ...] [--complete]
-  orbit run task-pilot [task_id ...]
-  orbit run job <job_id> [--input key=value] [--json]
-  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
+Examples:
+  orbit run auto --for 2h --concurrency 8
+  orbit run ship <task_id>
+  orbit run history --state failed --since 24h
+  orbit run show <run_id>
 
-Run history:
-  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50] [--failures]
-  orbit run history -j <job_id>
-  orbit run show [run_id] [-s step_id] [--json]
-  orbit run logs [run_id] [-s step_id] [--json]
-  orbit run events [run_id] [-s step_id] [--type event_type] [--json]
-  orbit run trace [run_id] [--json]
-  orbit run settlements [--since 7d] [--json]
-  orbit run settlements-hydrate --follower-workspace <workspace> [--limit N] [--after <claim-id>] [--json]
-
-Maintenance:
-  orbit run cancel <run_id> --confirm
-  orbit run concurrency <run_id> --set 7
-  orbit run extend <run_id> --for 2h [--concurrency <N>]
-  orbit run profiles [--accuracy] [--json]
-
-Owner/local drains count every in-flight child against N. Pull drains grant capped replacement
-credit for leaves in before-landing review: admission counts occupied - min(reviewing, N)
-against N. Reviewing leaves can exceed N as replacements reach review; with an unchanged N and
-no pre-existing excess, total occupied is at most 2N and implementing at most N. Lowering N
-preserves running leaves, so existing excess can remain temporarily. orbit run show reports
-stage counts, and review rebuilds still use repository build-budget slots.
+`orbit run <COMMAND> -h` lists a command's flags. Drain admission, concurrency
+and window rules: installed orbit-orchestrate skill `references/orchestration.md`.

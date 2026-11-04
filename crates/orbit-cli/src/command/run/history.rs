@@ -27,14 +27,14 @@ fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}. --failures uses {\"failures\":[{\"task_id\",\"run_id\",\"step\",\"crew\",\"cause\",\"show\"}]} instead.\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nA gate or auto run that failed only because a child failed records the leaf it echoes in `.root_cause` ({leaf_run_id, task_id, step, code}); it is null for a run that failed on its own. --incidents folds every listed run that echoes the same leaf into one row, the leaf's own when it is listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them. --failures folds the same runs into one row per task and root cause: RUN_ID, STEP and CREW are the root-cause run's, CAUSE is that run's error on one line with no 60-character cap, and SHOW is `orbit run show` for that run. --failures and --incidents cannot be combined.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "ROLE says how a run was submitted: top-level directly, child by a parent run.\nJSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging.md`.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
     #[arg(short = 'j', long = "job")]
     pub job_id: Option<String>,
 
-    /// Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
+    /// Filter to runs whose input names this task
     #[arg(long = "task")]
     pub task_id: Option<String>,
 
@@ -50,20 +50,15 @@ pub struct RunHistoryArgs {
     #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
 
-    /// Report stored run records as-is: skip stale-run reconciliation, which
-    /// finalizes an orphaned pending or running run as interrupted, releases
-    /// its task reservations, and settles with their owner the pull claims an
-    /// ended drain or leaf left
+    /// Report stored run records as-is, skipping stale-run reconciliation
     #[arg(long)]
     pub no_reconcile: bool,
 
-    /// Show one row per incident: fold runs that failed only because a child
-    /// failed into the run that failed on its own
+    /// One row per incident, folding runs that failed only because a child did
     #[arg(long, conflicts_with = "failures")]
     pub incidents: bool,
 
-    /// One row per task and root cause: the root-cause run, its step and crew,
-    /// the cause's first line in full, and `orbit run show` for that run
+    /// One row per task and root cause, with that run's step, crew and cause
     #[arg(long, conflicts_with = "incidents")]
     pub failures: bool,
 }

@@ -143,7 +143,7 @@ const fn path(mut param: ParamSpec) -> ParamSpec {
 const NOT_BEFORE_MCP_HELP: &str = "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused";
 
 /// `--not-before` on `orbit task add|update`.
-const NOT_BEFORE_CLI_HELP: &str = "Earliest time a dispatcher may start the task: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or a local `YYYY-MM-DDTHH:MM` in this host's time zone. Until then a backlog task waits, reported `scheduled`";
+const NOT_BEFORE_CLI_HELP: &str = "Earliest dispatch start: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or local `YYYY-MM-DDTHH:MM`";
 
 const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RETIRED_AGENT_FIELD,
@@ -422,7 +422,9 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
-        after_help: None,
+        after_help: Some(
+            "Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md` (Human CLI task update).",
+        ),
         flag_order: &[
             "host",
             "id",
@@ -504,7 +506,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Replacement dependency task IDs as a string or array of strings",
                 flag_with_delimiter("dependencies", &["dependency"], None),
-                "Replacement dependency task IDs. Repeat or comma-separate for multiple dependencies (empty string clears)",
+                "Replacement dependency task IDs; repeat or comma-separate (empty string clears)",
             )),
             mcp_only(
                 "relations",
@@ -516,21 +518,21 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
                 flag_with_delimiter("tag", &[], None),
-                "Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
+                "Replacement task tags; repeat or comma-separate. `os:linux|macos|windows` limits the host OS",
             ),
             preserve_empty(both(
                 "granted_tools",
                 ParamType::StringList,
                 "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
-                "Replacement operator-granted tool names (operator only; empty string clears). Accepted only before the task's next attempt is dispatched",
+                "Replacement operator-granted tool names (operator only; empty string clears)",
             )),
             preserve_empty(both(
                 "requires_labels",
                 ParamType::StringList,
                 "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
-                "Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels",
+                "Replacement labels a host must all carry to run the task (empty string clears)",
             )),
             preserve_empty(both(
                 "not_before",
@@ -551,7 +553,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                     value_name: None,
                     multiple: false,
                 },
-                "Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`)",
+                "Allow a tag replacement that drops a system identity tag (`ci-failure:*`)",
             ),
             free_text(preserve_empty(both(
                 "plan",
@@ -572,7 +574,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::Enum(TASK_UPDATE_STATUS_VALUES),
                 "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
                 CliArgKind::flag("status"),
-                "New status. A task assigned to a human crew takes any status from you directly, with no plan, evidence or review and no `--force`; the change is recorded in task history as a human-crew bypass",
+                "New status (human-crew tasks accept any status, recorded as a bypass)",
             ),
             free_text(both(
                 "note",
@@ -675,14 +677,14 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
                 flag_with_delimiter("context", &["context-files"], None),
-                "Replace the whole task context list. Omit to preserve it; an empty string clears it. To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up",
+                "Replace the whole context selector list; to extend, resend existing ones too (empty string clears)",
             ))),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
                 "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
                 CliArgKind::flag("allow-missing-context"),
-                "Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent; dropping a selector from the list revokes it, and re-sending a recorded one needs no flag",
+                "Accept context selectors for files this task will create",
             ),
             path(mcp_only(
                 "context",
@@ -736,19 +738,19 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 "approve",
                 ParamType::Switch,
                 CliArgKind::flag("approve"),
-                "Take the task's next approval step: `proposed` -> `backlog`, or `review` -> `done`. The transition is chosen from the current status, so it cannot be combined with field edits or an explicit `--status`",
+                "Take the next approval step (proposed -> backlog, review -> done); no field edits or `--status`",
             ),
             cli_only(
                 "discard_candidate",
                 ParamType::Switch,
                 CliArgKind::flag("discard-candidate"),
-                "Discard the candidate the task's last failed run preserved, so its next run implements fresh instead of resuming it. Combine with `--status backlog` to requeue",
+                "Discard the last failed run's preserved candidate; pair with `--status backlog` to requeue",
             ),
             cli_only(
                 "force",
                 ParamType::Switch,
                 CliArgKind::flag("force"),
-                "Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`. A human-crew task needs no `--force` except to leave `done` or `archived`",
+                "Apply `--status` even when the lifecycle refuses it (human override, recorded as `forced`)",
             ),
             CLI_OPTIONS_PARAM,
         ],

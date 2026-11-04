@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --host <HOST>
-          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+          Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix
 
       --title <TITLE>
           New title
@@ -20,19 +20,19 @@ Options:
           Replacement acceptance criteria. Repeat the flag for multiple criteria
 
       --dependencies <DEPENDENCIES>
-          Replacement dependency task IDs. Repeat or comma-separate for multiple dependencies (empty string clears)
+          Replacement dependency task IDs; repeat or comma-separate (empty string clears)
 
       --tag <TAGS>
-          Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected
+          Replacement task tags; repeat or comma-separate. `os:linux|macos|windows` limits the host OS
 
       --granted-tools <GRANTED_TOOLS>
-          Replacement operator-granted tool names (operator only; empty string clears). Accepted only before the task's next attempt is dispatched
+          Replacement operator-granted tool names (operator only; empty string clears)
 
       --requires-labels <LABEL>
-          Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels
+          Replacement labels a host must all carry to run the task (empty string clears)
 
       --not-before <TIME>
-          Earliest time a dispatcher may start the task: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or a local `YYYY-MM-DDTHH:MM` in this host's time zone. Until then a backlog task waits, reported `scheduled`
+          Earliest dispatch start: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or local `YYYY-MM-DDTHH:MM`
 
       --clear-not-before
           Clear the task's scheduled start, so dispatchers may start it at their next admission pass
@@ -47,7 +47,7 @@ Options:
           Append a task comment
 
       --status <STATUS>
-          New status. A task assigned to a human crew takes any status from you directly, with no plan, evidence or review and no `--force`; the change is recorded in task history as a human-crew bypass
+          New status (human-crew tasks accept any status, recorded as a bypass)
           
           [possible values: proposed, backlog, someday, in-progress, review, done, blocked, archived, rejected]
 
@@ -101,10 +101,10 @@ Options:
           - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
 
       --context <CONTEXT_FILES>
-          Replace the whole task context list. Omit to preserve it; an empty string clears it. To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up
+          Replace the whole context selector list; to extend, resend existing ones too (empty string clears)
 
       --allow-missing-context
-          Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent; dropping a selector from the list revokes it, and re-sending a recorded one needs no flag
+          Accept context selectors for files this task will create
 
       --artifact <ARTIFACTS>
           Task artifact write in `path=content` form. Repeat for multiple artifacts
@@ -113,19 +113,19 @@ Options:
           Explicit agent model to persist on the task artifact
 
       --approve
-          Take the task's next approval step: `proposed` -> `backlog`, or `review` -> `done`. The transition is chosen from the current status, so it cannot be combined with field edits or an explicit `--status`
+          Take the next approval step (proposed -> backlog, review -> done); no field edits or `--status`
 
       --note <NOTE>
           Note recorded on the approval's status history entry (with `--approve`)
 
       --discard-candidate
-          Discard the candidate the task's last failed run preserved, so its next run implements fresh instead of resuming it. Combine with `--status backlog` to requeue
+          Discard the last failed run's preserved candidate; pair with `--status backlog` to requeue
 
       --force
-          Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`. A human-crew task needs no `--force` except to leave `done` or `archived`
+          Apply `--status` even when the lifecycle refuses it (human override, recorded as `forced`)
 
       --allow-drop-system-tags
-          Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`)
+          Allow a tag replacement that drops a system identity tag (`ci-failure:*`)
 
       --repilot
           Request one new pilot after updating (operator only)
@@ -139,3 +139,5 @@ Global options (see 'orbit --help' for descriptions):
   --format <MODE>
   --json
   --header
+
+Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md` (Human CLI task update).

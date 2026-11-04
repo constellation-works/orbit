@@ -319,6 +319,75 @@ a managed worker cannot dispatch/resume another workflow or use operator command
 execution. An allowlisted tool still has to pass runtime policy, filesystem,
 subprocess, and external authentication checks.
 
+### Serving MCP: `orbit mcp serve` flags
+
+`orbit mcp serve --help` keeps one line per flag; these are its rules.
+
+- `--mode remote` proxies one chosen SSH destination and requires it as an
+  argument. `--mode federated` includes this machine automatically and muxes
+  every host registered with `orbit host add`; it takes no argument. A
+  federated server binds to no single workspace: it lists each destination's
+  workspaces as live descriptors, probing remotes on every call and including
+  remotes that are unreachable right now rather than hiding them.
+  Workspace-scoped tools take the host-qualified `selector` copied from that
+  list; a registered name, a bare `ws_*` or `--workspace` is not a federated
+  selector.
+- **Omit `--operator` for any server an agent launches.** Without it a session
+  holds the agent capability only, and governed operations (such as
+  dispatching a workflow or deleting a task) are refused. The
+  flag is the deliberate act: `ORBIT_OPERATOR` in the server's environment is
+  ignored on the MCP surface, so an operator shell cannot grant operator
+  authority to an agent's server by accident.
+- With `--mode remote` or `--mode federated`, `--operator` is also the operator
+  statement for every SSH destination the client opens: Orbit is a single-user
+  tool and an SSH login to a machine is ownership of it, so the destination
+  serves the authority this argv asks for. A client that is itself running as
+  an agent never propagates it.
+- `--workspace <SELECTOR>` takes a workspace name, a logical `ws_*` ID or an
+  absolute registered checkout path. Most MCP clients cannot announce
+  `_meta.orbit.workspace` on initialize, so without `--workspace` a
+  workspace-scoped tool must repeat the selector on every call. Local
+  `orbit mcp init` and `orbit workspace init --mcp` write it into the
+  integrations they generate; a managed child that launches `orbit mcp serve`
+  without the flag still inherits `ORBIT_WORKSPACE` from the trusted execution
+  envelope. The federated init path is session-unbound. A client that does
+  announce a workspace, and any explicit per-call `workspace`, still take
+  precedence. The selector is resolved against the accepting server's
+  registry per call, never from the server process cwd.
+- `--orchestrator <CREW>` is attribution only. Unlike `--operator` it grants
+  nothing: a session still holds exactly the capabilities it was served with,
+  and the crew named neither selects the crew a task executes under nor the
+  model recorded for that execution. The name is resolved against the crews
+  of whichever workspace the call lands in, so an unconfigured crew fails that
+  call rather than quietly selecting another one. It applies only when a task
+  is created, and only to that task, unless the call names an orchestrator
+  itself; an existing task's orchestrator is never rewritten from this
+  default. Treat it as configuration, not as evidence of who is calling. A
+  long-lived MCP connection outlives a model switch in the client, so pass
+  `orchestrator` on the individual call, or restart the connection with a new
+  value, when the orchestrating crew actually changes.
+- `--role <ROLE>` serves only one role's toolsets: `operator` (every toolset),
+  `manager`, `resident`, `agent` or `reader`. It replaces the
+  `machine.mcp.role` host config. A role limits what is advertised and
+  callable over MCP; it grants no authority. `orbit tool list --role <ROLE>`
+  lists a role's tools and size.
+- Only `core` is always advertised. Without a configured role, the default
+  tier (tasks, workflows and runs, automation, decision list and show,
+  codebase, friction, search, the UI and visual tools, and command execution)
+  is advertised. Named toolsets and toolsets stamped for a managed activity
+  add to the selected role or default tier. `decision-channel` tools may be
+  called only by the bound channel plugin or the operator; a managed run
+  offered explorer delegation enables `agent-invoke` on its own server.
+- `--toolset` takes a comma-separated list (`leases`, `experiments`,
+  `analytics`, `decision-channel`, `agent-invoke`, `notice`, `resident`,
+  `tasks-write`, `dispatch`; `default` names the default surface and `all`
+  every toolset) advertised beside the role's, or beside the default surface
+  without a role. It replaces the `machine.mcp.toolsets` host config for this
+  server. `--mode remote` asks the destination for the same toolsets, and
+  `--mode federated` applies them to every destination. `orbit tool list`
+  shows each tool's toolset; what a toolset changes is under MCP toolsets
+  below.
+
 ### MCP toolsets
 
 `orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus

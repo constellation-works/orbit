@@ -547,6 +547,22 @@ Look for `input.task_ids` overlap between candidate runs, parent events that inv
 
 A gate or auto run that failed only because its child did records that leaf in its `--json` `root_cause` (`leaf_run_id`, `task_id`, `step`, `code`; null on a run that failed on its own), and `orbit run history --state failed --incidents` shows one row per leaf with the folded parents in `cascaded_run_ids`. `orbit run history --failures` shows one row per task and root cause instead: the root-cause run, its step and crew, the cause's first line in full, and `orbit run show` for that run (`--json`: `failures`). It cannot be combined with `--incidents`. On a drain, `orbit run show` names that same root-cause run in the failed-leaf warning, states each task's current status, and omits the `orbit job resume` line once the task has left `blocked`. A red base or a before-landing review awaiting a decision ends the run `held`, and a cancelled child ends its waiting parents `cancelled`; neither is a failure. A claimed leaf stopped by its provider's usage limit also ends `held`: its step code is `provider_limit`, its message names the provider and the reset, and the claim returns to the owner. A CI sweep whose only gaps are run-scoped retryable collection errors succeeds with outcome `deferred` and a `deferred_count`. Neither lists under `--state failed`; Incidents lists both under the `deferred` class.
 
+`orbit run history --task <id>` lists runs whose `input.task_ids` array
+contains the task or whose top-level `input.task_id` matches it.
+`orbit run history --json` prints `{"runs":[<job-run>]}`; `--failures` prints
+`{"failures":[{task_id, run_id, step, crew, cause, show}]}` instead. ROLE says
+how a run was submitted: top-level directly, child by a parent run; run ids
+minted before role markers existed read as unmarked. `--incidents` folds every
+listed run that echoes the same leaf into one row, the leaf's own when it is
+listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them.
+`--failures` folds the same runs into one row per task and root cause: RUN_ID,
+STEP and CREW are the root-cause run's, and CAUSE is that run's error on one
+line without the plain ERROR column's 60-character cap. `--no-reconcile`
+reports stored records as-is; without it, stale-run reconciliation finalizes
+an orphaned pending or running run as interrupted, releases its task
+reservations, and settles with their owner the pull claims an ended drain or
+leaf left.
+
 ## Delivery-refusal holds
 
 A fail-closed delivery decision ends the run `held`, never `failed`. The
