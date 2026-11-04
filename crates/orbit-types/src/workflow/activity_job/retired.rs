@@ -1,21 +1,5 @@
-//! Retired v2 asset features and their fail-closed migration [ORB-10801].
-//!
-//! Orbit executes agent activities through the CLI agent path only. The
-//! `backend: http | cli | auto` selector and the engine-driven HTTP loop it
-//! chose are gone, along with everything that only that loop could provide.
-//!
-//! Both retired declarations are still *recognized* so an asset that carries
-//! one is refused with an actionable message. Accepting them silently would
-//! change what the asset does — an `http` step would start executing through
-//! the CLI agent, and a `session:` step would quietly lose the cross-iteration
-//! conversation history it was written to depend on.
-//!
-//! - `backend: cli` is inert and accepted, because it selected the surviving
-//!   path. `backend: http` / `backend: auto` are refused at parse time by
-//!   [`RetiredAgentBackend`](super::activity_v2::RetiredAgentBackend).
-//! - `session:` is refused at load time by
-//!   [`validate_job_retired_sessions`], which reports the owning asset and
-//!   step so the operator can find it.
+//! Reject retired v2 asset declarations that would otherwise silently change
+//! an activity or job’s execution semantics.
 
 use super::activity_v2::RETIRED_BACKEND_MIGRATION;
 use super::job_v2::{JobV2, JobV2Step, JobV2StepBody, LoopBlock};
