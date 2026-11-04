@@ -760,7 +760,7 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
         assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
-    has(findings, "--format plain or --json");
+    has(&collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
         !narrow.lines().any(|l| l == format!("Fix: {FIX}")),

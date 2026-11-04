@@ -370,7 +370,7 @@ impl Execute for TaskFlowArgs {
             report.open_now,
             report.verdict(),
         );
-        Ok(Payload::blocks(doc, vec![Block::table(table), Block::text(summary)]).into())
+        Ok(Payload::blocks(doc, vec![Block::table(table), Block::prose(summary)]).into())
     }
 }
 

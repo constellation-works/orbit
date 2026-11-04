@@ -433,6 +433,12 @@ pub(super) fn run_cli_on_terminal_at_width(
 
     let mut master = -1;
     let mut slave = -1;
+    let dimensions = libc::winsize {
+        ws_row: 24,
+        ws_col: width.parse().expect("terminal width"),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     // SAFETY: openpty initializes both descriptors on success; pointers are valid.
     let rc = unsafe {
         libc::openpty(
@@ -440,10 +446,17 @@ pub(super) fn run_cli_on_terminal_at_width(
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &dimensions,
         )
     };
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    let mut actual = dimensions;
+    // SAFETY: openpty returned a live descriptor and actual is a writable winsize.
+    assert_eq!(
+        unsafe { libc::ioctl(slave, libc::TIOCGWINSZ, &mut actual) },
+        0
+    );
+    assert_eq!(actual.ws_col, dimensions.ws_col, "PTY width readback");
     // SAFETY: successful openpty returned owned, distinct file descriptors.
     let mut master = unsafe { std::fs::File::from_raw_fd(master) };
     // SAFETY: slave is the other owned end of the same openpty pair.
@@ -457,7 +470,7 @@ pub(super) fn run_cli_on_terminal_at_width(
         .env("HOME", &workspace.home)
         .env("USERPROFILE", &workspace.home)
         .env("TERM", "xterm-256color")
-        .env("COLUMNS", width)
+        .env_remove("COLUMNS")
         .env_remove("NO_COLOR")
         .env_remove("ORBIT_FORMAT")
         .args(args)
@@ -737,6 +750,18 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
 /// widths stand in for a PTY, the way the doctor render fixtures do.
 #[test]
 fn all_fixed_overflow_warns_and_keeps_identifiers_whole() {
+    for width in [60, 80, 120] {
+        let rendered = render_overflow_fixture(&format!("fixed-{width}"));
+        assert!(
+            rendered
+                .stderr
+                .lines()
+                .all(|line| line.chars().count() <= width),
+            "fit notice must word-wrap at {width}: {}",
+            rendered.stderr
+        );
+        assert_eq!(rendered.stdout.lines().count(), 2, "table rows stay whole");
+    }
     let narrow = render_overflow_fixture("narrow-fixed");
     assert!(
         narrow.stderr.contains("wider than the terminal"),
@@ -775,6 +800,9 @@ fn all_fixed_overflow_warns_and_keeps_identifiers_whole() {
     let flex = render_overflow_fixture("narrow-flex");
     assert!(
         flex.stderr
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
             .contains("columns hidden to fit the terminal: TITLE"),
         "a dropped flexible column is still named: {}",
         flex.stderr
@@ -883,6 +911,7 @@ fn render_overflow_child() {
     ]);
     let doc = serde_json::json!([]);
     let (table, width, mode, is_tty) = match case.as_str() {
+        case if case.starts_with("fixed-") => (history, &case[6..], FormatArg::Table, true),
         "wide-fixed" => (history, "120", FormatArg::Table, true),
         "narrow-flex" => (flexible, "20", FormatArg::Table, true),
         "plain" => (history, "0", FormatArg::Plain, false),

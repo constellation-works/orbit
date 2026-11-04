@@ -201,9 +201,9 @@ impl Table {
     /// payload rather than emitting one itself.
     pub(crate) fn emit(&self, sink: &OutputSink) -> bool {
         if self.rows.is_empty() {
-            eprintln!("{}", self.empty_message);
+            eprintln!("{}", sink.wrap_prose(&self.empty_message));
             for notice in &self.trailing_notices {
-                eprintln!("{notice}");
+                eprintln!("{}", sink.wrap_prose(notice));
             }
             return false;
         }
@@ -211,7 +211,7 @@ impl Table {
             println!("{}", self.render_plain(sink));
             std::io::stdout().flush().ok();
             for notice in &self.trailing_notices {
-                eprintln!("{notice}");
+                eprintln!("{}", sink.wrap_prose(notice));
             }
             return false;
         }
@@ -221,12 +221,12 @@ impl Table {
             sink.suppress_uniform_columns(),
         );
         for notice in &rendered.notices {
-            eprintln!("{notice}");
+            eprintln!("{}", sink.wrap_prose(notice));
         }
         println!("{}", rendered.body);
         std::io::stdout().flush().ok();
         for notice in &self.trailing_notices {
-            eprintln!("{notice}");
+            eprintln!("{}", sink.wrap_prose(notice));
         }
         rendered.truncated
     }

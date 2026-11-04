@@ -21,6 +21,8 @@ mod output;
 mod browser_kit;
 #[cfg(unix)]
 mod detail_recovery;
+#[cfg(unix)]
+mod diagnostic_prose;
 mod doctor;
 mod error_output;
 mod experiment_readout;
