@@ -244,23 +244,31 @@ impl OrbitRuntime {
             // none, runs the contract's setting.
             Err(_) => return Ok(None),
         };
-        let key = ExperimentConfigKey::VisualReviewReviewer;
-        for entry in capture.assignments.iter().filter(|entry| entry.live) {
-            let overlay = ExperimentOverlay::parse(
-                &entry.arm,
-                serde_json::from_str(&entry.overlay_json).map_err(|error| {
-                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
-                })?,
-            )?;
-            if let Some(value) = overlay
-                .config
-                .as_ref()
-                .and_then(|config| config.values.get(key.config_key()))
-            {
-                key.validate_experiment_value(value)?;
-                return Ok(value.as_bool());
-            }
-        }
-        Ok(None)
+        captured_visual_reviewer(&capture)
     }
+}
+
+/// The reviewer switch from an immutable owner capture, used by the leaf and
+/// by the owner's later verification of that same claim.
+pub(crate) fn captured_visual_reviewer(
+    capture: &CapturedExperiments,
+) -> Result<Option<bool>, OrbitError> {
+    let key = ExperimentConfigKey::VisualReviewReviewer;
+    for entry in capture.assignments.iter().filter(|entry| entry.live) {
+        let overlay = ExperimentOverlay::parse(
+            &entry.arm,
+            serde_json::from_str(&entry.overlay_json).map_err(|error| {
+                OrbitError::Store(format!("invalid experiment overlay: {error}"))
+            })?,
+        )?;
+        if let Some(value) = overlay
+            .config
+            .as_ref()
+            .and_then(|config| config.values.get(key.config_key()))
+        {
+            key.validate_experiment_value(value)?;
+            return Ok(value.as_bool());
+        }
+    }
+    Ok(None)
 }

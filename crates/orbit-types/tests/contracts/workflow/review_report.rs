@@ -114,3 +114,27 @@ fn fixed_visual_finding_requires_established_recapture() {
     let record = VisualReviewRecord::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(record.unresolved_blocking().is_empty());
 }
+
+/// Historical visual contracts have no live resolution capability; decoding
+/// one cannot silently opt it into a newly supported claimed proof protocol.
+#[test]
+fn historical_visual_contracts_do_not_negotiate_claimed_resolution() {
+    use orbit_types::task::{CLAIMED_VISUAL_RESOLUTION_SCHEMA, VisualReviewContract};
+    use serde_json::json;
+    let historical = json!({"task_id":"T-1","mode":"shadow","default_width":1440,
+        "max_mocks":12,"require_established":false,"manifests":[],"mocks":[]});
+    let mut contract: VisualReviewContract = serde_json::from_value(historical).unwrap();
+    assert_eq!(contract.resolution_schema, None);
+    let written = serde_json::to_value(&contract).unwrap();
+    assert!(
+        written.get("resolution_schema").is_none(),
+        "legacy/shadow contracts must remain readable by preceding strict readers"
+    );
+    contract.resolution_schema = Some(CLAIMED_VISUAL_RESOLUTION_SCHEMA);
+    let negotiated: VisualReviewContract =
+        serde_json::from_slice(&serde_json::to_vec(&contract).unwrap()).unwrap();
+    assert_eq!(
+        negotiated.resolution_schema,
+        Some(CLAIMED_VISUAL_RESOLUTION_SCHEMA)
+    );
+}

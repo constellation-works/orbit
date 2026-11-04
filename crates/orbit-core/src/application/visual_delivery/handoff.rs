@@ -6,6 +6,7 @@
 //! never relabels an image.
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::AdmissionReceipt;
 use orbit_types::task::{
     VISUAL_CAPTURE_MISMATCH, VisualCaptureExpectation, VisualCaptureRecord, is_visual_artifact,
     mock_sha256_hex, visual_capture_mismatches,
@@ -16,6 +17,34 @@ use crate::OrbitRuntime;
 use crate::bootstrap::browser_kit::PLAYWRIGHT_VERSION;
 
 impl OrbitRuntime {
+    /// Recheck enforcing evidence at a landing authority boundary. Shadow/off
+    /// retain their existing acceptance checks without a new landing gate.
+    pub(crate) fn check_handoff_live_visual_resolution(
+        &self,
+        handoff: &TaskHandoff,
+    ) -> Result<(), OrbitError> {
+        let receipt = self.claim_receipt(&handoff.claim_id)?;
+        if self.handoff_requires_live_visual_proof(handoff, &receipt)? {
+            self.check_claimed_visual_resolution(handoff, &receipt)?;
+        }
+        Ok(())
+    }
+
+    fn handoff_requires_live_visual_proof(
+        &self,
+        handoff: &TaskHandoff,
+        receipt: &AdmissionReceipt,
+    ) -> Result<bool, OrbitError> {
+        Ok(receipt
+            .visual_review
+            .as_ref()
+            .is_some_and(|contract| contract.mode == orbit_types::task::VisualReviewMode::Live)
+            || (self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
+                && orbit_types::task::has_verify_mock_ui_tag(
+                    &self.get_task(&handoff.task_id)?.tags,
+                )))
+    }
+
     /// Refuse `handoff` when the capture it returns is not the one its
     /// claim's visual review contract asks for. A claim admitted without a
     /// contract (the phase did not apply) returns none and is not checked.
@@ -23,10 +52,11 @@ impl OrbitRuntime {
         &self,
         handoff: &TaskHandoff,
     ) -> Result<(), OrbitError> {
-        let contract = self
-            .claim_receipt(&handoff.claim_id)?
-            .visual_review
-            .filter(|contract| contract.task_id == handoff.task_id);
+        let receipt = self.claim_receipt(&handoff.claim_id)?;
+        let contract = receipt.visual_review.as_ref();
+        if self.handoff_requires_live_visual_proof(handoff, &receipt)? {
+            return self.check_claimed_visual_resolution(handoff, &receipt);
+        }
         let Some(contract) = contract else {
             return match &handoff.visual {
                 Some(_) => Err(mismatch(
@@ -91,7 +121,7 @@ impl OrbitRuntime {
         let mismatches = visual_capture_mismatches(
             &record,
             VisualCaptureExpectation {
-                contract: &contract,
+                contract,
                 commits: &commits,
                 kit_pin: PLAYWRIGHT_VERSION,
             },

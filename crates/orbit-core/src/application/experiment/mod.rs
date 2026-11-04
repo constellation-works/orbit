@@ -16,6 +16,7 @@ mod progress;
 mod promotion;
 mod readout;
 mod run_policy;
+pub(crate) use run_policy::captured_visual_reviewer;
 mod skills;
 mod templates;
 mod view;

@@ -497,6 +497,7 @@ fn admission_request(
         caller_before_pr: false,
         review_gate: false,
         selective_review: false,
+        visual_resolution: 0,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
             job_name: job_name.into(),

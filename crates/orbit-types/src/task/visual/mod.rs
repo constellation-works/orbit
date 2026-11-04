@@ -3,6 +3,7 @@
 mod budget;
 mod capture;
 mod capture_checks;
+mod claimed;
 mod image;
 mod review;
 
@@ -35,4 +36,8 @@ pub use review::{
     VisualVerdictKind, parse_visual_region_location, validate_visual_evidence,
     validate_visual_region_location, visual_disposition, visual_image_catalog,
     visual_region_inside, visual_severity_rank, visual_severity_weight,
+};
+
+pub use claimed::{
+    CLAIMED_VISUAL_RESOLUTION_SCHEMA, ClaimedVisualResolution, VISUAL_RESOLUTION_ARTIFACT,
 };

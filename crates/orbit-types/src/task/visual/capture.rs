@@ -157,6 +157,10 @@ pub struct VisualMockDigestRecord {
 pub struct VisualReviewContract {
     pub task_id: String,
     pub mode: VisualReviewMode,
+    /// Negotiated claimed live resolution schema. Absent on local, shadow,
+    /// and legacy contracts; those never authorize claimed live resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_schema: Option<u32>,
     pub default_width: u32,
     pub max_mocks: u32,
     /// `visual_review.reviewer`: run the comparison reviewer and its

@@ -180,6 +180,12 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
             "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.timing = before_pr` refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
         ),
         param(
+            "visual_resolution",
+            ParamType::Integer,
+            false,
+            "Supported claimed live visual-resolution bundle schema. Schema 1 returns owner-verifiable evidence for the exact final candidate. Omitted or zero declares no support; unsupported live claims stay held.",
+        ),
+        param(
             "caller_review_policy",
             ParamType::String,
             false,

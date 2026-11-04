@@ -101,6 +101,18 @@ fn accepted_disputes(
         .collect())
 }
 
+/// Only owner-held operator history grants dispute authority to a claimed
+/// handoff; a worker's resolution label is never sufficient.
+pub(super) fn owner_accepted_visual_dispute(
+    runtime: &OrbitRuntime,
+    record: &VisualReviewRecord,
+    finding: &VisualReviewFinding,
+) -> Result<bool, OrbitError> {
+    Ok(accepted_disputes(runtime, &record.task_id)?
+        .iter()
+        .any(|acceptance| acceptance.covers(record, finding)))
+}
+
 fn candidate_head(workspace: &Path) -> Result<String, OrbitError> {
     let repo = git2::Repository::open(workspace)
         .map_err(|error| OrbitError::Execution(format!("open candidate: {}", error.message())))?;
@@ -308,10 +320,24 @@ pub(crate) fn visual_recapture_step(
             message: holds.message(),
         });
     }
-    Ok(json!({
+    let mut output = json!({
         "applies": !resolved.is_empty(),
         "resolved": resolved,
-    }))
+    });
+    if runtime.worker_invocation().is_some() && !resolved.is_empty() {
+        let task = &runtime
+            .worker_invocation()
+            .ok_or_else(|| DispatchError::action_failed(action, "claimed binding missing"))?
+            .task_id;
+        let head = candidate_head(&workspace)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        let reference = runtime
+            .record_claimed_visual_resolution(task, &head)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        output["capture_artifact"] = json!(reference.path);
+        output["capture_sha256"] = json!(reference.sha256);
+    }
+    Ok(output)
 }
 
 /// What holds one task's candidate: its unresolved blocking findings and the
@@ -358,9 +384,20 @@ fn resolve_task(
     run_id: &str,
 ) -> Result<Option<(Value, VisualHolds)>, OrbitError> {
     let task = runtime.get_task(task_id)?;
-    if runtime.visual_review_settings().mode != VisualReviewMode::Live
-        || !has_verify_mock_ui_tag(&task.tags)
-    {
+    let worker = runtime.worker_invocation().is_some();
+    let claimed = if worker {
+        runtime.claimed_visual_review(task_id)?
+    } else {
+        None
+    };
+    let mode = if worker {
+        claimed
+            .as_ref()
+            .map_or(VisualReviewMode::Off, |contract| contract.mode)
+    } else {
+        runtime.visual_review_settings().mode
+    };
+    if mode != VisualReviewMode::Live || !has_verify_mock_ui_tag(&task.tags) {
         return Ok(None);
     }
     let missing = |reason: &str| {
@@ -377,7 +414,11 @@ fn resolve_task(
             "the current delivery has no live visual review evidence",
         ));
     };
-    let contract = match runtime.visual_review_contract_for(&task, MockDigestSource::Frozen) {
+    let contract = match claimed
+        .map(Some)
+        .map(Ok)
+        .unwrap_or_else(|| runtime.visual_review_contract_for(&task, MockDigestSource::Frozen))
+    {
         Ok(Some(contract)) => contract,
         _ => return Ok(missing("the frozen visual contract cannot be established")),
     };

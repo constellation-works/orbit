@@ -235,13 +235,14 @@ impl OrbitRuntime {
             &admission_holds,
             &self.baseline_held_tasks(&backlog),
             &|task, comments, history| {
-                // Live claimed delivery has no negotiated visual-resolution
-                // proof at the owner landing boundary yet. Do not hand an
-                // enforcing contract to a worker that can only return captures.
+                // Only a mutually supported resolution bundle can authorize
+                // live claimed delivery; captures alone cannot.
                 if self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
                     && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
+                    && (request.visual_resolution != orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA
+                        || request.ship.mode != "pr")
                 {
-                    return Ok(Some("visual_live_claim_unsupported: owner-verified final-candidate visual resolution is unavailable for claimed delivery".into()));
+                    return Ok(Some("visual_live_claim_unsupported: executor or delivery route has no supported owner-verifiable visual-resolution contract".into()));
                 }
                 if let Some(hold) = no_drain_pull_hold(task) {
                     return Ok(Some(hold));
