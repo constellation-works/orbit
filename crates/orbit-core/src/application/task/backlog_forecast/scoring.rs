@@ -235,7 +235,8 @@ struct VersionHits {
     forecasts: u64,
     task: [Hits; 3],
     task_by_complexity: BTreeMap<String, [Hits; 3]>,
-    total: [Hits; 3],
+    adjusted_total: [Hits; 3],
+    baseline_total: [Hits; 3],
     /// Settled forecasts, and those of them that never drained.
     settled: u64,
     not_drained: u64,
@@ -284,10 +285,21 @@ impl VersionHits {
     }
 
     fn forecast_level(&self) -> Value {
+        let total_hits = |hits: &[Hits; 3]| {
+            json!({
+                "time_to_drain_hours": hits[0].to_json(),
+                "tokens": hits[1].to_json(),
+                "usd": hits[2].to_json(),
+            })
+        };
+        let adjusted = total_hits(&self.adjusted_total);
         json!({
-            "time_to_drain_hours": self.total[0].to_json(),
-            "tokens": self.total[1].to_json(),
-            "usd": self.total[2].to_json(),
+            // Preserve the existing API fields as adjusted-only aliases.
+            "time_to_drain_hours": adjusted["time_to_drain_hours"],
+            "tokens": adjusted["tokens"],
+            "usd": adjusted["usd"],
+            "adjusted": adjusted,
+            "pre_regression_baseline": total_hits(&self.baseline_total),
             "settled": self.settled,
             "not_drained": self.not_drained,
         })
@@ -459,7 +471,10 @@ pub(super) fn score_backlog_forecasts(
         if whole && let Some(actual) = &actual {
             for (index, key) in TOTALS.iter().enumerate() {
                 if let Some(value) = actual[*key].as_f64() {
-                    hits.total[index].add(value, &result[*key]);
+                    hits.adjusted_total[index].add(value, &result[*key]);
+                    // Compare the displayed baseline against the same observed
+                    // whole outcome, without filling withheld adjusted totals.
+                    hits.baseline_total[index].add(value, &result["pre_regression_baseline"][*key]);
                     if index == 0 {
                         drain_residual = log_residual(value, &result[*key]);
                     }
