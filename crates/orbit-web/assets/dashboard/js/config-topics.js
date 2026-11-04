@@ -187,6 +187,12 @@ function weightBar(values) {
 function sectionSlug(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+// The Workflow navigation wraps to a different height per width, so the pane
+// reserves its measured height as scroll padding (see settings.css).
+function syncWorkflowNavOffset(nav) {
+  const pane = nav?.isConnected ? nav.closest('.tab-pane') : null;
+  if (pane) pane.style.setProperty('--workflow-nav-h', `${nav.offsetHeight}px`);
+}
 function section(title, rows, context, opts = {}) {
   const sec = el('section', { class: 'panel config-section' });
   if (opts.id) sec.id = opts.id;
@@ -343,6 +349,7 @@ export function renderWorkflow(body, payload, context) {
       context.rerender?.();
       const target = document.getElementById(g.id);
       if (!target) return;
+      syncWorkflowNavOffset(document.querySelector('nav.workflow-nav'));
       target.scrollIntoView({ block: 'start' });
       target.querySelector('.workflow-section-toggle')?.focus({ preventScroll: true });
     });
@@ -362,6 +369,7 @@ export function renderWorkflow(body, payload, context) {
   const collapseAll = el('button', { class: 'config-action ghost workflow-collapse-all', text: 'Collapse all' }); collapseAll.type = 'button';
   collapseAll.addEventListener('click', () => { workflowCollapsed = new Set(groups.map((g) => g.id)); context.rerender?.(); });
   nav.append(expandAll, collapseAll);
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => syncWorkflowNavOffset(nav)).observe(nav);
   nodes.push(nav);
   if (query && !shown.length) {
     const empty = el('section', { class: 'panel config-section' });
