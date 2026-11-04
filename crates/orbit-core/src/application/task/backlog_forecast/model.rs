@@ -55,6 +55,12 @@ pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
 pub(super) const ITERATIONS: usize = 1_000;
 /// Each mode-preserving pool requires this many completed deliveries.
 pub(super) const MIN_CELL_SAMPLES: usize = 5;
+/// A per-metric range (tokens or USD) resting on fewer measured samples
+/// than this is thin: disclosed beside the range and counted in coverage.
+/// It shares the cell minimum, so one measured sample (p50 == p90 by
+/// construction) is always thin. Zero samples are not thin; they are the
+/// separate `uncovered_model` / `uncosted` cases.
+pub(super) const MIN_METRIC_SAMPLES: usize = MIN_CELL_SAMPLES;
 pub(super) const FORECAST_SEED: u64 = 0x0b17_f0ec_a57d_2026;
 
 /// One completed delivery: a done task with linked invocations since its
@@ -186,6 +192,29 @@ impl Resolved {
     /// No delivery in its history recorded a provider cost throughout.
     pub(super) fn uncosted(&self) -> bool {
         !self.samples.is_empty() && self.cost_samples.is_empty()
+    }
+
+    /// Measured token support in the resolved pool, separate from
+    /// `cell_samples` (the time-sample count).
+    pub(super) fn token_sample_count(&self) -> usize {
+        self.token_samples.len()
+    }
+
+    /// Measured provider-cost support in the resolved pool.
+    pub(super) fn cost_sample_count(&self) -> usize {
+        self.cost_samples.len()
+    }
+
+    /// Its token range rests on some but fewer than
+    /// [`MIN_METRIC_SAMPLES`] measured samples.
+    pub(super) fn thin_tokens(&self) -> bool {
+        !self.token_samples.is_empty() && self.token_samples.len() < MIN_METRIC_SAMPLES
+    }
+
+    /// Its cost range rests on some but fewer than
+    /// [`MIN_METRIC_SAMPLES`] measured samples.
+    pub(super) fn thin_cost(&self) -> bool {
+        !self.cost_samples.is_empty() && self.cost_samples.len() < MIN_METRIC_SAMPLES
     }
 }
 

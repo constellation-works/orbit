@@ -283,6 +283,43 @@ assert.deepEqual(coverageRow('History with unknown review'), { text: '0', warn: 
 assert.ok(supported.includes('Medium · Before landing · mode kept'), `the tasks table names complexity and review assumption per task: ${supported}`);
 for (const column of ['Task', 'Status', 'Starts in', 'Work hours', 'Cost', 'Finishes']) assert.ok(headers().includes(column), `the tasks table has ${column}: ${headers().join(', ')}`);
 
+// Thin per-metric support [ORB-21948]: one measured sample beside a large
+// time-sample count is labelled thin, and ample support is not.
+const thinPayload = payload({
+  coverage: { thin_tokens: 1, thin_cost: 1 },
+  tasks: [task({
+    id: 'ORB-THIN', title: 'Thin metric task', review_mode: 'before_landing', review_mode_fallback: false, basis: 'cell',
+    cell_samples: 508, token_samples: 1, cost_samples: 1, thin_tokens: true, thin_cost: true,
+    work_hours: { p50: 1, p90: 1 }, usd: { p50: 1.11, p90: 1.11 }, tokens: { p50: 100, p90: 100 },
+  })],
+});
+thinPayload.inputs.min_metric_samples = 5;
+await render(thinPayload);
+const thinText = text();
+assert.ok(thinText.includes('thin cost & tokens'), `a one-sample range is labelled thin: ${thinText}`);
+assert.ok(thinText.includes('1 cost sample') && thinText.includes('1 token sample'), `per-metric support shows beside the range: ${thinText}`);
+assert.ok(body().querySelector('.fc-thin'), 'the thin support line uses the thin style');
+assert.deepEqual(coverageRow('Thin token support'), { text: '1', warn: true });
+assert.deepEqual(coverageRow('Thin cost support'), { text: '1', warn: true });
+assert.equal(forecast.forecastMetricThin({ thin_tokens: true }, 'tokens'), true);
+assert.equal(forecast.forecastMetricThin({ token_samples: 5, thin_tokens: false }, 'tokens'), false);
+
+const amplePayload = payload({
+  coverage: { thin_tokens: 0, thin_cost: 0 },
+  tasks: [task({
+    id: 'ORB-AMPLE', title: 'Ample metric task', review_mode: 'before_landing', review_mode_fallback: false, basis: 'cell',
+    cell_samples: 5, token_samples: 5, cost_samples: 5, thin_tokens: false, thin_cost: false,
+    work_hours: { p50: 1, p90: 2 }, usd: { p50: 1, p90: 2 }, tokens: { p50: 100, p90: 200 },
+  })],
+});
+amplePayload.inputs.min_metric_samples = 5;
+await render(amplePayload);
+const ampleText = text();
+assert.ok(!ampleText.includes('thin cost') && !ampleText.includes('thin tokens'), `ample support has no thin marking: ${ampleText}`);
+assert.ok(ampleText.includes('5 cost samples') && ampleText.includes('5 token samples'), `ample support counts still show: ${ampleText}`);
+assert.deepEqual(coverageRow('Thin token support'), { text: '0', warn: false });
+assert.deepEqual(coverageRow('Thin cost support'), { text: '0', warn: false });
+
 // A with-arrivals scenario cut at a bound names that bound and shows no totals,
 // whichever bound fired, and not as a regression-history gap.
 for (const [reason, expected] of [

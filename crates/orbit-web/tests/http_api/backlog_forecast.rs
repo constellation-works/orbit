@@ -803,6 +803,90 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
     );
 }
 
+#[test]
+fn thin_metric_support_is_disclosed_and_counted() {
+    isolated(
+        "backlog_forecast::thin_metric_support_is_disclosed_and_counted",
+        || {
+            // One measured delivery among five: the pool has five time samples,
+            // but only one measured token and cost sample [ORB-21948].
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(1);
+            completed_delivery(
+                &fixture,
+                at,
+                TaskComplexity::Medium,
+                "gpt-6.1-sol",
+                Some(1.0),
+                1,
+            );
+            for _ in 0..4 {
+                completed_delivery(
+                    &fixture,
+                    at,
+                    TaskComplexity::Medium,
+                    "unpriced-fixture-model",
+                    None,
+                    1,
+                );
+            }
+            let queued = backlog_task(&fixture, "Thin metric work", &["file:thin.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 1, "{row}");
+            assert_eq!(row["cost_samples"], 1, "{row}");
+            assert_eq!(row["thin_tokens"], true, "{row}");
+            assert_eq!(row["thin_cost"], true, "{row}");
+            // One measured sample gives p50 == p90 by construction.
+            assert_eq!(row["tokens"]["p50"], row["tokens"]["p90"], "{row}");
+            assert_eq!(row["usd"]["p50"], row["usd"]["p90"], "{row}");
+            assert_eq!(
+                forecast["coverage"]["thin_tokens"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(
+                forecast["coverage"]["thin_cost"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(forecast["coverage"]["uncosted"], 0);
+            assert_eq!(forecast["coverage"]["uncovered_model"], 0);
+            assert_eq!(forecast["inputs"]["min_metric_samples"], 5);
+            let stored = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(stored.len(), 1);
+            let stored_tasks: Value = serde_json::from_str(&stored[0].tasks_json).unwrap();
+            let stored_row = stored_tasks
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == queued)
+                .unwrap();
+            assert_eq!(stored_row["token_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["cost_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["thin_tokens"], true, "{stored_row}");
+            assert_eq!(stored_row["thin_cost"], true, "{stored_row}");
+
+            // Ample measured samples keep ranges with no thin marking.
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let queued = backlog_task(&fixture, "Ample metric work", &["file:ample.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 5, "{row}");
+            assert_eq!(row["cost_samples"], 5, "{row}");
+            assert_eq!(row["thin_tokens"], false, "{row}");
+            assert_eq!(row["thin_cost"], false, "{row}");
+            assert!(row["tokens"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert!(row["usd"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert_eq!(forecast["coverage"]["thin_tokens"], 0);
+            assert_eq!(forecast["coverage"]["thin_cost"], 0);
+        },
+    );
+}
+
 /// `filings` tasks filed this week, a one-hour no-diff delivery as the only
 /// history, and one task in the backlog.
 fn busy_arrivals_fixture(fixture: &Fixture, filings: usize) {
