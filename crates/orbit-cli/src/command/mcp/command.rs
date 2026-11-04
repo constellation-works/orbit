@@ -67,10 +67,10 @@ pub enum McpSubcommand {
 impl Execute for McpSubcommand {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
         match self {
-            // All MCP subcommands are dispatched runtime-free via main.rs's
-            // pattern match before runtime initialization. They reach this
-            // path only if invoked indirectly (currently never), so use the
-            // same runtime-less call chain for safety.
+            // All MCP subcommands are dispatched runtime-free by the operation
+            // registry (`RuntimeNeed::Forbidden`, `dispatch_mcp`) before runtime
+            // initialization. They reach this path only if invoked indirectly
+            // (currently never), so use the same runtime-less call chain for safety.
             Self::Init(args) => args.execute_without_runtime(None),
             Self::Remove(args) => args.execute_without_runtime(None),
             Self::Serve(args) => args.execute_without_runtime(None),
