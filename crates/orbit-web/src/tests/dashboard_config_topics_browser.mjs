@@ -22,7 +22,11 @@
 // (j) Workflow sections are directly navigable: the in-pane nav jumps to a
 //     section (expanding it), sections collapse to a bounded subset, and the
 //     search filters keys; controls stay inside the pane at 375px and every
-//     key returns when the search is cleared and sections are expanded.
+//     key returns when the search is cleared and sections are expanded. On a
+//     long inventory the navigation also stays visible in the pane that really
+//     scrolls through jumps and wheel scrolling, its controls stay reachable
+//     by Tab without moving the pane, and a jump leaves the target heading and
+//     focused toggle below the wrapped navigation at 1440 and 375 px (ORB-22013).
 // (i) with review.timing off, the Before landing rows keep their text and
 //     enabled Edit control at WCAG AA contrast after opacity is composited,
 //     at 1440 and 375 px; they still show the reason and stay distinct from
@@ -39,6 +43,71 @@ import { checkSettingsMutationOwnership } from './dashboard_settings_mutations.m
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
+
+// ORB-22013: the Workflow navigation must stay visible in the pane that really
+// scrolls (`.main-col > .tab-pane`), and a jump must leave the target heading
+// and its focused toggle below the (wrapped) navigation, not under it.
+const settingsPane = '.main-col > .tab-pane[data-tab="config"]';
+async function workflowNavGeometry(page, targetId) {
+  return page.evaluate(({ pane: paneSel, targetId: id }) => {
+    const pane = document.querySelector(paneSel);
+    const nav = document.querySelector('nav.workflow-nav');
+    const target = document.getElementById(id);
+    const toggle = target?.querySelector('.workflow-section-toggle');
+    const rect = (e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+    const controls = [...nav.querySelectorAll('button, input')].map((c) => {
+      const r = c.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { label: c.getAttribute('aria-label') || c.textContent.trim(), ...rect(c), hit: Boolean(hit && (hit === c || c.contains(hit))) };
+    });
+    return {
+      scrollTop: pane.scrollTop,
+      atEnd: pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1,
+      panelScrollTop: document.getElementById('config-panel').scrollTop,
+      pane: rect(pane), nav: rect(nav), target: target ? rect(target) : null, toggle: toggle ? rect(toggle) : null,
+      focus: document.activeElement?.getAttribute('aria-label'), controls,
+    };
+  }, { pane: settingsPane, targetId });
+}
+function assertWorkflowNavVisible(g, label) {
+  const eps = 1;
+  assert.ok(g.scrollTop > 0, `${label}: the Settings pane itself scrolled`);
+  assert.equal(g.panelScrollTop, 0, `${label}: the settings panel is not a scroll container`);
+  assert.ok(g.nav.top >= g.pane.top - eps && g.nav.bottom <= g.pane.bottom + eps, `${label}: navigation stays inside the scrolling pane (${JSON.stringify({ nav: g.nav, pane: g.pane })})`);
+  for (const c of g.controls) {
+    assert.ok(c.top >= g.pane.top - eps && c.bottom <= g.pane.bottom + eps, `${label}: "${c.label}" is visible in the pane`);
+    assert.ok(c.hit, `${label}: "${c.label}" is not covered by other content`);
+  }
+}
+async function assertWorkflowJump(page, title, targetId, label) {
+  await page.locator(`nav.workflow-nav button.workflow-nav-link:has-text("${title}")`).click();
+  const g = await workflowNavGeometry(page, targetId);
+  assertWorkflowNavVisible(g, `${label} after jumping to ${title}`);
+  assert.equal(g.focus, `Collapse ${title}`, `${label}: the jump leaves keyboard focus on the target toggle`);
+  assert.ok(g.target.top >= g.nav.bottom - 1, `${label}: the ${title} heading sits below the navigation (${JSON.stringify({ nav: g.nav, target: g.target })})`);
+  assert.ok(g.toggle.top >= g.nav.bottom - 1 && g.toggle.bottom <= g.pane.bottom + 1, `${label}: the focused ${title} toggle is visible below the navigation`);
+  if (!g.atEnd) assert.ok(g.target.top - g.nav.bottom <= 24, `${label}: the ${title} heading is aligned just below the navigation, not stranded further down`);
+  return g;
+}
+async function settlePaneScroll(page) {
+  let last = -1;
+  for (let i = 0; i < 40; i += 1) {
+    const now = await page.evaluate((sel) => document.querySelector(sel).scrollTop, settingsPane);
+    if (now === last) return now;
+    last = now;
+    await page.waitForTimeout(100);
+  }
+  throw new Error('the Settings pane never stopped scrolling');
+}
+async function assertWorkflowNavSurvivesPaneScroll(page, label) {
+  const box = await page.locator(settingsPane).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (const delta of [700, -350, 700]) {
+    await page.mouse.wheel(0, delta);
+    await settlePaneScroll(page);
+    assertWorkflowNavVisible(await workflowNavGeometry(page, 'workflow-section-steering-exploration'), `${label} after scrolling the pane by ${delta}`);
+  }
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -225,6 +294,21 @@ try {
     // Give the page a moment to apply or drop the response before asserting.
     await new Promise((resolve) => setTimeout(resolve, 200));
   };
+  // ORB-22013: a Workflow inventory long enough that the Settings pane scrolls
+  // far past the navigation (the fixture's few real keys alone fit one screen).
+  const workflowFillerKeys = ['workflow.crew_performance_', 'workflow.task_pilot_', 'workflow.explore.', 'workflow.filler_other_']
+    .flatMap((prefix) => Array.from({ length: 12 }, (_, i) => ({
+      key: `${prefix}${String(i).padStart(2, '0')}`,
+      label: `${prefix} filler ${i}`,
+      description: 'A harmless filler key that lengthens the Workflow inventory.',
+      value_type: 'string',
+      value: `filler-${i}`,
+      state: 'set',
+      settable: true,
+      source: { layer: 'workspace' },
+      built_in: { value: '' },
+      shadowed_by: [],
+    })));
   const effectiveConfig = {
     config_set: { authorized: true },
     sections: [
@@ -297,6 +381,7 @@ try {
             shadowed_by: [],
             options: ['off', 'before_pr'],
           },
+          ...workflowFillerKeys,
         ],
       },
       {
@@ -413,10 +498,6 @@ try {
   const steeringRow = page.locator('.topic-row[data-key="workflow.mid_run_steering.max_rounds"]');
   await steeringRow.waitFor({ state: 'visible' });
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Collapse Steering & exploration', 'a section jump expands the section and moves keyboard focus to its toggle');
-  assert.equal(await page.evaluate(() => {
-    const r = document.getElementById('workflow-section-steering-exploration')?.getBoundingClientRect();
-    return Boolean(r && r.top < window.innerHeight && r.bottom > 0);
-  }), true, 'a section jump brings the target section into the viewport');
   const workflowSearch = page.locator('input.workflow-search');
   await workflowSearch.click();
   await workflowSearch.pressSequentially('usage_pressure');
@@ -427,6 +508,27 @@ try {
   await workflowNav.locator('button.workflow-expand-all').click();
   await arrayRow.waitFor({ state: 'visible' });
   await steeringRow.waitFor({ state: 'visible' });
+  // ORB-22013: with every section open the pane really scrolls; the navigation
+  // must stay in view through jumps and scrolling, and a jump must leave the
+  // target heading and toggle below the (wrapped) navigation at both widths.
+  for (const [width, height] of [[1440, 900], [375, 900]]) {
+    const label = `dark ${width}`;
+    await page.setViewportSize({ width, height });
+    await workflowNav.scrollIntoViewIfNeeded();
+    await assertWorkflowJump(page, 'Task pilot', 'workflow-section-task-pilot', label);
+    await assertWorkflowJump(page, 'Steering & exploration', 'workflow-section-steering-exploration', label);
+    await page.screenshot({ path: path.join(evidence, `workflow-jump-dark-${width}.png`) });
+    await assertWorkflowNavSurvivesPaneScroll(page, label);
+    // Keyboard: the controls stay reachable by Tab without moving the pane.
+    await page.locator('input.workflow-search').focus();
+    await settlePaneScroll(page);
+    const before = (await workflowNavGeometry(page, 'workflow-section-steering-exploration')).scrollTop;
+    await page.keyboard.press('Tab');
+    const after = await workflowNavGeometry(page, 'workflow-section-steering-exploration');
+    assert.ok(await page.evaluate(() => document.activeElement?.classList.contains('workflow-expand-all')), `${label}: Tab from search reaches Expand all`);
+    assert.equal(after.scrollTop, before, `${label}: focusing a navigation control does not scroll the pane`);
+    await page.screenshot({ path: path.join(evidence, `workflow-scrolled-dark-${width}.png`) });
+  }
   await page.setViewportSize({ width: 375, height: 812 });
   assert.equal(await page.evaluate(() => {
     const nav = document.querySelector('nav.workflow-nav');
@@ -437,6 +539,11 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   await workflowNav.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(evidence, 'config-workflow-nav-dark-1440.png') });
+  // The filler keys only lengthen the Workflow page for case (j); drop them so
+  // the All keys paging cases below keep their original inventory.
+  effectiveConfig.sections[0].keys = effectiveConfig.sections[0].keys.filter((k) => !workflowFillerKeys.includes(k));
+  await page.reload();
+  await arrayRow.waitFor({ state: 'visible' });
 
   // -------------------------------------------------------------------------
   // Case (a): array<string> with commas survives save without edit

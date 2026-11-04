@@ -8,6 +8,11 @@
 .tab-pane[data-tab="config"] { container-type: size; }
 .config-layout { grid-template-columns: minmax(0, 1fr); }
 .tab-pane[data-tab="config"] .panel { min-width: 0; }
+/* The Settings panel clips its rounded corners with `clip`, not the shared
+   `.panel` `hidden`: `hidden` makes the panel a scroll container that never
+   scrolls, and sticky descendants (the Workflow navigation) then stick to it
+   instead of to the pane that scrolls. */
+#config-panel { overflow: clip; }
 #config-panel > .body { padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 12px; }
 .config-explainer {
   margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--hair);
@@ -295,7 +300,11 @@
 .all-keys-search { flex: 1 1 220px; min-width: 160px; }
 /* Workflow section navigation: sticky inside the scrolling content pane so
    the jump, search and collapse controls stay reachable without leaving the
-   pane; every control wraps inside the pane at phone width. */
+   pane; every control wraps inside the pane at phone width. Wrapping makes its
+   height vary, so config-topics.js publishes it as `--workflow-nav-h` on the
+   pane and sections and their controls reserve it as scroll margin: a jump or
+   a keyboard focus lands below the navigation, not under it. (Scroll padding
+   would also push focus away from the navigation's own controls.) */
 .workflow-nav {
   position: sticky; top: 0; z-index: 6; max-width: 100%; box-sizing: border-box;
   box-shadow: 0 1px 0 var(--hair);
@@ -305,7 +314,10 @@
 .workflow-search { flex: 1 1 180px; min-width: 140px; max-width: 100%; box-sizing: border-box; }
 .workflow-nav .config-action:focus-visible, .workflow-search:focus-visible,
 .workflow-section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.topic-page .config-section { scroll-margin-top: 64px; }
+.topic-page .config-section,
+.topic-page .config-section :is(button, input, select, textarea, a[href]) {
+  scroll-margin-top: calc(var(--workflow-nav-h, 0px) + 8px);
+}
 .config-section-body[hidden] { display: none; }
 .all-keys-pager {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px;
