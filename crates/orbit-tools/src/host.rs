@@ -332,6 +332,13 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     fn task_scope(&self) -> OrbitTaskScope;
+
+    /// Whether this host's task scope is a resident cycle's run, whose
+    /// dispatch its cycle guard decides. Grants nothing: the guard still runs
+    /// on the call.
+    fn scope_is_resident_cycle(&self) -> bool {
+        false
+    }
 }
 
 impl From<SearchVerb> for OrbitBuiltinAction {

@@ -120,7 +120,13 @@ route too; MCP and `orbit tool run` do not expose lint. Outside a resident cycle
 restoration is unchanged. Other refused writes include `orbit.task.update` with `approve` or `force`, other status
 targets, `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
-operator-only: their capability check runs before the guard. A write from a resident cycle run that
+operator-only, because their capability check runs before the guard, so `orbit.task.requeue`/`repilot`,
+`orbit.run.auto`/`resume` and `orbit.pipeline.invoke` in the table above are refused as
+`capability_denied` even with the right. `orbit.workflow.ship` (`orbit.run.ship` in the table) is the
+exception and the tool a resident dispatches with: a cycle's run passes its operator row and its managed-run refusal,
+and the guard decides the live cycle, the right and the workspace. A sandboxed cycle's ship goes through
+its run's broker, so the leaf's worker starts on the host beside the cycle's read-only sandbox, not
+inside it. A write from a resident cycle run that
 this workspace does not hold (one started in another catalog workspace) is refused as
 `resident_scope_refused`; slice 3 does not support cross-workspace writes. `orbit.evolution.add`
 arrives with [ORB-21248].
