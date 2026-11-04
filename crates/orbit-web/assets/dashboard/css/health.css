@@ -375,8 +375,25 @@ td .rel-rate { font-size: 12px; }
   overflow-wrap: anywhere; text-overflow: clip; white-space: normal;
 }
 .diagnostics-errors-main .error-message { min-width: 0; }
-.diagnostics-errors-main .error-message summary { cursor: pointer; }
+/* The preview is a -webkit-box block, which drops below the summary's native
+   list-item marker onto its own row. A flex row with a custom affordance
+   keeps the indicator beside the preview's first line; the details/summary
+   element keeps its native keyboard behavior. */
+.diagnostics-errors-main .error-message summary {
+  display: flex; align-items: flex-start; gap: 6px;
+  cursor: pointer; list-style: none;
+}
+.diagnostics-errors-main .error-message summary::-webkit-details-marker { display: none; }
+.diagnostics-errors-main .error-message summary::marker { content: ""; }
+.diagnostics-errors-main .error-message summary::before {
+  content: "▸"; flex: 0 0 auto; color: var(--fg-dim);
+}
+.diagnostics-errors-main .error-message[open] summary::before { content: "▾"; }
+.diagnostics-errors-main .error-message summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
 .diagnostics-errors-main .error-message-preview {
+  flex: 1 1 auto; min-width: 0;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; white-space: normal; overflow-wrap: anywhere;
 }

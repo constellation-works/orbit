@@ -1,10 +1,12 @@
-// Health › Incidents › Errors paging (ORB-20742).
+// Health › Incidents › Errors paging (ORB-20742) and disclosure layout (ORB-21995).
 //
 // A fixture server feeds a populated 24h window (48 ordinary errors plus two
 // recoverable agent diagnostics, and a larger page after Load more). Chromium
 // checks that the first paint mounts a bounded page, that Previous and Next
 // are keyboard buttons reaching the last ordinary error, and that the window,
-// agent grouping, run links and fetch-more control stay usable.
+// agent grouping, run links and fetch-more control stay usable. It also
+// checks that each error's disclosure indicator sits beside its two-line
+// preview instead of on a standalone marker row.
 //
 // Usage:
 //   node dashboard_error_pages_browser.mjs <playwright-module> <evidence-dir> [--before]
@@ -249,6 +251,22 @@ async function assertBounded(width, { ordinary, fetched, windowLabel, firstRun }
   assert(view.panelOverflow <= 1, `ORB-20742: ${where} panel overflows by ${view.panelOverflow}px`);
   assert(view.pagerInside, `ORB-20742: ${where} page control sits outside the Errors pane`);
   assert(view.loadMore === (windowLabel !== '7d'), `ORB-20742: ${where} Load more visibility does not match coverage`);
+  const disclosure = await page.evaluate(() => {
+    const summary = document.querySelector('.diagnostics-errors-main tbody tr .error-message summary');
+    const preview = document.querySelector('.diagnostics-errors-main tbody tr .error-message-preview');
+    if (!summary || !preview) return null;
+    const summaryBox = summary.getBoundingClientRect();
+    const previewBox = preview.getBoundingClientRect();
+    return {
+      topDelta: previewBox.top - summaryBox.top,
+      extraHeight: summaryBox.height - previewBox.height,
+      clamp: getComputedStyle(preview).webkitLineClamp,
+    };
+  });
+  assert(disclosure, `ORB-21995: ${where} first error has no expandable message preview`);
+  assert(disclosure.topDelta <= 1 && disclosure.extraHeight <= 1,
+    `ORB-21995: ${where} disclosure marker sits ${disclosure.topDelta}px above its preview (${disclosure.extraHeight}px of standalone marker row)`);
+  assert(disclosure.clamp === '2', `ORB-21995: ${where} preview lost its two-line clamp (${disclosure.clamp})`);
 }
 
 async function walkToEnd(width, lastRun) {
