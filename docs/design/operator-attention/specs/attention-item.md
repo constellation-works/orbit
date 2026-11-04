@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention item kinds with their source of truth, the item and response schema, severity derivation and the next action"
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 title: Spec — Attention item
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-02
+last_updated: 2026-11-04
 ---
 
 # Spec: Attention item

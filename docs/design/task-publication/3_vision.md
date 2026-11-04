@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Vision
 owner: codex
-last_updated: 2026-10-31
-last_validated: 2026-10-28
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 feature: task-publication
 doc_role: vision
@@ -132,10 +132,12 @@ authority merely because a machine can clone or push.
 - Repository-host visibility, branch-protection, and retention behavior.
 - Content-addressed backup, credential management, and secret-rotation practices.
 
+[ORB-11068] chose the original dedicated-repository design; [ORB-11077] shipped its operator workflow. [ORB-18375] added shared repositories with independent branch-scoped lineages. [ORB-20620] proposed the linked owner-failover design.
+
 ## Task References
 
 - [ORB-11068] — chose a dedicated private publication repository and deferred aggregation and synchronization.
-- [ORB-11077] — shipped the explicit-only v1 operator workflow and kept routine triggering, authority transfer, and multi-writer synchronization deferred.
+- [ORB-11077] — shipped the explicit v1 operator workflow and deferred authority transfer and multi-writer synchronization.
 - [ORB-18375] — allowed branch-scoped lineages to share one publication repository, which answers the shared-repository question for branch serialization but not for repository-level access.
 - [ORB-20620] — proposed owner failover, which defines authority transfer and links from open questions 1, 2 and 4.
 
