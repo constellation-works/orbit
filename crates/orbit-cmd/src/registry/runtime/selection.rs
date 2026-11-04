@@ -44,13 +44,14 @@ pub(super) fn load_registry_for_selector_resolution(
 /// by every root-aware surface — including the dashboard, which used to load
 /// the machine-global registry unconditionally (ORB-11388).
 pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
-    match root_override {
+    let root = match root_override {
         Some(root) if root.is_absolute() => Ok(root.to_path_buf()),
         Some(root) => std::env::current_dir()
             .map(|cwd| cwd.join(root))
             .map_err(|error| OrbitError::Io(error.to_string())),
         None => orbit_core::runtime::resolve_global_root(),
-    }
+    }?;
+    Ok(orbit_core::runtime::resolve_existing_root_traversal(root))
 }
 
 pub(super) enum CliWorkspaceTarget<'a> {

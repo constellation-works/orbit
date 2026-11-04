@@ -25,6 +25,92 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[test]
+fn parent_relative_root_opens_the_same_store_as_its_absolute_path() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::init(&work);
+    let root = temp.path().join("r3");
+    orbit(&work, &home)
+        .args([
+            "--root",
+            "../r3",
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "root-test",
+            "--task-prefix",
+            "RTR",
+        ])
+        .assert()
+        .success();
+    orbit(&work, &home)
+        .args([
+            "--root",
+            "../r3",
+            "workspace",
+            "init",
+            "--name",
+            "root-test",
+        ])
+        .assert()
+        .success();
+    let absolute = root.to_str().expect("root path");
+    let expected = orbit(&work, &home)
+        .args(["--root", absolute, "task", "list", "--json"])
+        .output()
+        .expect("absolute task list");
+    assert!(expected.status.success(), "{expected:?}");
+    for flag in [true, false] {
+        let mut command = orbit(&work, &home);
+        if flag {
+            command.args(["--root", "../r3"]);
+        } else {
+            command.env("ORBIT_ROOT", "../r3");
+        }
+        let actual = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("relative task list");
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    for args in [
+        &["workspace", "list", "--json"][..],
+        &["config", "show", "--workspace", "root-test"][..],
+    ] {
+        let actual = orbit(&work, &home)
+            .args(["--root", "../r3"])
+            .args(args)
+            .output()
+            .expect("relative command");
+        let expected = orbit(&work, &home)
+            .args(["--root", absolute])
+            .args(args)
+            .output()
+            .expect("absolute command");
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(expected.status.success(), "{expected:?}");
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    let doctor = orbit(&work, &home)
+        .args(["--root", "../r3", "doctor", "--json"])
+        .output()
+        .expect("doctor");
+    assert!(
+        !String::from_utf8_lossy(&doctor.stderr).contains("parent-directory traversal"),
+        "{doctor:?}"
+    );
+    let workspaces = orbit(&work, &home)
+        .args(["--root", absolute, "workspace", "list", "--json"])
+        .output()
+        .expect("workspace list");
+    let entries: Value = serde_json::from_slice(&workspaces.stdout).expect("workspace JSON");
+    assert_eq!(entries.as_array().map(Vec::len), Some(1));
+}
+
 fn explicit_root_spellings_select_the_same_generation_host_registry_and_admission_roots() {
     for (raw, suffix) in [
         ("~", ""),
