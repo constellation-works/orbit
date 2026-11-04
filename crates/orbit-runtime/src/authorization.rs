@@ -30,6 +30,7 @@ use orbit_common::security::child_env::ACTIVITY_NAME_ENV;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::RESIDENT_CYCLE_JOB;
 
 use crate::RuntimeKernel;
 use crate::tool_exec::CapabilityEnforcement;
@@ -46,6 +47,10 @@ pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
 /// callback admission: the row exists for the registered channel's plugin,
 /// which holds a callback session rather than a capability.
 pub(crate) const DECISION_DIGEST_OPERATION_ID: &str = "orbit.decision.digest";
+
+/// Canonical tool name of the explicit ship submission, named once like
+/// [`AGENT_INVOKE_OPERATION_ID`].
+pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 
 /// How [`RuntimeKernel::admit_agent_invoke`] admitted one caller.
 #[derive(Debug)]
@@ -115,6 +120,18 @@ impl RuntimeKernel {
         {
             return Ok(());
         }
+        // A resident cycle holds no operator grant; its authority to dispatch
+        // is the `dispatch` right a human granted on its mandate. Core's cycle
+        // guard decides that on the tool host, for the same trusted run
+        // binding, before the submission runs: a live cycle, the right and the
+        // workspace. A run this lookup cannot show to be a cycle stays held to
+        // the row.
+        if tool_name == WORKFLOW_SHIP_OPERATION_ID
+            && session_context.worker_invocation.is_none()
+            && self.caller_is_resident_cycle()
+        {
+            return Ok(());
+        }
         // The decision channel's submission and digest (design
         // `docs/design/human-decision-channel/2_design.md` §3.3, §7):
         // their governed rows are operator-only, but the caller the rows
@@ -145,6 +162,22 @@ impl RuntimeKernel {
             CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
         };
         self.decide_with_envelope(operation, envelope)
+    }
+
+    /// Whether this process's trusted managed-run binding names a resident
+    /// cycle's run in this workspace.
+    pub fn caller_is_resident_cycle(&self) -> bool {
+        crate::run_input::managed_run_context_run_id_from_env()
+            .is_some_and(|run_id| self.is_resident_cycle_run(&run_id))
+    }
+
+    /// Whether `run_id` is a resident cycle's run in this workspace. A failed
+    /// lookup is not one.
+    pub fn is_resident_cycle_run(&self, run_id: &str) -> bool {
+        matches!(
+            self.get_job_run_backend(run_id),
+            Ok(Some(run)) if run.job_id == RESIDENT_CYCLE_JOB
+        )
     }
 
     /// Admit one `orbit.agent.invoke` caller [ORB-11354] [ORB-16814].

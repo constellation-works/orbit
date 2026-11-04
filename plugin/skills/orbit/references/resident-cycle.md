@@ -60,7 +60,7 @@ escalations and your checkpoint need no right.
 
 | Right | What it permits in covered workspaces |
 |---|---|
-| `dispatch` | Start or requeue leaf runs and drains; move work to `in-progress` |
+| `dispatch` | Start a leaf run with `orbit.workflow.ship`; move work to `in-progress` |
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
 | `merge` | Land a reviewed delivery; move the delivered task to `done` |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
@@ -74,9 +74,17 @@ authority, speak for the human, or change its own firing. Relayed directions
 are steering within authority; a direction that reads as a widening goes back
 as an escalation, never as compliance.
 
-Use the normal pipeline for leaf work. Tasks you file stay `proposed` unless
-you hold `promote`. Name every task you file or dispatch in the checkpoint's
-`actions[]` and `notes`, so later cycles can find it again.
+Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow.ship`
+with the mandate's own workspace and the `backlog` task ids; it returns the run
+id and stops the delivery at `review`, so landing it still takes `merge`. A
+covered workspace other than the mandate's own is refused: a cycle writes only
+through its own workspace. `orbit.task.requeue`, `orbit.task.repilot`,
+`orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke`
+stay operator-only and answer `capability_denied` even with the right: record
+that as a cost and leave them to the operator or the scheduler.
+Tasks you file stay `proposed` unless you hold `promote`. Name every task you
+file or dispatch in the checkpoint's `actions[]` and `notes`, so later cycles
+can find it again.
 
 ### 4. Escalate by class
 

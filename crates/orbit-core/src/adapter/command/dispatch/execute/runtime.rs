@@ -157,6 +157,11 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let explorer = name == crate::runtime::plugin::broker::BROKERED_EXPLORER_TOOL
             && crate::runtime::run_input::managed_run_context_run_id_from_env().is_some();
+        // A resident cycle's ship is brokered for the same reason: the leaf's
+        // worker must start beside the cycle's sandbox, not inside it.
+        #[cfg(unix)]
+        let resident_ship = name == crate::runtime::plugin::broker::BROKERED_RESIDENT_SHIP_TOOL
+            && self.caller_is_resident_cycle();
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
             && session_context.application.is_none()
@@ -164,7 +169,10 @@ impl OrbitRuntime {
                 orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
             )
             .is_none()
-            && (host_read || explorer || self.tool_registry().plugin_binding(name).is_some())
+            && (host_read
+                || explorer
+                || resident_ship
+                || self.tool_registry().plugin_binding(name).is_some())
         {
             let explorer_wait = if explorer {
                 match crate::adapter::tool_host::agent_tools::brokered_explorer_wait_seconds(&input)
