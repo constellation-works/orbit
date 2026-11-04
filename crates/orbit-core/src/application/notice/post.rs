@@ -505,7 +505,6 @@ fn new_notice_id() -> Result<String, OrbitError> {
     Ok(format!("ntc_{value:016x}"))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decide_post(
     poster: &NoticePoster,
     settings: &NoticeSettings,

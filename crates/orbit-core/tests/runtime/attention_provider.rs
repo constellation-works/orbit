@@ -70,7 +70,6 @@ fn git(repo: &Path, args: &[&str]) {
 struct Fixture {
     _root: tempfile::TempDir,
     runtime: OrbitRuntime,
-    #[allow(dead_code)]
     repo: PathBuf,
     head: String,
     state: PathBuf,

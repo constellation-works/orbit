@@ -170,7 +170,10 @@ fn find_repair_task(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input the reader needs (workspace, host, filter, clock, settings, caller session) plus the candidate sink the aggregator collects into"
+)]
 pub(super) fn read_ci_attention(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,

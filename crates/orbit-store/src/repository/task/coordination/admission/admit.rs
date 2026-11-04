@@ -109,7 +109,10 @@ impl TaskCommitBoundary {
     /// Admission with guidance and the task's stored crew identity.
     /// Existing callers retain their policy; owners that resolve a fresh
     /// crew use [`Self::admit_task_with_crew_guidance`].
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public signature kept for existing callers; the crew-aware admit_task_with_crew_guidance adds the effective_task policy callback"
+    )]
     pub fn admit_task_with_guidance(
         &self,
         identity: &AdmissionIdentity,

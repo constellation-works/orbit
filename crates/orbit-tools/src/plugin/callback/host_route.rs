@@ -84,7 +84,13 @@ type PinnedTask = Arc<Mutex<Option<String>>>;
 
 /// The session a host-route call runs under, and that session's pin.
 #[derive(Clone)]
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "non-unix builds have no host route, so no RoutedCallback is ever built"
+    )
+)]
 struct RoutedCallback {
     record: SessionRecord,
     pinned: PinnedTask,

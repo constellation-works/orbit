@@ -110,7 +110,13 @@ pub(crate) fn diagnostic_step(
 /// Linux scope diagnostics retain their existing first-error policy. Only the
 /// macOS watchdog calls it; it compiles on Linux with the watchdog module.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "only the macOS watchdog calls this; Linux compiles it for CodeQL extraction and never starts a watchdog"
+    )
+)]
 pub(crate) fn watchdog_diagnostic_step(
     runs: &dyn JobRunStoreBackend,
     run: &JobRun,
