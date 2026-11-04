@@ -512,6 +512,50 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
     }
 }
 
+/// An upgrade's designed pause of a claimed leaf is accounted apart from
+/// failures, from the leaf's recorded step code; a leaf interrupted any other
+/// way stays a failure. The claim is released to the backlog either way.
+fn an_upgrade_quiesced_leaf_settles_outside_the_failure_count() {
+    let (pair, drain, leaf, task) = claimed_sol();
+    pair.follower.record_upgrade_interruption_for_test(
+        &leaf,
+        4242,
+        orbit_common::fs::generation::ParticipantRole::Drain,
+    );
+    assert_eq!(pair.run_state(&leaf), JobRunState::Interrupted);
+    settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "backlog");
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let [settlement] = settlements.as_slice() else {
+        panic!("one settled claim: {settlements:?}");
+    };
+    assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Transient));
+    assert_eq!(
+        serde_json::to_value(settlement).unwrap()["accounting"],
+        json!({"outcome": "upgrade_paused", "counts_as_failure": false, "reason": "upgrade_quiesce"}),
+    );
+
+    let (pair, drain, leaf, _) = claimed_sol();
+    end_leaf_at(
+        &pair,
+        &leaf,
+        (1, "implement_one"),
+        JobRunState::Interrupted,
+        Some("process_not_found"),
+        "the worker process is gone: reason=process_not_found".into(),
+    );
+    settle_only(&pair, &drain);
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let [settlement] = settlements.as_slice() else {
+        panic!("one settled claim: {settlements:?}");
+    };
+    assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Transient));
+    assert_eq!(
+        serde_json::to_value(settlement).unwrap()["accounting"],
+        json!({"outcome": "failure", "counts_as_failure": true, "reason": "settlement_failure"}),
+    );
+}
+
 /// [ORB-14439] The owner's run history never holds a follower's leaf, so the
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
@@ -2189,6 +2233,7 @@ crate::scenario_table!(
     handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks,
     crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
+    an_upgrade_quiesced_leaf_settles_outside_the_failure_count,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
     the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once,
     hydration_observes_stored_runs_without_reconciliation,

@@ -75,8 +75,8 @@ awaiting a recorded decision with `review_decision_pending: true`. Its `kind` st
 decision, with no release-budget charge. Count these separately from leaf failures. Older
 settlements without the flag read as false; absence is not evidence of a pending decision.
 Each settlement's typed `accounting` (`outcome`, `counts_as_failure`, `reason`) says how a
-failure scan counts it: `review_decision_hold`, `evidence_hold` and `operator_cancel` are held,
-while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
+failure scan counts it: `review_decision_hold`, `evidence_hold`, `operator_cancel` and
+`upgrade_paused` (reason `upgrade_quiesce`: an Orbit upgrade paused the leaf) are held, while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
 settlement other than a failed candidate stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting changes no claim or task.
 
@@ -370,7 +370,10 @@ summary and task artifact paths for the candidate and base logs; read those
 artifacts for the captured output. A run that failed on its own has `root_cause: null`. So one failed delivery no longer
 reads as three failures. `orbit run history --state failed --incidents` shows one row per
 incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascaded_run_ids`)
-counts the parents folded into it. `orbit run history --failures` folds further, to one row
+counts the parents folded into it. An incident an Orbit upgrade paused (`upgrade_quiesce`, which
+the clock resumes) is no failure: `--incidents` and `--failures` leave it out and report it as
+the `upgrade_paused` count, while `process_not_found` and other interruptions stay listed.
+`orbit run history --failures` folds further, to one row
 per task and root cause: `RUN_ID` is the root-cause run even when that run is outside the
 page, `STEP` and `CREW` are that run's, `CAUSE` is its error's first line with no
 60-character cap, and `SHOW` is `orbit run show` for that run. `STEP` comes from

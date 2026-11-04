@@ -96,7 +96,16 @@ pub(crate) fn leaf_attribution(run: &orbit_types::workflow::JobRun) -> ClaimAttr
 /// The job, build and failing step `run`'s own record holds [ORB-20906]: its
 /// recorded fields only, never the executing process's current build or text
 /// read out of a diagnostic. A build or step the record never held is absent.
-pub(crate) fn leaf_run_report(run: &orbit_types::workflow::JobRun) -> LeafRunReport {
+///
+/// `diagnostic` is the terminalizing caller's typed `(code, message)`. That
+/// caller settles inside its terminal write and records the matching job-level
+/// step only afterwards, and only when the run holds no error yet. So it stands
+/// in for that step here on the same condition: a recorded error always wins.
+pub(crate) fn leaf_run_report(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> LeafRunReport {
+    let has_cause = |cause: &LeafRootCause| cause.code.is_some() || cause.message.is_some();
     let root_cause = crate::application::job::run_error_step(run)
         .map(|step| LeafRootCause {
             step: Some(step.target_id.to_string()),
@@ -104,7 +113,17 @@ pub(crate) fn leaf_run_report(run: &orbit_types::workflow::JobRun) -> LeafRunRep
             message: step.error_message.clone(),
         })
         .map(LeafRootCause::bounded)
-        .filter(|cause| cause.code.is_some() || cause.message.is_some());
+        .filter(has_cause)
+        .or_else(|| {
+            diagnostic.map(|(code, message)| {
+                LeafRootCause {
+                    step: Some(run.job_id.to_string()),
+                    code: Some(code.to_string()),
+                    message: Some(message.to_string()),
+                }
+                .bounded()
+            })
+        });
     LeafRunReport {
         run_id: run.run_id.to_string(),
         job_id: run.job_id.to_string(),
@@ -125,6 +144,7 @@ pub(crate) fn leaf_run_report(run: &orbit_types::workflow::JobRun) -> LeafRunRep
 pub(crate) fn attach_leaf_attribution(
     mut settlement: ClaimMutation,
     run: Option<&orbit_types::workflow::JobRun>,
+    diagnostic: Option<(&str, &str)>,
 ) -> ClaimMutation {
     let Some(run) = run else {
         return settlement;
@@ -137,7 +157,7 @@ pub(crate) fn attach_leaf_attribution(
                 evidence.crew_model = attribution.crew_model;
             }
             if evidence.leaf_run.is_none() {
-                evidence.leaf_run = Some(leaf_run_report(run));
+                evidence.leaf_run = Some(leaf_run_report(run, diagnostic));
             }
         }
         _ => {}
