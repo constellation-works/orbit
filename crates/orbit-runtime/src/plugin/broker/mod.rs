@@ -65,6 +65,16 @@ pub const BROKERED_EXPLORER_TOOL: &str = crate::authorization::AGENT_INVOKE_OPER
 /// its worktree nor start its own agent sandbox.
 pub const BROKERED_RESIDENT_SHIP_TOOL: &str = crate::authorization::WORKFLOW_SHIP_OPERATION_ID;
 
+/// The built-in a sandboxed resident cycle escalates through. The broker raises
+/// it on the host, because the raise takes a workspace-wide lock in `.orbit`,
+/// which the cycle's sandbox mounts read-only.
+pub const BROKERED_RESIDENT_RAISE_TOOL: &str = "orbit.decision.raise";
+
+/// Whether `tool` is a built-in the broker runs for a resident cycle's run.
+pub fn is_brokered_resident_tool(tool: &str) -> bool {
+    tool == BROKERED_RESIDENT_SHIP_TOOL || tool == BROKERED_RESIDENT_RAISE_TOOL
+}
+
 /// Executes one authenticated request for the run a broker serves.
 ///
 /// The implementation holds the run's dispatch record, so everything that

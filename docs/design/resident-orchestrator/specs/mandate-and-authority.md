@@ -126,7 +126,8 @@ operator-only, because their capability check runs before the guard, so `orbit.t
 exception and the tool a resident dispatches with: a cycle's run passes its operator row and its managed-run refusal,
 and the guard decides the live cycle, the right and the workspace. A sandboxed cycle's ship goes through
 its run's broker, so the leaf's worker starts on the host beside the cycle's read-only sandbox, not
-inside it. A write from a resident cycle run that
+inside it. A sandboxed cycle's `orbit.decision.raise` goes through the same broker, because its lock
+lies in the `.orbit` that sandbox mounts read-only. A write from a resident cycle run that
 this workspace does not hold (one started in another catalog workspace) is refused as
 `resident_scope_refused`; slice 3 does not support cross-workspace writes. `orbit.evolution.add`
 arrives with [ORB-21248].
