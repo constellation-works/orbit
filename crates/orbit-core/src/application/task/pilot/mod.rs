@@ -76,7 +76,7 @@ pub(crate) use admission::{
 pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    contract_conflicts, normalize_evidence_gaps, required_machine, required_os,
+    SelectorCheck, contract_conflicts, normalize_evidence_gaps, required_machine, required_os,
     retained_review_evidence, review_filed, reviewed_evidence_drops, routing_os,
     unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
     validate_recommendations,

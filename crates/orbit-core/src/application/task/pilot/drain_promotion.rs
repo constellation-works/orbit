@@ -176,21 +176,37 @@ pub(super) struct DrainAdmissionDecision {
     pub(super) closure: AdmissionClosure,
 }
 
+/// The task, its pilot assessment and its snapshot that one drain admission
+/// decides over.
+pub(super) struct DrainAdmissionTask<'a> {
+    pub(super) action: &'a str,
+    pub(super) task_id: &'a str,
+    pub(super) snapshot: &'a PreparedTaskSnapshot,
+    pub(super) current: &'a Task,
+    pub(super) assessment: &'a Value,
+    pub(super) selectors: &'a [String],
+    pub(super) complexity: TaskComplexity,
+    pub(super) dependencies: &'a [String],
+    pub(super) is_done: &'a dyn Fn(&str) -> bool,
+}
+
 /// Decide one task under drain authority. Pilot output that is malformed
 /// fails the task; every well-formed finding becomes a classified hold.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn assess_drain_admission(
-    action: &str,
-    task_id: &str,
-    snapshot: &PreparedTaskSnapshot,
-    current: &Task,
-    assessment: &Value,
-    selectors: &[String],
-    complexity: TaskComplexity,
+    task: DrainAdmissionTask<'_>,
     authority: &DrainAuthority,
-    dependencies: &[String],
-    is_done: &dyn Fn(&str) -> bool,
 ) -> Result<Box<DrainAdmissionDecision>, DispatchError> {
+    let DrainAdmissionTask {
+        action,
+        task_id,
+        snapshot,
+        current,
+        assessment,
+        selectors,
+        complexity,
+        dependencies,
+        is_done,
+    } = task;
     let disposition = assessment
         .get("disposition")
         .and_then(Value::as_str)
