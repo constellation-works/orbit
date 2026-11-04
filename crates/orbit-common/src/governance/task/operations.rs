@@ -225,7 +225,7 @@ pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "model",
         ParamType::String,
-        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
+        "Agent family or full model ID for provenance.",
     ),
 ];
 
@@ -611,7 +611,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
+                "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
             ),
             BOUNDED_VIEW_PARAM,
             mcp_only("limit", ParamType::Integer, "Bounded detail page size"),

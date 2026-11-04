@@ -49,9 +49,9 @@ pub(super) fn tools(federated: bool) -> Vec<Tool> {
     PRESENTATION_DEFINITIONS.iter()
         .map(|definition| {
             let selector = if federated {
-                "Copy the opaque selector from orbit_workspace_list. A bare workspace ID is refused."
+                "Copy the opaque host-qualified selector from orbit_workspace_list."
             } else {
-                "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd."
+                "Explicit registered workspace name, ID or absolute checkout path."
             };
             let mut schema = json!({
                 "type": "object", "additionalProperties": false,

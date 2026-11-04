@@ -29,21 +29,9 @@ const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard", "xhard"];
 const AGENT_MODEL_PATTERN: &str = concat!(
     r"^(?:",
     r"[Cc][Oo][Dd][Ee][Xx]",
-    r"|[Cc][Ll][Aa][Uu][Dd][Ee]",
-    r"|[Gg][Ee][Mm][Ii][Nn][Ii]",
-    r"|[Gg][Rr][Oo][Kk]",
-    r"|[Mm][Uu][Ss][Ee]",
-    r"|[Gg][Pp][Tt]-.*",
-    r"|[Oo]1.*",
-    r"|[Oo]3.*",
-    r"|[Cc][Ll][Aa][Uu][Dd][Ee]-.*",
-    r"|[Oo][Pp][Uu][Ss].*",
-    r"|[Ss][Oo][Nn][Nn][Ee][Tt].*",
-    r"|[Ff][Aa][Bb][Ll][Ee].*",
-    r"|[Gg][Ee][Mm][Ii][Nn][Ii]-.*",
-    r"|[Gg][Rr][Oo][Kk]-.*",
-    r"|[Gg][Rr][Oo][Kk]3.*",
-    r"|[Mm][Uu][Ss][Ee]-.*",
+    r"|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?",
+    r"|[Gg][Rr][Oo][Kk](?:[-3].*)?",
+    r"|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*",
     r")$"
 );
 

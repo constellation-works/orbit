@@ -54,7 +54,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     verb: AttentionVerb::Query,
     cli_path: &["query"],
     tool_name: "orbit.attention",
-    tool_description: "List read-only operator waits: pilot_warning, pilot_hold, blocked, decision_open, review_waiting, run_failed, run_stuck, claim_stale, ci_red, friction_untriaged, notice_open, resident_stalled (active mandate with no checkpoint for twice its heartbeat or three incomplete cycles), and host_unhealthy. Decisions fold into their hold, block or review. Filters AND across fields and OR within repeated values; kinds select sources before reads. Returns items, counts, echoed filters, degraded sources and a stateless cursor. Pass cursor.next as since for new or changed items; expired, invalid or unsupported cursors restart the full list. Federated calls without a host-qualified workspace read every host; unreadable hosts produce host_unhealthy items and degraded entries. No session hooks or background work run. Bound MCP sessions cannot widen scope using all, host or another workspace. Runtime kinds require Operator capability; other sessions receive degraded code capability for unreadable kinds. Recovery and cancellation in next are suggestions only. ci_red reads the cached, timeout-bounded provider for the base head; missing authentication or timeouts degrade as source_unavailable, and excluding ci_red skips the read. Its since is the failing run's updated_at (an onset proxy). friction_untriaged lists open friction records.",
+    tool_description: "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention.md`.",
     cli_about: "List what waits on an operator",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -62,7 +62,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
         both(
             "workspace",
             ParamType::StringList,
-            "Registered workspace names or ids; accepts one string or an array. Conflicts with all.",
+            "Registered workspace names or IDs, as one string or an array; conflicts with all.",
             CliArgKind::flag("workspace"),
             "Registered workspaces (repeatable; conflicts with --all)",
         ),

@@ -23,8 +23,9 @@ a direct server's list. Federated discovery keeps its descriptor with
 `checkout_health: invalid`; restore or re-register the checkout before using it.
 
 - Direct server: pass the returned logical workspace ID as `workspace`.
-  The server can also resolve registered names and paths, but IDs avoid
-  ambiguity. An explicit selector overrides its session binding.
+  The server can also resolve registered names and absolute checkout paths;
+  a linked Git worktree resolves to its registered checkout. IDs avoid
+  ambiguity, and an explicit selector overrides its session binding.
 - Federated server: copy the returned `selector` exactly, including its
   `hm_…/ws_…` qualification for workspace-scoped calls. Bare workspace names,
   bare workspace IDs, and local paths cannot route federated calls. Single-task
@@ -35,6 +36,21 @@ a direct server's list. Federated discovery keeps its descriptor with
   workspace-scoped calls; server cwd never chooses the workspace.
 - A managed child inherits trusted workspace and run identity from its envelope.
   Do not replace those with a root or registry from another checkout.
+
+For workspace-optional tools, omitting `workspace` reads the bound workspace or,
+when unbound, every workspace homed on the authoritative server; the federated
+mux aggregates reachable owners and reports unreachable owners as degraded.
+An ID-routed call on an unbound direct server can omit the selector to resolve
+the task in that server's registry. A direct server never relays remote-prefix
+IDs and names the remote host in its `task_prefix_remote` refusal. A task-show
+workspace filter is explicit and fail-closed: a different owning workspace is
+not-found, and an unknown selector is rejected by name. Do not pass a cwd,
+session metadata or linked-worktree runtime identity as an explicit filter.
+Presentation tools require the explicit registered selector when addressing a
+task or run; they never infer it from the session or cwd.
+
+If discovery lists no workspace, run `orbit init` and then `orbit workspace init`
+from the project directory.
 
 If a host is unavailable, report that fact. Reading a publication is explicitly
 labelled snapshot access, not a substitute for live task state. Never create
@@ -111,6 +127,18 @@ drain still requires operator authorization.
 
 Registration errors, the doctor's `hosts` row and the one-release legacy-file
 migration are in [remote-access.md](../../orbit-setup/references/remote-access.md).
+
+## Model provenance
+
+Where a tool accepts `model` for provenance, pass the agent family (`codex`,
+`claude`, `gemini`, `grok` or `muse`) or a recognized full model ID. Family
+inference is case-insensitive: `gpt-*`, `o1*` and `o3*` identify codex;
+`claude-*`, `opus*`, `sonnet*` and `fable*` identify claude; `gemini-*`,
+`grok-*`/`grok3*` and `muse-*` identify their respective families. Unknown
+values are refused, and trusted runtime identity takes precedence over
+self-reported input. The deprecated `agent` field remains available for compatibility
+where advertised. On task creation, `created_by` records the family;
+a full model ID is additionally retained once as `created_by_model`.
 
 ## Capability map
 
