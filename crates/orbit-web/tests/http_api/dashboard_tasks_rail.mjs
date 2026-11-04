@@ -1478,6 +1478,7 @@ const waitingBox = Object.assign(new Node('div'), { id: 'task-filter' });
 byId['task-filter'] = waitingBox;
 document.body.appendChild(waitingBox);
 let decisionsServed = [{ task_id: 'ORB-401' }];
+let decisionsDown = false;
 const waitingReads = [];
 context.fetch = async (url, init = {}) => {
   const path = String(url);
@@ -1487,6 +1488,7 @@ context.fetch = async (url, init = {}) => {
   }
   if (path.startsWith('/api/decisions')) {
     waitingReads.push(path);
+    if (decisionsDown) return { ok: false, status: 503, text: async () => '{"error":"decisions unavailable"}', headers: { get: () => null } };
     return { ok: true, status: 200, json: async () => ({ items: decisionsServed }), headers: { get: () => null } };
   }
   return new Promise(() => {});
@@ -1559,6 +1561,36 @@ assert.equal(waitingCount(), '1', 'an in-progress human-crew task counts as soon
 waitingTasks = [quietTask];
 renderTasks(waitingTasks, waitingContext);
 assert.equal(waitingCount(), '0', 'the count drops with the task');
+
+// A cached decision for a task that then becomes terminal stops counting, even
+// when the next /api/decisions read fails: the failed read keeps the cached ids,
+// so the count must still agree with the live terminal-task exclusion.
+decisionsServed = [{ task_id: 'ORB-403' }, { task_id: 'ORB-404' }];
+const cachedDecisionTask = task(403, { status: 'in-progress' });
+const stillOpenTask = task(404, { status: 'in-progress' });
+waitingTasks = [quietTask, cachedDecisionTask, stillOpenTask];
+modules.get('task-shared.js').namespace.notifyDecisionAnswered();
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+const readsBeforeTerminal = waitingReads.length;
+assert.equal(waitingCount(), '2', 'both open decisions count once read');
+waitingTasks = [quietTask, task(403, { status: 'done' }), stillOpenTask];
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeTerminal, 'the throttle holds the next decisions read');
+assert.equal(waitingCount(), '1', 'a task that became done stops counting from its cached decision');
+decisionsDown = true;
+modules.get('task-shared.js').namespace.notifyDecisionAnswered();
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeTerminal + 1, 'the next decisions read is attempted');
+assert.equal(waitingCount(), '1', 'a failed decisions read keeps the terminal task out of the count');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+renderTasks(waitingTasks, waitingContext);
+assert.deepEqual(waitingRows(), ['task-ORB-404'], 'the filter lists only the task whose decision is still open');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+decisionsDown = false;
+decisionsServed = [];
 
 // A `[resident]: <title>` title moves the bracket to a chip and leaves no
 // separator at the start of the title.
