@@ -159,6 +159,7 @@ pub(super) fn classify_apply_result(
 /// it does not depend on whether a particular nested profile would apply.
 #[cfg(target_os = "macos")]
 fn current_process_is_sandboxed() -> bool {
+    // SAFETY: This declaration must match libsandbox's C ABI, including the pid, operation, filter type, return type, and variadic arguments.
     unsafe extern "C" {
         fn sandbox_check(
             pid: libc::pid_t,
