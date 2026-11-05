@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how open notices reach managed agents (a bounded fleet_notices brief block quoted as untrusted data), the dashboard and orbit attention"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Notice delivery
 owner: claude
 status: Draft

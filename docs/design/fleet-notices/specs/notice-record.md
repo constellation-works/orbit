@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the fleet notice record, its effective state, expiry defaults, linked-task close and dedupe"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Notice record and lifecycle
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec]
 related_features: [fleet-notices, human-decision-channel]
 related_artifacts: [ORB-21207]
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 ---
 
 # Spec: Notice record and lifecycle
@@ -22,11 +22,11 @@ one open subject.
 
 ## Why This Exists
 
-Every agent reads notices, so a notice that outlives its truth misleads the whole fleet. A stale
-"hold off, binary update in progress" idles every orchestrator; a stale "bug X breaks review"
-makes agents work around a bug that is fixed. Expiry and linked-task closure are what make the
-board safe to read unattended, and dedupe is what keeps forty agents hitting one bug from
-producing forty notices.
+Managed agent activities that opt into brief delivery, operators and `orbit attention` readers
+can consume notices, so one that outlives its truth can mislead people across the fleet. A stale
+"hold off, binary update in progress" can idle orchestrators; a stale "bug X breaks review" can
+make agents work around a fixed bug. Expiry and linked-task closure make the board safer to read
+unattended, and dedupe keeps forty agents hitting one bug from producing forty notices.
 
 ## Record
 
@@ -70,7 +70,7 @@ Computed per read, in this order:
 4. Otherwise → **open**.
 
 Only **open** notices are delivered to briefs, listed by default, and shown by `orbit attention`.
-A linked task that is terminal but not `done` (cancelled, rejected, retired) does not close the
+A linked task that is terminal but not `done` (`archived` or `rejected`) does not close the
 notice; the list output carries `linked_task.status` and attention raises the notice's severity
 one step so a human or orchestrator decides ([notice-delivery](./notice-delivery.md#attention-kind)).
 A linked task that cannot be read (deleted, or its workspace unreachable) leaves the notice open
