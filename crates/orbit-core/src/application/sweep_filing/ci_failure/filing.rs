@@ -39,9 +39,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
+use orbit_store::contracts::BranchObservationOutcome;
 use orbit_types::task::{
-    CiFailureIdentity, TaskArtifact, TaskComplexity, TaskDecision, TaskPriority, TaskStatus,
-    TaskType, is_valid_orb_task_id,
+    CiFailureIdentity, TaskComplexity, TaskDecision, TaskPriority, TaskStatus, TaskType,
+    is_valid_orb_task_id,
 };
 use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 use serde::{Deserialize, Serialize};
@@ -53,9 +54,11 @@ use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
 use crate::application::sweep_filing::{bounded_error, bounded_u64, digest, display};
-use crate::application::task::{CiSweepFilingEvidence, TaskAddParams, TaskUpdateParams};
+use crate::application::task::{CiSweepFilingEvidence, TaskAddParams};
 
-use super::branch_observation::{note_branch_retention, retain_branch_observations};
+use super::branch_observation::{
+    claimed_entry, note_branch_retention, retain_branch_observations, retain_owner_receipt,
+};
 use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
@@ -449,6 +452,7 @@ where
     let mut skipped_existing = Vec::new();
     let mut withheld = Vec::new();
     let mut skipped_over_cap = Vec::new();
+    let mut deferred_attribution = retention.deferred_attribution;
     // Two clusters in one snapshot can share a failure key when the same root
     // cause was tested at two commits. The first filing closes the second.
     let mut filed_keys: BTreeSet<String> = BTreeSet::new();
@@ -605,10 +609,13 @@ where
         }) = duplicate_match
         {
             if match_kind == DuplicateMatchKind::CoveredByRepair {
-                repair_assessment::retain(runtime, &task_id, &evidence)?;
+                deferred_attribution.extend(repair_assessment::retain(
+                    runtime, &task_id, cluster, &evidence,
+                )?);
             }
             if match_kind == DuplicateMatchKind::OpenCompilerDiagnostics {
-                retain_compiler_observations(runtime, &task_id, cluster)?;
+                deferred_attribution
+                    .extend(retain_compiler_observations(runtime, &task_id, cluster)?);
             }
             if let Some(existing) = duplicate_task {
                 let expected_key_tag =
@@ -756,6 +763,7 @@ where
     );
     final_audit["withheld_count"] = json!(withheld.len());
     final_audit["withheld"] = json!(withheld);
+    final_audit["deferred_attribution"] = json!(deferred_attribution);
     Ok(json!({
         "outcome": OUTCOME_CURRENT_FAILURES,
         "capability": capability,
@@ -768,7 +776,7 @@ where
         "withheld": withheld,
         "repair_assessments": repair_assessments,
         "attributed": retention.attributed,
-        "deferred_attribution": retention.deferred_attribution,
+        "deferred_attribution": deferred_attribution,
         "excluded_branch_failures": excluded_branch_failures,
         "skipped_over_cap": skipped_over_cap,
         "deferred_count": deferred.len(),
@@ -823,12 +831,15 @@ struct CiCompilerObservation {
     failure_key: String,
 }
 
-/// Retain a typed receipt with each comment, backfilling legacy comments.
+/// Retain a typed receipt with each comment, backfilling either half a legacy
+/// or partial write left out. Returns one `deferred_attribution` entry per
+/// observation a protecting claim holds until it settles.
 fn retain_compiler_observations(
     runtime: &OrbitRuntime,
     owner: &str,
     cluster: &FailureCluster,
-) -> Result<(), OrbitError> {
+) -> Result<Vec<Value>, OrbitError> {
+    let mut deferred = Vec::new();
     for run in &cluster.runs {
         let observation = CiCompilerObservation {
             run_id: value_string(run, "run_id"),
@@ -850,7 +861,8 @@ fn retain_compiler_observations(
             .get_task_comments(owner)?
             .iter()
             .any(|comment| comment.message == message);
-        if let Some(artifact) = runtime.get_task_artifact(owner, &path)? {
+        let artifact = runtime.get_task_artifact(owner, &path)?;
+        if let Some(artifact) = &artifact {
             let stored: CiCompilerObservation = serde_json::from_slice(&artifact.content)
                 .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
             if stored != observation {
@@ -858,29 +870,19 @@ fn retain_compiler_observations(
                     "compiler observation receipt does not match its identity".into(),
                 ));
             }
-            // The receipt and the comment are separate writes, so a stored
-            // receipt does not prove the comment landed: append it if missing.
-            if !already_commented {
-                runtime.update_task(
-                    owner,
-                    TaskUpdateParams {
-                        comment: Some(message),
-                        ..Default::default()
-                    },
-                )?;
-            }
+        }
+        // The receipt and the comment land together, but older writes may
+        // have left only one of them.
+        if artifact.is_some() && already_commented {
             continue;
         }
-        runtime.update_task(
-            owner,
-            TaskUpdateParams {
-                comment: (!already_commented).then_some(message),
-                upsert_artifacts: vec![TaskArtifact::from_text(path, content)],
-                ..Default::default()
-            },
-        )?;
+        let comment = (!already_commented).then_some(message);
+        let outcome = retain_owner_receipt(runtime, owner, run, path.clone(), content, comment)?;
+        if matches!(outcome, BranchObservationOutcome::Deferred { .. }) {
+            deferred.push(claimed_entry(owner, run, &path));
+        }
     }
-    Ok(())
+    Ok(deferred)
 }
 
 fn empty_snapshot_detail(inconclusive_empty: bool, deferred_empty: bool) -> &'static str {

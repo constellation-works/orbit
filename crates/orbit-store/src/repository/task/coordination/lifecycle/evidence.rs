@@ -108,7 +108,20 @@ impl TaskCommitBoundary {
             intent.envelope.job_run_machine = origin.cloned();
         }
         intent.evidence.summary = evidence.summary.clone();
-        if let Some(message) = &evidence.comment {
+        let comments: Vec<(&str, &String)> = evidence
+            .comment
+            .iter()
+            .map(|message| (actor, message))
+            // An observation is automation's record, whoever settles the
+            // claim: its author must never read as operator steering.
+            .chain(
+                effects
+                    .observation_comments
+                    .iter()
+                    .map(|message| ("system", message)),
+            )
+            .collect();
+        if !comments.is_empty() {
             let path = self
                 .bundle_store
                 .bundle_path(&intent.task_id)?
@@ -120,16 +133,18 @@ impl TaskCommitBoundary {
             });
             let next =
                 crate::repository::task::v2::sequencing::next_sequence(&bundle.comments, "C-");
-            let comment = TaskCommentRowV2 {
-                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                comment_id: format!("C-{next:04}"),
-                at: Utc::now(),
-                by: actor.into(),
-                body: message.clone(),
-                operation_id: None,
-            };
-            comment.validate()?;
-            intent.evidence.comments.push(comment);
+            for (offset, (by, message)) in comments.into_iter().enumerate() {
+                let comment = TaskCommentRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    comment_id: format!("C-{:04}", next + offset),
+                    at: Utc::now(),
+                    by: by.into(),
+                    body: message.clone(),
+                    operation_id: None,
+                };
+                comment.validate()?;
+                intent.evidence.comments.push(comment);
+            }
         }
         if !evidence.artifacts.is_empty() {
             let mut files: BTreeMap<_, _> = bundle

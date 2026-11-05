@@ -601,4 +601,6 @@ pub(crate) struct ClaimCommitEffects {
     /// The requesting executor's census row an admission upserts with its
     /// receipt [ORB-17304].
     pub census: Option<super::ExecutorCensusEntry>,
+    /// System comments of CI observations landing in this commit.
+    pub observation_comments: Vec<String>,
 }

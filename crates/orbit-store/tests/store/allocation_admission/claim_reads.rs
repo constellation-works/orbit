@@ -51,6 +51,7 @@ fn targeted_claim_reads_ignore_unrelated_payloads_and_refuse_missing_claims() {
             artifact_path: "ci/observation.json".into(),
             content: "failure evidence".into(),
             claiming_run_id: None,
+            comment: None,
             applied: false,
         })
         .unwrap();
