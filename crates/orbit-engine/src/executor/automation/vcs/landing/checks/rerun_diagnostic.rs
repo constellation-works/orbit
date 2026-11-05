@@ -1,4 +1,6 @@
 //! Bounded observations, never authorization for a CI mutation.
+
+use super::super::super::operations::{CiCommitJobEvidence, CiCommitJobIdentity};
 use super::super::super::pr::PullRequestStatus;
 use crate::context::RuntimeHost;
 use orbit_common::{OrbitError, security::redaction::redact_all_and_home};
@@ -35,13 +37,6 @@ pub(super) enum CiRerunDiagnosticKind {
     ProviderRefusal,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct CiRerunJobIdentity {
-    run_id: Option<u64>,
-    job_id: Option<u64>,
-    run_attempt: Option<u64>,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(in crate::executor::automation::vcs) struct CiRerunDiagnostic {
     pub(super) stage: CiRerunStage,
@@ -49,10 +44,10 @@ pub(in crate::executor::automation::vcs) struct CiRerunDiagnostic {
     pub(in crate::executor::automation::vcs) head_sha: Option<String>,
     pub(super) run_id: Option<u64>,
     pub(super) job_id: Option<u64>,
-    jobs: Vec<CiRerunJobIdentity>,
+    jobs: Vec<CiCommitJobIdentity>,
     jobs_omitted: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    prerequisite_job: Option<CiRerunJobIdentity>,
+    prerequisite_job: Option<CiCommitJobIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prerequisite_repository: Option<String>,
     kind: CiRerunDiagnosticKind,
@@ -80,15 +75,11 @@ impl CiRerunDiagnostic {
         }
     }
 
-    pub(super) fn bind_jobs(&mut self, jobs: &[Value]) {
+    pub(super) fn bind_jobs(&mut self, jobs: &[CiCommitJobEvidence]) {
         let mut identities = jobs
             .iter()
             .filter(|job| super::jobs::unsuccessful(job))
-            .map(|job| CiRerunJobIdentity {
-                run_id: job["run_id"].as_u64(),
-                job_id: job["job_id"].as_u64(),
-                run_attempt: job["run_attempt"].as_u64(),
-            })
+            .map(CiCommitJobEvidence::identity)
             .collect::<Vec<_>>();
         identities.sort();
         identities.dedup();
@@ -101,7 +92,7 @@ impl CiRerunDiagnostic {
         self.stage = CiRerunStage::Log;
         self.run_id = Some(deferred.run_id);
         self.job_id = Some(deferred.job_id);
-        self.prerequisite_job = Some(CiRerunJobIdentity {
+        self.prerequisite_job = Some(CiCommitJobIdentity {
             run_id: Some(deferred.run_id),
             job_id: Some(deferred.job_id),
             run_attempt: deferred.run_attempt,

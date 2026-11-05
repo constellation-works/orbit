@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 use super::super::super::operations;
+use super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
 use super::super::super::pr::{CheckState, PullRequestStatus};
 
 use super::annotations::unanswered_required;
@@ -177,7 +178,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         Ok(jobs) => jobs,
         Err(error) => return Ok(unclassified(format!("its jobs could not be read: {error}"))),
     };
-    let failed_jobs: Vec<&Value> = head_jobs
+    let failed_jobs: Vec<&CiCommitJobEvidence> = head_jobs
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect();
@@ -212,8 +213,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     if recovery.updated
         && aggregates.is_empty()
         && failed_jobs.iter().all(|job| {
-            job["job_id"]
-                .as_u64()
+            job.job_id
+                .number()
                 .is_some_and(|id| recovery.handled.contains(&id))
         })
     {
@@ -231,7 +232,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         .cloned()
         .collect::<BTreeSet<_>>();
     for job in failed_jobs {
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Ok(unclassified(
                 "a failed job reported no identity".to_string(),
             ));
@@ -296,10 +297,10 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
         }
         if class == CheckFailureClass::Flaky
-            && !(job["event"].as_str() == Some("pull_request")
-                && job["head_sha"].as_str().is_none_or(|sha| sha == head)
+            && !(job.event.value() == Some(&CiJobEvent::PullRequest)
+                && job.head_sha.text().is_none_or(|sha| sha == head)
                 && {
-                    let numbers = super::suspect::pull_request_numbers(job);
+                    let numbers = &job.association.numbers;
                     numbers.is_empty() || numbers.contains(&pr)
                 })
         {
@@ -316,8 +317,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 std::slice::from_ref(&context.task_id),
                 &json!({
                     "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason":why,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job.run_attempt, "pr_number":pr, "event":job.event,
+                    "started_at":job.started_at, "completed_at":job.completed_at, "reason":why,
                 }),
                 Some(&context.handoff_id),
             )?;

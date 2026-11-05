@@ -14,6 +14,10 @@ mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 
+pub(super) use ci::{
+    CiCommitJobEvidence, CiCommitJobIdentity, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent,
+    CiJobPullRequests, CiJobStatus,
+};
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, carry_class, is_transient,
