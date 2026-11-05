@@ -681,8 +681,8 @@ encode this repository's branches and gates. Re-init preserves them:
   artifact-deprecation-review, which sweeps codebase comments for stale
   artifact references.
 - [ORB-10446] — renamed `orbit auto-task generate` to `orbit auto-task mint`.
-- [ORB-20516] — fixed the recurring task-pilot warning and final-recovery block
-  causes at their source.
+- [ORB-20516] — shipped `pilot-block-patterns`, which identifies recurring
+  task-pilot warnings and post-recovery blocks and routes fixes to their source.
 - [ORB-20705] — cut `full-code-review`'s 56% rejected-filing rate, including the
   re-search before a retried filing.
 - [ORB-20991] — ran the auto-task yield review whose 30-day
