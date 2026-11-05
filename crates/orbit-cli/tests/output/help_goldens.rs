@@ -243,6 +243,263 @@ fn help_matches_the_shipped_surface() {
     check_help_goldens(&root, update, &home, &work);
 }
 
+/// A plugin longer than every built-in root group widens their shared
+/// description column, and its help wraps against the actual PTY width.
+#[cfg(unix)]
+#[test]
+fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    let root = temp.path().join("root");
+    let empty_root = temp.path().join("empty-root");
+    let source = temp.path().join("source");
+    fs::create_dir_all(&home).expect("create fixture home");
+    fs::create_dir_all(&work).expect("create fixture work");
+    fs::create_dir_all(source.join(".orbit-plugin/bin")).expect("create plugin source");
+    crate::git_repo::init(&work);
+
+    let fixture_command = |selected_root: &Path| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("NO_COLOR", "1")
+            .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+            .arg("--root")
+            .arg(selected_root);
+        command
+    };
+
+    for (selected_root, machine) in [(&root, "plugin-help"), (&empty_root, "empty-help")] {
+        fixture_command(selected_root)
+            .args([
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                machine,
+                "--task-prefix",
+                "UXR",
+            ])
+            .assert()
+            .success();
+    }
+    fixture_command(&root)
+        .args(["workspace", "init", "--name", "plugin-help"])
+        .assert()
+        .success();
+
+    fs::write(
+        source.join(".orbit-plugin/plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: long-plugin-namespace\n  version: 0.1.0\n  description: A very long plugin description used to inspect the shared root help column and wrapped output at narrow terminal sizes.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n",
+    )
+    .expect("write plugin manifest");
+    let backend = source.join(".orbit-plugin/bin/backend.sh");
+    fs::write(
+        &backend,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .expect("write plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backend, fs::Permissions::from_mode(0o755))
+            .expect("make plugin backend executable");
+    }
+    fixture_command(&root)
+        .args(["plugin", "add"])
+        .arg(&source)
+        .arg("--enable")
+        .assert()
+        .success();
+
+    let run_pty_help = |width: u16, flag: &str| {
+        let requested = libc::winsize {
+            ws_row: 40,
+            ws_col: width,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        // SAFETY: openpty initializes these two valid out-pointers and copies
+        // the supplied window size into the newly opened pseudo-terminal.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &requested,
+            )
+        };
+        assert_eq!(opened, 0, "open PTY: {}", std::io::Error::last_os_error());
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let mut actual = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the slave descriptor is open and `actual` is a valid output
+        // pointer for TIOCGWINSZ.
+        let read_size = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCGWINSZ, &mut actual) };
+        assert_eq!(read_size, 0, "read PTY window size");
+        assert_eq!(actual.ws_col, width, "PTY accepted requested width");
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("NO_COLOR", "1")
+            .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+            .arg("--root")
+            .arg(&root)
+            .arg(flag)
+            .stdin(Stdio::from(slave.try_clone().expect("clone PTY slave")))
+            .stdout(Stdio::from(slave.try_clone().expect("clone PTY stdout")))
+            .stderr(Stdio::from(slave.try_clone().expect("clone PTY stderr")));
+        let mut child = command.spawn().expect("spawn CLI help in PTY");
+        drop(command);
+        drop(slave);
+        let mut master = master;
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("PTY help timed out at {width} columns ({flag})");
+            }
+            let timeout_ms = remaining.as_millis().min(5_000) as i32;
+            let mut poll_fd = libc::pollfd {
+                fd: master.as_raw_fd(),
+                events: libc::POLLIN | libc::POLLHUP,
+                revents: 0,
+            };
+            // SAFETY: `poll_fd` points to one initialized pollfd and the call
+            // waits at most timeout_ms without mutating unrelated descriptors.
+            let ready = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("poll PTY output: {error}");
+            }
+            let mut chunk = [0_u8; 4096];
+            match master.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&chunk[..count]),
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("read PTY output: {error}");
+                }
+            }
+        }
+        let status = child.wait().expect("wait for CLI help");
+        (
+            status,
+            String::from_utf8(output)
+                .expect("help is UTF-8")
+                .replace('\r', ""),
+        )
+    };
+
+    for width in [60, 80, 120] {
+        for flag in ["--help", "-h"] {
+            let (status, help) = run_pty_help(width, flag);
+            assert!(status.success(), "orbit {flag} failed at {width}: {help}");
+            let lines: Vec<&str> = help.lines().collect();
+            let heading = lines
+                .iter()
+                .position(|line| *line == "Plugins:")
+                .expect("active plugin section");
+            let end = lines[heading + 1..]
+                .iter()
+                .position(|line| line.is_empty())
+                .expect("plugin section boundary");
+            let plugin_lines = &lines[heading + 1..heading + 1 + end];
+            let plugin_column = plugin_lines[0]
+                .find("A very long plugin description")
+                .expect("plugin description column");
+            let built_in = lines
+                .iter()
+                .find(|line| line.contains("Initialize the global Orbit root"))
+                .expect("built-in root description");
+            assert_eq!(
+                plugin_column,
+                built_in.find("Initialize the global Orbit root").unwrap(),
+                "plugin description column at {width} columns"
+            );
+            assert!(
+                plugin_lines
+                    .iter()
+                    .all(|line| line.chars().count() <= usize::from(width)),
+                "plugin row exceeded {width} columns:\n{}",
+                plugin_lines.join("\n")
+            );
+            assert!(
+                plugin_lines
+                    .iter()
+                    .skip(1)
+                    .all(|line| line.starts_with(&" ".repeat(plugin_column))),
+                "plugin continuation did not hang at its description column:\n{}",
+                plugin_lines.join("\n")
+            );
+        }
+    }
+
+    let piped = fixture_command(&root)
+        .arg("--help")
+        .output()
+        .expect("run piped plugin help");
+    assert!(piped.status.success());
+    let piped_help = String::from_utf8(piped.stdout).expect("piped help is UTF-8");
+    let piped_lines: Vec<&str> = piped_help.lines().collect();
+    let heading = piped_lines
+        .iter()
+        .position(|line| *line == "Plugins:")
+        .expect("piped plugin section");
+    let end = piped_lines[heading + 1..]
+        .iter()
+        .position(|line| line.is_empty())
+        .expect("piped plugin section boundary");
+    assert_eq!(end, 1, "piped plugin description stays on one line");
+
+    let no_plugin = fixture_command(&empty_root)
+        .arg("--help")
+        .output()
+        .expect("run help without plugins");
+    assert!(no_plugin.status.success());
+    assert!(!String::from_utf8_lossy(&no_plugin.stdout).contains("Plugins:"));
+}
+
 /// Grouped `orbit run` / `orbit task` help must keep every description in one
 /// column with a clear gap, and never stack a description onto its own line in
 /// piped output [ORB-19912]. Piped output is width 0, so this is the wide

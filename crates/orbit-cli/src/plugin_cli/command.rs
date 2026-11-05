@@ -23,9 +23,6 @@ use super::schema::{DerivedArg, clap_arg, derive_args, input_from_matches};
 use crate::command::tool::ToolRunArgs;
 use crate::command::{CommandOut, Execute, Payload};
 
-/// Help heading `orbit --help` lists plugin groups under.
-const PLUGIN_HELP_HEADING: &str = "Plugins:";
-
 /// One parsed `orbit <ns> <verb>` invocation, already reduced to the tool
 /// call it performs.
 pub struct PluginGroupInvocation {
@@ -234,30 +231,17 @@ fn build_invocation(verb: &PluginCliVerb, matches: &ArgMatches) -> PluginGroupIn
     }
 }
 
-/// The `Plugins:` block `orbit --help` prints, or an empty string when this
-/// host has no active plugin.
-pub(crate) fn help_section(groups: &[PluginCliGroup]) -> String {
-    if groups.is_empty() {
-        return String::new();
-    }
-    let width = groups
+/// Root help rows for active plugin groups.
+pub(crate) fn help_rows(groups: &[PluginCliGroup]) -> Vec<(String, String)> {
+    groups
         .iter()
-        .map(|group| group.namespace.len())
-        .max()
-        .unwrap_or(0)
-        .max(11);
-    let mut section = format!("\n{PLUGIN_HELP_HEADING}\n");
-    for group in groups {
-        let about = if group.description.trim().is_empty() {
-            format!("Tools from the '{}' plugin", group.namespace)
-        } else {
-            group.description.trim().to_string()
-        };
-        section.push_str(&format!(
-            "  {:<width$} {about}\n",
-            group.namespace,
-            width = width
-        ));
-    }
-    section
+        .map(|group| {
+            let about = if group.description.trim().is_empty() {
+                format!("Tools from the '{}' plugin", group.namespace)
+            } else {
+                group.description.trim().to_string()
+            };
+            (group.namespace.clone(), about)
+        })
+        .collect()
 }
