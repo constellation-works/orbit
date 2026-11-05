@@ -399,6 +399,24 @@ impl std::fmt::Display for CandidateAbsorbed {
     }
 }
 
+/// Orbit could not read or authenticate the evidence a workflow prerequisite
+/// decision needs. Callers branch on this type; `reason` is diagnostic only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowEvidenceUnavailable {
+    /// What could not be read or verified.
+    pub reason: String,
+}
+
+impl std::fmt::Display for WorkflowEvidenceUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "workflow prerequisite evidence is unavailable ({})",
+            self.reason
+        )
+    }
+}
+
 /// A delivery push the forge kept refusing past its retry budget, decided where
 /// the push gave up. Callers read the hold from here, never from `message`.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -50,7 +50,9 @@ fn provider_fields_keep_prerequisite_refusals_across_read_operations() {
                             )
                         })
                         .expect_err("malformed or changed provider fields must refuse");
-                        let orbit_common::OrbitError::Execution(message) = error else {
+                        let orbit_common::OrbitError::WorkflowEvidenceUnavailable(evidence) =
+                            &error
+                        else {
                             panic!("unexpected refusal for {operation}: {error}");
                         };
                         let reason = if value == Some(json!(501)) {
@@ -58,9 +60,13 @@ fn provider_fields_keep_prerequisite_refusals_across_read_operations() {
                         } else {
                             key
                         };
+                        assert_eq!(evidence.reason, reason, "{operation}: {key}={value:?}");
                         assert_eq!(
-                            message,
-                            format!("workflow prerequisite evidence is unavailable ({reason})"),
+                            error.to_string(),
+                            format!(
+                                "execution failed: workflow prerequisite evidence is unavailable \
+                                 ({reason})"
+                            ),
                             "{operation}: {key}={value:?}",
                         );
                     }

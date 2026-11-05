@@ -80,6 +80,13 @@ context, and choose the wire code according to the cause:
   reads, codes and serializes as `Execution`. Query it with `forge_push_hold()`.
   Only a persisted message with no structured hold is decoded from text, through
   `ForgeUnavailableHold::from_text`.
+- `WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable { reason })`: Orbit
+  could not read or verify the evidence a workflow prerequisite decision needs.
+  It reads, codes and serializes as `Execution`, and `reason` is diagnostic only.
+  The prerequisite snapshot retries this variant and no other. The expired
+  completion deadline stays a `DeliveryRefused`, and provider failures stay
+  `PrivateVcs`. Appending a CI retry diagnostic turns it into `Execution` with the
+  same text, because the suffix does not belong in `reason`.
 
 Each wildcard match in another crate must name the new variant wherever it
 names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed

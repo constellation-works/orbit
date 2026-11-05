@@ -323,6 +323,11 @@ pub(in crate::executor::automation::vcs) fn append_ci_rerun_diagnostic(
             message: format!("{message}{suffix}"),
         },
         OrbitError::Execution(message) => OrbitError::Execution(format!("{message}{suffix}")),
+        // The suffix does not belong in the bracketed reason. Nothing retries
+        // past this point, so the same text carries on as a plain execution error.
+        OrbitError::WorkflowEvidenceUnavailable(evidence) => {
+            OrbitError::Execution(format!("{evidence}{suffix}"))
+        }
         OrbitError::PrivateVcs(mut failure) => {
             failure.message.push_str(&suffix);
             OrbitError::PrivateVcs(failure)

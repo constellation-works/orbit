@@ -5,7 +5,8 @@ use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
     DependencyNotDelivered, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind,
     NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -190,6 +191,15 @@ pub enum OrbitError {
     #[error("execution failed: {0}")]
     #[serde(rename = "Execution", serialize_with = "serialize_absorbed_candidate")]
     CandidateAbsorbed(Box<CandidateAbsorbed>),
+    /// Evidence for a workflow prerequisite decision could not be read or
+    /// verified. Displays and serializes exactly as [`Self::Execution`]; callers
+    /// select this family by the variant, never from the text.
+    #[error("execution failed: {0}")]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_workflow_evidence_unavailable"
+    )]
+    WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable),
     /// An execution step failed because an operation it supervised hit its
     /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
     /// carries the timeout class so callers never read it from the text.
@@ -436,6 +446,13 @@ fn serialize_absorbed_candidate<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&candidate.to_string())
+}
+
+fn serialize_workflow_evidence_unavailable<S: serde::Serializer>(
+    evidence: &WorkflowEvidenceUnavailable,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&evidence.to_string())
 }
 
 fn serialize_private_vcs_failure<S: serde::Serializer>(

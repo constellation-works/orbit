@@ -234,6 +234,7 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
         | OrbitError::ForgeUnavailable(_)
+        | OrbitError::WorkflowEvidenceUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_)

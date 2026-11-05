@@ -13,9 +13,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 pub(super) fn unreadable(reason: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "workflow prerequisite evidence is unavailable ({reason})"
-    ))
+    OrbitError::workflow_evidence_unavailable(reason)
 }
 pub(super) fn api(
     deadline: Deadline,
@@ -88,9 +86,7 @@ pub(super) fn snapshot(
         // Only this adapter's unavailable-evidence errors are retried here.
         // Transport/authentication failures retain their provider class and
         // existing recovery policy. Never act on a partial snapshot.
-        if !matches!(&error, OrbitError::Execution(message)
-            if message.starts_with("workflow prerequisite evidence is unavailable ("))
-        {
+        if !matches!(&error, OrbitError::WorkflowEvidenceUnavailable(_)) {
             return Err(error);
         }
         let Ok(remaining) = deadline.remaining() else {

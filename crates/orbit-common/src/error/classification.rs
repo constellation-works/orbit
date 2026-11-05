@@ -4,7 +4,7 @@ use super::{
     ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
     RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    WorkspaceClaimHeld,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -22,6 +22,13 @@ impl OrbitError {
             code,
             message: message.into(),
         }
+    }
+
+    /// Construct the unavailable-evidence failure of a workflow prerequisite read.
+    pub fn workflow_evidence_unavailable(reason: impl Into<String>) -> Self {
+        Self::WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable {
+            reason: reason.into(),
+        })
     }
 
     /// Whether this is a policy denial, including a typed decision-channel refusal.

@@ -150,6 +150,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
         | OrbitError::ForgeUnavailable(_)
+        | OrbitError::WorkflowEvidenceUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
