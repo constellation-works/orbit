@@ -1,3 +1,4 @@
+// Test crate root: no `//!` crate doc, which missing_docs would otherwise flag.
 #![allow(missing_docs)]
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
