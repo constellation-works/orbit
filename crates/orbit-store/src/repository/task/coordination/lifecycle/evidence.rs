@@ -23,6 +23,47 @@ use crate::repository::task::v2::{normalize_v2_artifact_path, review_report_hist
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
 impl TaskCommitBoundary {
+    /// Measure the failure's committed task, while its bundle is still locked,
+    /// and stamp the receipt rows written by that same journal transaction.
+    pub(in super::super) fn stamp_failure_revision(
+        &self,
+        rows: &mut [crate::contracts::TaskCoordinationRow],
+        bundle: &TaskBundleV2,
+        intent: &TaskCommitIntent,
+    ) -> Result<(), OrbitError> {
+        let mut failed = bundle.clone();
+        failed.envelope = intent.envelope.clone();
+        failed.events.extend(intent.events.iter().cloned());
+        failed
+            .comments
+            .extend(intent.evidence.comments.iter().cloned());
+        if let Some(plan) = &intent.evidence.plan {
+            failed.plan = plan.clone();
+        }
+        let comments = failed
+            .comments
+            .iter()
+            .cloned()
+            .map(crate::repository::task::v2::task_comment_from_row)
+            .collect::<Vec<_>>();
+        let history = crate::repository::task::v2::task_history_from_events(failed.events.clone());
+        let task = crate::repository::task::v2::TaskV2Store::new(
+            self.registry.clone(),
+            self.workspace_id.clone(),
+        )
+        .task_from_bundle(failed)?;
+        let revision = crate::contracts::FinalRecoveryTaskRevision::of(&task, &comments, &history);
+        for row in rows
+            .iter_mut()
+            .filter(|row| row.kind == super::codec::RECEIPT)
+        {
+            let mut receipt: super::MutationReceipt = super::decode(&row.payload_json)?;
+            receipt.result.failure_revision = Some(revision.clone());
+            row.payload_json = super::encode(&receipt)?;
+        }
+        Ok(())
+    }
+
     pub(in super::super) fn prepare_claim_evidence(
         &self,
         intent: &mut TaskCommitIntent,

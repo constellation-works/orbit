@@ -67,6 +67,10 @@ impl OrbitRuntime {
         {
             return Ok(());
         }
+        let Some(observed) = result.failure_revision.as_ref() else {
+            // A legacy receipt cannot prove which failed revision it owns.
+            return Ok(());
+        };
         let task = self.get_task(&claim.task_id)?;
         if task.status != TaskStatus::Blocked {
             return Ok(());
@@ -74,7 +78,7 @@ impl OrbitRuntime {
         let request = FinalRecoveryRequest {
             task_id: claim.task_id.clone(),
             run_id: final_recovery.run_id.clone(),
-            observed: self.final_recovery_revision(&task)?,
+            observed: observed.clone(),
             repo_root: self.context.paths().repo_root.clone(),
             base_ref: self.owner_ship_contract().base_branch,
             completion: FinalRecoveryCompletion::Review,

@@ -468,16 +468,11 @@ impl crate::OrbitRuntime {
             .and_then(|run| run.input)
             .unwrap_or(serde_json::Value::Null);
         let allowlist = self.crew_allowlist_from_input(&input)?;
-        let unlimited = reviewable.as_ref().map(|crews| {
-            crews
-                .iter()
-                .filter(|crew| !timed(crew))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        let runnable = match &allowlist {
-            None => unlimited,
-            Some(allowlist) => Some(match &unlimited {
+        // Use the same effective provider/model/account authority for diagnostics
+        // and admission, including effort-qualified references.
+        let permitted = match &allowlist {
+            None => reviewable.clone(),
+            Some(allowlist) => Some(match &reviewable {
                 Some(crews) => crews
                     .iter()
                     .filter(|crew| self.crew_allowlist_permits(allowlist, crew))
@@ -487,14 +482,17 @@ impl crate::OrbitRuntime {
                     .names()
                     .into_iter()
                     .filter(|crew| {
-                        !excluded
-                            .iter()
-                            .any(|exclusion| same_crew_family(&exclusion.crew, crew))
+                        !excluded.iter().any(|exclusion| {
+                            same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
+                        })
                     })
                     .map(ToOwned::to_owned)
                     .collect(),
             }),
         };
+        let runnable = permitted
+            .as_ref()
+            .map(|crews| crews.iter().filter(|crew| !timed(crew)).cloned().collect());
         // [ORB-17773] Per-crew weekly pressure from this host's own
         // readings, recomputed each pass like the limit gate above. Under
         // `static` nothing is reported, so admission and offer order are
@@ -530,6 +528,7 @@ impl crate::OrbitRuntime {
                     .collect()
             }),
             reviewable,
+            permitted,
             default_crew,
             excluded,
             auth_exclusions,

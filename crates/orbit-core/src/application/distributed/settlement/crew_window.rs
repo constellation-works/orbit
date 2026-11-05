@@ -70,6 +70,9 @@ pub struct PullCrewWindow {
     /// not the review it owes.
     #[serde(skip)]
     pub(super) reviewable: Option<Vec<String>>,
+    /// Preflight crews permitted by the effective allowlist, before timed holds.
+    #[serde(skip)]
+    pub(super) permitted: Option<Vec<String>>,
     /// Per-crew weekly usage pressure from this host's own readings
     /// [ORB-17773], recomputed each pass like the limit gate. Empty under
     /// `workflow.crew_selection = "static"`: then the capability reports
@@ -141,24 +144,7 @@ impl PullCrewWindow {
         if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
             return false;
         }
-        let candidate_crews: Vec<&str> = match (&self.allowed, &self.reviewable) {
-            (Some(allowed), Some(reviewable)) => reviewable
-                .iter()
-                .filter(|crew| allowed.iter().any(|a| a == *crew))
-                .map(String::as_str)
-                .collect(),
-            (None, Some(reviewable)) => reviewable.iter().map(String::as_str).collect(),
-            (Some(allowed), None) => allowed
-                .iter()
-                .filter(|crew| {
-                    !self.excluded.iter().any(|exclusion| {
-                        same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
-                    })
-                })
-                .map(String::as_str)
-                .collect(),
-            (None, None) => Vec::new(),
-        };
+        let candidate_crews = self.permitted.as_deref().unwrap_or_default();
         !candidate_crews.is_empty()
             && candidate_crews.iter().all(|crew| {
                 self.excluded.iter().any(|exclusion| {
