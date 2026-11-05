@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 ---
 # Command Pattern
 
@@ -11,6 +11,9 @@ In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/tool.rs`
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
     fn input_schema(&self) -> Option<Value> { None }
+    fn declared_id_route(&self) -> McpIdRouteDeclaration {
+        McpIdRouteDeclaration::Unspecified
+    }
     fn execution_kind(&self) -> ToolExecutionKind { ToolExecutionKind::Mutating }
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
 }
