@@ -121,6 +121,7 @@ a.failure-id-link:focus-visible {
 .child-dispatch-summary { margin-bottom: 8px; }
 .child-dispatch-row .state-label { color: var(--dot); }
 .child-dispatch-row .duration { white-space: nowrap; }
+.provider-process-message { overflow-wrap: anywhere; }
 
 /* ORB-12516: distributed claim provenance and the owner's handoff
    actions, rendered inside the existing task detail and run meta rather

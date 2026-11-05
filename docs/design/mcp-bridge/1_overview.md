@@ -2,7 +2,7 @@
 title: Orbit MCP — Overview
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 status: Draft
 stage: shipped
 next: "—"
@@ -38,12 +38,14 @@ non-interactive SSH process whose remote command is equivalent to:
 
 ```text
 ssh -T <host> orbit mcp serve [--operator] \
-    --remote-caller-machine-id <audit-label> [--orchestrator <crew>]
+    --remote-caller-machine-id <audit-label> [--orchestrator <crew>] \
+    [--role <role>] [--toolset <list>]
 ```
 
 Orbit includes `--operator` only when the client has operator authority and is not
 running as an agent. It includes `--orchestrator` when the client has that attribution
-default configured.
+default configured. It includes `--role` and `--toolset` only when the proxy's role or
+toolset selection, from its flags or `machine.mcp.role` and `machine.mcp.toolsets`, sets them.
 
 The proxy inherits stdin, stdout, and stderr. It does not parse MCP frames, open a
 checkout, resolve a workspace, filter tools, make authorization decisions, or
