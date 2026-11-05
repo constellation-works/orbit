@@ -19,6 +19,7 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 
 /// One declared panel, as the API reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +145,7 @@ pub fn read_plugin_panel(
         verb,
         plugin.manifest.claims_first_party_namespace(),
     );
-    runtime.execute_tool_command_with_session_context(
+    runtime.run_tool_command_with_session(
         &tool_name,
         Value::Object(Default::default()),
         None,

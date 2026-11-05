@@ -18,6 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use crate::application::job::JobAdmissionPort;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
@@ -177,7 +178,7 @@ pub(crate) fn gate_starvation_step(
             DispatchError::action_failed(action, "late reservation missing reservation_id")
         })?;
         runtime
-            .run_tool_with_context_and_role(
+            .run_tool_in_role(
                 "orbit.task.locks.release",
                 json!({"reservation_id": reservation_id}),
                 Role::Admin,

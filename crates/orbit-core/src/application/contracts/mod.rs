@@ -5,7 +5,9 @@
 //! none of them owns them: a module that defined one would pull every other
 //! user into a dependency on itself. This module sits below all nine and
 //! imports none of them [ORB-17924]. Only pure values belong here: no
-//! runtime access and no behaviour beyond formatting the value itself.
+//! runtime access and no behaviour beyond formatting the value itself. The one
+//! exception is a port trait the adapter implements, such as
+//! `ToolInvocationPort` [ORB-22004].
 
 mod claimed_leaf;
 mod crew_draw;
@@ -19,6 +21,7 @@ mod published_delivery;
 mod pull_settlement;
 mod retry_key;
 mod review_layer;
+mod tool_invocation;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
 pub(crate) use crew_draw::{
@@ -43,3 +46,4 @@ pub(in crate::application) use pull_settlement::SETTLEMENT_REFUSAL_REMEDY;
 pub use pull_settlement::{PullSettlementEntry, PullSettlementOutcome};
 pub(crate) use retry_key::RetryKey;
 pub(crate) use review_layer::review_layer_json;
+pub(crate) use tool_invocation::ToolInvocationPort;

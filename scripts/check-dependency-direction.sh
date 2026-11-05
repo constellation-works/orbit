@@ -401,13 +401,17 @@ PY
 # inherent method is covered without being listed. A call whose
 # `<path>:<line>:<text>` matches the regex `$4` is a named exact-line
 # allowance for a same-named method on another type (a store read).
+# `$6` (default `$1`) is the directory `$3` is relative to, when the defining
+# modules are not application modules: `$3` empty means all of it [ORB-22004].
 inherent_calls_into() {
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-}" <<'PY'
 import pathlib, re, sys
 app = pathlib.Path(sys.argv[1]); module = sys.argv[2]
 upper = sys.argv[3].split("|")
 allowed = re.compile(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
 exempt = [p for p in (sys.argv[5].split("|") if len(sys.argv) > 5 and sys.argv[5] else [])]
+defs_root = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else app
+def_prefix = list(defs_root.relative_to(app.parent).parts)
 token = re.compile(
     r"(?P<line>//[^\n]*)|(?P<block>/\*)"
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
@@ -437,9 +441,9 @@ def code_tokens(source):
             index = end + len(closing)
         else:
             yield match.group(), match.start()
-def production(root):
+def production(root, base):
     for path in sorted(root.rglob("*.rs")):
-        rel = path.relative_to(app)
+        rel = path.relative_to(base)
         if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
             continue
         yield path, rel
@@ -462,11 +466,11 @@ def visibility(toks, i, parts):
             if inner[:1] == ["in"] and inner[1:2] == ["crate"]:
                 return inner[2:]
     return None
-lower_path = ["application", module]
+lower_path = ["application", *([module] if module else [])]
 names = set()
 for top in upper:
-    for path, rel in production(app / top):
-        parts = ["application", *rel.with_suffix("").parts]
+    for path, rel in production(defs_root / top, defs_root):
+        parts = [*def_prefix, *rel.with_suffix("").parts]
         if parts[-1] == "mod":
             parts.pop()
         toks = list(code_tokens(path.read_text()))
@@ -496,7 +500,7 @@ for top in upper:
                     i = k
             i += 1
 failed = False
-for path, rel in production(app / module):
+for path, rel in production(app / module, app):
     if any(str(rel).startswith(e) for e in exempt):
         continue
     source = path.read_text()
@@ -508,6 +512,12 @@ for path, rel in production(app / module):
         nxt = toks[i + 1][0]
         if nxt != "(" and not (nxt == "::" and i + 2 < len(toks) and toks[i + 2][0] == "<"):
             continue
+        # An inherent method is reached by `receiver.name(` or `OrbitRuntime::name(`
+        # (or `Self::`); a bare `name(` is a free function, which the path checks
+        # already cover, so it is not an up-call.
+        prev = toks[i - 1][0]
+        if prev != "." and not (prev == "::" and i >= 2 and toks[i - 2][0] in ("OrbitRuntime", "Self")):
+            continue
         number = source.count("\n", 0, start) + 1
         hit = f"{rel}:{number}:{lines[number - 1]}"
         if allowed and allowed.search(hit):
@@ -517,6 +527,19 @@ for path, rel in production(app / module):
 sys.exit(1 if failed else 0)
 PY
 }
+
+# [ORB-22004] The `crate::adapter` grep above cannot see an inherent `OrbitRuntime`
+# method, which carries no import. The adapter defines those on `impl OrbitRuntime`
+# blocks; application reaches them only through the ports the adapter implements
+# (`ToolInvocationPort`, `PullTransportPort`). The names are derived from the
+# adapter's blocks, so a new adapter method is covered without being listed.
+# Same-named methods on receivers that are not `OrbitRuntime`: the skill catalog's
+# `doctor` and the plugin store's `list_plugins`. Exact lines only.
+adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.doctor\(|^skill\.rs:[0-9]+:.*self\.skill_catalog\(\)\.doctor\(|^plugin/inspect/summary\.rs:[0-9]+:\s+\.list_plugins\(\)\?$|^plugin/secrets\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\('
+if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_root/crates/orbit-core/src/adapter"; then
+  echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
+  fail=1
+fi
 
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and

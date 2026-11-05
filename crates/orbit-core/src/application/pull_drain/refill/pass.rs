@@ -8,8 +8,8 @@ use orbit_store::contracts::{
 use serde_json::{Value, json};
 
 use super::super::drain::{
-    BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, PullDrain, RefusedDelivery, admits_request,
-    breaker_gate, settle_breaker,
+    BreakerGate, DEFAULT_BREAKER_COOLDOWN_SECONDS, PullDrain, PullTransportPort, RefusedDelivery,
+    admits_request, breaker_gate, settle_breaker,
 };
 use super::cancel::cancelling_pass;
 use super::crews::crew_window;
@@ -80,8 +80,8 @@ pub(crate) fn pull_refill(
             destination.owner_machine_id
         ))
     })?;
-    let peer = runtime.routed_pull_peer(transport.clone());
-    let launcher = runtime.leaf_pull_launcher();
+    let peer = runtime.follower_pull_peer(transport.clone());
+    let launcher = runtime.bound_leaf_launcher();
     let claimed_review = |run_id: &str| runtime.claimed_review_carry(run_id);
     let drain = PullDrain {
         jobs: runtime.stores().jobs(),

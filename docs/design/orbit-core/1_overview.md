@@ -111,6 +111,7 @@ source scan, enforces the runtime direction.
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
+| Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
 | Config loading and runtime assembly | `crates/orbit-core/src/composition.rs` | [ORB-10886] |
@@ -254,7 +255,17 @@ and job edges that had regrown past the fixed-name guard (all but
   chain, or calls the inherent methods and functions the [ORB-17939] ports
   and reused reads wrap, when `contracts` imports any of the nine modules,
   or when a shared contract is defined or imported anywhere but
-  `application::contracts`.
+  `application::contracts`. [ORB-22004] The same derivation covers the adapter:
+  `application` may not import `crate::adapter`, and no application file may call
+  an inherent `OrbitRuntime` method that an `impl OrbitRuntime` block under
+  `adapter/` defines with a visibility that reaches it. Application reaches tool
+  execution through `contracts::ToolInvocationPort` and the pull transport
+  through `pull_drain::drain::PullTransportPort`, both implemented on `OrbitRuntime` by
+  the adapter; the adapter's inherent tool methods stay for its own callers. A
+  bare `name(` is a free function, not an up-call, so only `receiver.name(`,
+  `OrbitRuntime::name(` and `Self::name(` are checked. Same-named methods on
+  other receivers (the skill catalog's `doctor`, the plugin store's
+  `list_plugins`) are exact-line allowances.
 
 The application layering, lowest first, is `contracts < task < job <
 automation < review < distributed < pull_drain < admission < workspace_auto <
@@ -284,6 +295,7 @@ task → admission and task → workspace_auto edges are the known exception.
 - [ORB-17939] — cut the back edges among automation, review, distributed, admission and workspace_auto through ports the lower modules own and the distributed mutation gate contract, and guarded the order above job.
 - [ORB-17972] — routed task's remaining inherent calls to `job` through `task::TaskJobPort` and guarded them; no task → job edge remains.
 - [ORB-22003] — routed the regrown task → job, task → distributed, job → distributed and job → pull_drain calls through the existing lower-owned ports and made the guard derive forbidden inherent names from each higher module's `impl OrbitRuntime` blocks; `task/backlog_forecast/` is exempt pending its move.
+- [ORB-22004] — moved the application's tool-invocation and pull-transport calls behind `contracts::ToolInvocationPort` and `pull_drain::drain::PullTransportPort`, which the adapter implements on `OrbitRuntime`, and guarded the application → adapter edge against inherent `OrbitRuntime` calls.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 - [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
 

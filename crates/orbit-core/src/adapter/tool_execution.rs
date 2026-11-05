@@ -6,6 +6,7 @@ use orbit_types::policy::Role;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use crate::runtime::tool_exec::{CapabilityEnforcement, resolve_task_id_from_context};
 
 impl OrbitRuntime {
@@ -166,5 +167,54 @@ impl OrbitRuntime {
             ));
         }
         self.execute_registered_tool(name, input, tool_context, capability_enforcement)
+    }
+}
+
+/// Application use cases reach tool execution through this port [ORB-22004].
+/// Each method delegates to the inherent entry point of the same behaviour, so
+/// audit rows and capability checks are unchanged.
+impl ToolInvocationPort for OrbitRuntime {
+    fn run_tool_command_with_session(
+        &self,
+        name: &str,
+        input: Value,
+        agent_override: Option<String>,
+        model_override: Option<String>,
+        session_context: orbit_types::tool::ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.execute_tool_command_with_session_context(
+            name,
+            input,
+            agent_override,
+            model_override,
+            session_context,
+        )
+    }
+
+    fn run_tool_in_role(
+        &self,
+        name: &str,
+        input: Value,
+        role: Role,
+        tool_context: ToolContext,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_role(name, input, role, tool_context)
+    }
+
+    fn run_tool_with_enforcement(
+        &self,
+        name: &str,
+        input: Value,
+        role: Role,
+        tool_context: ToolContext,
+        enforcement: CapabilityEnforcement,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_role_and_capability(
+            name,
+            input,
+            role,
+            tool_context,
+            enforcement,
+        )
     }
 }
