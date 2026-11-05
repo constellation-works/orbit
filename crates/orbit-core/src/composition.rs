@@ -13,10 +13,10 @@ pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
 use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
+use crate::application::workspace_product_profile::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
-use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
 pub use crate::bootstrap::workspace_authority::{
@@ -552,33 +552,9 @@ pub fn host_assistance_service(
     )
 }
 
-impl OrbitRuntime {
-    /// Join the private task consumer to the host-only adapter and ledger.
-    pub(crate) fn task_quality_service(
-        &self,
-    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
-        Ok(host_assistance_service(
-            &self.global_root(),
-            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
-        ))
-    }
-}
-
-impl OrbitRuntime {
-    /// Join the private delivery consumer to host-only policy and bounded assistance.
-    pub(crate) fn delivery_quality_service(
-        &self,
-    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
-        Ok(host_assistance_service(
-            &self.global_root(),
-            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
-        ))
-    }
-}
-
-impl OrbitRuntime {
-    /// Join the shadow precedent-decision consumer to host-only policy and the assistance ledger.
-    pub(crate) fn precedent_decision_service(
+impl crate::application::assistance::AssistanceServicePort for OrbitRuntime {
+    /// Join an assistance consumer to host-only policy, the adapter and the ledger.
+    fn assistance_service(
         &self,
     ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
         Ok(host_assistance_service(

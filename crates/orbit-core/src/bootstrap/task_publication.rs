@@ -16,6 +16,7 @@ use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspacePublicationBinding}
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::TaskBundleMaintenancePort;
 
 pub use orbit_store::workflow::task::{
     AttachmentPolicy, AttachmentPolicyKind, InspectedPublicationTask, OmittedAttachment,
@@ -242,5 +243,15 @@ fn publish_request(
                 generation,
                 commit: commit.clone(),
             }),
+    }
+}
+
+impl TaskBundleMaintenancePort for OrbitRuntime {
+    fn run_workspace_task_publication(&self) -> Result<Value, OrbitError> {
+        self.run_task_publication()
+    }
+
+    fn count_unindexed_task_bundles(&self) -> Result<usize, OrbitError> {
+        self.unindexed_task_bundle_count()
     }
 }

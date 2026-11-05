@@ -14,7 +14,7 @@ use orbit_types::task::{
 use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
 
 use crate::OrbitRuntime;
-use crate::bootstrap::browser_kit::PLAYWRIGHT_VERSION;
+use orbit_exec::browser_kit::PLAYWRIGHT_VERSION;
 
 impl OrbitRuntime {
     /// Recheck enforcing evidence at a landing authority boundary. Shadow/off

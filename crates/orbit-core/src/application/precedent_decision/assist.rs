@@ -35,6 +35,7 @@ use super::ledger::{
     with_receipt, write_receipt,
 };
 use crate::OrbitRuntime;
+use crate::application::assistance::AssistanceServicePort;
 use crate::application::assistance::{AssistancePolicyIdentity, AssistanceService};
 
 const APPLY_BOUND: usize = 32;
@@ -306,7 +307,7 @@ impl OrbitRuntime {
         if !matches!(routed, Ok(false)) {
             return false;
         }
-        let live = self.precedent_decision_service().and_then(|service| {
+        let live = self.assistance_service().and_then(|service| {
             service.assistance_shadow_policy_identity(&workspace, PRECEDENT_DECISION_USE_CASE)
         });
         matches!(live, Ok(live) if record.answers_under(live.as_ref()))

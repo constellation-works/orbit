@@ -19,6 +19,7 @@ use super::ledger::{
 };
 use crate::OrbitRuntime;
 use crate::application::assistance::AssistanceService;
+use crate::application::assistance::AssistanceServicePort;
 use crate::application::task::precedent_provider::{
     self, PRECEDENT_PROVIDER_CONTRACT, PrecedentProviderRequest, PrecedentQuery,
 };
@@ -52,7 +53,7 @@ impl OrbitRuntime {
     /// Enqueue one shadow assessment when this workspace's grant is shadow.
     /// Off and advisory return before any precedent-provider call.
     pub fn consider_precedent_decision(&self, request: &DecisionRequest) -> Result<(), OrbitError> {
-        let service = self.precedent_decision_service()?;
+        let service = self.assistance_service()?;
         self.consider_precedent_decision_with_service(request, &service)
     }
 
@@ -137,7 +138,7 @@ impl OrbitRuntime {
         if self.coordination_write_owner().is_some() {
             return Ok(());
         }
-        let service = self.precedent_decision_service()?;
+        let service = self.assistance_service()?;
         self.run_precedent_decision_with_service(&service)
     }
 

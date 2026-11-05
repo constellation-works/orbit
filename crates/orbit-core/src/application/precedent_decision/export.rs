@@ -12,6 +12,7 @@ use super::contract::request_category;
 use super::ledger::{read_receipt, receipt_path};
 use crate::OrbitRuntime;
 use crate::application::assistance::AssistanceService;
+use crate::application::assistance::AssistanceServicePort;
 
 #[derive(Serialize)]
 struct JoinDocument {
@@ -55,7 +56,7 @@ impl OrbitRuntime {
     /// Predictions sealed at or after `answered_at`, curated-rule answers,
     /// and non-human actors are counted and omitted from `scored`.
     pub fn precedent_decision_join(&self) -> Result<Value, OrbitError> {
-        let service = self.precedent_decision_service()?;
+        let service = self.assistance_service()?;
         self.precedent_decision_join_with_service(&service)
     }
 

@@ -17,6 +17,15 @@ use orbit_types::assistance::{AssistanceReason, AssistanceRequest, AssistanceRes
 
 pub(crate) use preparation::prepare_assistance_evidence;
 
+/// The assistance service for the private task-quality, delivery-quality and
+/// shadow precedent-decision consumers. Composition implements it on
+/// `OrbitRuntime`, joining host-only settings, the concrete adapter and the
+/// assistance ledger, so these use cases never name composition [ORB-22005].
+pub(crate) trait AssistanceServicePort {
+    /// A service over this host's assistance ledger, bound to its global config.
+    fn assistance_service(&self) -> Result<AssistanceService, OrbitError>;
+}
+
 /// Inject a recorded adapter at the same public boundary used by consumers.
 /// Implementations must honor the claim's timeout and bounded response size,
 /// never log request/response/credential values, and return fixed error codes.

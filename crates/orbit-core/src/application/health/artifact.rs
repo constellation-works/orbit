@@ -406,7 +406,7 @@ impl OrbitRuntime {
             if catalog.kind == ArtifactKind::Skill
                 && let Some(base) = self.global_root().parent()
             {
-                let roots = crate::bootstrap::init::skill_link_roots(base);
+                let roots = crate::application::skill::skill_link_roots(base);
                 let links = match dangling_client_skill_links(&roots) {
                     Ok(links) => links,
                     Err(error) => {

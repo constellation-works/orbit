@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
+use crate::application::contracts::TaskBundleMaintenancePort;
 use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
@@ -172,7 +173,7 @@ pub(crate) fn run_deterministic(
             .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // Publish only this workspace, with an explicit successful skip when unbound.
         CoreDeterministicAction::TaskPublication => runtime
-            .run_task_publication()
+            .run_workspace_task_publication()
             .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.

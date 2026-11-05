@@ -20,7 +20,6 @@ pub mod linux_sandbox_host {
     };
 }
 pub(crate) mod policy;
-pub(crate) mod product_profile;
 pub mod task_migration;
 pub mod task_publication;
 pub(crate) mod workspace_authority;
