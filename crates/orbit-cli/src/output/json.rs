@@ -144,6 +144,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
+        | OrbitError::ForgeUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",

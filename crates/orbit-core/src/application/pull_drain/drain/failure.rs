@@ -437,8 +437,14 @@ fn leaf_failure(
             .into_iter()
             .chain(diagnostic.map(|(_, message)| message))
             .any(|message| message.contains(REVIEW_LANDING_DECISION_PENDING));
-    // [ORB-14617] A forge hold's text leads with its JSON; say it plainly.
-    let mut reason = match ForgeUnavailableHold::from_text(&reason) {
+    // [ORB-14617] A forge hold's text leads with its JSON; say it plainly. A
+    // resumed run's state starts from its source's hold, so that hold speaks
+    // only for a run that ended held. Any other record has only its message.
+    let held = (run.state == JobRunState::Held)
+        .then(|| state.and_then(|state| state.pull_drain.forge_hold.clone()))
+        .flatten()
+        .or_else(|| ForgeUnavailableHold::from_text(&reason));
+    let mut reason = match held {
         Some(hold) => format!(
             "the forge refused the push of {} to {} {} times over {} s",
             hold.head_sha,
