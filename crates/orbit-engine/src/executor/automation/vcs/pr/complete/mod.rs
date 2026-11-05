@@ -68,6 +68,14 @@
 //! SHA. At most `BASE_MODIFIED_MERGE_ATTEMPTS` requests are made, within the
 //! unchanged wait budget.
 //!
+//! A completed synchronous HTTP 500/502/503/504 server error with an exact
+//! provider diagnostic may instead be an uncertain landing. Completion makes
+//! one read-only status observation within the original deadline, accepting
+//! only explicit MERGED evidence for the same pinned head, branch, base, PR
+//! number and repository URL. Missing, contradictory or unreadable evidence
+//! retains the original failure and durable mutation intent. This path never
+//! retries a merge, runs repair, or attributes the landing to the failed request.
+//!
 //! `auto_fix: true` (`orbit run auto --auto-fix`) authorizes repair of failed
 //! required checks and merge conflicts on this pull request (see
 //! [`super::auto_fix`]). Without `completion: done` beside it the step only

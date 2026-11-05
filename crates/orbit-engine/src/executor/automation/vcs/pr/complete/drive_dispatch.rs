@@ -1,7 +1,7 @@
 //! Dispatch sub-phases of the PR completion poll: blocked, conflict,
 //! mergeable and pending states.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
@@ -9,17 +9,19 @@ use serde_json::json;
 
 use crate::context::RuntimeHost;
 
+use super::super::super::super::input::input_string_field;
+
 use super::super::super::landing::checks::CheckReadGap;
 use super::super::super::operations::BASE_MODIFIED_MERGE_ATTEMPTS;
 use super::super::super::push::push_batch_changes;
 use super::super::super::remote_probe::fixed_wait as sleep;
-use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome};
+use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status_before};
 use super::super::auto_fix::{
     self, BlockedStopReason, BlockedVerdict, CheckRepair, base_tip_checks, blocked_verdict,
     defer_throttled_read, hold_auto_fix_stop, record_landed_repair, record_published_repair,
     red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
-use super::super::delivery::PrMergeState;
+use super::super::delivery::{PrMergeState, classify_pr_state};
 use super::conflict::{
     admit_conflict_repair, completion_conflict_error, has_completion_recovery_checkpoint,
     is_blocked_merge_state, re_review_on_conflict, rebase_conflicting_pr_branch,
@@ -28,7 +30,9 @@ use super::conflict::{
 use super::drive::{DeliveredMerge, Delivery};
 use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, SubFlow};
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
-use super::reviewed::merge_condition_sha;
+use super::reviewed::{
+    ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_condition_sha,
+};
 
 impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     pub(super) fn dispatch_state(
@@ -57,32 +61,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 })))));
             }
             PrMergeState::Merged => {
-                let evidence = self.pin.ensure_delivered(&status, self.pr_number)?;
-                let landed_commit = status.exact_merge_commit.as_deref();
-                let managed_merge = self
-                    .requested_landed_commit
-                    .as_deref()
-                    .is_some_and(|requested| Some(requested) == landed_commit);
-                return Ok(DispatchFlow::Deliver(Box::new(Delivery::Merged(
-                    DeliveredMerge {
-                        outcome: json!({
-                            "merged": true,
-                            "pr_number": self.pr_number,
-                            "strategy": self.merge_capabilities.as_ref().map(|capabilities| capabilities.strategy.as_str()),
-                            "auto_merge_requested": self.auto_merge_requested,
-                            "waited_seconds": self.waited_seconds,
-                            "max_wait_seconds": self.max_wait_seconds,
-                            "poll_interval_seconds": self.poll_interval_seconds,
-                            "landed_commit": landed_commit,
-                            "managed_merge": managed_merge,
-                            "base_modified_refusals": self.base_modified_refusals,
-                            "stale_head_observations": self.head_lag.observations,
-                            "reviewed_head_sha": self.reviewed_head_sha,
-                            "delivery_evidence": evidence.as_json(),
-                        }),
-                        evidence,
-                    },
-                ))));
+                return Ok(DispatchFlow::Deliver(Box::new(
+                    self.delivered_merge(&status)?,
+                )));
             }
             PrMergeState::Closed => {
                 return Err(OrbitError::DeliveryRefused {
@@ -123,6 +104,110 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             SubFlow::ContinuePoll => Ok(DispatchFlow::ContinuePoll),
             SubFlow::Deliver(delivery) => Ok(DispatchFlow::Deliver(delivery)),
             SubFlow::WaitPoll => Ok(DispatchFlow::WaitPoll(base_red_reason)),
+        }
+    }
+
+    /// Shared landing evidence and truthful attribution for normal and reconciled reads.
+    fn delivered_merge(&self, status: &PullRequestStatus) -> Result<Delivery, OrbitError> {
+        let evidence = self.pin.ensure_delivered(status, self.pr_number)?;
+        let landed_commit = status.exact_merge_commit.as_deref();
+        let managed_merge = self
+            .requested_landed_commit
+            .as_deref()
+            .is_some_and(|requested| Some(requested) == landed_commit);
+        Ok(Delivery::Merged(DeliveredMerge {
+            outcome: json!({
+                "merged": true,
+                "pr_number": self.pr_number,
+                "strategy": self.merge_capabilities.as_ref().map(|capabilities| capabilities.strategy.as_str()),
+                "auto_merge_requested": self.auto_merge_requested,
+                "waited_seconds": self.waited_seconds,
+                "max_wait_seconds": self.max_wait_seconds,
+                "poll_interval_seconds": self.poll_interval_seconds,
+                "landed_commit": landed_commit,
+                "managed_merge": managed_merge,
+                "base_modified_refusals": self.base_modified_refusals,
+                "stale_head_observations": self.head_lag.observations,
+                "reviewed_head_sha": self.reviewed_head_sha,
+                "delivery_evidence": evidence.as_json(),
+            }),
+            evidence,
+        }))
+    }
+
+    /// One read only, within the original deadline. Never re-enter polling or
+    /// recovery here: an inconclusive read retains the original merge failure.
+    fn reconcile_ambiguous_merge(
+        &self,
+        previous: &PullRequestStatus,
+        diagnostic: &str,
+    ) -> Result<SubFlow, OrbitError> {
+        let reconcile = || -> Result<Delivery, OrbitError> {
+            let repository = self
+                .merge_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.repository.as_str())
+                .ok_or_else(|| OrbitError::Execution("missing repository identity".into()))?;
+            let suffix = format!("/{repository}/pull/{}", self.pr_number);
+            if previous.number_selector.as_deref() != Some(self.pr_number)
+                || !previous.url.as_deref().is_some_and(|url| {
+                    url.strip_suffix(&suffix)
+                        .is_some_and(|host| host.starts_with("https://"))
+                })
+                || self.pin.candidate_sha().is_none()
+                || self.pin.head().is_none()
+                || input_string_field(self.input, "base").is_none()
+                || previous.base_branch.is_none()
+            {
+                return Err(OrbitError::Execution(
+                    "missing or inconsistent pinned PR identity".into(),
+                ));
+            }
+            let status = read_pr_status_before(
+                self.host,
+                Path::new(self.workspace_path),
+                self.pr_number,
+                self.completion_deadline_ms,
+            )?;
+            if status.number_selector != previous.number_selector || status.url != previous.url {
+                return Err(OrbitError::Execution(
+                    "PR number or repository URL changed during reconciliation".into(),
+                ));
+            }
+            if !matches!(classify_pr_state(&status), PrMergeState::Merged)
+                || status.state.as_deref() != Some("MERGED")
+                || !status.merged_at.as_deref().is_some_and(|timestamp| {
+                    chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()
+                })
+                || !status.exact_merge_commit.as_deref().is_some_and(|sha| {
+                    matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+                || status.base_branch != previous.base_branch
+                || status.head_branch != previous.head_branch
+            {
+                return Err(OrbitError::Execution(
+                    "reconciliation did not confirm matching MERGED evidence".into(),
+                ));
+            }
+            ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+            ensure_pr_head_matches_selection(
+                &status,
+                self.pr_number,
+                self.selective_head_sha.as_deref(),
+            )?;
+            self.delivered_merge(&status)
+        };
+        match reconcile() {
+            Ok(delivery) => Ok(SubFlow::Deliver(Box::new(delivery))),
+            Err(error) => Err(OrbitError::Execution(format!(
+                "pr_complete: could not request {} merge on pull request #{}: {diagnostic}; \
+                 read-only reconciliation was inconclusive: {error}; the task stays in review",
+                self.merge_capabilities
+                    .as_ref()
+                    .map(|c| c.strategy.as_str())
+                    .unwrap_or("synchronous"),
+                self.pr_number,
+            ))),
         }
     }
 
@@ -427,7 +512,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         Ok(SubFlow::ContinuePoll)
     }
 
-    fn dispatch_mergeable(&mut self, _status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
+    fn dispatch_mergeable(&mut self, status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -467,6 +552,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     capabilities.strategy.as_str()
                 ))
             })? {
+                ReviewedMergeOutcome::Ambiguous { diagnostic } => {
+                    return self.reconcile_ambiguous_merge(&status, &diagnostic);
+                }
                 ReviewedMergeOutcome::Accepted { landed_commit } => {
                     self.requested_landed_commit = landed_commit;
                     self.merge_requested = true;

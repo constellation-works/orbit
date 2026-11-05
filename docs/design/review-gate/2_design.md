@@ -1538,9 +1538,23 @@ the ordinary poll wait, completion re-reads the PR, reapplies its head, branch,
 base, check, review and merge-policy gates, and resends the same `sha`, for at
 most three requests within the unchanged wait budget. `handoff_land` applies the
 same retry and ceiling to its synchronous merge, resolving each refused intent as
-unmerged before it asks again [ORB-21765]. Ungated runs retain
+unmerged before it asks again [ORB-21765]. Runs without a pinned head retain
 ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
+
+A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504)
+can mean that the merge landed but its response was lost. `pr_complete` makes
+one fresh authenticated status read within the original completion deadline.
+It accepts only explicit `MERGED` state with a merge timestamp and commit for
+the same published/reviewed head, PR number, repository URL, head branch and
+base branch, through the existing delivery and review landing checks. It never
+sends another mutation on this path. An open or closed-unmerged PR, changed
+identity, missing or contradictory evidence, or an unavailable read retains
+the original merge diagnostic, mutation provenance and task review state.
+A failed response does not establish managed-merge attribution. Exact
+server diagnostics and consistent error bodies are required; policy, queue,
+protection, auth, timeout, mixed diagnostics and invalid successful responses
+retain their existing failures. Unpinned or deferred merges do not opt in.
 
 After a before-landing review (§3.2) `complete_pr` also receives
 `landing_reviewed_head_sha`. When set, that head is the reviewed head the PR
