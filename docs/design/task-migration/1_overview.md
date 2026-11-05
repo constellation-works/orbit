@@ -1,7 +1,7 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-05
 last_validated: 2026-11-01
 status: Draft
 stage: shipped
@@ -77,7 +77,7 @@ machine a disjoint id range).
 | Concern | File | Task |
 |---------|------|------|
 | Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
-| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034] |
+| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034], [ORB-20828] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
@@ -123,7 +123,7 @@ knows, or under a prefix of an id this import will register, but that neither
 the accepted import set nor the existing registry contains. The rejection
 names the source task, the relation type and the missing target, and it
 happens before a canonical bundle is written and before a workspace or task
-binding is registered. Targets in the accepted set, including ids rewritten
+binding is registered ([ORB-20828] preflights these targets ahead of any write, so a bad archive fails before a long import rather than after it). Targets in the accepted set, including ids rewritten
 by `--on-conflict=renumber`, and targets already registered locally still
 resolve. A `ChildOf` target is the task's parent, so the same check covers
 parent links. A prefix this import will register counts as known, matching
@@ -332,5 +332,6 @@ that record and the current [distributed-drain setup procedure](../../runbooks/d
 - [ORB-13653] bounded the number of bundle locks held by reindex.
 - [ORB-15666] corrected the lost-registry recovery procedure.
 - [ORB-15668] reconciled task authority guidance with claimed follower execution.
+- [ORB-20828] preflighted unresolved import relation targets before any registry or bundle write.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

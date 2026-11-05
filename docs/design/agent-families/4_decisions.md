@@ -3,7 +3,7 @@ summary: "Agent Families — Decisions"
 type: design
 title: "Agent Families — Decisions"
 owner: grok
-last_updated: 2026-10-15
+last_updated: 2026-11-05
 last_validated: 2026-10-15
 status: Draft
 feature: agent-families
@@ -208,12 +208,25 @@ Crew configuration accepts flat `provider`/`model` only; the retired `backend` k
 ## Task References
 
 - ORB-00042: Onboard Grok (xAI) as a first-class supported agent family.
+- ORB-00043: Add Grok to agent_from_model, all_agent_families, and provider_from_model.
+- ORB-00044: Guard the dashboard diagnostics tab and stale knowledge panels in the aggregate view.
+- ORB-00045: Add Grok executor YAML and CLI runner support for backend: cli.
+- ORB-00046: Implement orbit mcp init/remove support for Grok Build (.grok/ config).
+- ORB-00049: Add Grok commit identity and update releasing and CI processes.
+- ORB-00050: Audit .grok/ for parity with the other family config directories and document onboarding.
+- ORB-00052: Scaffold docs/design/agent-families/ per CONVENTIONS.md.
 - ORB-00058: Introduce per-task crew override for agent model selection.
+- ORB-00071: Clarify crew lineup vs actual role execution in legacy model migration (archived).
 - ORB-00072: Make duel-plan agent pool and per-family model configurable via `[duel]`.
+- ORB-00079: Canonicalize duel model aliases before artifact validation (archived).
 - ORB-00080: Collapse agent identity to family; isolate model strings to invocation surface.
+- ORB-00154: Redesign the Scoreboard tab UX, which fragmented agent metrics across six stacked tables.
+- ORB-00347: Make default_crew and [duel].candidates dynamic from detected agents at orbit init.
+- ORB-10051: De-hardcode model names: default Claude to opus/sonnet aliases and centralize model defaults.
 - ORB-10130: Flatten each crew to one provider-model assignment.
+- ORB-10479: Restore the 18 design-doc ADRs whose allocation survived but whose body was lost.
 - ORB-10620: Reject legacy crew role sub-tables at config load.
+- ORB-10621: Route system-activity crews through configuration instead of the task's crew.
 - ORB-10622: Retire activity roles and role-based crew resolution.
-- ORB-10627: Remove the planning duel and its parallel model-selection path.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
