@@ -724,9 +724,11 @@ fn named_task_ids(text: &str) -> Vec<String> {
 }
 
 /// Whether an assessed pilot's holding utility finding declares an unread
-/// footprint source: it explicitly holds promotion and either names the
-/// footprint, describes the source as unread, or names a task the
-/// `evidence_gaps` also name as the unread source.
+/// footprint source: it explicitly holds promotion and, with `evidence_gaps`
+/// present, either describes the source as unread or names a task the gaps
+/// also name as the unread source. The word "footprint" alone is not
+/// evidence: "ORB-1 must land before adjusting the footprint" declares
+/// nothing unread.
 fn pilot_declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
     if finding.get("holds_promotion").and_then(Value::as_bool) != Some(true) {
         return false;
@@ -735,9 +737,6 @@ fn pilot_declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool
         return false;
     };
     let lower = text.to_ascii_lowercase();
-    if lower.contains("footprint") {
-        return true;
-    }
     if gaps.is_empty() {
         return false;
     }
