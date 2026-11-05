@@ -23,6 +23,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
 use crate::application::auto_tasks::projection::{self, AutoTaskListingProfile};
 use crate::application::auto_tasks::{
     AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskTemplatePatch, AutoTaskUpdateParams,
@@ -275,8 +276,7 @@ fn delete(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
         reason: input.optional_string("reason")?,
         force: input.optional_bool("force")?.unwrap_or(false),
     })?;
-    serde_json::to_value(&report)
-        .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}")))
+    delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Tool)
 }
 
 /// Mint one task from a definition on demand. `OrbitRuntime::auto_task_mint`

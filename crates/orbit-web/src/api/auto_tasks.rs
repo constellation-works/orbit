@@ -12,6 +12,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
     DASHBOARD_AUTO_TASK_TOGGLE,
 };
+use orbit_core::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
 use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
 use orbit_core::application::auto_tasks::{
     AutoTaskDeleteParams, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
@@ -406,19 +407,10 @@ pub(super) async fn delete_auto_task(
         started,
     )
     .await;
-    let mut message = format!("Deleted auto-task {}.", report.name);
-    if report.opted_out {
-        message.push_str(" The shipped default will not be reseeded.");
+    match delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Http) {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(error) => map_runtime_error(error),
     }
-    Json(json!({
-        "name": report.name,
-        "deleted": true,
-        "opted_out": report.opted_out,
-        "open_tasks": report.open_tasks,
-        "reason": report.reason,
-        "message": message,
-    }))
-    .into_response()
 }
 
 fn trimmed_delete_reason(reason: Option<&str>) -> Option<String> {
