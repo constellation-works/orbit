@@ -1,17 +1,4 @@
 //! Durable record of a child job run dispatched by a parent run's step.
-//!
-//! A parent that submits a child Run and then blocks on it has two distinct
-//! lifecycle phases — submission and waiting — that used to be invisible from
-//! the outside: the deterministic action kept the child's `run_id` in a local
-//! variable and the engine did not persist the activity output until the wait
-//! returned. A parent could therefore sit on a dispatch step for the whole
-//! wait timeout with no durable child identifier, and an operator could not
-//! tell a healthy long wait apart from a dispatch wedged before persistence.
-//!
-//! [`ChildDispatch`] is that missing checkpoint. It is written into the
-//! parent's `PipelineState` immediately after `orbit.pipeline.invoke` returns
-//! a durable child run id and before the parent blocks, so CLI, MCP, API, and
-//! dashboard readers all resolve the same lineage from one persisted record.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
