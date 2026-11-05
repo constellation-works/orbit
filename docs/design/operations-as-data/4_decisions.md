@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
@@ -477,7 +477,7 @@ drift the tool entry does not.
 ## Migrated CLI verbs execute through the tool path
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935], the task reads in [ORB-15937] and the task writes in [ORB-15938]; no workflow-run CLI verb migrates ([ORB-15941])
-**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs` (since split into `catalog/operations.rs` and `catalog/types.rs`), `crates/orbit-cli/src/command/task/operation.rs`, `crates/orbit-core/src/adapter/tool_host/task/write.rs`
+**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog/application.rs`, `crates/orbit-common/src/governance/authorization/catalog/operations.rs` and `crates/orbit-common/src/governance/authorization/catalog/types.rs` (anchors repaired in [ORB-21745]), `crates/orbit-cli/src/command/task/operation.rs`, `crates/orbit-core/src/adapter/tool_host/task/write.rs`
 
 ### Context
 
@@ -1033,17 +1033,7 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-21211] — added the governed fleet notice writes in the opt-in `notice`
   toolset.
 
-- [ORB-21243] — adds `orbit.resident.checkpoint` as an advertised write in the
-  opt-in `resident` toolset. Agent, operator and runner capabilities provide
-  identification; core checks the mandate's live cycle under the task lock.
-
-- [ORB-21248] — adds the evolution noun through the shared registry. Add/list/show
-  are advertised in the opt-in `resident` toolset; cost recording is additive,
-  like friction reporting. `orbit.evolution.decline` is an operator-only,
-  unadvertised write reached through `orbit evolution decline`. The operator,
-  manager and resident role budgets each gain exactly three tools and 1,000
-  approximate tokens for add/list/show: these roles need to read the shared
-  ledger and record interactive costs without enabling the entire default
-  tool tier. Agent, reader and default budgets stay unchanged.
+- [ORB-21745] — repaired the authorization catalog source anchors after the
+  catalog split.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

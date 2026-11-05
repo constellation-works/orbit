@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, read-only codebase, and agent scorecard operations. Deprecated orchestrator scorecard aliases share the registry. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
+summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase, agent scorecard, resident checkpoint and evolution operations. Deprecated orchestrator scorecard aliases share the registry. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
 paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-common/src/governance/orchestrator.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-tools/src/builtin/orbit/orchestrator.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-cli/src/command/orchestrator.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs", "crates/orbit-core/src/application/agents/**"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-17118]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15939, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-17118, ORB-21243, ORB-21248]
 ---
 
 # Operations as Data — Design
@@ -955,7 +955,9 @@ They are read-only and workspace-scoped over MCP. The deprecated
 and Core handler in
 [orchestrator_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs);
 they return the orchestrator agent scorecard with a deprecation note naming
-`orbit agents` as the replacement. These later additions do not reopen the
+`orbit agents` as the replacement. The resident checkpoint write and evolution
+ledger verbs also use the shared registry ([ORB-21243], [ORB-21248]). These
+later additions do not reopen the
 original phase 0–5 migration plan or change the hand-wired tool verdicts below.
 
 Every remaining hand-wired builtin was inspected rather than inferred from its
@@ -1040,5 +1042,8 @@ migration phase.
   `orbit agents` CLI and MCP tools, with deprecated orchestrator aliases.
 - [ORB-17118] — reworked the orchestrator score the deprecated aliases
   return so it measures spec quality.
+- [ORB-21243] — added the governed resident checkpoint write through the
+  shared operation registry.
+- [ORB-21248] — added evolution ledger operations through the shared registry.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
