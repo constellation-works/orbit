@@ -1622,7 +1622,11 @@ try {
     mobileEvidence.navigation.push({ destination, controls: selectors.length, subtabs: subtabs.length });
   }
   // A critical reading puts one warning chip in the top bar. The rail block
-  // is hidden at this width, so that chip is the alarm.
+  // is hidden at this width, so that chip is the alarm. The phone top bar is a
+  // single scrolling strip (ORB-21961), so the chip starts past the right edge
+  // of the viewport. That starting position is recorded as evidence, not
+  // required: the chip must be reachable by touch and by keyboard, fully
+  // visible and hit-testable after each reveal.
   const header = await page.evaluate(async () => {
     const { renderHostResources } = await import('/js/host-resources.js');
     renderHostResources({
@@ -1634,7 +1638,6 @@ try {
     const brand = document.querySelector('.rail-brand').getBoundingClientRect();
     const drain = document.getElementById('global-drain-state').getBoundingClientRect();
     const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
-    const bar = document.querySelector('.topbar').getBoundingClientRect();
     const warn = document.getElementById('host-warn');
     const warnBox = warn.getBoundingClientRect();
     const blockHidden = document.getElementById('host-block').getClientRects().length === 0;
@@ -1646,21 +1649,94 @@ try {
       pickersBelowActions: workspace.width > 0 && workspace.top >= Math.max(brand.bottom, drain.bottom, refresh.bottom) && workspace.right <= innerWidth,
       blockHidden,
       topbarHostChips: document.querySelectorAll('.topbar [data-resource]').length,
+      // The bar stays one compact row; a tall, wrapped header fails here.
+      barHeight: document.querySelector('.topbar').getBoundingClientRect().height,
       warnShown: !warn.hidden && warnBox.width > 0,
-      warnInView: !warn.hidden && warn.scrollWidth <= warn.clientWidth + 1 && warnBox.left >= bar.left - 0.5 && warnBox.right <= Math.min(bar.right, innerWidth) + 0.5,
       warnText: `${warn.querySelector('#host-warn-label')?.textContent ?? ''} ${warn.querySelector('#host-warn-value')?.textContent ?? ''}`.trim(),
     };
   });
-  if (!header.actionsInHeader || !header.pickersBelowActions || !header.blockHidden || header.topbarHostChips !== 0 || !header.warnShown || !header.warnInView) throw new Error(`Phone header or host warning wrapped or clipped: ${JSON.stringify(header)}`);
-  await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
+  if (!header.actionsInHeader || !header.pickersBelowActions || !header.blockHidden || header.topbarHostChips !== 0 || !header.warnShown || header.barHeight > 60) throw new Error(`Phone header or host warning wrapped or clipped: ${JSON.stringify(header)}`);
+  const readWarning = () => page.evaluate(() => {
+    const bar = document.querySelector('.topbar');
+    const barBox = bar.getBoundingClientRect();
+    const warn = document.getElementById('host-warn');
+    const box = warn.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return {
+      scrollLeft: bar.scrollLeft,
+      bar: { left: barBox.left, right: barBox.right, top: barBox.top, bottom: barBox.bottom },
+      warn: { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height },
+      viewportWidth: innerWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      // The chip's own label must fit its box. A chip off the strip's edge is
+      // a position question, not clipping, so it is judged separately.
+      contentClipped: warn.scrollWidth > warn.clientWidth + 1,
+      fullyVisible: box.left >= barBox.left - 0.5 && box.right <= Math.min(barBox.right, innerWidth) + 0.5
+        && box.top >= barBox.top - 0.5 && box.bottom <= barBox.bottom + 0.5,
+      hitTest: !!hit && (hit === warn || warn.contains(hit)),
+      focused: document.activeElement === warn,
+      focusVisible: warn.matches(':focus-visible'),
+    };
+  });
+  const initial = await readWarning();
+  if (initial.contentClipped) throw new Error(`Host warning label clipped at its starting position: ${JSON.stringify(initial)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-375x812-initial.png') });
+
+  // Touch: a swipe along the top bar scrolls the strip until the chip is in
+  // view, as a finger would. Touch emulation runs only for the gesture.
+  const touchCdp = await page.context().newCDPSession(page);
+  const touchCommand = ['Input', 'dispatchTouchEvent'].join('.');
+  const touchStart = await page.locator('.topbar').evaluate(node => {
+    const box = node.getBoundingClientRect();
+    return { x: box.right - 16, y: box.top + box.height / 2 };
+  });
+  let touchScrollEnd;
+  try {
+    await touchCdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await page.locator('.topbar').evaluate(node => {
+      globalThis.warningTouchScroll = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Top bar touch scroll did not finish')), 5000);
+        node.addEventListener('scrollend', () => { clearTimeout(timeout); resolve(node.scrollLeft); }, { once: true });
+      });
+    });
+    await touchCdp.send(touchCommand, { type: 'touchStart', touchPoints: [touchStart] });
+    for (let step = 1; step <= 6; step += 1) {
+      await touchCdp.send(touchCommand, { type: 'touchMove', touchPoints: [{ x: touchStart.x - step * 40, y: touchStart.y }] });
+    }
+    await touchCdp.send(touchCommand, { type: 'touchEnd', touchPoints: [] });
+    touchScrollEnd = await page.evaluate(() => globalThis.warningTouchScroll);
+  } finally {
+    await touchCdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await touchCdp.detach();
+  }
+  const touch = { ...await readWarning(), scrollEnd: touchScrollEnd };
+  if (touch.scrollLeft <= initial.scrollLeft) throw new Error(`Touch swipe did not scroll the top bar to the host warning: ${JSON.stringify(touch)}`);
+  if (!touch.fullyVisible || !touch.hitTest || touch.contentClipped) throw new Error(`Host warning not fully visible and hit-testable after touch reveal: ${JSON.stringify(touch)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-warning-touch-dark-375.png') });
+
+  // Keyboard: return the strip to its start, then Tab from the skip link. The
+  // chip is the top bar's first focus stop, and focusing it must reveal it.
+  await page.evaluate(() => { document.querySelector('.topbar').scrollLeft = 0; });
+  await page.locator('#skip-link').focus();
+  let tabs = 0;
+  while (tabs < 12 && !await page.evaluate(() => document.activeElement?.id === 'host-warn')) {
+    await page.keyboard.press('Tab');
+    tabs += 1;
+  }
+  if (!await page.evaluate(() => document.activeElement?.id === 'host-warn')) throw new Error(`Keyboard Tab did not reach the host warning within ${tabs} presses`);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const keyboard = await readWarning();
+  if (!keyboard.focused || !keyboard.focusVisible || !keyboard.fullyVisible || !keyboard.hitTest || keyboard.contentClipped) throw new Error(`Host warning not fully visible, focused and hit-testable after keyboard reveal: ${JSON.stringify(keyboard)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-warning-keyboard-dark-375.png') });
+  await assertNoOverflow('375x812 / host warning reveal');
   for (const selector of ['#refresh-btn', '#global-drain-state', '#host-warn']) {
     await page.locator(selector).focus();
     await page.locator(selector).scrollIntoViewIfNeeded();
     await page.locator(selector).click({ trial: true });
   }
-  mobileEvidence.header = header;
+  mobileEvidence.header = { ...header, warning: { initial, touch, keyboard } };
   fs.writeFileSync(path.join(evidence, 'mobile-shell.json'), `${JSON.stringify(mobileEvidence, null, 2)}\n`);
-  console.log(`PASS: phone shell panel positions ${JSON.stringify(mobileEvidence.routes)}; all ${destinations.length} destinations and active rail subtabs reachable; count gaps >=6px; no page overflow.`);
+  console.log(`PASS: phone shell panel positions ${JSON.stringify(mobileEvidence.routes)}; all ${destinations.length} destinations and active rail subtabs reachable; count gaps >=6px; no page overflow; host warning reached by touch and keyboard at 375px.`);
 
   await page.click('.tab[data-tab="operations"]');
   await page.click('#operations-subtabs .subtab[data-subtab="auto-tasks"]');
