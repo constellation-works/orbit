@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Task Artifacts"
 tags: ["task-artifacts"]
-last_validated: 2026-11-01
+last_validated: 2026-11-05
 ---
 
 # Glossary: Task Artifacts

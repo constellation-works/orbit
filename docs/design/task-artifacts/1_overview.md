@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 status: Draft
 stage: shipped
 next: "—"
