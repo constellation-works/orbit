@@ -53,7 +53,7 @@ run's [worker scope](#worker-resource-containment)):
 | Source | Contents | First inspection |
 | --- | --- | --- |
 | OS service log | `orbit-sweep` starts, exits, and scheduler output | Linux: `journalctl --user -u orbit-sweep.service`; macOS: the launchd sweep log |
-| Global JSONL trace | Structured tracing emitted by Orbit processes | `~/.orbit/state/logs/orbit.jsonl` and rotated archives |
+| Global JSONL trace | Structured tracing emitted by Orbit processes | Ordinarily `~/.orbit/state/logs/orbit.jsonl` and rotated archives; in a managed run with a different explicit `--root` or `ORBIT_ROOT`, the selected root's `state/logs/orbit.jsonl` and archives |
 | Audit event store | Persistent CLI invocation metadata | `orbit audit list --since 1h --status failure` |
 | Job-run evidence | One pipeline's state, events, stdout/stderr, and blobs | `orbit run show|events|trace|logs <run_id>` |
 
@@ -116,6 +116,13 @@ orbit sweep --dry-run
 
 The JSONL tracing sink is distinct from the sweep-service log. Its active file
 and rename-based archives are disposable; job/run stores are not.
+Ordinary processes use the home-global `~/.orbit/state/logs/orbit.jsonl` and
+`orbit-agent.jsonl` feeds. An Orbit-managed run normally uses its inherited
+registry root, but a different explicit `--root` or `ORBIT_ROOT` diverts both
+feeds to that selected root's `state/logs/` directory so scratch startup logs
+stay out of the inherited registry. The diversion requires a managed-run
+context; unmanaged root overrides keep the home-global feeds. Check the root
+used by the managed invocation when locating its logs.
 
 ```bash
 # Preferred public reader: recent events, warnings, or one tracing target.

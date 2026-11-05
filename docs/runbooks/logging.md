@@ -13,15 +13,24 @@ last_validated: 2026-10-30
 Use this runbook to locate Orbit process logs, filter structured events, or verify that
 process and routine-sweep logs remain bounded.
 
-## Global process log
+## Process log feeds
 
-All Orbit processes—the CLI, `orbit web serve`, and the MCP server—append structured tracing
-events to two global JSONL feeds with independent byte budgets:
+Ordinary Orbit processes—the CLI, `orbit web serve`, and the MCP server—append
+structured tracing events to two home-global JSONL feeds with independent byte
+budgets:
 
 ```text
 ~/.orbit/state/logs/orbit.jsonl        # operational events
 ~/.orbit/state/logs/orbit-agent.jsonl  # agent stdout/stderr relay
 ```
+
+An Orbit-managed run normally uses its inherited registry root for these feeds.
+If that run starts Orbit with a different explicit `--root` or `ORBIT_ROOT`,
+both feeds are instead written and read under that selected root's
+`state/logs/` directory. This keeps a scratch invocation's startup tracing out
+of the inherited registry. The diversion requires the managed-run context; an
+unmanaged command's `--root` or `ORBIT_ROOT` does not move its feeds away from
+the home-global paths above.
 
 `orbit log tail` and the dashboard merge both active feeds. `orbit log tail` can
 read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
