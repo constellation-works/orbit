@@ -2,7 +2,7 @@
 title: "Scope: UX rules"
 owner: claude
 last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_validated: 2026-11-05
 status: Draft
 stage: building
 next: "Apply ORB-19976's operator handoff so UX reviews consume routine results"
