@@ -3,7 +3,7 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-10-28
+last_updated: 2026-11-05
 last_validated: 2026-10-28
 status: Draft
 feature: user-interface
@@ -274,5 +274,6 @@ Keep every route, endpoint and control, and change the presentation around them:
 - [ORB-10458] — backfilled design-doc ADRs with no ADR-store record, including the Canon Refined and multi-workspace entries.
 - [ORB-10627] — removed the planning duel subsystem and the UI surfaces and scoreboard projections it fed.
 - [ORB-15355] — replaced Audit › Policy with the Codebase analytics view.
+- [ORB-20662] — removed the Health rail denial badge; the count stays on the audit summary and Events.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
