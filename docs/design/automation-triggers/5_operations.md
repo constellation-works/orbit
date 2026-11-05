@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-01
+last_updated: 2026-11-05
 last_validated: 2026-11-01
 ---
 
@@ -1069,5 +1069,7 @@ part of this implementation.
   definition's own `enabled` flag.
 - [ORB-14164] — state-member attempt pins live under one Orbit root and
   workspace namespace.
+- [ORB-21124] — made a pilot request on a held assessment run as a targeted
+  re-check (`mode: recheck`) rather than a full assessment.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

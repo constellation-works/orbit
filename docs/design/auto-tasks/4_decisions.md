@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-05
 last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
@@ -209,9 +209,11 @@ The scheduler pass was already a stateless, cursor-driven due evaluator — the 
   reports its reason.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.
-- ORB-10146 — qa-sweep v2 worker-invoked QA agent pass; set the wall-clock,
+- [ORB-10146] — qa-sweep v2 worker-invoked QA agent pass; set the wall-clock,
   never turn-cap budget rule.
 - [ORB-10472] — Isolated auto-task definition refresh from the registered
   primary checkout.
+- [ORB-21785] — made minted implementation auto-tasks without `no-diff-expected`
+  land as `proposed`, so the task pilot assesses them before dispatch.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
