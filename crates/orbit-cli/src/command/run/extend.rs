@@ -2,7 +2,7 @@
 
 use chrono::SecondsFormat;
 use clap::Args;
-use orbit_core::application::job::DrainWindowExtensionOutcome;
+use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitChangeProfile};
 use orbit_core::{DrainWindowExtensionRequest, OrbitRuntime};
 use serde_json::json;
 
@@ -66,12 +66,9 @@ impl Execute for RunExtendArgs {
             "previous_deadline": previous,
             "deadline": deadline,
             "revision": change.revision,
-            "concurrency": change.worker_limit.as_ref().map(|limit| json!({
-                "outcome": limit.outcome,
-                "previous_concurrency": limit.previous_max_active_leaf_runs,
-                "concurrency": limit.max_active_leaf_runs,
-                "revision": limit.revision,
-            })),
+            "concurrency": change.worker_limit.as_ref().map(|limit| {
+                limit.to_json(DrainWorkerLimitChangeProfile::Nested)
+            }),
         });
         let mut text = if change.outcome == DrainWindowExtensionOutcome::Unchanged {
             format!(
