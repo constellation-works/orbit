@@ -143,10 +143,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
   applicable application code, dependencies, secret handling, and configuration;
   each actionable finding is filed as a durable Orbit task, and a clean review
   is a successful no-op (ORB-10950).
-- `code-review` — disabled-by-default six-hourly review of commits merged
-  since the previous sweep's recorded cursor. Its cursor selector requires the
-  `auto-task:code-review` provenance tag, so only a minted sweep can be the
-  cursor task.
+- `code-review` — disabled-by-default six-hourly review of the tracked tree in
+  a two-module rotation, choosing the least recently reviewed modules. For each
+  behavior change, it uses tracked files to locate the repository's
+  documentation, website, and shipped-skill directories and searches them for
+  the old claim. Its cursor selector requires the `auto-task:code-review`
+  provenance tag, so only a minted sweep can be the cursor task.
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
   commit and counts only source in programming or scripting languages, tests,
@@ -303,7 +305,8 @@ re-init does not overwrite a workspace-authored definition of the same name.
   without filing or attaching a cursor. The scan never mutates run state —
   its run and settlement reads pass `--no-reconcile`, so an orphaned run it
   lists is not finalized — and a pass with nothing new is a successful no-op
-  that still stores the report and cursor.
+  that still stores the report and cursor. File-wide fixes use `file:` context
+  selectors, with exclusions coming from the workspace's own agent guidance.
 - `pilot-block-patterns` — disabled-by-default daily upstream counterpart of
   `run-failure-patterns`. A first pass, with no prior cursor, uses the 3 days
   before scan start; a later pass uses the 14 days before scan start, unless the
@@ -326,7 +329,9 @@ re-init does not overwrite a workspace-authored definition of the same name.
   reduce its group. It never acts on an individual blocked or held task, and
   runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
-  deliveries. Its `enabled` flag is the after-landing review switch
+  deliveries. For behavior changes, its instructions locate documentation,
+  website, and shipped-skill directories from tracked files and search them for
+  stale claims. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
   as `effective_enabled`. The dashboard groups and toggles by that effective
