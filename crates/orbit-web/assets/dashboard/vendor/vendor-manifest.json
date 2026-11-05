@@ -15,12 +15,12 @@
     {
       "name": "marked",
       "npm_package": "marked",
-      "version": "18.1.1",
+      "version": "18.1.2",
       "upstream": "https://github.com/markedjs/marked",
-      "source": "https://registry.npmjs.org/marked/-/marked-18.1.1.tgz",
+      "source": "https://registry.npmjs.org/marked/-/marked-18.1.2.tgz",
       "npm_file": "lib/marked.umd.js",
       "path": "marked.umd.js",
-      "sha256": "b82b9334406d8bdd16b6236c08de1cb65b2a859873ca9503d9cc0b292ca3c12a"
+      "sha256": "9eb730d2362ae1a8c6201698f17009e16671be6946d3d06503ddc0575283db7c"
     }
   ]
 }
