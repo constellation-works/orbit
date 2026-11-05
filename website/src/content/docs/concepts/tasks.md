@@ -86,9 +86,10 @@ The two gates are independent:
   `proposed` work. See
   [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
-An [auto-task](../scheduling/#auto-task) files each recurring task at the
-status its definition declares: `backlog` by default, or `proposed` when you
-want to approve each one. See
+An [auto-task](../scheduling/#auto-task) stores `backlog` as its template
+status by default. When it mints a task, that backlog status becomes
+`proposed` unless the normalized template tags include
+`no-diff-expected`; explicit non-backlog statuses are preserved. See
 [Schedule Recurring Work](../../how-to/recurring-work/#3-define-recurring-chores-as-auto-tasks).
 
 ### Statuses

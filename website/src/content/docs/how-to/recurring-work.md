@@ -244,6 +244,10 @@ orbit auto-task add \
   --tag maintenance
 ```
 
+This definition keeps `backlog` as its serialized template status, but mints
+a `proposed` task because its normalized tags do not include
+`no-diff-expected`.
+
 Give exactly one trigger: `--cron`, `--every-minutes`, or
 `--deliveries-landed '<JSON>'`, which fires once verified deliveries land on a
 branch. A cron or interval definition is enabled as soon as you add it. A
@@ -252,7 +256,7 @@ delivery-triggered one starts disabled; check it with
 
 | Option | Effect |
 |---|---|
-| `--status` | Status of each filed task: `backlog` (default), or `proposed` to approve each one yourself. |
+| `--status` | Serialized template default: `backlog`. At mint time, a backlog template produces a `proposed` task unless its normalized tags include `no-diff-expected`; explicit non-backlog statuses are preserved. |
 | `--dedupe` | `skip-if-open` (default) skips a fire while the previous task is still open, so a stalled backlog never collects copies. `always` files regardless. |
 | `--crew` | Crew for filed tasks. |
 | `--priority` | `low`, `medium` (default), `high`, or `critical`. |
