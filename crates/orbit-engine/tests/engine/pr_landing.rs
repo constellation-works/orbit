@@ -1328,7 +1328,15 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         "malformed_body" => (BASE_MODIFIED);
         "trailing_stderr" => ("retried after a proxy reset");
         "transport_timeout" => ("Client.Timeout exceeded");
-        "server_error" => ("Server Error (HTTP 502)")
+        "server_error_mixed_auth" => ("Bad credentials");
+        "server_error_malformed" => ("Server Error (HTTP 502)");
+        "server_error_mismatched" => ("Server Error (HTTP 502)");
+        "server_error_contradictory" => ("Server Error (HTTP 502)");
+        "server_error_trailing" => ("HTTP 403");
+        "server_error_wrong_status" => ("HTTP 502");
+        "server_error_auth_detail" => ("HTTP 502");
+        "invalid_success" => ("invalid JSON");
+        "unconfirmed_success" => ("did not confirm a synchronous merge")
     } {
         let (fx, host) = fx_host(sandbox);
         open_for_completion(&fx, &host);
@@ -1346,6 +1354,125 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         assert!(host.landings().is_empty(), "{outcome}");
         assert!(host.completion_notes().is_empty(), "{outcome}");
         assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{outcome}");
+        test_env::record_scenario_pass(&format!("merge-refusal-{outcome}"));
+    }
+    for case in [
+        "open",
+        "closed",
+        "contradictory",
+        "missing_merge_commit",
+        "missing_merge_time",
+        "malformed_merge_time",
+        "malformed_merge_commit",
+        "missing_head",
+        "missing_state",
+        "head",
+        "branch",
+        "base",
+        "pr_number",
+        "repository",
+        "missing_identity",
+        "missing_base_pin",
+        "missing_head_pin",
+        "missing_candidate_pin",
+        "read_auth",
+        "read_502",
+        "read_invalid",
+        "zero_budget",
+    ] {
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_merges(&["server_error"]);
+        let mut evidence = json!({"number":42,"url":"https://github.com/orbit/test/pull/42",
+            "state":"MERGED","mergedAt":"2026-11-05T08:24:36Z","mergeCommit":{"oid":fx.candidate},
+            "headRefName":BRANCH,"headRefOid":fx.candidate,"baseRefName":BASE});
+        match case {
+            "open" => evidence["state"] = json!("OPEN"),
+            "closed" => {
+                evidence["state"] = json!("CLOSED");
+                evidence["mergedAt"] = Value::Null;
+                evidence["mergeCommit"] = Value::Null;
+            }
+            "contradictory" => evidence["state"] = json!("CLOSED"),
+            "missing_merge_commit" => evidence["mergeCommit"] = Value::Null,
+            "missing_merge_time" => evidence["mergedAt"] = Value::Null,
+            "malformed_merge_time" => evidence["mergedAt"] = json!("not a timestamp"),
+            "malformed_merge_commit" => evidence["mergeCommit"] = json!({"oid":"not a commit"}),
+            "missing_head" => evidence["headRefOid"] = Value::Null,
+            "missing_state" => {
+                evidence.as_object_mut().unwrap().remove("state");
+            }
+            "head" => evidence["headRefOid"] = json!(fx.base_sha),
+            "branch" => evidence["headRefName"] = json!("other-branch"),
+            "base" => evidence["baseRefName"] = json!("other-base"),
+            "pr_number" => evidence["number"] = json!(43),
+            "repository" => evidence["url"] = json!("https://github.com/other/repo/pull/42"),
+            "missing_identity" => {
+                evidence.as_object_mut().unwrap().remove("url");
+            }
+            "read_auth" => fx.write_forge("reconcile-error", "gh: Bad credentials (HTTP 401)"),
+            "read_502" => fx.write_forge("reconcile-error", "gh: Server Error (HTTP 502)"),
+            "read_invalid" => evidence = json!("not PR metadata"),
+            "zero_budget" | "missing_base_pin" | "missing_head_pin" | "missing_candidate_pin" => {}
+            _ => unreachable!(),
+        }
+        // OPEN is explicitly unmerged; the contradictory row retains merge evidence.
+        if case == "open" {
+            evidence["mergedAt"] = Value::Null;
+            evidence["mergeCommit"] = Value::Null;
+        }
+        fx.write_forge("reconcile-status", evidence.to_string());
+        let mut input = fx.complete_input();
+        if case == "zero_budget" {
+            input["max_wait_seconds"] = json!(0);
+        }
+        let missing_pin = match case {
+            "missing_base_pin" => Some("base"),
+            "missing_head_pin" => Some("head"),
+            "missing_candidate_pin" => Some("published_head_sha"),
+            _ => None,
+        };
+        if let Some(pin) = missing_pin {
+            input.as_object_mut().unwrap().remove(pin);
+        }
+        let error = action_err(&host, "pr_complete", &input).to_string();
+        assert!(
+            error.contains("Server Error (HTTP 502)"),
+            "{case}: original diagnostic: {error}"
+        );
+        assert!(
+            error.contains("read-only reconciliation was inconclusive"),
+            "{case}: {error}"
+        );
+        assert_eq!(
+            fx.merge_requests(),
+            squash(&fx.candidate),
+            "{case}: no second mutation"
+        );
+        assert_eq!(
+            fx.status_reads(),
+            if case == "zero_budget" || missing_pin.is_some() {
+                1
+            } else {
+                2
+            },
+            "{case}: bounded read"
+        );
+        assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+        assert!(host.landings().is_empty(), "{case}");
+        assert!(host.completion_notes().is_empty(), "{case}");
+        assert_eq!(
+            host.history(TASK_ID)
+                .iter()
+                .filter(
+                    |row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT
+                )
+                .count(),
+            1,
+            "{case}"
+        );
+        assert_eq!(fx.head(), fx.candidate, "{case}: no rewrite");
+        test_env::record_scenario_pass(&format!("ambiguous-reconciliation-refused-{case}"));
     }
 }
 /// Shared by the two refresh-refusal tests: after one base-modification refusal, the fresh read in each case must refuse without a second merge request, leaving the checkout, landings and task untouched.
@@ -1396,25 +1523,64 @@ fn a_base_race_refresh_refuses_unmet_gates_without_another_merge(sandbox: &Path)
     );
 }
 fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    open_for_completion(&fx, &host);
-    fx.script_merges(&["base_modified+merged"]);
-    let completed = action_ok(&host, "pr_complete", &fx.complete_input());
-    assert_eq!(fx.merge_requests().len(), 1, "no second mutation");
-    let landed = fx.remote_tip(BASE);
-    let merge = &completed["merge"];
-    assert_eq!(merge["merged"], true);
-    assert_eq!(merge["landed_commit"], landed.as_str());
-    assert_eq!(merge["managed_merge"], false);
-    assert_eq!(
-        merge["delivery_evidence"]["head_sha"],
-        fx.candidate.as_str()
-    );
-    let landings = host.landings();
-    assert_eq!(landings.len(), 1);
-    assert!(!landings[0].managed_merge);
-    assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
-    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+    for (outcome, reviewed) in [
+        ("server_error+merged", true),
+        ("server_error+merged", false),
+        ("internal_error+merged", true),
+        ("bad_gateway+merged", true),
+        ("unavailable+merged", true),
+        ("gateway_timeout+merged", true),
+        ("empty_error_body+merged", true),
+        ("base_modified+merged", true),
+    ] {
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_merges(&[outcome]);
+        let input = if reviewed {
+            fx.complete_input()
+        } else {
+            fx.complete_ungated_input()
+        };
+        let completed = action_ok(&host, "pr_complete", &input);
+        assert_eq!(
+            fx.merge_requests(),
+            squash(&fx.candidate),
+            "{outcome}: no second mutation"
+        );
+        assert_eq!(fx.status_reads(), 2, "{outcome}: exactly one fresh read");
+        assert_eq!(fx.forge_calls().last().unwrap(), "pr view");
+        let mutations = host
+            .history(TASK_ID)
+            .into_iter()
+            .filter(|row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT)
+            .collect::<Vec<_>>();
+        assert_eq!(mutations.len(), 1, "{outcome}: durable mutation intent");
+        let provenance: Value = serde_json::from_str(mutations[0].note.as_ref().unwrap()).unwrap();
+        assert_eq!(provenance["head_sha"], fx.candidate);
+        assert_eq!(provenance["pr_number"], PR_NUMBER);
+        let landed = fx.remote_tip(BASE);
+        let merge = &completed["merge"];
+        assert_eq!(merge["merged"], true);
+        assert_eq!(merge["landed_commit"], landed.as_str());
+        assert_eq!(merge["managed_merge"], false);
+        assert_eq!(
+            merge["delivery_evidence"]["head_sha"],
+            fx.candidate.as_str()
+        );
+        let landings = host.landings();
+        if reviewed {
+            assert_eq!(landings.len(), 1);
+            assert!(!landings[0].managed_merge);
+            assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
+            assert_eq!(landings[0].reviewed_head_sha, fx.candidate);
+        } else {
+            assert!(landings.is_empty(), "no review to attribute");
+        }
+        assert_eq!(host.completion_notes().len(), 1);
+        assert!(host.completion_notes()[0].contains(&landed));
+        assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        test_env::record_scenario_pass(&format!("reconciled-{outcome}-reviewed-{reviewed}"));
+    }
 }
 fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget(sandbox: &Path) {
     for (case, max_wait_seconds, requests, refusal) in rows_by_name! {
@@ -6173,6 +6339,12 @@ status() {
     draft_field=${1:-0}
     pr_head=$(cat "$forge/pr-head")
     pr_base=$(cat "$forge/pr-base")
+    if [ -f "$forge/merge-requests" ] && [ -f "$forge/reconcile-status" ]; then
+        printf '%s\n' "$(( $(cat "$forge/reads") + 1 ))" > "$forge/reads"
+        if [ -f "$forge/reconcile-error" ]; then cat "$forge/reconcile-error" >&2; exit 1; fi
+        cat "$forge/reconcile-status"
+        return
+    fi
     if [ -f "$forge/merged" ]; then
         touch "$forge/merged-reads"
         # GitHub keeps headRefOid after the head branch is deleted. `land`
@@ -6495,7 +6667,33 @@ merge() {
         protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
         auth) refuse 403 "Resource not accessible by integration" ;;
         head_modified) refuse 409 "Head branch was modified. Review and try the merge again." ;;
+        server_error+merged) land "$sha"; refuse 502 "Server Error" ;;
+        internal_error+merged) land "$sha"; refuse 500 "Internal Server Error" ;;
+        bad_gateway+merged) land "$sha"; refuse 502 "Bad Gateway" ;;
+        unavailable+merged) land "$sha"; refuse 503 "Service Unavailable" ;;
+        gateway_timeout+merged) land "$sha"; refuse 504 "Gateway Timeout" ;;
+        empty_error_body+merged) land "$sha"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
         server_error) refuse 502 "Server Error" ;;
+        server_error_mixed_auth) refuse 502 "Bad credentials" ;;
+        server_error_malformed)
+            printf '<html>upstream error</html>\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_mismatched)
+            printf '{"message":"Bad credentials","status":"502"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_contradictory)
+            printf '{"message":"Server Error","status":"502","merged":true,"sha":"%s"}\n' "$sha"
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_wrong_status)
+            printf '{"message":"Server Error","status":"403"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_auth_detail)
+            printf '{"message":"Server Error","status":"502","errors":["Bad credentials"]}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_trailing)
+            printf 'gh: Server Error (HTTP 502)\ngh: permission denied (HTTP 403)\n' >&2; exit 1 ;;
+        invalid_success) printf 'invalid-json\n'; return ;;
+        unconfirmed_success) printf '{"merged":false}\n'; return ;;
         mismatched_body)
             printf '{"message":"Pull Request is not mergeable","status":"405"}\n'
             printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2

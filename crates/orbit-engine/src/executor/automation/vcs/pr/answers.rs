@@ -380,11 +380,19 @@ pub(in crate::executor::automation::vcs) enum ReviewedMergeOutcome {
     /// The SHA-conditioned merge was refused because another merge moved the
     /// base first; carries the provider's diagnostic.
     BaseModified { diagnostic: String },
+    /// A narrowly classified synchronous server failure: never authorizes
+    /// another mutation, only a fresh read by an opted-in completion caller.
+    Ambiguous { diagnostic: String },
 }
 
 impl ReviewedMergeOutcome {
     /// Parse a `pr.merge` response.
     pub(in crate::executor::automation::vcs) fn from_response(response: &Value) -> Self {
+        if let Some(diagnostic) = response.get("ambiguous_merge").and_then(Value::as_str) {
+            return Self::Ambiguous {
+                diagnostic: diagnostic.to_string(),
+            };
+        }
         if response.get("refusal").and_then(Value::as_str)
             == Some(operations::BASE_MODIFIED_REFUSAL)
         {

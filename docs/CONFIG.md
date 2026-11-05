@@ -1428,7 +1428,13 @@ completion mutation; no repair agent runs and no merge is admitted on that
 evidence. Permanent forge-read failures at other boundaries, failed candidate
 checks, and unlisted refusals remain failures. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
-also remain failures, except that a transient auto-fix required-check read
+also remain failures, except that a narrowly classified synchronous HTTP
+500/502/503/504 merge server error permits one read-only reconciliation within
+the original deadline. Only fresh `MERGED` evidence matching the published and
+reviewed candidate, PR, repository, head branch and base branch permits
+completion; a failed response grants no managed-merge attribution. An
+inconclusive read retains the original failure and mutation provenance and
+never sends another merge request. A transient auto-fix required-check read
 holds as `delivery_check_evidence_inconclusive` when completion mutation
 provenance is present in the invocation or task history. In particular,
 `delivery_evidence_stale` text alone does not establish a hold. Completion's
