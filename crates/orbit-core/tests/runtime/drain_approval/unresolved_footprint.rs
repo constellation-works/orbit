@@ -291,6 +291,38 @@ fn an_unresolved_footprint_naming_a_done_task_reports_its_finding() {
     assert_status(&ws, &task, TaskStatus::Proposed);
 }
 
+fn a_done_prerequisite_that_mentions_the_footprint_does_not_hold() {
+    // A prerequisite finding that merely says "footprint" is an ordinary
+    // prerequisite: once the named task is done, it releases the task.
+    for field in ["blocked_by", "utility_warnings", "surface_warnings"] {
+        let (ws, drain) = harness();
+        let done = done_predecessor(&ws);
+        let task = ws.readme_task("done prerequisite mentions footprint");
+        let finding = json!({
+            "text": format!("{} must land before adjusting the footprint", done.id),
+            "holds_promotion": true,
+        });
+        let mut pilot = pilot_says(&task, "low", &[], &["file:README.md"], json!([]));
+        pilot[field] = if field == "blocked_by" {
+            json!([format!(
+                "{} must land before adjusting the footprint",
+                done.id
+            )])
+        } else {
+            json!([finding])
+        };
+        let after = pilot_once(&ws, &drain, &task, pilot);
+        assert_eq!(after.complexity, Some(TaskComplexity::Low), "{field}");
+        assert_status(&ws, &task, TaskStatus::Backlog);
+        let next = ws.select(&drain);
+        assert_ne!(
+            held_reason(&next, &task),
+            Some("footprint_unresolved"),
+            "{field}: {next}"
+        );
+    }
+}
+
 crate::scenario_table!(
     unresolved_footprint_scenarios,
     an_unresolved_footprint_keeps_the_tier_and_pool_and_holds_approval,
@@ -299,5 +331,6 @@ crate::scenario_table!(
     a_truly_unidentifiable_task_stays_unassessed_and_held,
     an_assessed_footprint_warning_naming_a_done_predecessor_still_holds,
     an_explicit_footprint_warning_naming_a_done_predecessor_is_not_reused,
-    an_unresolved_footprint_naming_a_done_task_reports_its_finding
+    an_unresolved_footprint_naming_a_done_task_reports_its_finding,
+    a_done_prerequisite_that_mentions_the_footprint_does_not_hold
 );
