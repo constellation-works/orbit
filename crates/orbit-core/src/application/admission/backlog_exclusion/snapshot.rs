@@ -108,11 +108,14 @@ pub(super) fn backlog_snapshot_in_mode(
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(
+    let mut task_lookup = admission_population(
         runtime.stores().tasks(),
         matches!(read_mode, BacklogReadMode::Observation(_)),
     )
     .map_err(|error| PassError::store(action, "list tasks", error))?;
+    if matches!(read_mode, BacklogReadMode::Admission) {
+        super::super::recovery_context::reconcile_recovery_context(runtime, &mut task_lookup);
+    }
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let status_by_id = runtime

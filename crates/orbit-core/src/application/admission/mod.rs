@@ -13,6 +13,7 @@ mod job_port;
 pub(super) mod leaf_occupancy;
 pub(crate) mod pass_error;
 mod published_delivery;
+mod recovery_context;
 pub(crate) mod scan_unresolved;
 pub(super) mod stuck_head;
 pub(super) mod surface_reservation;

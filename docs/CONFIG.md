@@ -2335,8 +2335,18 @@ existing recovery activities, final validation and push do the repair:
   before committing, retaining a pre-commit copy under
   `auto-fix/<run>/scope-<failed-head>.json` and the committed record under
   `auto-fix/<run>/<repair-head>.json`. It widens task selectors with recovery
-  provenance. Missing or stale records, unexplained files, protected metadata,
-  environment files, symlinks and CI workflow
+  provenance. Before a local drain or follower pull admits more work, the owner
+  reconciles recovery-only selectors against stopped local PR deliveries and
+  their observed candidates.
+  A selector is released only after an explicit candidate discard or a verified
+  candidate/publication no longer changes that path. Original selectors stay;
+  live runs, unsettled claims, kept claim candidates, still-published repairs,
+  uncommitted repairs that were not discarded, and unreadable or incomplete
+  outcomes keep their protection.
+  Read-only readiness reports the last durable declaration; it does not perform
+  this cleanup. Each cleanup records its released selectors and candidate
+  observations in task history. Missing or stale records, unexplained files,
+  protected metadata, environment files, symlinks and CI workflow
   edits are refused. Explanations are agent evidence for review; they cannot
   grant a repair admission or bypass validation. Required commands, test
   assertions and branch rules must not be weakened.
