@@ -2,7 +2,7 @@
 title: Symbol Risk Index — Design
 owner: claude
 last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_validated: 2026-11-05
 status: Draft
 feature: symbol-risk-index
 doc_role: design
