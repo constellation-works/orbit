@@ -113,6 +113,14 @@ pub(super) fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup
     // queries terminal state (`check-terminal-state-guard.sh`); `main` still
     // resolves its own sink after parsing for rendering.
     let term_width = crate::output::sink::OutputSink::from_process(None, false).width();
+    cli_command_with_width(groups, term_width)
+}
+
+/// Assemble the root command with the width selected for its output sink.
+fn cli_command_with_width(
+    groups: &[orbit_core::adapter::command::PluginCliGroup],
+    term_width: u16,
+) -> Command {
     // Clap's own help text (flag descriptions, about, command lists,
     // after-help) wraps to the same width with its hanging indent. `0`, the
     // piped width, tells Clap to keep source formatting rather than assume a
@@ -120,16 +128,10 @@ pub(super) fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup
     // line wraps at 120 as it does at 60.
     let root =
         plugin_cli::augment(command::Cli::command(), groups).term_width(usize::from(term_width));
-    let mut root = root.help_template(crate::help::root_help_template(term_width));
-    if !groups.is_empty() {
-        // The hand-rolled top-level template lists commands by section, so a
-        // plugin group is listed in its own section rather than left out of
-        // `orbit --help` entirely.
-        root = root.help_template(crate::help::root_help_template(term_width).replace(
-            "\nOptions:",
-            &format!("{}\nOptions:", plugin_cli::help_section(groups)),
-        ));
-    }
+    // The hand-rolled top-level template lists plugin groups alongside the
+    // built-ins so their names share the root description column and width.
+    let plugin_rows = plugin_cli::help_rows(groups);
+    let mut root = root.help_template(crate::help::root_help_template(term_width, &plugin_rows));
     root = root.mut_subcommand("run", |cmd| {
         cmd.help_template(crate::help::run_help_template(term_width))
     });

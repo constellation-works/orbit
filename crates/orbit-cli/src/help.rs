@@ -430,10 +430,11 @@ fn name_width(name: &str) -> usize {
 /// Description column for a template: indent plus the longest name in the
 /// template plus the gap. One column per template keeps every section aligned
 /// even when sections have different longest names.
-fn template_column(sections: &[&[GroupedRow]]) -> usize {
+fn template_column(sections: &[&[GroupedRow]], extra_rows: &[(&str, &str)]) -> usize {
     let longest = sections
         .iter()
         .flat_map(|rows| rows.iter().map(|(name, _)| name_width(name)))
+        .chain(extra_rows.iter().map(|(name, _)| name_width(name)))
         .max()
         .unwrap_or(0);
     GROUP_INDENT + longest + GROUP_GAP
@@ -475,15 +476,15 @@ fn wrap_description(description: &str, available: usize) -> Vec<String> {
 /// sink width: `0` (piped) keeps every row on one line; otherwise a row that
 /// would exceed the width wraps with continuation lines indented to the
 /// column so the command/description association stays readable.
-fn render_grouped_rows(
-    rows: &[GroupedRow],
+fn render_grouped_rows<'a>(
+    rows: impl IntoIterator<Item = (&'a str, &'a str)>,
     column: usize,
     term_width: Option<usize>,
 ) -> Vec<String> {
     let global_longest = column
         .saturating_sub(GROUP_INDENT)
         .saturating_sub(GROUP_GAP);
-    rows.iter()
+    rows.into_iter()
         .flat_map(|(name, about)| {
             let mut prefix = String::from("  ");
             prefix.push_str(name);
@@ -540,7 +541,19 @@ fn render_section(
 ) -> String {
     let mut out = String::from(heading);
     out.push_str(":\n");
-    out.push_str(&render_grouped_rows(rows, column, term_width).join("\n"));
+    out.push_str(&render_grouped_rows(rows.iter().copied(), column, term_width).join("\n"));
+    out
+}
+
+fn render_dynamic_section(
+    heading: &str,
+    rows: &[(&str, &str)],
+    column: usize,
+    term_width: Option<usize>,
+) -> String {
+    let mut out = String::from(heading);
+    out.push_str(":\n");
+    out.push_str(&render_grouped_rows(rows.iter().copied(), column, term_width).join("\n"));
     out
 }
 
@@ -555,7 +568,7 @@ fn width_option(term_width: u16) -> Option<usize> {
 
 /// Grouped `orbit run` help with a uniform column and width-aware wrapping.
 pub(crate) fn run_help_template(term_width: u16) -> String {
-    let column = template_column(&[RUN_WORKFLOWS, RUN_AUDITS, RUN_MAINTENANCE]);
+    let column = template_column(&[RUN_WORKFLOWS, RUN_AUDITS, RUN_MAINTENANCE], &[]);
     let width = width_option(term_width);
     format!(
         "{{about}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}\n{{after-help}}",
@@ -567,7 +580,7 @@ pub(crate) fn run_help_template(term_width: u16) -> String {
 
 /// Grouped `orbit task` help with a uniform column and width-aware wrapping.
 pub(crate) fn task_help_template(term_width: u16) -> String {
-    let column = template_column(&[TASK_TASKS, TASK_HEALTH, TASK_BUNDLES]);
+    let column = template_column(&[TASK_TASKS, TASK_HEALTH, TASK_BUNDLES], &[]);
     let width = width_option(term_width);
     format!(
         "{{about}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}\n{{after-help}}",
@@ -578,23 +591,41 @@ pub(crate) fn task_help_template(term_width: u16) -> String {
 }
 
 /// Grouped root help with a uniform column and width-aware wrapping.
-pub(crate) fn root_help_template(term_width: u16) -> String {
-    let column = template_column(&[
-        ROOT_ENVIRONMENT,
-        ROOT_KNOWLEDGE,
-        ROOT_OPERATE,
-        ROOT_OBSERVE,
-        ROOT_SCHEDULER,
-        ROOT_SERVICES,
-    ]);
+pub(crate) fn root_help_template(term_width: u16, plugin_rows: &[(String, String)]) -> String {
+    let plugin_rows: Vec<(&str, &str)> = plugin_rows
+        .iter()
+        .map(|(name, about)| (name.as_str(), about.as_str()))
+        .collect();
+    let column = template_column(
+        &[
+            ROOT_ENVIRONMENT,
+            ROOT_KNOWLEDGE,
+            ROOT_OPERATE,
+            ROOT_OBSERVE,
+            ROOT_SCHEDULER,
+            ROOT_SERVICES,
+        ],
+        &plugin_rows,
+    );
     let width = width_option(term_width);
-    format!(
-        "{{name}} {{version}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}",
+    let mut sections = vec![
         render_section("Environment", ROOT_ENVIRONMENT, column, width),
         render_section("Knowledge", ROOT_KNOWLEDGE, column, width),
         render_section("Operate", ROOT_OPERATE, column, width),
         render_section("Observe", ROOT_OBSERVE, column, width),
         render_section("Scheduler", ROOT_SCHEDULER, column, width),
         render_section("Services", ROOT_SERVICES, column, width),
+    ];
+    if !plugin_rows.is_empty() {
+        sections.push(render_dynamic_section(
+            "Plugins",
+            &plugin_rows,
+            column,
+            width,
+        ));
+    }
+    format!(
+        "{{name}} {{version}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\nOptions:\n{{options}}",
+        sections.join("\n\n"),
     )
 }

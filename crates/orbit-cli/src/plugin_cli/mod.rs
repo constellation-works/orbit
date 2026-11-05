@@ -11,4 +11,4 @@
 mod command;
 mod schema;
 
-pub(crate) use command::{PluginGroupInvocation, augment, help_section, invocation_from_matches};
+pub(crate) use command::{PluginGroupInvocation, augment, help_rows, invocation_from_matches};
