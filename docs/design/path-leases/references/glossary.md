@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Path Leases"
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 ---
 
 # Glossary: Path Leases

@@ -56,8 +56,8 @@ per-kind semantics in `notes`.
 Federation interleaves per-workspace rankings and attributes each hit.
 
 The index retains `semantic.db` for persisted-path compatibility. The first
-writable open migrates earlier FTS layouts and removes obsolete vector tables;
-vacuum runs when those vector tables existed. Read-only runtimes can search an
+writable open migrates earlier FTS layouts and removes the obsolete `embeddings`
+and `id_allocations` tables; vacuum runs when either existed. Read-only runtimes can search an
 existing index, while an unavailable index uses the bundle substring fallback.
 See [upgrade guidance](../../runbooks/upgrades.md#lexical-search-migration).
 
