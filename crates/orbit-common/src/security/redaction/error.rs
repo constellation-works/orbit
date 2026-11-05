@@ -200,6 +200,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::WorkflowEvidenceUnavailable(mut evidence) => {
+            evidence.reason = redact(&evidence.reason);
+            OrbitError::WorkflowEvidenceUnavailable(evidence)
+        }
         OrbitError::CandidateAbsorbed(mut candidate) => {
             candidate.head = redact(&candidate.head);
             candidate.base_sha = redact(&candidate.base_sha);

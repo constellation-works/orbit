@@ -19,9 +19,7 @@ pub(super) fn now_ms() -> Result<u64, OrbitError> {
     .map_err(|_| error("completion clock overflow"))
 }
 fn error(reason: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "workflow prerequisite evidence is unavailable ({reason})"
-    ))
+    OrbitError::workflow_evidence_unavailable(reason)
 }
 fn expired() -> OrbitError {
     OrbitError::DeliveryRefused {

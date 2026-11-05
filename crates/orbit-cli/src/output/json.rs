@@ -145,6 +145,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
         | OrbitError::ForgeUnavailable(_)
+        | OrbitError::WorkflowEvidenceUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
