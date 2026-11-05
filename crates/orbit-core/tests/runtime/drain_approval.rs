@@ -26,6 +26,7 @@ mod pilot_mutations;
 #[cfg(unix)]
 mod required_tools;
 mod step_graph;
+mod unresolved_footprint;
 struct Workspace {
     _root: TempDir,
     runtime: OrbitRuntime,

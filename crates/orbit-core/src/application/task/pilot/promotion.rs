@@ -33,6 +33,22 @@ pub(super) const WARNING_FIELDS: [&str; 6] = [
     VALIDATION_TOOL_WARNINGS,
 ];
 
+/// The `hold` marker on the `utility_warnings` finding the apply boundary
+/// writes when the pilot could not establish a task's lock footprint and so
+/// returned `unassessed` for a task that keeps its assessed tier [ORB-22153].
+/// The finding is independent of the tier and of the selectors, so it holds
+/// promotion however either is set.
+pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
+
+/// The footprint hold in an applied assessment, if the apply boundary wrote one.
+pub(super) fn footprint_hold(assessment: &Value) -> Option<&Value> {
+    assessment
+        .get("utility_warnings")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|finding| finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED))
+}
+
 /// Findings whose named prerequisites may already be enforced or completed.
 const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 

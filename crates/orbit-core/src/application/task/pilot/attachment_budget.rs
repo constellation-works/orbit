@@ -29,17 +29,25 @@ fn context_selector_cap(complexity: TaskComplexity) -> usize {
 
 /// The complexity this boundary writes for an assessment.
 ///
-/// The recommendation applies as-is, with one exception: a task already
+/// The recommendation applies as-is, with two exceptions. A task already
 /// carrying the top tier keeps it. `xhard` routes work to the most capable —
 /// and most expensive — crews, so a task there receives its selectors from a
 /// lower recommendation without being demoted out of that pool; lowering it
 /// is an operator decision [ORB-12622].
+///
+/// An `unassessed` recommendation does not rerate a task that already has an
+/// assessed tier. It says the pilot could not establish the lock footprint, not
+/// that the work cannot be sized, so the task keeps its tier and pool and the
+/// unresolved footprint holds it instead [ORB-22153].
 pub(super) fn resolve_applied_complexity(
     recommended: TaskComplexity,
     current: Option<TaskComplexity>,
 ) -> TaskComplexity {
     match current {
         Some(TaskComplexity::XHard) => TaskComplexity::XHard,
+        Some(current) if recommended == TaskComplexity::Unassessed && current.is_assessed() => {
+            current
+        }
         _ => recommended,
     }
 }

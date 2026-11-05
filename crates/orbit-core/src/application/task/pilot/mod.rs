@@ -94,7 +94,7 @@ use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
-    HeldPilotWarnings, PromotionFindings, auto_approval_hold_classification,
+    FOOTPRINT_UNRESOLVED, HeldPilotWarnings, PromotionFindings, auto_approval_hold_classification,
     auto_approval_opted_out, held_pilot_warnings, promotion_findings, recommendation_has_evidence,
     warning_hold_findings,
 };

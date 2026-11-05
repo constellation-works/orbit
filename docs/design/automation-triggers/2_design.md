@@ -691,7 +691,12 @@ Preparation eligibility includes both selector-free tasks and tasks whose
 persisted complexity remains `unassessed`. Task-pilot records the bounded
 repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
-triggers. Its apply step commits concrete selectors, complexity, audit evidence,
+triggers. A footprint the pilot cannot establish is not a reason to return
+`unassessed`: `unassessed` means the repair cannot be identified at all. When
+an `unassessed` recommendation reaches a task that already has an assessed tier,
+apply keeps that tier and its pool and writes a `footprint_unresolved` hold
+that drain approval reports whatever the tier or selectors are [ORB-22153]. Its
+apply step commits concrete selectors, complexity, audit evidence,
 and the idempotency receipt at one task-bundle boundary. `context_files` are
 optional for admission, but empty context holds no context lock. A
 single-slot local drain, an explicit ship and owner pull admit selector-free

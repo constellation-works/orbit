@@ -25,6 +25,7 @@ use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_with_current, task_operation_id, task_outcome,
 };
+use super::super::promotion::FOOTPRINT_UNRESOLVED;
 use super::super::recheck::{complete_recheck, mark_full};
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
@@ -442,9 +443,9 @@ fn assess_with(
             "note": format!("warning: dropped self-reference {task_id} from blocked_by"),
         }));
     }
-    let complexity = validate_recommendations(action, task_id, &assessment)
+    let recommended = validate_recommendations(action, task_id, &assessment)
         .map_err(refused(task_id, "invalid"))?;
-    let complexity = resolve_applied_complexity(complexity, snapshot.complexity);
+    let complexity = resolve_applied_complexity(recommended, snapshot.complexity);
     // The caller shares its pre-lock task read; the locked write re-reads
     // under the task locks, so no decision changes here.
     let Some(current) = pre_current.cloned() else {
@@ -486,6 +487,7 @@ fn assess_with(
     .map_err(refused(task_id, "invalid"))?;
     let user_facing_ui =
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
+    hold_unresolved_footprint(&mut assessment, recommended, complexity);
     attach_host_findings(
         &mut assessment,
         snapshot,
@@ -632,6 +634,50 @@ fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedT
     };
     if let Value::Object(fields) = &mut validated.assessment {
         fields.insert("finding_rejection".to_string(), report);
+    }
+}
+
+/// Hold a task whose pilot could not establish its lock footprint, so the hold
+/// is independent of its tier and selectors [ORB-22153]. An `unassessed`
+/// recommendation that kept an assessed tier gets one `utility_warnings`
+/// finding naming the unread evidence. Any footprint finding already in the
+/// assessment is dropped first, so a pilot cannot supply the marker and a
+/// re-check cannot hold the task twice.
+fn hold_unresolved_footprint(
+    assessment: &mut Value,
+    recommended: TaskComplexity,
+    applied: TaskComplexity,
+) {
+    let gaps = assessment
+        .get("evidence_gaps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    let kept = recommended == TaskComplexity::Unassessed && applied.is_assessed();
+    let Some(warnings) = assessment
+        .get_mut("utility_warnings")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    warnings.retain(|finding| {
+        finding.get("hold").and_then(Value::as_str) != Some(FOOTPRINT_UNRESOLVED)
+    });
+    if kept {
+        warnings.push(json!({
+            "text": format!(
+                "Footprint unresolved: the pilot could not establish the task's lock footprint, \
+                 so it returned unassessed. The task keeps its assessed {applied} tier and pool. \
+                 Unresolved: {gaps}. Make the named evidence readable or re-scope the task, then \
+                 request a new pilot assessment. A consulted reference document is not a \
+                 verified footprint."
+            ),
+            "holds_promotion": true,
+            "hold": FOOTPRINT_UNRESOLVED,
+        }));
     }
 }
 
