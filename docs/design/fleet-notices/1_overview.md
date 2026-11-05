@@ -1,8 +1,8 @@
 ---
 title: Fleet Notices — Overview
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 stage: shipped
 next: "—"
@@ -25,9 +25,10 @@ owner host of the workspace they are posted in and read by followers. They are p
 listed through `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and
 `orbit.notice.show` (CLI `orbit notice …`), advertised on MCP only with the opt-in
 `--toolset notice`. Open notices in scope are quoted into managed agents' activity briefs as
-untrusted data, shown on the dashboard and listed by `orbit attention`. Every notice expires,
-closes itself when its linked task is done, and is deduplicated by subject. A notice informs; it
-never grants authority, changes a task's mandate or holds dispatch in v1.
+untrusted data, shown on the dashboard and listed by `orbit attention`. Every notice expires;
+one with a linked task closes when that task is done unless `close_on_linked_done` is false.
+Open notices are deduplicated by subject. A notice informs; it never grants authority, changes a
+task's mandate or holds dispatch in v1.
 
 ## 1. Motivation
 
@@ -100,12 +101,12 @@ Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.
 | Follower CLI owner routing | [host_route.rs](../../../crates/orbit-cli/src/command/host_route.rs) | [ORB-21214] |
 | Cross-workspace closure sweep | [sweep.rs](../../../crates/orbit-core/src/application/routines/sweep.rs) | [ORB-21214] |
 | Slices and dependencies | [2_design.md §8](./2_design.md#8-slices) | [ORB-21207] |
-| First client: orbit-office scribe `#board` routing | — (separate repository) | [ORB-21208] |
+| Proposed client: Orbit Office scribe `#board` routing | — (separate repository) | [ORB-21208] |
 
 ## Task References
 
 - [ORB-21207] — designed fleet notices and filed the implementation slices
-- [ORB-21208] — orbit-office scribe routes `#board` markers to the notice tools (client of the API)
+- [ORB-21208] — proposes Orbit Office scribe `#board` routing to the notice tools
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
 - [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset (done)
 - [ORB-21212] — slice 2: brief delivery as untrusted data (done)
