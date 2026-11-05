@@ -100,7 +100,7 @@ source scan, enforces the runtime direction.
 - **Registry-aware composition** — opening a selected registered checkout and
   composing routine discovery from the global `config.toml` `[machine]` table
   plus `workspaces.json`
-  lives in `orbit-cmd::registry_runtime` and `orbit-cmd::registry_routines`,
+  lives in `orbit-cmd`'s `registry::runtime` and `registry::routines` modules,
   over persistence and validation owned by `orbit-registry`.
 - **Consumer-justified re-export** — a root `pub use` kept only because a
   consumer crate (`orbit-cli`, `orbit-web`, `orbit-cmd`) genuinely
