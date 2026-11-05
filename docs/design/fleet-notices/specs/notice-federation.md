@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: where fleet notices live (the home workspace's owner), how followers read and write them, what global scope reaches, and linked tasks across workspaces"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Notice federation
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, federated-mcp]
 related_features: [fleet-notices, federated-mcp, host-registry, distributed-drain, operator-attention]
 related_artifacts: [ORB-21207, ORB-21171]
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 ---
 
 # Spec: Notice federation
@@ -66,14 +66,14 @@ it still returns `updated` or `corroborated` with the stored expiry untouched.
   and the item filters but without `limit`. It merges, deduplicates by `id`, orders, then applies
   `limit`. An owner that does not answer becomes a `degraded` entry naming the host and the
   workspaces it owns; it never yields a silently shorter list.
-- The fan-out reuses the caller-side aggregation that `orbit attention` federation introduces
-  ([operator-attention attention-federation](../../operator-attention/specs/attention-federation.md),
-  [ORB-21171]) when that has landed. It had not landed when slice 4 ([ORB-21214]) was built, so the
-  mux carries the minimal per-owner fan-out itself (`crates/orbit-mcp/src/federated/notice_aggregate.rs`);
-  fold the two when attention federation lands. Owners are the machines the listed workspaces name
-  as their owner: a reachable follower that owns nothing listed is read through its owners and is
-  never a `degraded` entry, while a configured destination that does not answer, and an owner with
-  no configured destination, both degrade.
+- `orbit attention` federation landed in [ORB-21171](../../operator-attention/specs/attention-federation.md),
+  but the notice list still has its own per-owner fan-out in
+  `crates/orbit-mcp/src/federated/notice_aggregate.rs`; the two paths have not been folded together.
+  The notice fan-out issues one untruncated owner-local read per owner, then merges, deduplicates,
+  orders and applies the notice limit. Owners are the machines the listed workspaces name as their
+  owner: a reachable follower that owns nothing listed is read through its owners and is never a
+  `degraded` entry, while a configured destination that does not answer, and an owner with no
+  configured destination, both degrade.
 
 ## Scope
 
