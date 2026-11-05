@@ -536,7 +536,7 @@ fn completed_delivery(
     id
 }
 
-fn comment(fixture: &Fixture, id: &str) {
+pub(super) fn comment_on_task(fixture: &Fixture, id: &str) {
     history(fixture)
         .update_task_history(
             id,
@@ -641,7 +641,7 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             );
 
             for id in [&recent, &old] {
-                comment(&fixture, id);
+                comment_on_task(&fixture, id);
                 // The old helper keeps its documented updated_at semantics.
                 let rows = fixture
                     .runtime
@@ -976,13 +976,63 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
 }
 
 #[test]
+fn arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals() {
+    isolated(
+        "backlog_forecast::arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 850);
+            // A spent budget cuts before the first iteration whatever the
+            // host's speed.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "0".as_ref(),
+                )],
+            );
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let forecast = &cut["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "compute_budget",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["simulation_cut"]["compute_budget_seconds"], 0);
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            // The bound that cut the run is the budget, not the generation limit.
+            assert_eq!(forecast["simulation_truncated"], 0);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+        },
+    );
+}
+
+#[test]
 fn arrivals_draining_before_the_generation_bound_stay_complete() {
     isolated(
         "backlog_forecast::arrivals_draining_before_the_generation_bound_stay_complete",
         || {
             let fixture = Fixture::new();
             busy_arrivals_fixture(&fixture, 850);
-            let server = fixture.server(false);
+            // The simulation costs well over the production wall-time budget
+            // on a host slowed by instrumentation, so this checks completion
+            // under a budget no host reaches; the budget's own cut is checked
+            // by the test above.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "3600000".as_ref(),
+                )],
+            );
             // Over 90 days this rate files past the limit, yet every run
             // drains long before using that many filings.
             let complete = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
@@ -1001,6 +1051,164 @@ fn arrivals_draining_before_the_generation_bound_stay_complete() {
             );
         },
     );
+}
+
+/// The furthest apart two back-to-back forecast scans may be. Each live
+/// forecast builds its own riskiness model from a fresh wall-clock scan, so
+/// the two `observed_through` instants differ by the requests' own compute
+/// time — one second across the F2026-11-097 CI run. The semantic remainder
+/// must still match exactly, so this bound only recognizes same-test scans;
+/// it matches the cross-scan skew the
+/// `forecast_riskiness_preserves_observation_timestamps` regression allows.
+const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
+
+/// One riskiness observation window read from a forecast prediction.
+struct RiskinessScanWindow {
+    since: DateTime<Utc>,
+    observed_through: DateTime<Utc>,
+    window_days: u64,
+}
+
+/// Validate every `task_predictions[].riskiness` observation window in
+/// `forecast` and remove `since`/`observed_through` from it, returning the
+/// removed windows. The windows keep their exact RFC3339 instants (never
+/// date-only: ORB-22032) and must each span `window_days`.
+fn strip_riskiness_scan_windows(
+    forecast: &mut Value,
+    side: &str,
+) -> Result<Vec<RiskinessScanWindow>, String> {
+    if !forecast
+        .get("task_predictions")
+        .is_some_and(|predictions| predictions.is_array())
+    {
+        return Err(format!(
+            "{side} forecast has no task_predictions array: {forecast}"
+        ));
+    }
+    let rows = forecast
+        .get_mut("task_predictions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| format!("{side} forecast has no task_predictions array"))?;
+    let mut windows = Vec::with_capacity(rows.len());
+    for row in rows.iter_mut() {
+        let id = row.get("id").unwrap_or(&Value::Null).clone();
+        let row_context = row.to_string();
+        let riskiness = row
+            .get_mut("riskiness")
+            .ok_or_else(|| format!("{side} prediction {id} has no riskiness: {row_context}"))?;
+        let context = riskiness.to_string();
+        let object = riskiness.as_object_mut().ok_or_else(|| {
+            format!("{side} prediction {id} riskiness is not an object: {row_context}")
+        })?;
+        let raw = ["since", "observed_through"]
+            .into_iter()
+            .map(|field| {
+                object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!(
+                            "{side} prediction {id} riskiness.{field} is not a string: {context}"
+                        )
+                    })
+                    .map(|raw| (field, raw))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut instants = Vec::with_capacity(2);
+        for (field, text) in raw {
+            if !text.contains('T') {
+                return Err(format!(
+                    "{side} prediction {id} riskiness.{field} must retain the RFC3339 instant, \
+                     not a date-only string ({text}): {context}"
+                ));
+            }
+            let instant = DateTime::parse_from_rfc3339(text)
+                .map_err(|_| {
+                    format!(
+                        "{side} prediction {id} riskiness.{field} must parse as RFC3339 ({text}): \
+                         {context}"
+                    )
+                })?
+                .with_timezone(&Utc);
+            instants.push(instant);
+        }
+        let since = instants[0];
+        let observed_through = instants[1];
+        if since >= observed_through {
+            return Err(format!(
+                "{side} prediction {id} observation window must advance: {context}"
+            ));
+        }
+        let window_days = object
+            .get("window_days")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                format!("{side} prediction {id} riskiness has no window_days: {context}")
+            })?;
+        let span_hours = (observed_through - since).num_seconds() as f64 / 3600.0;
+        if (span_hours - window_days as f64 * 24.0).abs() >= 1.0 {
+            return Err(format!(
+                "{side} prediction {id} riskiness window must span window_days ({window_days}): \
+                 {context}"
+            ));
+        }
+        object.remove("since");
+        object.remove("observed_through");
+        windows.push(RiskinessScanWindow {
+            since,
+            observed_through,
+            window_days,
+        });
+    }
+    Ok(windows)
+}
+
+/// Compare the no-arrivals (`off`) and arrivals-on (`on`) forecasts for
+/// semantic equality, tolerating only independently sampled riskiness scan
+/// instants. Every estimate, probability, cohort/prediction identity and
+/// completeness field must match exactly; the excluded `since`/
+/// `observed_through` pairs must each be an exact RFC3339 window from the
+/// same estimator, sampled within same-test skew (F2026-11-097).
+/// Returns the number of riskiness windows compared.
+fn compare_no_arrivals_forecasts(off: &Value, on: &Value) -> Result<usize, String> {
+    let mut off = off.clone();
+    let mut on = on.clone();
+    let off_windows = strip_riskiness_scan_windows(&mut off, "off")?;
+    let on_windows = strip_riskiness_scan_windows(&mut on, "on")?;
+    if off_windows.len() != on_windows.len() {
+        return Err(format!(
+            "off and on forecasts compare {} and {} riskiness windows",
+            off_windows.len(),
+            on_windows.len()
+        ));
+    }
+    if off != on {
+        return Err(format!("semantic forecast difference: off: {off} on: {on}"));
+    }
+    for (index, (off_window, on_window)) in off_windows.iter().zip(&on_windows).enumerate() {
+        if off_window.window_days != on_window.window_days {
+            return Err(format!(
+                "prediction {index} compares window_days {} against {}",
+                off_window.window_days, on_window.window_days
+            ));
+        }
+        for (field, off_instant, on_instant) in [
+            ("since", off_window.since, on_window.since),
+            (
+                "observed_through",
+                off_window.observed_through,
+                on_window.observed_through,
+            ),
+        ] {
+            let skew = (off_instant - on_instant).num_seconds().abs();
+            if skew >= NO_ARRIVALS_SCAN_SKEW_SECONDS {
+                return Err(format!(
+                    "prediction {index} {field} scans are {skew}s apart, beyond same-test skew"
+                ));
+            }
+        }
+    }
+    Ok(off_windows.len())
 }
 
 #[test]
@@ -1028,7 +1236,18 @@ fn arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast() {
             let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
             assert_eq!(on["arrivals"]["per_day"]["total"], 0.0);
             assert_eq!(on["inputs"]["arrivals"], true);
-            assert_eq!(on["forecast"], off["forecast"]);
+            let compared = compare_no_arrivals_forecasts(&off["forecast"], &on["forecast"])
+                .unwrap_or_else(|diff| {
+                    panic!(
+                        "arrivals=on with zero arrivals must preserve the no-arrivals forecast: \
+                         {diff}"
+                    )
+                });
+            assert!(
+                compared > 0,
+                "the comparison must exercise at least one sampled riskiness window: {}",
+                on["forecast"]["task_predictions"]
+            );
             assert!(on["forecast"].get("simulation_cut").is_none());
         },
     );

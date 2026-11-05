@@ -13,21 +13,40 @@
 //! composing the runtime binds it. The values both sides name live in
 //! [`contracts`](crate::application::contracts).
 
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
+use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{DecisionRequest, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
-    HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation, ShipMode,
-    SourceRepairBinding,
+    CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
+    ShipMode, SourceRepairBinding,
 };
 use serde_json::Value;
 
+use super::TaskRow;
 use crate::application::contracts::{
     CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
 };
 
 /// The crew pools an admitting pipeline captured, as task code names them.
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
+
+/// The authenticated identity of the pull request a task's own native run
+/// published, as desktop review compares it with the forge.
+pub(in crate::application) struct NativePublicationIdentity {
+    /// The published head branch.
+    pub(in crate::application) branch: String,
+    /// The published head commit.
+    pub(in crate::application) head: String,
+    /// The branch the pull request targets.
+    pub(in crate::application) base_branch: String,
+    /// The pull request number, as recorded.
+    pub(in crate::application) number: String,
+    /// The pull request URL, when recorded.
+    pub(in crate::application) url: Option<String>,
+}
 
 /// The job-dispatch and crew-pool operations task code calls, implemented
 /// by `job`.
@@ -215,4 +234,78 @@ pub(in crate::application) trait TaskJobPort {
         task_id: &str,
         run_id: Option<&str>,
     ) -> Result<RunDeliveryObservation, OrbitError>;
+
+    /// Apply a human's answer `answer_id` to the script-grant decision
+    /// `request`.
+    fn answer_script_grant_decision(
+        &self,
+        request: &DecisionRequest,
+        answer_id: &str,
+        actor_label: &str,
+        via: &str,
+    ) -> Result<(), OrbitError>;
+
+    /// Whether a decision option may request a task-pilot for `task_id`;
+    /// the refusal or failure is returned as its display text.
+    fn decision_pilot_preflight(&self, task_id: &str) -> Result<(), String>;
+
+    /// Submit an explicit task-pilot run for `task_id`; the refusal or
+    /// failure is returned as its display text.
+    fn request_explicit_task_pilot(
+        &self,
+        task_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<(), String>;
+
+    /// The authenticated publication identity of the exact native run
+    /// `task` names.
+    fn native_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<NativePublicationIdentity, OrbitError>;
+
+    /// The enabled members of `purpose`'s `workflow.purpose_crews` pool,
+    /// with the draw's source. With `inspection`, only members whose provider
+    /// inspects source natively and that hold a ticket are kept. `None` when
+    /// no such member remains, so the fallback route applies.
+    fn purpose_pool_members(
+        &self,
+        purpose: CrewPurpose,
+        inspection: bool,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError>;
+
+    /// Resume the failed run `source_run_id` as `actor`, returning the new
+    /// run's ID.
+    fn resume_failed_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<String, OrbitError>;
+
+    /// The explore brief the claimed leaf this process executes captured at
+    /// admission; an error when no claimed leaf binds this process.
+    fn claimed_leaf_explore_brief(&self) -> Result<Option<CapturedExploreBrief>, OrbitError>;
+
+    /// The task-pilot run still pending or running for `task_id`, if any.
+    fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError>;
+
+    /// A claimed leaf's candidates for `task` before any provider failure
+    /// hold, drawn from the owner's captured `pools`, with their provenance.
+    fn claimed_leaf_candidates_before_holds(
+        &self,
+        task: &Task,
+        pools: &Self::CrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError>;
+
+    /// The persisted pipeline states of `run_ids` in one exact read: an
+    /// unreadable state fails the whole read.
+    fn stored_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
+
+    /// The delivery attention marker for one task row, if any.
+    fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError>;
 }

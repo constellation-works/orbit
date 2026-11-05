@@ -149,6 +149,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
+        | OrbitError::ForgeUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",

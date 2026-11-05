@@ -192,6 +192,10 @@ const RUN_AUDITS: &[GroupedRow] = &[
         "settlements",
         "Show failure and release settlements claimed leaves sent this owner",
     ),
+    (
+        "settlements-hydrate",
+        "Keep settled leaf run evidence from its follower (operator)",
+    ),
 ];
 
 const RUN_MAINTENANCE: &[GroupedRow] = &[
@@ -308,6 +312,10 @@ const ROOT_ENVIRONMENT: &[GroupedRow] = &[
     ),
     ("plugin", "Install and manage Orbit plugins"),
     (
+        "application",
+        "Consent to scoped application calls and manage credentials (operator)",
+    ),
+    (
         "migrate",
         "Apply or inspect pending .orbit layout/schema migrations",
     ),
@@ -363,6 +371,7 @@ const ROOT_OPERATE: &[GroupedRow] = &[
 ];
 
 const ROOT_OBSERVE: &[GroupedRow] = &[
+    ("attention", "List what waits on an operator"),
     ("audit", "Query the audit event log"),
     (
         "codebase",

@@ -74,7 +74,7 @@ pub(super) fn identity_params() -> Vec<ToolParam> {
         ToolParam {
             name: "model".to_string(),
             description:
-                "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
+                "Agent family or full model ID for provenance."
                     .to_string(),
             param_type: "string".to_string(),
             required: false,
@@ -85,9 +85,7 @@ pub(super) fn identity_params() -> Vec<ToolParam> {
 pub(super) fn model_identity_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "model".to_string(),
-        description:
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
-                .to_string(),
+        description: "Agent family or full model ID for provenance.".to_string(),
         param_type: "string".to_string(),
         required: false,
     }]

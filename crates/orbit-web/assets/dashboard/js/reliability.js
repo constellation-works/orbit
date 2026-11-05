@@ -116,7 +116,12 @@ function renderSummary(payload) {
   const settled = num(counts.succeeded) + num(counts.failed);
   const cascaded = num(counts.cascaded);
   const excluded =
-    num(counts.cancelled) + num(counts.skipped) + num(counts.held) + num(counts.in_flight) + num(counts.unknown);
+    num(counts.upgrade_paused) +
+    num(counts.cancelled) +
+    num(counts.skipped) +
+    num(counts.held) +
+    num(counts.in_flight) +
+    num(counts.unknown);
 
   const tiles = [
     statTile(
@@ -157,7 +162,7 @@ function renderSummary(payload) {
   const note = $("reliability-denominator-note");
   if (note) {
     // The rate's numerator and denominator both count a failed delivery once.
-    // Wrapper echoes are outside that fraction; cancelled, skipped, held,
+    // Wrapper echoes are outside that fraction; upgrade-paused, cancelled, skipped, held,
     // in-flight, and unrecognized runs are the other exclusion.
     const rule =
       "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so the numerator and the denominator both omit that echo. ";
@@ -166,9 +171,9 @@ function renderSummary(payload) {
       `Failure rate is over settled deliveries (success + one count per failed delivery = ${settled}). `;
     const excludedClause =
       excluded > 0
-        ? `${excluded} further run(s) in this window were cancelled, skipped, held, still in flight, ` +
+        ? `${excluded} further run(s) in this window were paused by an Orbit upgrade, cancelled, skipped, held, still in flight, ` +
           "or in an unrecognized state and are excluded from the denominator."
-        : "No cancelled, skipped, held, in-flight, or unrecognized runs in this window.";
+        : "No upgrade-paused, cancelled, skipped, held, in-flight, or unrecognized runs in this window.";
     note.textContent = `${rule}${rolled}${settledClause}${excludedClause}`;
   }
 

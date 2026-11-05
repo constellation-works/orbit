@@ -1,11 +1,11 @@
 ---
 title: Owner Failover — Overview
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-11-03
-status: Proposed
+last_updated: 2026-11-04
+last_validated: 2026-11-04
+status: Draft
 stage: designing
-next: "Daniel reviews the proposal and answers its open questions (ORB-20620)"
+next: "Daniel reviews the proposal and answers its open questions"
 feature: owner-failover
 doc_role: overview
 type: design
@@ -106,11 +106,14 @@ All rows are proposed. The files named are the ones that would change. None of t
 | Data-loss windows and ID sizing | [2_design.md §5–§6](./2_design.md#5-taking-over-ownership) | [ORB-20620] |
 | Open questions for Daniel | [2_design.md §10.1](./2_design.md#101-open-questions-for-daniel) | [ORB-20620] |
 
+The proposal extends the distributed-drain contract authored by [ORB-12488] and the publication protocol designed by [ORB-11068] and shipped by [ORB-11077]; [ORB-18378] added the disabled weekly routine.
+
 ## Task References
 
 - [ORB-20620] — wrote this proposal for epoch-fenced owner failover.
 - [ORB-12488] — authored the distributed-drain owner/follower contract this design extends.
 - [ORB-11068] — specified the dedicated publication repository this design reuses as the fence.
-- [ORB-11077] — shipped the publication CLI and the disabled weekly routine.
+- [ORB-11077] — shipped the publication CLI.
+- [ORB-18378] — added the disabled weekly publication routine.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

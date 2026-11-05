@@ -39,9 +39,13 @@ use super::review_modes::ReviewMode;
 /// [ORB-20728]. 17: that correction is applied to the full-script total
 /// and distributed over its steps, matching the full-task totals it is
 /// trained on, instead of applying the log-affine map per attempt step
-/// [ORB-20729]. A bump starts uncorrected; earlier versions keep their own
-/// scoring rules.
-pub(super) const MODEL_VERSION: u32 = 17;
+/// [ORB-20729]. 18: that correction reads one forecast per task, its first
+/// stored forecast taken before work started, and a cohort whose
+/// leave-one-out p90 coverage falls below both the base and the 90% target
+/// is withheld [ORB-21949]. A bump starts uncorrected; earlier versions
+/// keep their own scoring rules, though task-level calibration of every
+/// version counts each task once on that same population.
+pub(super) const MODEL_VERSION: u32 = 18;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [

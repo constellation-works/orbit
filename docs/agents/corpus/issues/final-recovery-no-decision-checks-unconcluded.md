@@ -17,7 +17,7 @@ The recovery agent ran while the PR's required checks were still pending, so it 
 
 ## Resolution
 
-Do not treat the escalation as a diagnosis. Check whether checks have since concluded and rerun recovery; if a conflict is real, hand it to an operator with the exact refusal.
+Do not treat the escalation as a diagnosis. Check whether checks have since concluded and rerun recovery; if a conflict is real, hand it to an operator with the exact refusal. Three rows from 2026-10-25 18:36 (ORB-18269, ORB-18270, ORB-18271) carried the same `did not return a decision` prefix but their diagnosis is `worktree_mismatch`; they moved to `worktree-missing-at-dispatch`.
 
 ## Fix task
 
@@ -33,6 +33,3 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 08:48 | ORB-18124 | jrun-20261025-0757-c31 | no decision, checks unconcluded | human:daniel moved to backlog at 2026-10-25T08:49Z |
 | 2026-10-26 08:29 | ORB-18542 | jrun-20261026-0716-c9 | no decision, checks unconcluded | merged outside Orbit at 2026-10-26T08:54Z, settled done |
 | 2026-10-27 02:47 | ORB-18816 | jrun-20261027-0224-c3 | no decision, checks unconcluded | no clearing event in history; task now done |
-| 2026-10-25 18:36 | ORB-18270 | jrun-20261025-1832-c3 | final recovery returns no decision while required checks are unconcluded | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
-| 2026-10-25 18:36 | ORB-18271 | jrun-20261025-1836-c3 | final recovery returns no decision while required checks are unconcluded | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |
-| 2026-10-25 18:37 | ORB-18269 | jrun-20261025-1832-c1 | final recovery returns no decision while required checks are unconcluded | occurrence recorded in ORB-21385 partial pass; pre-cursor, no new action in this pass |

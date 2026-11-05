@@ -72,9 +72,9 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.",
+                "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing.",
                 flag("limit"),
-                "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation)",
+                "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation). 0 uses the default: 10",
             ),
             "10",
         ),
@@ -128,7 +128,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
         mcp_only(
             "model",
             ParamType::String,
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+            "Agent family or full model ID for provenance.",
         ),
     ]],
     at_least_one_of: &[],

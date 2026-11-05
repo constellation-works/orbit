@@ -811,12 +811,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the test runners must select every count partition "
                          "of NEXTEST_PARTITIONS")
-        # The literal shard names are the agent-main ruleset's; the three
+        # The literal shard names are the agent-main ruleset's; the five
         # additional partition jobs run the shard steps under names outside it.
         self.assertEqual(sorted(partitions.values()),
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
                                 + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
-                                   jobs["test-partition-6"]["name"]]))
+                                   jobs["test-partition-6"]["name"], jobs["test-partition-7"]["name"],
+                                   jobs["test-partition-8"]["name"]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
@@ -838,7 +839,9 @@ class NextestShardWorkflowTests(unittest.TestCase):
         for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
                              ("test-3", "Run nextest shard"), ("test-extra", "Run nextest shard"),
                              ("test-partition-2", "Run nextest shard"),
-                             ("test-partition-6", "Run nextest shard")):
+                             ("test-partition-6", "Run nextest shard"),
+                             ("test-partition-7", "Run nextest shard"),
+                             ("test-partition-8", "Run nextest shard")):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -1084,7 +1087,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
                 self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2",
                                             "test-3", "test-extra", "test-partition-2",
-                                            "test-partition-6"})
+                                            "test-partition-6", "test-partition-7", "test-partition-8"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -1107,9 +1110,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
-            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6"},
+            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
+            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

@@ -259,6 +259,54 @@ try {
     await page.evaluate(() => window.harness.retire('close'));
   });
 
+  // 5. A long list is bounded: one page in the DOM, filter and keyboard
+  // paging reach later entries, and a loaded preview (with its blob URL and
+  // download) survives paging and filtering away and back without refetch.
+  await check('bounded-paging-filter-preview', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => artifact(`evidence-${String(i).padStart(3, '0')}.txt`));
+    many[57] = artifact('ux-review.json');
+    await page.evaluate((artifacts) => window.harness.mount(artifacts, 'close'), many);
+    const rows = page.locator('.artifacts-list .artifact-row');
+    assert(await rows.count() === 25, `the initial page renders 25 rows, got ${await rows.count()}`);
+    assert((await page.locator('.artifacts-status').textContent()).includes('Showing 1–25 of 60'), 'the status names the bounded range and total');
+    // Open the first preview; it becomes a download link holding one blob URL.
+    await rows.first().click();
+    await page.locator('.artifacts-list .artifact-preview a[download]').first().waitFor({ state: 'visible' });
+    // Keyboard paging: focus Next, activate it, and page to the end. Next
+    // disables itself on the last page, so focus moves to Previous.
+    const next = page.locator('.artifacts-page-btn', { hasText: 'Next' });
+    const prev = page.locator('.artifacts-page-btn', { hasText: 'Previous' });
+    await next.focus();
+    await page.keyboard.press('Enter');
+    assert((await page.locator('.artifacts-page-label').textContent()).includes('Page 2 of 3'), 'Enter on Next shows page 2');
+    assert(await rows.first().textContent().then((t) => t.includes('evidence-025')), 'page 2 starts at the 26th artifact');
+    await next.focus();
+    await page.keyboard.press('Enter');
+    assert(await rows.count() === 10, `the last page renders the remaining 10 rows, got ${await rows.count()}`);
+    assert(await page.evaluate(() => document.activeElement?.textContent) === 'Previous', 'focus stays in the pagination when Next disables itself');
+    // Filtering finds a later entry directly, and its preview downloads.
+    await page.locator('.artifacts-filter').fill('ux-review');
+    assert(await rows.count() === 1, 'the filter narrows to the matching artifact');
+    await rows.first().click();
+    await page.locator('.artifacts-list .artifact-preview a[download]').waitFor({ state: 'visible' });
+    await downloads('ux-review.json', BIN);
+    // Clearing the filter returns to page 1 with the first preview intact.
+    await page.locator('.artifacts-filter').fill('');
+    assert((await page.locator('.artifacts-page-label').textContent()).includes('Page 1 of 3'), 'clearing the filter returns to the first page');
+    await page.locator('.artifacts-list .artifact-preview a[download]').first().waitFor({ state: 'visible' });
+    assert(requested.filter((entry) => entry === 'evidence-000.txt').length === 1, 'returning to a loaded preview does not refetch it');
+    // Screenshots of the bounded view at both widths, as review evidence.
+    const shot = Array.from({ length: 411 }, (_, i) => artifact(`shot-${String(i).padStart(3, '0')}.txt`));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate((artifacts) => window.harness.mount(artifacts, 'close'), shot);
+    await page.locator('.artifacts').screenshot({ path: path.join(evidence, 'artifacts-bounded-dark-1440.png') });
+    await page.setViewportSize({ width: 375, height: 900 });
+    await page.locator('.artifacts').screenshot({ path: path.join(evidence, 'artifacts-bounded-dark-375.png') });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    assert(!overflow, 'the bounded view does not overflow horizontally at 375px');
+    await page.evaluate(() => window.harness.retire('close'));
+  });
+
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   assert(violations.length === 0, `CSP violations: ${violations.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'task-artifacts-assertions.json'), `${JSON.stringify({ csp: CSP, results, requested }, null, 2)}\n`);

@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
+use super::super::terminal_dates::latest_status_entry_at;
 use super::assembly::ARRIVAL_DAYS;
 use super::options::{DEFAULT_LOOKBACK_DAYS, MIN_HISTORY_TASKS, Options};
 use super::outcomes::TaskEpisodes;
@@ -119,13 +120,8 @@ pub(super) fn load_forecast_history(
     let completed_at = |runtime: &OrbitRuntime,
                         histories: &mut HashMap<String, Option<Vec<TaskHistoryEntry>>>,
                         task_id: &str| {
-        cached_history(runtime, histories, task_id).and_then(|task_history| {
-            task_history
-                .iter()
-                .rev()
-                .find(|entry| entry.to_status == Some(TaskStatus::Done))
-                .map(|entry| entry.at)
-        })
+        cached_history(runtime, histories, task_id)
+            .and_then(|task_history| latest_status_entry_at(task_history, TaskStatus::Done))
     };
     for row in runtime
         .task_terminal_transitions(transitions_since)?
@@ -230,11 +226,7 @@ pub(super) fn load_forecast_history(
             if link.relation_type == TaskRelationType::RegressionFrom
                 && !done_at.contains_key(link.target.as_str())
                 && let Some(history) = cached_history(runtime, &mut histories, &link.target)
-                && let Some(at) = history
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.to_status == Some(TaskStatus::Done))
-                    .map(|entry| entry.at)
+                && let Some(at) = latest_status_entry_at(history, TaskStatus::Done)
             {
                 done_at.insert(link.target.to_string(), at);
             }

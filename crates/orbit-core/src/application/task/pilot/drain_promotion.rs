@@ -668,7 +668,7 @@ fn classify_reuse(
     else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     };
-    if hold_live_pilot && let Some(run_id) = runtime.live_task_pilot_run(&task.id)? {
+    if hold_live_pilot && let Some(run_id) = runtime.live_pilot_run(&task.id)? {
         return Ok(ExplicitAssessmentReuse::Hold {
             reason: "pilot_running",
             detail: Some(format!("task-pilot run {run_id} is assessing it")),

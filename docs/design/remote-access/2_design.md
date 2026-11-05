@@ -1,9 +1,9 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-10-08
+last_updated: 2026-11-04
 last_validated: 2026-11-01
-status: Accepted
+status: Implemented
 feature: remote-access
 doc_role: design
 type: design
@@ -70,6 +70,9 @@ connect reads no local workspace state. It selects a local loopback port: an exp
 
 The Web-owned tunnel then follows an attach-first lifecycle:
 
+[ORB-10708] delivered this lifecycle. [ORB-14057] moved the readiness budget
+after authentication, preserving interactive SSH prompts.
+
 1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>, plus a LocalCommand that writes a private marker file once ssh has bound the forward ([bind report](./specs/ssh-tunnel.md#bind-report)).
 2. Wait until that marker exists, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the marker is a connection failure. A listener on the port alone proves nothing: another process may have taken the port before ssh, and ssh then exits. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
 3. Poll GET /healthz through the forward for up to five seconds, measured from that bind report. The five seconds bound the polls together. A socket timeout limits one idle read, and a peer that trickles status bytes cannot extend the wait. A status line longer than 8 KiB is not healthy.
@@ -82,9 +85,21 @@ In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the re
 
 connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is a deprecated no-op for current remote dashboards; when supplied, it is forwarded only in spawn mode for compatibility with older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
 
+[ORB-18488] added optional browser-session tickets. When the remote advertises
+sessions and a browser or interactive terminal will consume the URL, connect
+requests a one-time ticket through a separate `ssh <host> orbit web open --no-open`
+command and rewrites its authority to the local forward. This is not an HTTP
+credential-fetch endpoint; existing API routes retain their authorization.
+
 ## 3a. Host forward
 
 `/api/on/<host>/<path>` forwards one request to `/api/<path>` on a registered host's own dashboard ([specs/host-forward.md](./specs/host-forward.md)). The host is resolved from the serving host's host file; the serving host's own name is answered locally.
+
+[ORB-14679] delivered this surface. [ORB-16130] subsequently allowed at most
+three ephemeral allocations for a proven initial attach bind collision, under
+the original deadline; authentication, readiness and remote-command failures
+remain failures. The [host-forward spec](./specs/host-forward.md#tunnels) records
+the diagnostic and child-reaping conditions.
 
 host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's; when the SSH child has exited by the end of that read, the exit is reported instead, since its port may have passed to another listener. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.
 
@@ -96,7 +111,11 @@ The forwarding client speaks HTTP/1.1 to the tunnel's loopback port, one connect
 
 The dashboard is an unauthenticated read/write HTTP application. check_bindable_host permits only `127.0.0.1` and `::1`. The request Host gate permits those IPs and `localhost`. The Origin middleware reduces browser cross-site request risk but is forgeable by non-browser clients and is not authentication.
 
-Remote confidentiality, server identity, and user authentication are delegated to SSH. The local forward is explicitly loopback-bound, but access to that port is still access to the remote dashboard's authority; connect adds no token, ACL, or Orbit session.
+Remote confidentiality, server identity, and user authentication are delegated to SSH.
+The local forward is explicitly loopback-bound, but access to that port still
+carries the remote dashboard's existing API authority. The optional browser
+ticket from [ORB-18488] authenticates routes that explicitly require a browser
+session; it adds no operator capability and does not gate existing API routes.
 
 The host forward extends the serving dashboard's reach to every registered host its SSH identity can reach. An operator session there can act as operator on each of them; without it, only reads are forwarded. Each remote dashboard still applies its own gates.
 
@@ -106,3 +125,13 @@ Operational limitations:
 - Exit 127 is reported as a remote PATH problem; exit 255 as an SSH connection problem.
 - Local port selection and attach-versus-spawn contain accepted time-of-check/time-of-use races. SSH or the second Web bind fails loudly if a race is lost.
 - A target must remain online. Nothing is synchronized or available offline.
+
+## Task References
+
+- [ORB-10708] — delivered attach-first SSH connection and ownership-aware teardown.
+- [ORB-14057] — started readiness timing after SSH reports its authenticated bind.
+- [ORB-14679] — delivered identity-checked, operator-gated host forwarding.
+- [ORB-16130] — bounded initial bind-collision reallocation without replaying remote commands.
+- [ORB-18488] — added optional browser-session tickets while preserving existing API authority.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1478,6 +1478,7 @@ const waitingBox = Object.assign(new Node('div'), { id: 'task-filter' });
 byId['task-filter'] = waitingBox;
 document.body.appendChild(waitingBox);
 let decisionsServed = [{ task_id: 'ORB-401' }];
+let decisionsDown = false;
 const waitingReads = [];
 context.fetch = async (url, init = {}) => {
   const path = String(url);
@@ -1487,6 +1488,7 @@ context.fetch = async (url, init = {}) => {
   }
   if (path.startsWith('/api/decisions')) {
     waitingReads.push(path);
+    if (decisionsDown) return { ok: false, status: 503, text: async () => '{"error":"decisions unavailable"}', headers: { get: () => null } };
     return { ok: true, status: 200, json: async () => ({ items: decisionsServed }), headers: { get: () => null } };
   }
   return new Promise(() => {});
@@ -1545,6 +1547,60 @@ assert.deepEqual(waitingRows(), [], 'the filter drops the previous workspace\'s 
 await settleReads();
 assert.ok(waitingReads.at(-1).includes('workspace=ws_waiting_b'), 'the next workspace reads its own decisions');
 waitingBox.querySelector('.waiting-filter').dispatch('click');
+
+// The count follows the live task list, not the list as it stood when the open
+// decisions were read: a human-crew task that arrives in a later poll, inside the
+// read's throttle window, counts at once instead of showing 0 until the next read.
+const lateHuman = task(601, { status: 'in-progress', crew: 'daniel', human_crew: { name: 'daniel', description: 'Operator work' } });
+const readsBeforeLate = waitingReads.length;
+waitingTasks = [quietTask, lateHuman];
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeLate, 'the late task arrives inside the throttle window');
+assert.equal(waitingCount(), '1', 'an in-progress human-crew task counts as soon as it is listed');
+waitingTasks = [quietTask];
+renderTasks(waitingTasks, waitingContext);
+assert.equal(waitingCount(), '0', 'the count drops with the task');
+
+// A cached decision for a task that then becomes terminal stops counting, even
+// when the next /api/decisions read fails: the failed read keeps the cached ids,
+// so the count must still agree with the live terminal-task exclusion.
+decisionsServed = [{ task_id: 'ORB-403' }, { task_id: 'ORB-404' }];
+const cachedDecisionTask = task(403, { status: 'in-progress' });
+const stillOpenTask = task(404, { status: 'in-progress' });
+waitingTasks = [quietTask, cachedDecisionTask, stillOpenTask];
+modules.get('task-shared.js').namespace.notifyDecisionAnswered();
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+const readsBeforeTerminal = waitingReads.length;
+assert.equal(waitingCount(), '2', 'both open decisions count once read');
+waitingTasks = [quietTask, task(403, { status: 'done' }), stillOpenTask];
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeTerminal, 'the throttle holds the next decisions read');
+assert.equal(waitingCount(), '1', 'a task that became done stops counting from its cached decision');
+decisionsDown = true;
+modules.get('task-shared.js').namespace.notifyDecisionAnswered();
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, readsBeforeTerminal + 1, 'the next decisions read is attempted');
+assert.equal(waitingCount(), '1', 'a failed decisions read keeps the terminal task out of the count');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+renderTasks(waitingTasks, waitingContext);
+assert.deepEqual(waitingRows(), ['task-ORB-404'], 'the filter lists only the task whose decision is still open');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+decisionsDown = false;
+decisionsServed = [];
+
+// A `[resident]: <title>` title moves the bracket to a chip and leaves no
+// separator at the start of the title.
+waitingTasks = [task(602, { title: '[resident]: orbit-graph - sol' })];
+renderTasks(waitingTasks, waitingContext);
+const prefixedRow = taskRows().find(row => row.dataset.key === 'task-ORB-602');
+assert.equal(prefixedRow.querySelector('.title').textContent, 'orbit-graph - sol', 'the title starts with its own words');
+assert.deepEqual(prefixedRow.querySelectorAll('.title-tag').map(chip => chip.textContent), ['resident'], 'the bracket becomes a chip');
+waitingTasks = [quietTask];
+renderTasks(waitingTasks, waitingContext);
 
 // Human-crew work is classified by the server from the task's own workspace
 // (`human_crew` on the row), so it survives the aggregate view, which has no
@@ -1655,6 +1711,16 @@ if (process.argv.includes('--browser')) {
             globalThis.fixtureRequests.push(url.search);
             return url.searchParams.get('workspace') === 'ws_fixture'
               ? json({ items: [{ task_id: 'ORB-401' }] }) : json({ error: 'no workspace selected and no default configured' }, 400);
+          }
+          if (url.pathname === '/api/dashboard/chrome') {
+            const component = body => ({ status: 200, body: JSON.stringify(body) });
+            const since = url.searchParams.get('since') || '24h';
+            return json({
+              notices: component({ open: [], recent: [], banner: [], degraded: [] }),
+              summary: component({ events: 0, failed_runs: 0, window: since, tool_call_failure_rate: { failed: 0, total: 0, denied: 0 } }),
+              routines: url.searchParams.get('routines') === 'true' ? component({ routines: [], clock: {} }) : null,
+              failures: url.searchParams.get('failures') === 'true' ? component({ failing: [] }) : null,
+            });
           }
           if (url.pathname === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner', local: true }] });
           if (url.pathname === '/api/crews') return json({ crews: [] });

@@ -2,11 +2,13 @@
 
 use std::path::Path;
 
-use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle};
-use orbit_tools::github_cli::{SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
-use serde_json::{Value, json};
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
+use serde_json::json;
 
 use super::super::super::operations;
+use super::super::super::operations::{
+    CiCommitJobEvidence, CiJobLogAnswer, CiLogReadThrottle, CiLogSource,
+};
 use crate::context::RuntimeHost;
 
 /// One failed job's log. A read that recovered no text, which the log
@@ -18,7 +20,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     run_id: u64,
     job_id: u64,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     deadline_ms: Option<u64>,
 ) -> Result<String, OrbitError> {
     let mut input = json!({
@@ -29,38 +31,39 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     if let Some(deadline_ms) = deadline_ms {
         input["deadline_ms"] = json!(deadline_ms);
     }
-    let response = host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?;
-    if let Some(reason) = response["fallback_error"].as_str() {
+    let response = CiJobLogAnswer::decode_response(
+        host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?,
+    );
+    if let Some(reason) = response.fallback_error.as_deref() {
         let message = format!("the log read recovered no text: {reason}");
-        let throttle = response
-            .get("read_throttle")
-            .filter(|throttle| !throttle.is_null())
-            .map(|throttle| serde_json::from_value::<ProviderReadThrottle>(throttle.clone()));
-        return Err(match throttle {
-            Some(Ok(throttle)) => OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
-                operation: operations::CI_JOB_LOG.to_string(),
-                class: PrivateVcsFailureClass::Other,
-                message,
-                read_throttle: Some(throttle),
-            })),
+        return Err(match response.read_throttle {
+            CiLogReadThrottle::Known(throttle) => {
+                OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+                    operation: operations::CI_JOB_LOG.to_string(),
+                    class: PrivateVcsFailureClass::Other,
+                    message,
+                    read_throttle: Some(throttle),
+                }))
+            }
             // An unreadable throttle is no wait evidence: the read stays
             // the ordinary failure.
-            Some(Err(_)) | None => OrbitError::Execution(message),
+            CiLogReadThrottle::Unreadable(_) | CiLogReadThrottle::Absent => {
+                OrbitError::Execution(message)
+            }
         });
     }
-    if response["source_complete"] == false {
+    if response.source_complete == Some(false) {
         return Err(OrbitError::Execution(
             "the job log source is incomplete".to_string(),
         ));
     }
-    let source = response["source"].as_str();
-    if source.is_some_and(|source| source != SOURCE_RUN_LOG && source != SOURCE_JOB_API_LOG) {
+    if matches!(response.source, Some(CiLogSource::Unknown(_))) {
         return Err(OrbitError::Execution(
             "the job log source is unknown".to_string(),
         ));
     }
-    let selected = response["diagnostic"].as_str();
-    if selected.is_none() && response["failure_regions"].is_object() {
+    let selected = response.diagnostic.as_deref();
+    if selected.is_none() && response.failure_regions.is_some() {
         return bound_failure_regions(&response, job)
             .map(ToOwned::to_owned)
             .ok_or_else(|| {
@@ -70,13 +73,13 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
             });
     }
     let step = super::jobs::failed_step(job);
-    if response["truncated"] == true && selected.is_none() {
+    if response.truncated == Some(true) && selected.is_none() {
         return Err(OrbitError::Execution(
             "the job log is truncated and has no complete failing command".to_string(),
         ));
     }
     let text = selected
-        .or_else(|| response["log"].as_str())
+        .or(response.log.as_deref())
         .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))?;
     // gh's columns bind command evidence to the provider's failed step.
     // Raw job API logs have no columns; a unique complete failed command is
@@ -86,7 +89,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         // A raw job API log can contain arbitrary tabs in printed commands or
         // output. Its ISO timestamp precedes the payload, so recognize that
         // shape before interpreting any tabs as gh's job/step columns.
-        if timestamp_prefixed(line) || source == Some(SOURCE_JOB_API_LOG) {
+        if timestamp_prefixed(line) || response.source == Some(CiLogSource::JobApiLog) {
             selected_lines.push(line);
             continue;
         }
@@ -117,31 +120,29 @@ fn timestamp_prefixed(line: &str) -> bool {
 /// Regions omit source bytes, so attribution must come from the collector's
 /// complete-command proof and the provider's unique failed step, never from
 /// the display tail. This is the same binding the CI sweep requires.
-fn bound_failure_regions<'a>(response: &'a Value, job: &Value) -> Option<&'a str> {
-    let regions = &response["failure_regions"];
-    if response["source_complete"] != true
-        || regions["kind"] != "runner_failure_regions"
-        || regions["command_complete"] != true
-        || regions["selection_complete"] != true
-    {
+fn bound_failure_regions<'a>(
+    response: &'a CiJobLogAnswer,
+    job: &CiCommitJobEvidence,
+) -> Option<&'a str> {
+    let regions = response.failure_regions.as_ref()?;
+    if response.source_complete != Some(true) || !regions.selection_proven() {
         return None;
     }
-    let text = regions["text"]
-        .as_str()
+    let text = regions
+        .text
+        .as_deref()
         .filter(|text| !text.trim().is_empty())?;
-    let steps = job["failed_steps"].as_array()?;
+    let steps = job.failed_steps.value()?;
     let [step] = steps.as_slice() else {
         return None;
     };
-    let step = step.as_str().filter(|step| !step.trim().is_empty())?;
-    if job["failed_step"].as_str() != Some(step) {
+    let step = step.text().filter(|step| !step.trim().is_empty())?;
+    if job.failed_step.text() != Some(step) {
         return None;
     }
-    match response["source"].as_str()? {
-        SOURCE_RUN_LOG => {
-            let name = job["name"]
-                .as_str()
-                .filter(|name| !name.trim().is_empty())?;
+    match response.source.as_ref()? {
+        CiLogSource::RunLog => {
+            let name = job.name.text().filter(|name| !name.trim().is_empty())?;
             let mut label = None;
             for line in text.lines() {
                 let mut columns = line.splitn(3, '\t');
@@ -161,8 +162,8 @@ fn bound_failure_regions<'a>(response: &'a Value, job: &Value) -> Option<&'a str
         }
         // Collection refuses raw evidence from multiple failed commands,
         // including when their other failures fall outside retained regions.
-        SOURCE_JOB_API_LOG => {}
-        _ => return None,
+        CiLogSource::JobApiLog => {}
+        CiLogSource::Unknown(_) => return None,
     }
     Some(text)
 }

@@ -72,6 +72,41 @@ pub struct AutoTaskDeleteReport {
     pub deleted_at: String,
 }
 
+/// Success-receipt contracts over the same completed delete operation.
+#[derive(Debug, Clone, Copy)]
+pub enum AutoTaskDeleteProfile {
+    /// Complete CLI/tool report, omitting absent consumer and reason fields.
+    Tool,
+    /// Bounded dashboard receipt, including a reason even when it is null.
+    Http,
+}
+
+/// Project a completed delete without changing lifecycle or audit behavior.
+/// The HTTP profile never serializes the report's forensic fields.
+pub fn project_auto_task_delete_receipt(
+    report: &AutoTaskDeleteReport,
+    profile: AutoTaskDeleteProfile,
+) -> Result<Value, OrbitError> {
+    match profile {
+        AutoTaskDeleteProfile::Tool => serde_json::to_value(report)
+            .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}"))),
+        AutoTaskDeleteProfile::Http => {
+            let mut message = format!("Deleted auto-task {}.", report.name);
+            if report.opted_out {
+                message.push_str(" The shipped default will not be reseeded.");
+            }
+            Ok(json!({
+                "name": report.name,
+                "deleted": true,
+                "opted_out": report.opted_out,
+                "open_tasks": report.open_tasks,
+                "reason": report.reason,
+                "message": message,
+            }))
+        }
+    }
+}
+
 impl OrbitRuntime {
     /// Delete a definition, its scheduler cursor and any delivery consumer
     /// state, and write an audit record.

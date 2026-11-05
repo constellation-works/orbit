@@ -33,7 +33,7 @@ pub const CREW: NounSpec<CrewVerb> = NounSpec {
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+    "Agent family or full model ID for provenance.",
 )];
 
 const LADDER: OperationSpec<CrewVerb> = OperationSpec {

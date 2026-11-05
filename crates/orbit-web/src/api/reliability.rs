@@ -267,6 +267,7 @@ fn accumulate(totals: &mut OutcomeCounts, counts: &OutcomeCounts) {
     totals.succeeded += counts.succeeded;
     totals.failed += counts.failed;
     totals.cascaded += counts.cascaded;
+    totals.upgrade_paused += counts.upgrade_paused;
     totals.cancelled += counts.cancelled;
     totals.skipped += counts.skipped;
     totals.held += counts.held;

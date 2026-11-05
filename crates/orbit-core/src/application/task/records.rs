@@ -97,6 +97,19 @@ impl TaskRecordService<'_> {
                 "injected task record update failure".to_string(),
             ));
         }
+        // A work-starting write the claim footprint guard will refuse must
+        // refuse before any companion artifact, document or history write:
+        // the store's in-lock guard stays authoritative, and this pre-flight
+        // keeps its deterministic refusal from leaving field edits behind.
+        if params.has_history_changes() {
+            self.history.check_ordinary_work_start_footprint(
+                id,
+                params.status,
+                params.status_event.as_deref(),
+                params.context_files.as_deref(),
+            )?;
+        }
+
         // Let the artifact store finish its rejection checks before publishing
         // document or status/history edits. Keeping those checks in the store
         // also covers reserved evidence paths and malformed coverage payloads.

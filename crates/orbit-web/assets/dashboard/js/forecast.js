@@ -1287,12 +1287,18 @@ function calibrationMeasure(label, hits) {
 
 function settlementLine(calibration) {
   const level = calibration.forecast_level || {};
-  const drain = level.time_to_drain_hours || {};
   const parts = [];
-  if (drain.n) {
-    parts.push(`Whole-backlog totals: ${drain.n} scored, ${fmtShare(drain.under_p50)} under p50 · ${fmtShare(drain.under_p90)} under p90 on time to drain`);
-  } else {
-    parts.push("Whole-backlog totals (drain time, cost, tokens) settle under each model's rule, up to 90 days after the forecast — none scored yet");
+  for (const [label, scores] of [
+    ["Adjusted", level.adjusted || level],
+    ["Baseline", level.pre_regression_baseline],
+  ]) {
+    if (!scores) continue;
+    const drain = scores.time_to_drain_hours || {};
+    if (drain.n) {
+      parts.push(`${label} whole-backlog totals: ${drain.n} scored, ${fmtShare(drain.under_p50)} under p50 · ${fmtShare(drain.under_p90)} under p90 on time to drain`);
+    } else {
+      parts.push(`${label} whole-backlog drain time: none scored yet`);
+    }
   }
   if (num(level.settled)) parts.push(`${level.settled} settled${num(level.not_drained) ? `, ${level.not_drained} not drained` : ""}`);
   const current = calibration.model_version;
@@ -1323,8 +1329,44 @@ function calibrationCard() {
       calibrationMeasure("Task cost", taskLevel.usd),
       calibrationMeasure("Task tokens", taskLevel.tokens),
     ]),
+    populationLine(calibration),
+    complexityHits(calibration),
+    el("h3", { class: "fc-sub-title", text: "Adjusted whole-backlog totals" }),
+    forecastCalibrationMeasures("Adjusted", calibration.forecast_level?.adjusted || calibration.forecast_level),
+    el("h3", { class: "fc-sub-title", text: "Pre-regression baseline" }),
+    el("p", { class: "fc-line", text: "Baseline predictions exclude unsupported regression work. They are scored separately against the same observed totals, including regression follow-ups. Missing adjusted predictions remain unscored. Whole-backlog scores settle under each model's rule, up to 90 days after the forecast." }),
+    forecastCalibrationMeasures("Baseline", calibration.forecast_level?.pre_regression_baseline),
     settlementLine(calibration),
   ], "fc-calibration");
+}
+
+function forecastCalibrationMeasures(label, level) {
+  return el("div", { class: "fc-cals" }, [
+    calibrationMeasure(`${label} drain time`, level?.time_to_drain_hours),
+    calibrationMeasure(`${label} cost`, level?.usd),
+    calibrationMeasure(`${label} tokens`, level?.tokens),
+  ]);
+}
+
+const TASK_POPULATIONS = {
+  first_not_started_forecast_per_task: "Each task counts once, from its first stored forecast taken before work started.",
+};
+
+function populationLine(calibration) {
+  const text = TASK_POPULATIONS[calibration.task_population];
+  return text ? el("p", { class: "fc-line", text }) : null;
+}
+
+// Task hit rates per complexity: under p50 · under p90 (scored).
+function complexityHits(calibration) {
+  const rows = (calibration.task_level_by_complexity || []).filter((row) => row.hours?.n || row.usd?.n || row.tokens?.n);
+  if (!rows.length) return null;
+  return table("Task calibration by complexity", [["Complexity"], ["Task hours", true], ["Task cost", true], ["Task tokens", true]], rows.map((row) => el("tr", {}, [
+    el("th", { scope: "row", text: row.complexity }),
+    el("td", { class: "num", text: versionHits(row.hours) }),
+    el("td", { class: "num", text: versionHits(row.usd) }),
+    el("td", { class: "num", text: versionHits(row.tokens) }),
+  ])), "By complexity, under p50 · under p90 (scored).");
 }
 
 // ---- residuals -------------------------------------------------------------

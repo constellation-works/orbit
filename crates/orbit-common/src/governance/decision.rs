@@ -106,7 +106,7 @@ const GATES: &[EnumValue] = &[
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+    "Agent family or full model ID for provenance.",
 )];
 
 const LIST_FILTER: &[ParamSpec] = &[
@@ -217,7 +217,7 @@ const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::Raise,
     cli_path: &["raise"],
     tool_name: "orbit.decision.raise",
-    tool_description: "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. The operator answers, or a current corpus rule the operator marked auto answers an exact topic match and records that answer as precedent: either way the answer is in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+    tool_description: "Raise a multiple-choice request on a human-crew task when an operator decision is needed to proceed. Answering and limits: installed Orbit skill `references/tool-surface.md#raising-a-decision`.",
     cli_about: "Raise a multiple-choice decision request on a human-crew task",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

@@ -282,26 +282,24 @@ function profileSection() {
 }
 
 function classPicker(classes, current) {
-  return el("div", { class: "mx-seg rp-classes", role: "group", "aria-label": "Work class" }, classes.map((entry) => {
-    const on = entry.key === current;
-    const button = el("button", {
-      class: on ? "mx-seg-btn on" : "mx-seg-btn",
-      type: "button",
+  const select = el("select", { class: "mx-select rp-class-select", "aria-label": "Work class" }, classes.map((entry) => {
+    const option = el("option", {
       text: entry.label,
-      "aria-pressed": on ? "true" : "false",
       title: entry.available ? (entry.key.startsWith(TEMPLATE_PREFIX) ? `Auto-task template ${entry.label}` : `${entry.label} deliveries`) : `No ${entry.label.toLowerCase()} profiles on this host yet`,
     });
-    button.dataset.workClass = entry.key;
-    button.disabled = !entry.available;
-    button.addEventListener("click", () => {
-      if (view.workClass === entry.key) return;
-      view.workClass = entry.key;
-      view.hover = null;
-      rerender();
-      focusIn(`.rp-classes [data-work-class="${CSS.escape(entry.key)}"]`);
-    });
-    return button;
+    option.value = entry.key;
+    option.selected = entry.key === current;
+    option.disabled = !entry.available;
+    return option;
   }));
+  select.addEventListener("change", () => {
+    if (view.workClass === select.value) return;
+    view.workClass = select.value;
+    view.hover = null;
+    rerender();
+    focusIn(".rp-class-select");
+  });
+  return el("label", { class: "rp-class" }, [el("span", { class: "rp-class-label", text: "Work class" }), select]);
 }
 
 /// Deliveries per profile, counted rather than dated: a month without

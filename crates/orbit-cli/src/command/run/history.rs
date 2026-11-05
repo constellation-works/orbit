@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{
-    JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step,
+    JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step, run_upgrade_paused,
 };
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, RunRootCause};
 use serde_json::json;
@@ -27,14 +27,14 @@ fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}. --failures uses {\"failures\":[{\"task_id\",\"run_id\",\"step\",\"crew\",\"cause\",\"show\"}]} instead.\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nA gate or auto run that failed only because a child failed records the leaf it echoes in `.root_cause` ({leaf_run_id, task_id, step, code}); it is null for a run that failed on its own. --incidents folds every listed run that echoes the same leaf into one row, the leaf's own when it is listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them. --failures folds the same runs into one row per task and root cause: RUN_ID, STEP and CREW are the root-cause run's, CAUSE is that run's error on one line with no 60-character cap, and SHOW is `orbit run show` for that run. --failures and --incidents cannot be combined.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "ROLE says how a run was submitted: top-level directly, child by a parent run.\nJSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging.md`.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
     #[arg(short = 'j', long = "job")]
     pub job_id: Option<String>,
 
-    /// Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
+    /// Filter to runs whose input names this task
     #[arg(long = "task")]
     pub task_id: Option<String>,
 
@@ -50,20 +50,15 @@ pub struct RunHistoryArgs {
     #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
 
-    /// Report stored run records as-is: skip stale-run reconciliation, which
-    /// finalizes an orphaned pending or running run as interrupted, releases
-    /// its task reservations, and settles with their owner the pull claims an
-    /// ended drain or leaf left
+    /// Report stored run records as-is, skipping stale-run reconciliation
     #[arg(long)]
     pub no_reconcile: bool,
 
-    /// Show one row per incident: fold runs that failed only because a child
-    /// failed into the run that failed on its own
+    /// One row per incident, folding runs that failed only because a child did
     #[arg(long, conflicts_with = "failures")]
     pub incidents: bool,
 
-    /// One row per task and root cause: the root-cause run, its step and crew,
-    /// the cause's first line in full, and `orbit run show` for that run
+    /// One row per task and root cause, with that run's step, crew and cause
     #[arg(long, conflicts_with = "incidents")]
     pub failures: bool,
 }
@@ -109,9 +104,15 @@ pub(crate) fn run_history_payload(
         return failure_history_payload(runtime, read, &runs, &states);
     }
 
-    // [ORB-15202] Each incident keeps one row: its leaf's when listed.
+    // [ORB-15202] Each incident keeps one row: its leaf's when listed. An
+    // upgrade's designed pause is no incident; it is only counted.
+    let mut upgrade_paused = 0;
     let rows = if incidents {
-        fold_run_incidents(&runs, &states)
+        let (paused, incidents): (Vec<_>, Vec<_>) = fold_run_incidents(&runs, &states)
+            .into_iter()
+            .partition(|incident| incident.upgrade_paused);
+        upgrade_paused = paused.len();
+        incidents
             .into_iter()
             .map(|incident| (incident.index, Some(incident.cascaded_run_ids)))
             .collect::<Vec<_>>()
@@ -125,10 +126,16 @@ pub(crate) fn run_history_payload(
             if let Some(cascaded) = cascaded {
                 value["cascaded_run_ids"] = json!(cascaded);
             }
+            if run_upgrade_paused(&runs[*index], states[*index]) {
+                value["upgrade_paused"] = json!(true);
+            }
             value
         })
         .collect::<Vec<_>>();
-    let doc = json!({ "runs": values });
+    let mut doc = json!({ "runs": values });
+    if upgrade_paused > 0 {
+        doc["upgrade_paused"] = json!(upgrade_paused);
+    }
 
     let errors = rows
         .iter()
@@ -211,7 +218,15 @@ pub(crate) fn run_history_payload(
     if !waiting.is_empty() {
         blocks.push(Block::text(waiting.join("\n")));
     }
+    if upgrade_paused > 0 {
+        blocks.push(Block::text(upgrade_paused_note(upgrade_paused)));
+    }
     Ok(Payload::blocks(doc, blocks).with_records(values).into())
+}
+
+/// The line that discloses upgrade pauses left out of a failure listing.
+fn upgrade_paused_note(count: usize) -> String {
+    format!("Upgrade-paused, not failures: {count}")
 }
 
 /// One `--failures` row: a task and the root-cause run behind it.
@@ -226,7 +241,7 @@ struct FailureRow {
 /// Fold the listing into one row per task and root cause.
 ///
 /// Echoes of the same leaf collapse, including a held or interrupted parent.
-/// The cause is the root-cause run's own error, first line only, with no
+/// An upgrade's designed pause is left out and only counted. The cause is the root-cause run's own error, first line only, with no
 /// character cap. `--limit` still bounds the runs scanned.
 fn failure_history_payload(
     runtime: &OrbitRuntime,
@@ -242,6 +257,11 @@ fn failure_history_payload(
     let mut loaded: HashMap<String, FailureFacts> = HashMap::new();
     let mut seen = HashSet::new();
     let mut rows = Vec::new();
+    let paused_leaves = fold_run_incidents(runs, states)
+        .into_iter()
+        .filter(|incident| incident.upgrade_paused)
+        .map(|incident| incident.leaf_run_id)
+        .collect::<HashSet<_>>();
     for (index, run) in runs.iter().enumerate() {
         if !is_reported_failure(run.state) {
             continue;
@@ -254,6 +274,9 @@ fn failure_history_payload(
         let root_id = recorded
             .map(|cause| cause.leaf_run_id.as_str())
             .unwrap_or(run.run_id.as_str());
+        if paused_leaves.contains(root_id) {
+            continue;
+        }
         let (mut task_ids, mut step, crew, cause) =
             root_facts(runtime, read, runs, &listed, &mut loaded, root_id);
         if step.is_none() {
@@ -295,7 +318,7 @@ fn failure_history_payload(
             })
         })
         .collect::<Vec<_>>();
-    let doc = json!({ "failures": values });
+    let mut doc = json!({ "failures": values });
 
     use crate::output::table::{Column, Table};
     let columns = vec![
@@ -320,7 +343,15 @@ fn failure_history_payload(
             Cell::new(format!("orbit run show {}", row.run_id)),
         ]);
     }
-    Ok(Payload::enveloped_list(doc, values, table).into())
+    if paused_leaves.is_empty() {
+        return Ok(Payload::enveloped_list(doc, values, table).into());
+    }
+    doc["upgrade_paused"] = json!(paused_leaves.len());
+    let blocks = vec![
+        Block::table(table),
+        Block::text(upgrade_paused_note(paused_leaves.len())),
+    ];
+    Ok(Payload::blocks(doc, blocks).with_records(values).into())
 }
 
 fn is_reported_failure(state: JobRunState) -> bool {

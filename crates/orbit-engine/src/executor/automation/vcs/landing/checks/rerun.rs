@@ -1,4 +1,6 @@
 //! Shared first-failure planner; never reduce mixed jobs to a retry permission.
+
+use super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
 use super::super::super::{operations, pr::PullRequestStatus};
 use super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::{
@@ -122,7 +124,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     let runs = jobs
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
-        .filter_map(|job| job["run_id"].as_u64())
+        .filter_map(|job| job.run_id.number())
         .collect::<BTreeSet<_>>();
     let mut conclusion_set = false;
     let mut roots = BTreeMap::<u64, Vec<CiRerunRoot>>::new();
@@ -143,11 +145,10 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         conclusion_set = true;
         roots.insert(run_id, pre_roots);
     } else {
-        for job in jobs.iter().filter(|job| {
-            job["run_id"]
-                .as_u64()
-                .is_some_and(|run| runs.contains(&run))
-        }) {
+        for job in jobs
+            .iter()
+            .filter(|job| job.run_id.number().is_some_and(|run| runs.contains(&run)))
+        {
             if !unsuccessful(job) {
                 continue;
             }
@@ -156,7 +157,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                 // transient root, and a missing log must not hide that failure.
                 continue;
             }
-            let (Some(run), Some(id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+            let (Some(run), Some(id)) = (job.run_id.number(), job.job_id.number()) else {
                 return Ok(CiRerunStep::Wait(
                     "CI retry job identity is incomplete".into(),
                 ));
@@ -298,12 +299,12 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             for root in roots.iter().filter(|root| root.classification == "flaky") {
                 if let Some(job) = jobs
                     .iter()
-                    .find(|job| job["job_id"].as_u64() == Some(root.job_id))
+                    .find(|job| job.job_id.number() == Some(root.job_id))
                 {
                     super::suspect::record_base_suspect(
                         host,
                         tasks,
-                        &json!({"base":tip,"head":head,"check":root.check,"signature":root.signature,"run_id":run_id,"job_id":root.job_id,"run_attempt":job["run_attempt"],"pr_number":pr,"event":job["event"],"started_at":job["started_at"],"completed_at":job["completed_at"],"reason":"qualifying base pass; waiting for complete eligible-set authorization or a manual unchanged-head repeat"}),
+                        &json!({"base":tip,"head":head,"check":root.check,"signature":root.signature,"run_id":run_id,"job_id":root.job_id,"run_attempt":job.run_attempt,"pr_number":pr,"event":job.event,"started_at":job.started_at,"completed_at":job.completed_at,"reason":"qualifying base pass; waiting for complete eligible-set authorization or a manual unchanged-head repeat"}),
                         handoff,
                     )?;
                 }
@@ -407,7 +408,7 @@ const SHARED_RETRY_BUDGET_SPENT: &str = "the shared unchanged-head CI retry budg
 fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    jobs: &[serde_json::Value],
+    jobs: &[CiCommitJobEvidence],
     runs: &BTreeSet<u64>,
     deadline_ms: u64,
     diagnostic: &mut CiRerunDiagnostic,
@@ -422,14 +423,14 @@ fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
     let mut failures = Vec::new();
     for job in jobs
         .iter()
-        .filter(|job| job["run_id"].as_u64() == Some(run_id))
+        .filter(|job| job.run_id.number() == Some(run_id))
     {
         if !unsuccessful(job) {
             continue;
         }
         if super::jobs::concluded_stopped(job).is_some() {
             stopped.push(job);
-        } else if job["conclusion"].as_str() == Some("failure") {
+        } else if job.conclusion.value() == Some(&CiJobConclusion::Failure) {
             failures.push(job);
         } else {
             return Ok(None);
@@ -452,7 +453,7 @@ fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
     let mut needs_cancelled = false;
     let mut needs_timed_out = false;
     for job in &failures {
-        let (Some(run), Some(id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run), Some(id)) = (job.run_id.number(), job.job_id.number()) else {
             return Ok(None);
         };
         diagnostic.stage = CiRerunStage::Log;
@@ -484,10 +485,10 @@ fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
     }
     let have_cancelled = stopped
         .iter()
-        .any(|job| job["conclusion"].as_str() == Some("cancelled"));
+        .any(|job| job.conclusion.value() == Some(&CiJobConclusion::Cancelled));
     let have_timed_out = stopped
         .iter()
-        .any(|job| job["conclusion"].as_str() == Some("timed_out"));
+        .any(|job| job.conclusion.value() == Some(&CiJobConclusion::TimedOut));
     if (needs_cancelled && !have_cancelled) || (needs_timed_out && !have_timed_out) {
         return Ok(None);
     }
@@ -497,10 +498,10 @@ fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
     Ok(Some((run_id, roots)))
 }
 
-fn conclusion_root(job: &serde_json::Value) -> Option<CiRerunRoot> {
+fn conclusion_root(job: &CiCommitJobEvidence) -> Option<CiRerunRoot> {
     let conclusion = super::jobs::concluded_stopped(job)?;
     Some(CiRerunRoot {
-        job_id: job["job_id"].as_u64()?,
+        job_id: job.job_id.number()?,
         check: job_label(job),
         classification: CheckFailureClass::Transient.as_str().into(),
         signature: super::jobs::conclusion_signature(conclusion),

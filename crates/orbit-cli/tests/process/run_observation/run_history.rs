@@ -7,6 +7,35 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_types::workflow::{ChildDispatch, DrainWorkerLimit, JobRunTrigger, PipelineState};
 use serde_json::json;
 
+#[test]
+fn malformed_duration_since_errors_show_accepted_format_without_mutating_runs() {
+    if !isolated_run_observation(
+        "run_observation::run_history::malformed_duration_since_errors_show_accepted_format_without_mutating_runs",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let before = fixture.snapshot();
+    for since in ["bogus", "12", ""] {
+        let args = [
+            "run",
+            "history",
+            "--no-reconcile",
+            "--since",
+            since,
+            "--json",
+        ];
+        let output = fixture.orbit().args(args).output().unwrap();
+        assert!(
+            !output.status.success(),
+            "{args:?} accepted malformed input"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("30m"), "{args:?}: {stderr}");
+        assert_eq!(fixture.snapshot(), before, "{args:?} must not mutate runs");
+    }
+}
+
 /// NDJSON exposes ordered history rows, including folded rows, without the
 /// JSON envelope or an empty-list sentinel.
 #[test]
@@ -591,6 +620,121 @@ fn history_error_column_names_failed_runs_at_the_end_capped() {
     assert!(successes.status.success(), "{successes:?}");
     let text = String::from_utf8(successes.stdout).unwrap();
     assert!(!text.lines().next().unwrap().contains("ERROR"), "{text}");
+}
+
+/// An upgrade's designed pause, and the parent echoing it, leave `--failures`
+/// and `--incidents` for their own count and keep their `interrupted` state in
+/// the plain listing. A lost worker in the same listing stays a failure.
+#[test]
+fn history_failure_views_count_upgrade_pauses_apart_from_real_interruptions() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_failure_views_count_upgrade_pauses_apart_from_real_interruptions",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::RunRootCause;
+
+    let fixture = Fixture::terminal();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let at = Utc::now().to_rfc3339();
+    const PAUSED: &str = "jrun-paused-leaf";
+    const LOST: &str = "jrun-lost-leaf";
+    for (id, state) in [
+        (PAUSED, "interrupted"),
+        ("jrun-paused-echo", "failed"),
+        (LOST, "interrupted"),
+    ] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, created_at, input_json)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, ?3, ?4, ?4, ?4, ?4, '{}')",
+            params![id, workspace_id, state, at],
+        )
+        .unwrap();
+    }
+    for (id, code) in [(PAUSED, "upgrade_quiesce"), (LOST, "process_not_found")] {
+        db.execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id,
+                state, started_at, finished_at, error_code, error_message)
+             VALUES (?1, ?2, 0, 'job', 'task_pr_pipeline', 'interrupted', ?3, ?3, ?4, 'stopped')",
+            params![workspace_id, id, at, code],
+        )
+        .unwrap();
+    }
+    let state = PipelineState {
+        root_cause: Some(RunRootCause {
+            leaf_run_id: PAUSED.into(),
+            task_id: None,
+            step: None,
+            code: Some("upgrade_quiesce".into()),
+        }),
+        ..PipelineState::new(
+            "jrun-paused-echo".into(),
+            "task_pr_pipeline".into(),
+            json!({}),
+        )
+    };
+    db.execute(
+        "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+         VALUES (?1, ?2, ?3)",
+        params![
+            workspace_id,
+            "jrun-paused-echo",
+            serde_json::to_string(&state).unwrap()
+        ],
+    )
+    .unwrap();
+
+    // The terminal fixture's own failed run stays listed beside these.
+    let listed = |rows: &serde_json::Value| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["run_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let failures = fixture.json(&["run", "history", "--no-reconcile", "--failures", "--json"]);
+    let rows = listed(&failures["failures"]);
+    assert!(rows.iter().any(|id| id == LOST), "{failures}");
+    assert!(!rows.iter().any(|id| id == PAUSED), "{failures}");
+    assert_eq!(failures["upgrade_paused"], 1, "{failures}");
+
+    let incidents = fixture.json(&["run", "history", "--no-reconcile", "--incidents", "--json"]);
+    let rows = listed(&incidents["runs"]);
+    assert!(rows.iter().any(|id| id == LOST), "{incidents}");
+    assert!(
+        !rows
+            .iter()
+            .any(|id| id == PAUSED || id == "jrun-paused-echo"),
+        "{incidents}"
+    );
+    assert_eq!(incidents["upgrade_paused"], 1, "{incidents}");
+
+    let plain = fixture.json(&["run", "history", "--no-reconcile", "--json"]);
+    let row = |id: &str| {
+        plain["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["run_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row(PAUSED)["state"], "interrupted", "{plain}");
+    assert_eq!(row(PAUSED)["upgrade_paused"], true, "{plain}");
+    assert_eq!(row("jrun-paused-echo")["upgrade_paused"], true, "{plain}");
+    assert!(row(LOST).get("upgrade_paused").is_none(), "{plain}");
+
+    let table = fixture
+        .orbit()
+        .args(["run", "history", "--no-reconcile", "--failures"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&table.stdout).contains("Upgrade-paused, not failures: 1"),
+        "{table:?}"
+    );
 }
 
 /// Three echoing runs of one task are one `--failures` row, named by the

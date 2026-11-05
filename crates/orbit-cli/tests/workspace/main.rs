@@ -51,6 +51,7 @@ mod init_interactive_stdin;
 mod init_linux_sandbox;
 mod init_minted_prefix;
 mod init_workspace_seed;
+mod isolated_home;
 mod layout_version;
 mod replica_routines;
 mod routine_root;

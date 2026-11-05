@@ -5,6 +5,8 @@ mod artifact_export;
 mod automation_port;
 mod backlog_forecast;
 pub use backlog_forecast::BacklogForecastHistory;
+#[cfg(feature = "test-support")]
+pub use backlog_forecast::COMPUTE_BUDGET_ENV;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) mod batch_prepare;
@@ -59,6 +61,8 @@ mod resolves;
 mod retained_candidate;
 mod schedule;
 pub(crate) use schedule::schedule_hold_in;
+mod terminal_dates;
+pub use terminal_dates::{DatedTerminalTask, TerminalTaskDates};
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod ci_sweep_filing;
@@ -137,7 +141,7 @@ pub(crate) use finding_verification::{
     needs_verification, next_tier,
 };
 use job_port::CrewPools;
-pub(in crate::application) use job_port::TaskJobPort;
+pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
 pub use listing::{

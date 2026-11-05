@@ -57,6 +57,8 @@ const WIDE_TASK_PATHS = 5;
 const TASKS_SHOWN = 3;
 // Paths each signal contributes to "One signal" before Show all.
 const SINGLES_SHOWN = 3;
+// Initial entries in each Coupling list, after release grouping or lock sorting.
+const COUPLING_SHOWN = 5;
 // Unranked known paths a search offers to open.
 const OTHER_PATHS_SHOWN = 8;
 // Partners the file view's "Changes with" lists.
@@ -91,9 +93,9 @@ let codebaseQuery = { ...DEFAULT_QUERY };
 let route = { view: "hotspots", path: null };
 // What the reader picked on the page: every ranked path or the top of each
 // signal, the path search, whether release files are grouped, the lock sort
-// (`wait` or `rate`), whether every regressed task is listed, and which path
-// was last copied or failed to copy.
-let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allTasks: false, copied: null, copyFailed: null };
+// (`wait` or `rate`), whether each Coupling list or every regressed task is
+// expanded, and which path was last copied or failed to copy.
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
 let paintedView = null;
@@ -114,7 +116,7 @@ onWorkspaceChange(() => {
   lastData = null;
   lastPayloadKey = null;
   resetRelated();
-  view = { ...view, search: "", showAll: false };
+  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
 
@@ -1184,6 +1186,24 @@ async function fetchPathDetail(path, key) {
 
 // ---- coupling & locks -------------------------------------------------------
 
+function couplingListFooter(total, state, listId) {
+  const footer = el("div", { class: "codebase-list-footer" });
+  if (total > COUPLING_SHOWN) {
+    const expanded = view[state];
+    const toggle = actionButton(expanded ? "Show fewer" : `Show all ${count(total)}`, () => {
+      view = { ...view, [state]: !view[state] };
+      paint();
+    }, "small codebase-list-toggle");
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-controls", listId);
+    footer.appendChild(el("div", { class: "codebase-list-disclosure" }, [
+      el("span", { class: "codebase-extra", text: `Showing ${count(expanded ? total : COUPLING_SHOWN)} of ${count(total)}` }),
+      toggle,
+    ]));
+  }
+  return footer;
+}
+
 function pairRow(pair) {
   const [left, right] = pair.paths || [];
   const item = el("li", { class: "codebase-pair-row" }, [
@@ -1253,14 +1273,19 @@ function pairsNode(model) {
     return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support });
   }
   const grouped = view.groupRelease && release.length > 0;
-  const list = el("ul", { class: "codebase-pair-list" });
+  const list = el("ul", { class: "codebase-pair-list", id: "codebase-pair-list" });
+  const entries = pairs.filter((pair) => !(grouped && releasePair(pair.paths)));
+  const total = entries.length + (grouped ? 1 : 0);
   if (grouped) list.appendChild(releaseRow(release));
-  for (const pair of pairs) if (!(grouped && releasePair(pair.paths))) list.appendChild(pairRow(pair));
+  const shown = view.allPairs ? entries : entries.slice(0, COUPLING_SHOWN - (grouped ? 1 : 0));
+  for (const pair of shown) list.appendChild(pairRow(pair));
   box.appendChild(list);
+  const footer = couplingListFooter(total, "allPairs", list.id);
   const parts = [`${plural(below, "pair")} below ${count(data.min_support)} shared reservations ${below === 1 ? "is" : "are"} hidden.`];
   if (largeNote) parts.push(largeNote);
-  box.appendChild(note(parts.join(" "), "codebase-box-note"));
-  return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support, grouped: view.groupRelease });
+  footer.appendChild(note(parts.join(" ")));
+  box.appendChild(footer);
+  return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support, grouped: view.groupRelease, allPairs: view.allPairs });
 }
 
 function lockRow(row, byWait, maxTotal, recorded) {
@@ -1305,6 +1330,7 @@ function locksNode(model) {
     head.appendChild(sorts);
   }
   const box = el("section", { class: "codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
+  const footer = couplingListFooter(rows.length, "allLocks", "codebase-lock-list");
   if (lockIsQuiet(data)) {
     box.appendChild(el("div", { class: "codebase-empty-state good" }, [
       el("p", { class: "codebase-empty-title", text: "No lock was refused in this window." }),
@@ -1315,16 +1341,17 @@ function locksNode(model) {
     box.appendChild(el("p", { class: "codebase-empty", text: below ? `No path reaches minimum support ${count(data.min_support)}; ${count(below)} fall below it.` : "No path has lock data in this window." }));
   } else {
     const maxTotal = Math.max(0, ...rows.map((row) => Number(row.wait?.total_ms) || 0));
-    const list = el("ul", { class: "codebase-lock-list" });
-    for (const row of rows) list.appendChild(lockRow(row, byWait, maxTotal, recorded));
+    const list = el("ul", { class: "codebase-lock-list", id: "codebase-lock-list" });
+    for (const row of view.allLocks ? rows : rows.slice(0, COUPLING_SHOWN)) list.appendChild(lockRow(row, byWait, maxTotal, recorded));
     box.appendChild(list);
   }
   const foot = [];
   if (Number(lock.below_support) > 0 && rows.length) foot.push(`${plural(lock.below_support, "path")} below minimum support ${count(data.min_support)} hidden.`);
   if (!recorded) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
   else if (rowsByWait(data).length) foot.push("A wait runs from a task's first denial to its admission or its leaving the backlog; its retries add no wait. A wait still in progress is measured to now.");
-  if (foot.length) box.appendChild(note(foot.join(" "), "codebase-box-note"));
-  return keyed(box, "locks", { lock, min: data.min_support, byWait });
+  if (foot.length) footer.appendChild(note(foot.join(" ")));
+  box.appendChild(footer);
+  return keyed(box, "locks", { lock, min: data.min_support, byWait, allLocks: view.allLocks });
 }
 
 function couplingNodes(model) {

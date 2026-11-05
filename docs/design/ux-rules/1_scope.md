@@ -1,11 +1,11 @@
 ---
 title: "Scope: UX rules"
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-01
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
-stage: designing
-next: "Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase"
+stage: building
+next: "Apply ORB-19976's operator handoff so UX reviews consume routine results"
 feature: ux-rules
 doc_role: scope
 type: design
@@ -15,13 +15,22 @@ tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit, visual-review]
 
 # Scope: UX rules
 
-Status: phases 1-3 built (runner, CLI and UI rule sets, `file_rule_findings`, the `rule_fingerprint` field, `ux_rules_pipeline` and the seeded daily `ux-rules` routine, disabled until an operator grants the runner script and enables it). The two auto-tasks' prompts still carry their own measurement sections; moving them onto the rules is not done. Open question 1 is answered: a network-`none` script step cannot reach host loopback, so a live-dashboard UI surface waits for script steps' network phase; CLI and fixture-mode UI runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
+Status: phases 1-3 delivered the CLI runner in [ORB-19974], UI rules in
+[ORB-19975], and the filer and disabled routine in [ORB-19976]. [ORB-20565]
+subsequently shipped the script adapter and manifest template. Installation
+requires an operator grant; the review-prompt handoff remains pending. The current `ux-review-ui` and
+`ux-review-cli` definitions still carry their measurement sections. The scope
+therefore remains building. Open question 1 is answered by [ORB-19985]: a
+network-`none` script step cannot reach host loopback, so live-dashboard UI
+measurement waits for script steps' network phase; CLI and fixture-mode UI
+runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
 on a list of rules ... break it down into rules, and automate the validation", and the same
 for the CLI. This is the first slice of the shared visual infrastructure: the view manifest
 and capture driver it introduces are the ones [visual review](../visual-review/1_scope.md)
 reuses, and its UI rules become visual review's deterministic checks.
 
-Bearing: two auto-tasks in `ws_orbit` review the user-facing surfaces by hand, each every
+Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
+[ORB-19682]. The two auto-tasks in `ws_orbit` review the user-facing surfaces by hand, each every
 4,320 minutes (three days), at `hard` complexity, tagged `no-diff-expected`:
 
 - **`ux-review-ui`** walks the dashboard and the website at 1440px and 375px in every theme
@@ -161,9 +170,20 @@ Rules that need the live data shape (the backlog-forecast unavailable reasons) a
 against API-shaped fixtures rendered in the browser, like the existing dashboard browser
 tests, so they do not depend on what the live store happens to hold.
 
+Delivered follow-ups extend this seed set:
+
+| Capability | Current source | Delivery |
+|------------|----------------|----------|
+| Text occlusion, overflow, wrapping, padding, leading and typography measurements | [ui/](../../../scripts/ux-rules/ui/), [README rule table](../../../scripts/ux-rules/README.md) | [ORB-20528] added text rules; [ORB-20536] added narrow-prose detection and experiment-detail coverage |
+| Durable screenshots on findings after script scratch cleanup | [step.mjs](../../../scripts/ux-rules/step.mjs), [rule_findings.rs](../../../crates/orbit-core/src/application/sweep_filing/rule_findings.rs) | [ORB-20867] connected bounded evidence transport to the filer |
+| Producer-declared defect groups and compact, lossless reporting | [lib/filing-report.mjs](../../../scripts/ux-rules/lib/filing-report.mjs), [rule_groups.rs](../../../crates/orbit-core/src/application/sweep_filing/rule_groups.rs) | [ORB-21111] grouped proven shared defects; [ORB-21236] reconciled this scope's filing contract |
+| Content-based short-help comparison | [cli/short-help-shorter.mjs](../../../scripts/ux-rules/cli/short-help-shorter.mjs) | [ORB-21634] stopped treating layout padding as extra help content |
+| Notices view and dashboard route coverage | [views.toml](../../../crates/orbit-web/visual/views.toml), [dashboard_assets.rs](../../../crates/orbit-web/tests/http_api/dashboard_assets.rs) | [ORB-21637] added Notices fixtures and a route-coverage guard |
+
 ### The runner
 
-The runner, proposed at **scripts/ux-rules/run.mjs**, runs with the kit's `node` and pinned Playwright:
+The runner, delivered at **scripts/ux-rules/run.mjs** by [ORB-19974] and
+extended for UI by [ORB-19975], runs with the kit's `node` and pinned Playwright:
 
 ```sh
 . "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
@@ -213,7 +233,7 @@ id and argv for CLI), never a measurement or the failing element's selector, so 
 aggregate target keeps one fingerprint while its numbers or its first failing element change. The
 selector stays in `measurements`.
 
-The script adapter exports evidence to declared `ORBIT_SCRIPT_OUT` outputs before removing
+The script adapter from [ORB-20565], extended by [ORB-20867], exports evidence to declared `ORBIT_SCRIPT_OUT` outputs before removing
 surface scratch. Content SHA-256 names deduplicate equal captures, with a finite bound of
 64 unique files × 1 MiB. Evidence paths in the merged report name those output members;
 the standalone runner report above still uses paths relative to its output directory.
@@ -223,7 +243,8 @@ with `files.outputs: {max_files: 64, max_file_bytes: 1048576}`. Read/network gra
 
 ### Producer-declared defect groups
 
-A result may declare `defect: {version: 1, key: "stable-cause"}`. The generic filer treats
+[ORB-21111] delivered producer-declared groups: a result may declare
+`defect: {version: 1, key: "stable-cause"}`. The generic filer treats
 surface, rule, version and key as an opaque group identity. Each result remains a separate
 member observation with its original target, fingerprint, status, measurements, severity
 and screenshot references. UI member results keep the former aggregate fingerprint in
@@ -303,11 +324,15 @@ target: job:ux_rules_pipeline
 policy: {timeout_minutes: 60, overlap: forbid}
 ```
 
-`ux_rules_pipeline` has two steps: a [script step](../script-steps/1_scope.md)
-(`script:ux_rules_runner`, a workspace script an operator creates and grants) that runs the
-runner for each configured surface, and `file_rule_findings` on its output. It uses script
+`ux_rules_pipeline`, delivered by [ORB-19976] and extended by [ORB-21111], has
+three steps: `prepare_rule_findings` reads tracked owners, a
+[script step](../script-steps/1_scope.md) (`script:ux_rules_runner`) runs the
+runner for each configured surface, and `file_rule_findings` files its output.
+[ORB-20565] supplied the adapter and manifest template; an operator copies the
+template, substitutes host paths and grants the script. It uses script
 steps' Linux execution phase, which has landed; that phase has no network, so a live
-dashboard on host loopback is out of reach until a network phase exists (open question 1).
+dashboard on host loopback is out of reach until a network phase exists, as
+[ORB-19985] established for open question 1.
 Phase 1 below also lets the two auto-tasks run the runner themselves.
 
 ### What the auto-tasks keep
@@ -370,30 +395,37 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 - **Script steps have no network phase.** Their Linux execution phase has landed, so the
   routine can run, but only on the CLI surface and fixture-mode UI targets. Phase 1 gets
   most of the value without it.
-- **Loopback access.** UI rules reach the live dashboard on loopback. Script steps' Linux
-  phase runs without network; whether loopback counts is an open question for that design.
+- **Loopback access.** Standalone UI runs can reach a live dashboard. The contained
+  routine uses fixture UI because [ORB-19985] established that network `none`
+  also excludes host loopback; it cannot certify the current live dashboard.
 
 ## Phasing
 
-1. **Runner, schema and CLI rules.** The runner (**scripts/ux-rules/run.mjs**), the results schema, the PTY
-   runner and the CLI rule set. `ux-review-cli` runs it first and drops its measurement
-   sections.
-2. **UI rules and the view manifest.** The view manifest format and Orbit's dashboard and
+1. **Runner, schema and CLI rules — delivered by [ORB-19974].** The runner
+   (**scripts/ux-rules/run.mjs**), results schema, PTY driver and CLI rules are
+   landed. The operator prompt handoff for `ux-review-cli` remains pending.
+2. **UI rules and the view manifest — delivered by [ORB-19975].** The view manifest format and Orbit's dashboard and
    website manifests ([visual review §3](../visual-review/2_design.md#3-the-view-manifest)),
    the capture driver's browser-context settings, and the UI rule set, including the
-   forecast fixture rule. `ux-review-ui` runs it first and drops its measurement and
-   regression sections.
-3. **Routine and filing.** `file_rule_findings`, the `rule_fingerprint` field, the
-   `ux_rules_pipeline` job and the routine. Uses script steps' Linux execution phase.
-4. **Later.** Each filed only when needed: rules for other workspaces' UIs, fixture mode for
-   flapping rules, and a dashboard view of rule results over time.
+   forecast fixture rule are landed. The operator prompt handoff for
+   `ux-review-ui` remains pending.
+3. **Routine and filing — delivered by [ORB-19976].** `file_rule_findings`, the
+   `rule_fingerprint` field, `ux_rules_pipeline` and the disabled daily routine
+   are landed. [ORB-20565] supplied the adapter/template; [ORB-20867] persisted
+   evidence, and [ORB-21111] added owner preparation and grouped filing.
+   Installation and routine enablement are host-specific; applying the
+   review-prompt handoff remains the next step.
+4. **Later.** File only when needed: rules for other workspaces' UIs and a
+   dashboard view of rule results over time. Fixture mode already shipped in
+   [ORB-19975].
 
 ## Open questions
 
-1. **Loopback from a script step.** Does the script-step Linux profile allow loopback when
-   it denies network, or does the UI surface wait for the network phase?
-2. **Where CLI rules live.** `scripts/ux-rules/cli/` beside the UI rules, or with the CLI's
-   goldens in `crates/orbit-cli/`? Beside the UI rules keeps one runner.
+1. **Loopback from a script step — resolved by [ORB-19985].** Network `none`
+   excludes host loopback. The contained UI surface uses fixtures; live access
+   waits for a network phase.
+2. **Where CLI rules live — resolved by [ORB-19974].** The delivered rules live
+   in `scripts/ux-rules/cli/` beside the UI modules and share one runner.
 3. **Close on pass?** A rule that passes on two consecutive runs could move its task to
    `review` for the operator. This scope only comments.
 
@@ -417,11 +449,19 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 
 ## Task References
 
-- [ORB-19681] — the latest `ux-review-cli` pass
-- [ORB-19682] — the latest `ux-review-ui` pass
-- [ORB-19294] — designed script steps, which the routine needs
-- [ORB-19974] — phase 1: rule runner, results schema and CLI rules
-- [ORB-19975] — phase 2: view manifest, browser settings and UI rules
-- [ORB-19976] — phase 3: rule-findings filer and the routine
+- [ORB-19681] — supplied the CLI-review baseline for this design.
+- [ORB-19682] — supplied the UI-review baseline for this design.
+- [ORB-19974] — delivered phase 1's rule runner, results schema and CLI rules.
+- [ORB-19975] — delivered phase 2's view manifests, browser settings, UI rules and fixture mode.
+- [ORB-19976] — delivered phase 3's rule-findings filer and disabled routine, with an operator prompt handoff.
+- [ORB-19985] — delivered Linux script execution and established that network `none` excludes host loopback.
+- [ORB-20528] — added text occlusion, overflow and typography rules.
+- [ORB-20536] — added narrow-prose detection and experiment-detail coverage.
+- [ORB-20565] — shipped the script adapter and operator manifest template.
+- [ORB-20867] — retained bounded screenshot evidence on filed findings.
+- [ORB-21111] — grouped proven shared defects and added owner preparation and compact reporting.
+- [ORB-21236] — reconciled the scope's filing promises with producer-declared defect groups.
+- [ORB-21634] — compared short and long help content without layout-padding false positives.
+- [ORB-21637] — added Notices coverage and a dashboard-route manifest guard.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

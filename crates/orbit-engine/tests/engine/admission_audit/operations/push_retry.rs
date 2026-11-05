@@ -278,9 +278,26 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                 );
                 // Only the delivery push holds; a carried candidate ref is pushed by
                 // a failure activity, which has no later step to hold at.
-                let hold = ForgeUnavailableHold::from_text(&error.to_string());
+                let legacy = ForgeUnavailableHold::from_text(&error.to_string());
                 if operation == "push" {
-                    let hold = hold.expect("an exhausted delivery push carries a forge hold");
+                    let failure = error
+                        .forge_push_hold()
+                        .expect("an exhausted delivery push carries a typed forge hold");
+                    let hold = &failure.hold;
+                    assert_eq!(
+                        legacy.as_ref(),
+                        Some(hold),
+                        "the rendered error still carries the same hold for legacy readers"
+                    );
+                    assert_eq!(
+                        error.to_string(),
+                        format!("execution failed: {}", failure.message)
+                    );
+                    assert_eq!(
+                        serde_json::to_value(&error).unwrap(),
+                        json!({"Execution": failure.message}),
+                        "the error wire shape must remain Execution(string)"
+                    );
                     assert_eq!(hold.target_ref, "refs/heads/branch");
                     assert_eq!(hold.head_sha, PUSH_HEAD);
                     assert_eq!(hold.attempts, 3);
@@ -289,14 +306,24 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                         hold.diagnostic.contains("(Internal Server Error)"),
                         "{hold:?}"
                     );
+                    let redacted = orbit_common::security::redaction::redact_all_error(error);
+                    assert_eq!(
+                        redacted
+                            .forge_push_hold()
+                            .map(|failure| &failure.hold.head_sha[..]),
+                        Some(PUSH_HEAD),
+                        "redaction keeps the typed hold"
+                    );
                 } else {
-                    assert_eq!(hold, None, "{error}");
+                    assert_eq!(error.forge_push_hold(), None, "{error}");
+                    assert_eq!(legacy, None, "{error}");
                 }
 
                 fixture.reset("fatal: early EOF", 1, false);
                 fixture.write("lookup-failure", "fatal: unable to read remote ref");
                 let error = run_private_operation(operation, &fixture.input(operation, false))
                     .expect_err("a failed remote read must not trigger another mutation");
+                assert_eq!(error.forge_push_hold(), None, "{error}");
                 assert_eq!(ForgeUnavailableHold::from_text(&error.to_string()), None);
                 assert!(error.to_string().contains("unable to read remote ref"));
                 assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);

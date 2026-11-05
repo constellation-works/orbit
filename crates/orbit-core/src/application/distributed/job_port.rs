@@ -3,11 +3,13 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::LocalPullAdmission;
+use orbit_store::contracts::{AdmissionReceipt, LocalPullAdmission};
 use orbit_types::workflow::ResourceThrottle;
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{DrainClaimedLeaf, DrainEntryPoint, HostProviderHold};
+use crate::application::contracts::{
+    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold,
+};
 use crate::application::job::JobDrainPort;
 
 impl JobDrainPort for OrbitRuntime {
@@ -53,5 +55,16 @@ impl JobDrainPort for OrbitRuntime {
 
     fn owner_commit_boundary(&self) -> Result<TaskCommitBoundary, OrbitError> {
         self.admission_boundary()
+    }
+
+    fn claim_admission_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
+        self.claim_receipt(claim_id)
+    }
+
+    fn held_claimed_leaf_stage(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError> {
+        self.claimed_leaf_stage_for_task(task_id)
     }
 }

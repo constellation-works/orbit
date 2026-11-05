@@ -632,6 +632,8 @@ Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; o
 
 Every response carries an `Age` header: the seconds since its scan.
 
+The dashboard ages the displayed scan independently of requests: its qualification becomes stale as soon as the reported cache window expires, including while refresh is pending or has failed. The scan status is a polite live region; ranks and selected detail stay in place, and request errors remain visible. The displayed age updates at least once a minute while the view retains that response. A newer successful response replaces the qualification; role, window and workspace changes discard the old timer.
+
 Errors are 400 for:
 - an unknown role or window;
 - a zero `min_support`;

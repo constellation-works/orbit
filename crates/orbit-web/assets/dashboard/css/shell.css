@@ -554,12 +554,10 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
 .topbar .notify-btn[hidden] { display: none; }
 
-/* On phones the top bar keeps the brand, Drain and Refresh on its first row
-   and the host readings on a second; the rail below holds the host and
-   workspace pickers side by side over scrolling destinations and views.
-   Keep the three rail rows compact enough that the first panel or view tabs
-   start by 200px at 375px wide, including the refresh line and clock below
-   navigation. */
+/* On phones the top bar is one scrolling row: the brand and fleet drain
+   stay at the start, with actions and provider usage reachable by swiping or
+   tabbing across. Scope pickers and navigation keep their own rows below,
+   leaving most of the viewport for the current pane. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -658,19 +656,27 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   }
   /* Free scrolling can rest mid-label; the fades above mark it as overflow,
      while the router snaps the strip to an item start after every reveal. */
-  .topbar { flex-wrap: wrap; height: auto; padding: 4px 8px; row-gap: 2px; column-gap: 6px; }
+  .topbar {
+    flex-wrap: nowrap;
+    height: auto;
+    padding: 4px 8px;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    scroll-padding-inline: 8px;
+  }
+  .topbar :is(button, a):focus-visible { outline-offset: -2px; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .topbar :is(button, a) { scroll-margin-inline: 8px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
   .topbar .global-drain-state { order: 2; }
   .topbar .refresh-btn { order: 3; }
   .topbar .host-resource-group {
     order: 4;
-    flex: 1 1 100%;
-    overflow-x: auto;
+    flex: 0 0 auto;
+    overflow: visible;
     padding: 2px;
-    scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   /* A scope note takes room only while it says something. The host block
      is a desktop reading; at this width the warning chip is the alarm. */
@@ -687,11 +693,12 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    height: 34px;
+    height: 44px;
   }
-  .topbar .global-drain-state { min-width: 86px; padding: 0 10px; }
+  .topbar .global-drain-state { min-width: 86px; max-width: calc(100vw - 32px); padding: 0 10px; }
+  .topbar .global-drain-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .topbar .global-drain-running { display: none; }
-  .topbar .refresh-btn { width: 34px; padding: 0; }
+  .topbar .refresh-btn { width: 44px; padding: 0; }
   .topbar .global-drain-state[hidden] { display: none; }
   /* Keep the action name available to assistive tech. */
   .refresh-label {

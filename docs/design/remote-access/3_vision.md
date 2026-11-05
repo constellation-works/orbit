@@ -1,7 +1,7 @@
 ---
 title: "Remote Access — Vision"
 owner: codex
-last_updated: 2026-10-18
+last_updated: 2026-11-04
 last_validated: 2026-11-02
 status: Accepted
 feature: remote-access
@@ -32,6 +32,9 @@ Any routable listener needs a real authentication and authorization design befor
 ### Long-lived connectivity
 
 Crossed by the host forward ([4_decisions.md](./4_decisions.md#forward-dashboard-requests-to-registered-hosts), [specs/host-forward.md](./specs/host-forward.md)): one dashboard holds on-demand tunnels to several registered hosts, with the lifecycle, port ownership, failure reporting and authority rules that decision records. `web connect` keeps its foreground one-tunnel model.
+
+[ORB-14679] delivered that crossing; the reconnect and heartbeat work below
+remains outside its committed scope.
 
 Background reconnect, heartbeats and a standing connection to every host remain behind this gate. Each needs its own lifecycle and failure design; the host forward re-establishes only when a request arrives.
 
@@ -66,5 +69,6 @@ Measure registry parse cost, runtime-cache churn, and aggregate endpoint latency
 
 - [ORB-11008] recorded federated MCP policy while preserving destination-host authority
 - [ORB-11009] moved the implementable contract to federated-mcp; this vision now cross-links
+- [ORB-14679] — delivered on-demand host tunnels while leaving background reconnect out of scope.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

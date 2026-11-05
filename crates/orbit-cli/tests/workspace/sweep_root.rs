@@ -249,13 +249,12 @@ fn managed_registry_root(args: &[&str], orbit_root: Option<&Path>) -> Option<Pat
 }
 
 fn assert_home_empty(home: &Path) {
+    let entries = crate::isolated_home::isolated_home_entries(home);
     assert!(
-        fs::read_dir(home)
-            .expect("read isolated home")
-            .next()
-            .is_none(),
-        "sweep touched isolated HOME at {}",
-        home.display()
+        entries.is_empty(),
+        "sweep touched isolated HOME at {}; found:\n{}",
+        home.display(),
+        entries.join("\n")
     );
 }
 

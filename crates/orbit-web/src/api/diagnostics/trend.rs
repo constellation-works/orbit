@@ -106,6 +106,8 @@ pub(super) struct TrendWindow {
     /// Buckets of history before `start` that a trailing 24h sum at the
     /// first bucket needs; zero when buckets are a day or wider.
     lead: usize,
+    /// An `all` range: no bound, so nothing can be ruled out of the window.
+    unbounded: bool,
 }
 
 impl TrendWindow {
@@ -147,6 +149,7 @@ impl TrendWindow {
             bucket_secs,
             previous,
             lead,
+            unbounded: range.since.is_none(),
         }
     }
 
@@ -210,6 +213,18 @@ impl TrendWindow {
     pub(super) fn in_previous(&self, at: DateTime<Utc>) -> bool {
         self.previous
             .is_some_and(|(start, end)| at >= start && at < end)
+    }
+
+    /// Whether an undated terminal task last written at `last_write` could
+    /// have closed in this window. A completion is never newer than the
+    /// task's last write, so only a write before the window rules it out.
+    pub(super) fn may_hold_undated(&self, last_write: DateTime<Utc>) -> bool {
+        self.unbounded || last_write >= self.start
+    }
+
+    /// [`Self::may_hold_undated`] for the previous window.
+    pub(super) fn previous_may_hold_undated(&self, last_write: DateTime<Utc>) -> bool {
+        self.previous.is_some_and(|(start, _)| last_write >= start)
     }
 
     pub(super) fn bucket_start(&self, index: usize) -> DateTime<Utc> {

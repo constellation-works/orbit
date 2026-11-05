@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 use super::super::super::operations;
+use super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
 use super::super::super::pr::{CheckState, PullRequestStatus};
 
 use super::annotations::unanswered_required;
@@ -101,6 +102,11 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Wait,
     /// A base-suspect failure waits without authorizing candidate recovery.
     WaitForBase(String),
+    /// A base-suspect failure spent its observation budget with the base's
+    /// own result still missing: hold in review for that result, with this
+    /// evidence. Nothing is repaired or rerun, so it is a designed wait, not a
+    /// failure.
+    HoldForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
@@ -172,7 +178,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         Ok(jobs) => jobs,
         Err(error) => return Ok(unclassified(format!("its jobs could not be read: {error}"))),
     };
-    let failed_jobs: Vec<&Value> = head_jobs
+    let failed_jobs: Vec<&CiCommitJobEvidence> = head_jobs
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect();
@@ -207,8 +213,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     if recovery.updated
         && aggregates.is_empty()
         && failed_jobs.iter().all(|job| {
-            job["job_id"]
-                .as_u64()
+            job.job_id
+                .number()
                 .is_some_and(|id| recovery.handled.contains(&id))
         })
     {
@@ -226,7 +232,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         .cloned()
         .collect::<BTreeSet<_>>();
     for job in failed_jobs {
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Ok(unclassified(
                 "a failed job reported no identity".to_string(),
             ));
@@ -291,10 +297,10 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
         }
         if class == CheckFailureClass::Flaky
-            && !(job["event"].as_str() == Some("pull_request")
-                && job["head_sha"].as_str().is_none_or(|sha| sha == head)
+            && !(job.event.value() == Some(&CiJobEvent::PullRequest)
+                && job.head_sha.text().is_none_or(|sha| sha == head)
                 && {
-                    let numbers = super::suspect::pull_request_numbers(job);
+                    let numbers = &job.association.numbers;
                     numbers.is_empty() || numbers.contains(&pr)
                 })
         {
@@ -311,8 +317,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 std::slice::from_ref(&context.task_id),
                 &json!({
                     "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason":why,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job.run_attempt, "pr_number":pr, "event":job.event,
+                    "started_at":job.started_at, "completed_at":job.completed_at, "reason":why,
                 }),
                 Some(&context.handoff_id),
             )?;
@@ -465,7 +471,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 }
             }
             if let Some((cycles, check, signature)) = exhausted {
-                Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                Ok(CheckRecoveryStep::HoldForBase(evidence(&format!(
                     "escalated after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; a matching pull_request rerun failure and a successful same-check agent-main run on the accepted base ancestry have not both been observed, so review the missing base/check evidence",
                 ))))
             } else {

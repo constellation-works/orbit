@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Overview"
 owner: grok
 last_updated: 2026-08-09
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 status: Draft
 stage: shipped
 next: "—"

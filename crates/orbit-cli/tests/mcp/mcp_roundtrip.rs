@@ -1277,6 +1277,51 @@ fn ambient_activity_mcp_toolset_does_not_change_default_tools_list() {
 }
 
 #[test]
+fn mcp_repeated_field_metadata_stays_within_context_budget() {
+    let (_workspace, mut client) = McpWorkspace::served();
+    let listed = client.tools_list();
+    let mut workspace_bytes = 0;
+    let mut model_bytes = 0;
+    for tool in tools_array(&listed) {
+        let properties = &tool["inputSchema"]["properties"];
+        let workspace_description_bytes = properties["workspace"]["description"]
+            .as_str()
+            .map_or(0, str::len);
+        assert!(
+            workspace_description_bytes <= 120,
+            "ORB-21943: each workspace field must stay concise, got {workspace_description_bytes} bytes for {}",
+            tool["name"]
+        );
+        workspace_bytes += workspace_description_bytes;
+        if matches!(
+            tool["name"].as_str(),
+            Some("orbit_attention" | "orbit_decision_raise")
+        ) {
+            let description_bytes = tool["description"]
+                .as_str()
+                .expect("tool description")
+                .len();
+            assert!(
+                description_bytes <= 300,
+                "ORB-21943: long tool policy belongs in installed references, got {description_bytes} bytes for {}",
+                tool["name"]
+            );
+        }
+        for keyword in ["description", "pattern"] {
+            model_bytes += properties["model"][keyword].as_str().map_or(0, str::len);
+        }
+    }
+    assert!(
+        workspace_bytes <= 4_434,
+        "ORB-21943: repeated workspace metadata must use at most half the observed 8,868 bytes, got {workspace_bytes}"
+    );
+    assert!(
+        model_bytes <= 6_000,
+        "ORB-21943: repeated model metadata must shrink from the observed 8,732 bytes, got {model_bytes}"
+    );
+}
+
+#[test]
 fn mcp_model_schema_admits_full_model_strings_and_call_succeeds() {
     let (_workspace, mut client) = McpWorkspace::served();
     let listed = client.tools_list();
@@ -3636,10 +3681,9 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
     );
 }
 
-/// ORB-11017: federated `tools/list` must tell callers to copy `selector` from
-/// the federated list. A bare `ws_*` — including a v1 session default — is
-/// `unknown_selector` before forwarding. `orbit.task.show` does not inherit
-/// the v1 id-only default in this namespace.
+/// ORB-11017: federated workspace calls route with a selector returned by the
+/// federated list and reject a bare `ws_*` before forwarding. `orbit.task.show`
+/// does not inherit the v1 id-only default in this namespace.
 fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     let workspace = McpWorkspace::init();
     write_destinations(
@@ -3649,25 +3693,25 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
 
     let mut client = federated_client(&workspace);
 
-    let listed = client.tools_list();
-    for tool_name in ["orbit_task_list", "orbit_task_show", "orbit_auto_task_list"] {
-        let description = tool_workspace_description(&listed, tool_name);
-        assert!(
-            description.contains("selector") && description.contains("orbit_workspace_list"),
-            "{tool_name} must instruct copying from the federated list: {description}"
-        );
-        assert!(
-            description.to_ascii_lowercase().contains("copy"),
-            "{tool_name} must say to copy the list field: {description}"
-        );
-        assert!(
-            !description.contains("registered workspace name")
-                && !description.contains("ws_*")
-                && !description.contains("absolute path")
-                && !description.to_ascii_lowercase().contains("cwd"),
-            "{tool_name} must not present a v1 local form as valid: {description}"
-        );
-    }
+    let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let rows = array_of(&listed, "workspaces");
+    let (machine_id, _) = machine_identity(&workspace.home);
+    let local = rows
+        .iter()
+        .find(|row| row["machine_id"] == machine_id)
+        .expect("the federated list includes the local workspace");
+    let selector = local["selector"].as_str().expect("host-qualified selector");
+    let local_workspace_id = local["id"].as_str().expect("workspace ID");
+    assert_eq!(
+        selector,
+        format!("{machine_id}/{local_workspace_id}"),
+        "federated list selectors identify both the host and workspace"
+    );
+    let routed = client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
+    assert!(
+        routed["tasks"].is_array(),
+        "host-qualified selector routes: {routed}"
+    );
 
     // An id-only call routes by the id's prefix [ORB-14449]; it is never
     // read as a minted selector.
@@ -3680,14 +3724,14 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     // An unqualified selector must fail before forwarding.
     client.assert_tool_error(
         "orbit_task_show",
-        json!({ "id": "ORB-00001", "workspace": "ws_orbit" }),
+        json!({ "id": "ORB-00001", "workspace": local_workspace_id }),
         "unknown_selector",
     );
 
     // An unqualified selector must fail before forwarding.
     client.assert_tool_error(
         "orbit_task_list",
-        json!({ "workspace": "ws_orbit" }),
+        json!({ "workspace": local_workspace_id }),
         "unknown_selector",
     );
 }

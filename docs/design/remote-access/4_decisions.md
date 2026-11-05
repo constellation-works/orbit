@@ -1,7 +1,7 @@
 ---
 title: "Remote Access — Decisions"
 owner: codex
-last_updated: 2026-10-08
+last_updated: 2026-11-04
 last_validated: 2026-10-13
 status: Accepted
 feature: remote-access
@@ -84,3 +84,9 @@ These choices describe the current implementation.
 - An attached remote dashboard keeps whatever capability it was started with; the forward cannot raise or lower it.
 - Each host adds an SSH child and a remote dashboard process while its tunnel is open.
 - A host that needs an interactive SSH prompt cannot be reached this way.
+
+## Task References
+
+No task IDs are cited in this historical record.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

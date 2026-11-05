@@ -32,7 +32,6 @@ let myWorkOnly = false;
 // "Waiting on you": open human-crew tasks plus tasks with open decisions.
 let waitingOnly = false;
 let waitingDecisionTaskIds = null;
-let waitingCountValue = null;
 let waitingFetchAt = 0;
 let waitingFetchPending = false;
 // Advances whenever the cached ids stop being trustworthy (a workspace switch or
@@ -52,6 +51,23 @@ export function taskWaitsOnYou(t) {
 function waitingCountFromTasks(context) {
   return taskList(context).filter(taskWaitsOnYou).length;
 }
+// Derived from the live task list on every paint, never cached at fetch time: a
+// count stored when /api/decisions answered went stale for the 15 s throttle
+// whenever the task list changed after it (a human-crew task arriving in a
+// later poll read as 0). Open decisions for tasks outside the loaded list still
+// count, by id. A cached id for a task the list shows counts only while that task
+// is open, so a failed read that keeps the ids cannot count a settled task.
+function waitingCountNow(context) {
+  if (isAggregateView() || !waitingDecisionTaskIds) return waitingCountFromTasks(context);
+  const tasks = taskList(context);
+  const listed = new Map(tasks.map((t) => [t.id, t]));
+  const ids = new Set(tasks.filter(taskWaitsOnYou).map((t) => t.id));
+  for (const id of waitingDecisionTaskIds) {
+    const live = listed.get(id);
+    if (!live || isOpenTask(live)) ids.add(id);
+  }
+  return ids.size;
+}
 // The cache holds the ids of the workspace and moment it was read; forget it so
 // the next chip refresh reads /api/decisions again.
 function invalidateWaitingDecisions() {
@@ -61,7 +77,6 @@ function invalidateWaitingDecisions() {
 function resetWaitingDecisions() {
   invalidateWaitingDecisions();
   waitingDecisionTaskIds = null;
-  waitingCountValue = null;
 }
 onWorkspaceChange(resetWaitingDecisions);
 onDecisionAnswered(invalidateWaitingDecisions);
@@ -74,7 +89,7 @@ async function refreshWaitingCount(context) {
   if (waitingFetchPending || Date.now() - waitingFetchAt < 15000) return;
   // Federated/aggregate: loaded tasks already carry open_decisions and crew,
   // so count locally — a workspace-spanning /api/decisions read has no scope.
-  if (isAggregateView()) { waitingDecisionTaskIds = null; waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); renderChips(context); return; }
+  if (isAggregateView()) { waitingDecisionTaskIds = null; waitingFetchAt = Date.now(); renderChips(context); return; }
   waitingFetchPending = true;
   const generation = waitingGeneration;
   let redo = false;
@@ -87,11 +102,10 @@ async function refreshWaitingCount(context) {
     const ids = new Set(items.map((r) => r && r.task_id).filter(Boolean));
     changed = !sameIds(ids, waitingDecisionTaskIds);
     waitingDecisionTaskIds = ids;
-    waitingCountValue = new Set([...ids, ...taskList(context).filter(taskWaitsOnYou).map((t) => t.id)]).size;
     waitingFetchAt = Date.now();
   } catch {
     if (generation !== waitingGeneration) redo = true;
-    else { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); }
+    else waitingFetchAt = Date.now();
   } finally {
     waitingFetchPending = false;
     // Rows filtered by the old ids repaint; otherwise only the chip changes.
@@ -365,7 +379,8 @@ let pinnedRefreshInFlight = null;
 // The pinned object is the only copy of a filtered-out task, so without this
 // it stays at whatever the first open fetched. Drafts are preserved by the
 // pane's draft retention; this only replaces the cached record, guarded by
-// the workspace visit and the open-task generation like the first read.
+// the workspace visit and the open-task generation like the first read, and
+// by the starting record so a completed save wins over an older response.
 export function refreshPinnedTask(context) {
   const pinned = taskState.pinnedExternalTask;
   if (!pinned || !pinned.task) return Promise.resolve();
@@ -381,6 +396,9 @@ export function refreshPinnedTask(context) {
     try {
       const task = await fetchJson(taskMutationPath(previous));
       if (superseded()) return;
+      // Check only before applying the response: our own update also replaces
+      // the pinned record, but must still reach the repaint below.
+      if (taskState.pinnedExternalTask.task !== previous) return;
       if (!task || task.id !== taskId) return;
       const merged = mergeTaskRecord(previous, task);
       taskState.pinnedExternalTask = { task: merged, id: taskId };
@@ -486,7 +504,7 @@ function renderChips(context) {
     if (!count) continue;
     if (chip.dataset.role === "waiting") {
       // Always shown, unlike a status count that shows only while its chip is on.
-      count.textContent = String(waitingCountValue != null && !isAggregateView() ? waitingCountValue : waitingCountFromTasks(context));
+      count.textContent = String(waitingCountNow(context));
     } else {
       count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
     }

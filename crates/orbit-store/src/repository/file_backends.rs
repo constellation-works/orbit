@@ -523,6 +523,16 @@ impl TaskHistoryStoreBackend for TaskV2Store {
     ) -> Result<(), OrbitError> {
         self.update_task_history(id, &params)
     }
+
+    fn check_ordinary_work_start_footprint(
+        &self,
+        id: &str,
+        status: Option<orbit_types::task::TaskStatus>,
+        status_event: Option<&str>,
+        context_files: Option<&[String]>,
+    ) -> Result<(), OrbitError> {
+        self.check_ordinary_work_start_footprint(id, status, status_event, context_files)
+    }
 }
 
 impl TaskArtifactStoreBackend for TaskV2Store {

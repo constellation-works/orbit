@@ -356,16 +356,36 @@ claims needs no operator capability:
 orbit run settlements --since 7d --no-reconcile --json
 ```
 
-Each settlement's `accounting` says how a failure scan counts it, derived from
-its typed kind, class and pending-decision flag, never its reason: `outcome` is
-`failure`, `review_decision_hold`, `evidence_hold`, `operator_cancel`,
-`baseline_red` or `unrecorded`, with `counts_as_failure` (true for `failure`,
-`baseline_red` and `unrecorded`) and a `reason` token. It changes nothing about
-the claim or its task.
+Rows list newest first. `--no-reconcile` reports stored claim records as-is: it
+skips recovery of an interrupted coordination commit and fails instead while
+one is pending. EVIDENCE is the most specific class a settlement carried;
+claims settled before the owner recorded settlements read as `unrecorded`
+unless their release kept a class. The `--json` shape is
+`{"settlements":[{task_id, claim_id, machine_id, machine_name, drain_run_id,
+leaf_run_id, phase, last_event, settled_at, kind, evidence, failure_class,
+review_decision_pending, crew, crew_model, failed_step_id, reason,
+run_evidence, accounting}]}`.
 
-Each settlement's `run_evidence` is the leaf's own run record: `job_id`, `build`
-and failing step (`root_cause`), sent with the settlement and kept in an
-immutable row beside the claim. `provenance` is `settlement`, `hydrated` or null
+`review_decision_pending` marks a before-landing review refusal awaiting a
+recorded decision: the claim still fails and blocks the task, but failure scans
+count it separately. Older records without the flag read as false.
+
+Each settlement's `accounting` (`{outcome, counts_as_failure, reason}`) says how
+a failure scan counts it, derived from its typed kind, class, pending-decision
+flag and the leaf's recorded step code, never its reason: `outcome` is `failure`,
+`review_decision_hold` (the pending decision above), `evidence_hold`,
+`operator_cancel`, `upgrade_paused` (a `transient` settlement whose leaf recorded
+`upgrade_quiesce`: an Orbit upgrade paused it), `baseline_red` or `unrecorded`, with `counts_as_failure`
+(true for `failure`, `baseline_red` and `unrecorded`) and a `reason` token
+naming the deciding evidence, such as
+`review_decision_pending_without_candidate_failure` for a flag on a settlement
+that cannot be that hold. It changes nothing about the claim or its task.
+
+Each settlement's `run_evidence` is the leaf's own run record
+(`{provenance, recorded_at, job_id, build, build_state, root_cause,
+root_cause_state}`): `job_id`, `build` and failing step (`root_cause`), sent
+with the settlement and kept in an immutable row beside the claim. `provenance` is `settlement` (sent with the settlement),
+`hydrated` (read from the follower by `orbit run settlements-hydrate`) or null
 (none held); `build_state` and `root_cause_state` are `recorded` or `unrecorded`,
 and `unrecorded` is never filled from the owner's or a current build or from the
 settlement's text. For a claim settled before a follower sent it, an operator on

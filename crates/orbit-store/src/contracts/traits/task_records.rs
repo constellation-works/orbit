@@ -1,6 +1,8 @@
 use crate::contracts::params::*;
 use orbit_common::OrbitError;
-use orbit_types::task::{ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry};
+use orbit_types::task::{
+    ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry, TaskStatus,
+};
 
 pub trait TaskDocumentStoreBackend: Send + Sync {
     fn update_task_document(
@@ -37,6 +39,22 @@ pub trait TaskHistoryStoreBackend: Send + Sync {
         id: &str,
         params: TaskHistoryUpdateParams,
     ) -> Result<(), OrbitError>;
+    /// Refuse a work-starting history write whose effective footprint
+    /// overlaps a protecting execution claim, before a coordinated caller
+    /// persists any companion document or artifact edits. The guard inside
+    /// `update_task_history` remains authoritative; this pre-flight only
+    /// keeps a deterministic refusal from leaving companion writes behind.
+    /// `context_files` is the replacement footprint when the same update
+    /// changes it, otherwise the stored footprint applies.
+    fn check_ordinary_work_start_footprint(
+        &self,
+        _id: &str,
+        _status: Option<TaskStatus>,
+        _status_event: Option<&str>,
+        _context_files: Option<&[String]>,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
 }
 
 pub trait TaskArtifactStoreBackend: Send + Sync {

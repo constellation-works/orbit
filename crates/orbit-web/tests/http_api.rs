@@ -91,6 +91,8 @@ mod leases;
 mod log;
 #[path = "http_api/log_render.rs"]
 mod log_render;
+#[path = "http_api/metrics_terminal_dates.rs"]
+mod metrics_terminal_dates;
 #[path = "http_api/metrics_trends.rs"]
 mod metrics_trends;
 #[path = "http_api/notices.rs"]

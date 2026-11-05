@@ -73,4 +73,6 @@ mod usage;
 
 use assembly::arrival_source;
 pub use options::BacklogForecastHistory;
+#[cfg(feature = "test-support")]
+pub use simulation::COMPUTE_BUDGET_ENV;
 use usage::{ForecastRun, forecast_usage};

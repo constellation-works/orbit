@@ -31,7 +31,7 @@ const measurements = [];
 const failures = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, hasTouch: true, reducedMotion: 'reduce' });
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#tasks`);
   await page.evaluate(() => document.fonts.ready);
   const cases = [
@@ -157,6 +157,8 @@ try {
   const settle = () => page.evaluate(async () => {
     await document.fonts.ready;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await Promise.all(document.getAnimations().filter(animation =>
+      animation.effect.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
   });
   const openRoute = async (route, width = 1440) => {
     await page.setViewportSize({ width, height: 900 });
@@ -261,9 +263,110 @@ try {
   await page.locator('.host-block-verdict-text').evaluate(node => { node.textContent += ' before checking admission'; });
   await settle();
   await checkVisible('#config-subtabs [data-subtab="all-keys"]', 'Settings / focused All keys / resized host block', true);
-  fs.writeFileSync(path.join(evidence, 'measurements.json'), `${JSON.stringify({ browser: browser.version(), measurements, indicators, visibility, failures }, null, 2)}\n`);
+  // The phone shell formerly consumed 225px before the main pane (61% of
+  // 375x667 left for content). Exercise the rendered UI, including the fleet
+  // label that caused an extra wrapped row, rather than pinning CSS text.
+  const phoneChrome = [];
+  const keyboard = [];
+  const touch = [];
+  for (const height of [667, 900]) {
+    await openRoute('tasks', 375);
+    await page.setViewportSize({ width: 375, height });
+    await page.evaluate(async () => {
+      const { renderFleetIndicator } = await import('/static/js/operations-fleet.js');
+      renderFleetIndicator({ items: [{ workspace_id: 'ws_fixture', phase: 'winding_down' }] });
+      const { renderProviderUsage } = await import('/static/js/provider-usage.js');
+      renderProviderUsage({ provider_limits: [{ provider: 'codex', window: 'five_hour',
+        used_percent: 40, threshold: 90, gating: true, gated: false, stale: false }] });
+      // Notifications are optional in production; include the widest usual bar.
+      document.getElementById('notify-btn').hidden = false;
+    });
+    await settle();
+    const geometry = await page.evaluate(() => {
+      const rect = selector => {
+        const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect();
+        return { x, y, width, height };
+      };
+      return { viewport: { width: innerWidth, height: innerHeight },
+        pane: rect('#tasks-main'), topbar: rect('.topbar'), rail: rect('.rail'),
+        log: rect('#log-statusbar'), overflow: document.scrollingElement.scrollWidth > innerWidth };
+    });
+    phoneChrome.push(geometry);
+    await page.screenshot({ path: path.join(evidence, `shell-dark-375-${height}.png`) });
+    if (geometry.pane.height / height < 0.70) failures.push(`${height}px: phone content takes less than 70%: ${JSON.stringify(geometry)}`);
+    if (geometry.overflow) failures.push(`${height}px: phone shell overflows horizontally`);
+    if (height !== 667) continue;
+
+    // A real touch swipe exposes the actions beyond the fleet pill. Wait
+    // for native scroll completion before switching back to keyboard input.
+    if (await page.locator('.topbar').evaluate(node => node.scrollWidth > node.clientWidth)) {
+      await page.locator('#global-drain-state').focus();
+      await settle();
+      const touchCdp = await page.context().newCDPSession(page);
+      // Keep the protocol domain separate from its method: the fixture hook
+      // guard otherwise reads Input as an HTML tag and the method as a class.
+      const touchCommand = ['Input', 'dispatchTouchEvent'].join('.');
+      const beforeSwipe = await page.locator('.topbar').evaluate(node => node.scrollLeft);
+      await page.locator('.topbar').evaluate(node => {
+        globalThis.phoneChromeSwipe = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Top bar touch scroll did not finish')), 5000);
+          node.addEventListener('scrollend', () => { clearTimeout(timeout); resolve(node.scrollLeft); }, { once: true });
+        });
+      });
+      await touchCdp.send(touchCommand, { type: 'touchStart', touchPoints: [{ x: 300, y: 25 }] });
+      for (const x of [250, 200, 150, 100, 50]) {
+        await touchCdp.send(touchCommand, { type: 'touchMove', touchPoints: [{ x, y: 25 }] });
+      }
+      await touchCdp.send(touchCommand, { type: 'touchEnd', touchPoints: [] });
+      const afterSwipe = await page.evaluate(() => globalThis.phoneChromeSwipe);
+      touch.push({ beforeSwipe, afterSwipe });
+      if (afterSwipe <= beforeSwipe) failures.push('Touch swipe did not reveal the remaining top bar actions');
+      await touchCdp.detach();
+      await page.screenshot({ path: path.join(evidence, 'shell-swiped-dark-375.png') });
+    }
+
+    const targets = ['#host-select', '#workspace-select', '#global-drain-state', '#notify-btn', '#refresh-btn',
+      '.provider-usage-summary', '#log-statusbar-open',
+      ...await page.locator('.rail .tab').evaluateAll(nodes => nodes.map(node => `.tab[data-tab="${node.dataset.tab}"]`))];
+    const seen = new Set();
+    await page.locator('#skip-link').focus();
+    // Use the actual Tab sequence. Focus must scroll offscreen bar actions and
+    // rail destinations into view without moving the document horizontally.
+    for (let step = 0; step < 160 && seen.size < targets.length; step += 1) {
+      await page.keyboard.press('Tab');
+      await settle();
+      for (const selector of targets) {
+        if (seen.has(selector) || !await page.locator(selector).evaluate(node => node === document.activeElement)) continue;
+        const probe = await page.locator(selector).evaluate(node => {
+          const box = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+            visible: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight
+              && (hit === node || node.contains(hit)), focused: node.matches(':focus-visible') };
+        });
+        keyboard.push({ selector, ...probe });
+        if (!probe.visible || !probe.focused) failures.push(`Tab focus cannot reveal ${selector}: ${JSON.stringify(probe)}`);
+        seen.add(selector);
+        await page.screenshot({ path: path.join(evidence, `keyboard-${seen.size}-dark-375.png`) });
+      }
+    }
+    for (const selector of targets) if (!seen.has(selector)) failures.push(`Tab sequence never reached ${selector}`);
+
+    // Tap every top-level destination through the real router; screenshots
+    // cover the shared shell on each view, including horizontally hidden tabs.
+    const destinations = await page.locator('.rail .tab').evaluateAll(nodes => nodes.map(node => node.dataset.tab));
+    for (const destination of destinations) {
+      const tab = page.locator(`.rail .tab[data-tab="${destination}"]`);
+      await tab.scrollIntoViewIfNeeded();
+      await tab.tap();
+      await settle();
+      if (!await tab.evaluate(node => node.classList.contains('active'))) failures.push(`Tap did not activate ${destination}`);
+      await page.screenshot({ path: path.join(evidence, `shell-${destination}-dark-375.png`) });
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'measurements.json'), `${JSON.stringify({ browser: browser.version(), measurements, indicators, visibility, phoneChrome, keyboard, touch, failures }, null, 2)}\n`);
   assert.deepEqual(failures, [], 'Rail labels and counts must remain readable, navigation must reuse one indicator per bar, and active/focused views and focus rings must stay unobscured');
-  console.log(`PASS: rail label/count geometry at seven viewport widths; one indicator per bar across ${indicators.length} route changes; ${visibility.length} active/focused visibility checks including desktop sticky-footer clearance and mobile deep links; screenshots: ${evidence}`);
+  console.log(`PASS: rail label/count geometry at seven viewport widths; one indicator per bar across ${indicators.length} route changes; ${visibility.length} active/focused visibility checks including desktop sticky-footer clearance and mobile deep links; phone content >=70% at both heights; ${keyboard.length} keyboard controls and all touch destinations; screenshots: ${evidence}`);
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
