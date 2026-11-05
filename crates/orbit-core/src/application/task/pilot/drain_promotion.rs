@@ -41,8 +41,8 @@ use crate::application::task::{
 use super::apply::admission::{AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{
-    PromotionFindings, auto_approval_hold_classification, auto_approval_opted_out,
-    promotion_findings, promotion_task_ids,
+    FOOTPRINT_UNRESOLVED, PromotionFindings, auto_approval_hold_classification,
+    auto_approval_opted_out, footprint_hold, promotion_findings, promotion_task_ids, warning_text,
 };
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -272,6 +272,12 @@ pub(super) fn assess_drain_admission(
         (
             PromotionDecision::Withhold,
             "release_action_required",
+            finding.clone(),
+        )
+    } else if let Some(finding) = footprint_hold(assessment) {
+        (
+            PromotionDecision::Withhold,
+            FOOTPRINT_UNRESOLVED,
             finding.clone(),
         )
     } else if !warnings.is_empty() {
@@ -828,6 +834,12 @@ fn promotable_reuse(
         .is_some_and(|finding| !finding.is_null())
     {
         return Ok(hold("release_action_required"));
+    }
+    if let Some(finding) = footprint_hold(assessment) {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: FOOTPRINT_UNRESOLVED,
+            detail: warning_text(finding).map(str::to_string),
+        });
     }
     if !findings.warnings.is_empty() {
         return Ok(hold("warnings"));

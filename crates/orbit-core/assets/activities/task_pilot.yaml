@@ -811,6 +811,14 @@ spec:
       all. List what blocks identification in `evidence_gaps` (it must not be
       empty), and propose the smallest bounded investigation as selectors and
       `validation_approach`.
+    - An unestablished lock footprint is not a reason to return `unassessed`.
+      When the bounded repair is identifiable, return its assessed tier even if
+      a footprint lookup the task directs failed, such as a predecessor ledger,
+      artifact or related task that is missing or unreadable under your read
+      authority. Name the unread source in `evidence_gaps`, and return a
+      `utility_warnings` object with `holds_promotion: true` naming it. The task
+      stays held on that finding whatever its tier or selectors. A consulted
+      reference document is not a verified footprint on its own.
     - `evidence_gaps` holds unknowns that could change the rating or a
       criterion-relevant finding, such as unknown fixture semantics, an
       unresolved architecture choice, a missing failure signature, or the
@@ -819,7 +827,7 @@ spec:
       the unknowns when it is `medium` or `low`.
     - Never list unexecuted validation or general read-only limits in
       `evidence_gaps`; the concrete failure to verify an explicit duplicate
-      lead is the exception defined above. Never return `unassessed` for a
+      lead, and an unread footprint source named above, are the exceptions. Never return `unassessed` for a
       validation/read-only limitation when the bounded repair is identifiable.
       Name the checks that would establish the repair in `validation_approach`
       and `reassessment_triggers`; report missing validation authority or

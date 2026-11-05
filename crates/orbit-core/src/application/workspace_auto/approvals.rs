@@ -61,9 +61,9 @@ use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    ExplicitAssessmentReuse, approval_disqualification, classify_explicit_assessment_reuse,
-    held_classification, live_execution_claim_tasks, promote_reusable_assessment,
-    task_pilot_warnings,
+    ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, approval_disqualification,
+    classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
+    promote_reusable_assessment, task_pilot_warnings,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -218,7 +218,7 @@ pub(super) fn approval_snapshot(
             && let Some(classification) = held_classification(runtime, entry)
             && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
-            let findings = if classification == "warnings" {
+            let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
                 task_pilot_warnings(
                     task.status,
                     &runtime.get_task_comments(&task.id)?,
@@ -287,7 +287,7 @@ pub(super) fn approval_snapshot(
                 if reason == "changed_since_pilot" && !claimed_tasks.contains(&task.id) {
                     // Fall through to the unresolved checks and candidacy.
                 } else {
-                    let findings = if reason == "warnings" {
+                    let findings = if matches!(reason, "warnings" | FOOTPRINT_UNRESOLVED) {
                         task_pilot_warnings(
                             task.status,
                             &runtime.get_task_comments(&task.id)?,
