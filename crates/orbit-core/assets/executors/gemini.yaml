@@ -1,6 +1,7 @@
 # Legacy Gemini CLI executor. Individual Gemini CLI accounts stopped 2026-06-18;
 # enterprise Gemini Code Assist and API-key authentication remain available.
-# `orbit init` picks the Antigravity (`agy`) executor when `agy` is installed.
+# `orbit init` enables the Antigravity (`agy`) crews when `agy` is installed;
+# those crews run on the `antigravity` executor.
 # Do not treat this as the current Google terminal agent. [ORB-11299]
 schemaVersion: 2
 kind: Executor

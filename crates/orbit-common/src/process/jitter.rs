@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Fallback seed used when the entropy sources collapse to zero
+/// Fallback state used when SplitMix64 mixes a seed to zero
 /// (xorshift64* has a fixed point at state 0).
 const SEED_FALLBACK: u64 = 0x9e37_79b9_7f4a_7c15;
 /// Separates fallback seeds if the operating system cannot provide entropy.
@@ -33,7 +33,8 @@ impl JitterRng {
         Self::from_seed(seed)
     }
 
-    /// Construct from an explicit seed (deterministic; intended for tests).
+    /// Construct from an explicit seed. Equal seeds yield equal streams;
+    /// [`Self::from_entropy`] is the production constructor.
     pub fn from_seed(seed: u64) -> Self {
         // Run the raw seed through SplitMix64 so weak/adjacent seeds still
         // produce well-mixed initial states, then guard the zero fixed point.
