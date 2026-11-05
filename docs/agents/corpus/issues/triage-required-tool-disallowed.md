@@ -13,11 +13,11 @@ The escalation-triage run fails at dispatch: `task ORB-18271 required tool orbit
 
 ## Mechanism
 
-The triager's tool allowlist rejects any task whose `required_tools` include a tool the triager may not use, so the task never gets a triage disposition.
+The triager's tool allowlist rejected a task whose `required_tools` included a tool the triager could not use, so the task never got a triage disposition.
 
 ## Resolution
 
-No agent action; the task has no triage disposition until the triager can run.
+Non-implementer deny-mode activities now omit disallowed task requirements and record an omission note; the requirements still bind the implementing activity. Current escalation triage handles pilot-warning holds; the former blocked-task subject is retired and final recovery handles blocked tasks.
 
 ## Fix task
 
