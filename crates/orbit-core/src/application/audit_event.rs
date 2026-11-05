@@ -94,7 +94,10 @@ pub enum AuditListingProfile {
     },
 }
 
-/// The bounded page of an HTTP audit listing.
+/// The bounded page of an ordinary HTTP audit listing. A `limit` of zero
+/// requests an empty page: it never falls through to the store's internal
+/// `filter.limit == 0` default, so an ordinary page never exceeds the
+/// 200-row HTTP maximum.
 pub struct AuditListingHttpWindow {
     limit: usize,
     offset: usize,
@@ -103,6 +106,9 @@ pub struct AuditListingHttpWindow {
 impl AuditListingHttpWindow {
     /// Applies the default and clamp to `limit` and refuses a too-deep
     /// `offset`, returning the refusal text for the surface to report.
+    /// An omitted `limit` becomes the 50-row default; a positive `limit` is
+    /// clamped to the 200-row maximum; an explicit zero is preserved and
+    /// means an empty page (no store rows).
     pub fn from_request(limit: Option<usize>, offset: Option<usize>) -> Result<Self, String> {
         let limit = limit
             .unwrap_or(AUDIT_HTTP_DEFAULT_LIMIT)
@@ -408,6 +414,16 @@ impl OrbitRuntime {
                     return Ok(AuditListingPage {
                         events: self
                             .list_audit_events_by_ids(&ids, columns.workspace_id.as_deref())?,
+                        next_before: None,
+                    });
+                }
+                // An explicit `?limit=0` is an empty ordinary page. Answer
+                // here so a zero window never reaches the store, whose
+                // `filter.limit == 0` convention means its internal default;
+                // the exact-ID evidence lookup above keeps its own behavior.
+                if window.limit == 0 {
+                    return Ok(AuditListingPage {
+                        events: Vec::new(),
                         next_before: None,
                     });
                 }
