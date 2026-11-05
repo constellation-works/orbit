@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
 doc_role: reference
@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15939, ORB-15940, ORB-15941, ORB-15942]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -31,7 +31,8 @@ to migrate part of a noun. Phase 3b (task writes, [ORB-15938]) built `Array`,
 `UnknownFields::Refuse` for a verb that
 already refused extras, retired-field wordings, the `GuardedModes::preempt`
 and `schema_extension` tables, and a hidden option object for operator-only
-CLI flags. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
+CLI flags. Phase 2 (drain and workspace claim, [ORB-15936]) migrated the
+tool-only nouns without adding CLI surfaces. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
 nesting, `cli_groups` help and inherited group arguments, and CLI argument
 relationships. Phase 3d (task review and lifecycle, [ORB-15940]) built
 `CliArgKind::Actions`, which spells a multiplexed tool's actions as CLI
@@ -386,12 +387,18 @@ runtime need all come from the spec.
   mode.
 - [ORB-15935] — migrated auto-task, building the switch, enum, object and
   CLI-only parameter kinds.
+- [ORB-15936] — migrated the drain and workspace-claim tool-only nouns.
 - [ORB-15937] — migrated the task read verbs, building enum lists, multi-value
   flags, optional positionals and `CliHelp`, and the part-migrated noun shape.
 - [ORB-15938] — migrated task `add` and `update`, building arrays,
   CLI-required flags, refuse-mode unknown fields, `preempt`,
   `schema_extension` and the hidden CLI option object.
+- [ORB-15939] — migrated task artifacts and locks with nested CLI groups.
+- [ORB-15940] — migrated task review and lifecycle tools with action
+  subcommands.
 - [ORB-15941] — migrated the workflow-run tools as a tool-only noun, with
   the multiplexed-action shape.
+- [ORB-15942] — migrated search and routine control where a second surface
+  existed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -7,8 +7,8 @@ doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 stage: shipped
 next: "—"
 ---
@@ -763,11 +763,13 @@ a read a refused command offered requests the serving tool instead:
 | `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability |
 | a run's commit and landing for one task | `orbit.task.show` with `field: "delivery"` | `orbit tool run` or MCP | — (bounded host evidence; no `operator`) |
 
-Cross-host callbacks through `orbit tool run` are unsupported. A `network` grant and `ssh` in
-`requires.programs` do not grant access to the host’s SSH credentials.
+Cross-host callbacks through `orbit tool run` are unsupported [ORB-21384]. A
+`network` grant and `ssh` in `requires.programs` do not grant access to the
+host’s SSH credentials.
 This includes a registered remote host addressed through `--host <host> --workspace <name>`
 and an id-only tool call whose task prefix belongs to that host (without an explicit
-workspace or root). Both are refused with `policy_denied` before SSH discovery or delivery.
+workspace or root). Both are refused with `policy_denied` before SSH discovery
+or delivery [ORB-21774].
 The error names the destination; a plugin-attributed `WARN` records the tool, destination
 (in the `workspace` field) and refusal in `orbit.jsonl`, as for a direct remote selector.
 
@@ -778,7 +780,7 @@ credential for both exec and MCP backends, along with whether the effective prof
 is unconfined. Backends the host spawned with the `unsandboxed` grant retain
 cross-workspace local calls. A selector for another local checkout is
 refused before runtime bootstrap or any selected store open, with
-`callback_workspace_outside_sandbox`. The error names the selector and explains the
+`callback_workspace_outside_sandbox` [ORB-21432]. The error names the selector and explains the
 sandbox limit; a `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and
 code. Changing cwd does not change the host-recorded binding. Sessions minted before
 that binding was recorded must restart their backend before using an explicit
@@ -1010,9 +1012,10 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - An activity whose tool allowlist names a tool the workspace does not register (say, one
   from a plugin that is not installed) is withdrawn from the catalog on its own: a job that
   references it is refused at load with a message naming the activity and the tool, every
-  other job keeps running, and `orbit plugin enable` warns. One plugin's unresolvable
+  other job keeps running, and `orbit plugin enable` warns [ORB-21453]. One
+  plugin's unresolvable
   activity never fails the whole catalog. `orbit doctor` checks configured activity-catalog
-  directories; it does not inspect plugin-contributed activity files.
+  directories; it does not inspect plugin-contributed activity files [ORB-21609].
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
   `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` — the only addition to the closed
   action enums. Such a step may spawn the plugin's granted `requires.programs` (§4.3), even
@@ -1317,5 +1320,14 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 - [ORB-12879] — repaired the callback schema v2 bump's tests and v1
   leftovers.
 - [ORB-13115] — added task and run identity to the plugin call context.
+- [ORB-21384] — refused unsupported remote-host callbacks with a clear warning.
+- [ORB-21432] — refused same-host workspace callbacks outside a confined
+  backend's binding before runtime bootstrap or store access.
+- [ORB-21453] — withdrew one activity with an unregistered tool while keeping
+  unrelated jobs available.
+- [ORB-21609] — corrected the plugin activity `orbit doctor` claim to match
+  its configured-catalog-only scope.
+- [ORB-21774] — closed `--host` and id-routed bypasses of the cross-host
+  callback refusal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -8,8 +8,8 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-30
-last_validated: 2026-10-31
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
@@ -21,7 +21,7 @@ server UID. The broker executes authenticated requests for exec-backed plugin to
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
 It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
 `gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed worker's
-owner calls, including a before-PR reviewer's review-artifact reads and report write, to the
+owner calls [ORB-14260], including a before-PR reviewer's review-artifact reads and report write, to the
 claim's remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner
 calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
@@ -820,5 +820,9 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
 - [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
 - [ORB-19270] — a claimed worker's task show and artifact get of any task in the claimed workspace (§3).
+- [ORB-20350] — prevented nested Landlock write grants from reopening the
+  agent's read exclusions (§6.2).
+- [ORB-20566] — moved managed explorer submissions to a sibling worker
+  outside the caller's sandbox (§3).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

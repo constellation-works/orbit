@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 feature: auto-concurrency
 doc_role: design
@@ -551,15 +551,15 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   and runtime clones, not just for the pass. Each read runs a freshness probe
   over the sampled runs, returning the newest `finished_at` and count of
   finished sampled runs, and rebuilds when it, the `[machine.auto_concurrency]`
-  bounds, the crew-model map, or the `no-diff-expected` tags of the cached
-  templates change; a tag edit finishes no run, so each read re-reads those
+  bounds, the crew-model map [ORB-19546], or the `no-diff-expected` tags of
+  the cached templates change [ORB-19555]; a tag edit finishes no run, so each read re-reads those
   tags. A sampled
   run counts from its first recorded minute, so a run whose minute zero was
-  never recorded still changes the key when it finishes. Pruning changes the
+  never recorded still changes the key when it finishes [ORB-19545]. Pruning changes the
   count when a run's last minute row goes; removing its earlier rows leaves the
   count unchanged. The probe scans every retained minute row, so a read runs
   it only when the store's `delivery_runs_stamp` counter moved since the cached
-  answer; triggers bump that counter on a run's first or last minute row and on
+  answer [ORB-19463]; triggers bump that counter on a run's first or last minute row and on
   an insert, delete, re-key or `finished_at` change of a sampled run's
   `job_runs` row. A rebuild re-reads minutes only where they moved: the cache
   keeps the runs its last build read, with each sampled run's shape (its
@@ -568,7 +568,7 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   its shape changed. A worker writes each minute index once, past any an
   earlier worker of the run wrote, and retention only deletes, so an unchanged
   shape means unchanged minutes. The first build, and one where most runs
-  moved, read every row in one scan. The dashboard's read also keeps each
+  moved, read every row in one scan [ORB-21826]. The dashboard's read also keeps each
   workspace's encoded profiles with the cached set, so a hit does not
   re-encode them.
   Only profiles are cached: the forecast's live inputs (running deliveries,
@@ -1533,5 +1533,16 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   correction and phase-aligned profiles (§4.2).
 - [ORB-18010] — recorded the 2026-10-25 CPU bias-correction replay in
   §4.2.
+- [ORB-19199] — proposed count-based windows for forecasts, resource profiles
+  and other per-task analytics.
+- [ORB-19264] — replaced the newest-crew and Orbit-version profile regime
+  with per-crew profiles and a union fallback.
+- [ORB-19463] — reduced repeated resource-profile freshness-probe work.
+- [ORB-19545] — fixed cache freshness for sampled runs without minute zero.
+- [ORB-19546] — documented the crew-model map as a profile-cache rebuild trigger.
+- [ORB-19555] — refreshed cached template classes when `no-diff-expected`
+  tags change.
+- [ORB-21826] — bounded resource-profile refresh request tails and re-read
+  only changed runs during a rebuild.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
