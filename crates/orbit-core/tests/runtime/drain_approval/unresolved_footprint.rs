@@ -34,6 +34,22 @@ fn stored(ws: &Workspace, task: &Task) -> Task {
     ws.runtime.get_task(&task.id).unwrap()
 }
 
+/// A predecessor task that is already `done`, as a ledger task would be.
+fn done_predecessor(ws: &Workspace) -> Task {
+    ws.runtime
+        .add_task(TaskAddParams {
+            title: "predecessor ledger".into(),
+            description: "Already landed.".into(),
+            acceptance_criteria: vec!["Done.".into()],
+            plan: "Nothing remains.".into(),
+            status: Some(TaskStatus::Done),
+            context_files: vec!["file:README.md".into()],
+            complexity: TaskComplexity::Low,
+            ..Default::default()
+        })
+        .unwrap()
+}
+
 /// `task`'s hold in a drain selection names `needle` in one of its findings,
 /// so an operator reads what to resolve.
 fn assert_held_finding(selection: &Value, task: &Task, needle: &str) {
@@ -185,10 +201,103 @@ fn a_truly_unidentifiable_task_stays_unassessed_and_held() {
     assert_eq!(ws.record(&drain)["approved"], json!([]));
 }
 
+fn an_assessed_footprint_warning_naming_a_done_predecessor_still_holds() {
+    let (ws, drain) = harness();
+    let done = done_predecessor(&ws);
+    let task = ws.readme_task("ledger of done predecessor unread");
+    let gap = format!(
+        "predecessor ledger {} artifact unreadable under the pilot's read authority",
+        done.id
+    );
+    let warning = json!([{
+        "text": format!("Footprint unresolved: {gap}"),
+        "holds_promotion": true,
+    }]);
+    let after = pilot_once(
+        &ws,
+        &drain,
+        &task,
+        pilot_says(&task, "low", &[&gap], &["file:README.md"], warning),
+    );
+    assert_eq!(after.complexity, Some(TaskComplexity::Low));
+    assert_status(&ws, &task, TaskStatus::Proposed);
+    let next = ws.select(&drain);
+    assert_task_ids(&next, &[]);
+    assert_held(&next, &task, "footprint_unresolved");
+    assert_held_finding(&next, &task, &done.id);
+    assert_eq!(ws.record(&drain)["approved"], json!([]));
+    assert_status(&ws, &task, TaskStatus::Proposed);
+}
+
+fn an_explicit_footprint_warning_naming_a_done_predecessor_is_not_reused() {
+    let (ws, drain) = harness();
+    let done = done_predecessor(&ws);
+    let task = ws.readme_task("explicit ledger of done predecessor unread");
+    let gap = format!(
+        "predecessor ledger {} artifact unreadable under the pilot's read authority",
+        done.id
+    );
+    let warning = json!([{
+        "text": format!("Footprint unresolved: {gap}"),
+        "holds_promotion": true,
+    }]);
+    let (run, prepared) = explicit_pilot(&ws, &task);
+    let applied = ws.apply_unpromoted_assessment(
+        &run,
+        &prepared,
+        pilot_says(&task, "low", &[&gap], &["file:README.md"], warning),
+    );
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_status(&ws, &task, TaskStatus::Proposed);
+    ws.finish(&run, JobRunState::Success);
+    let next = ws.select(&drain);
+    assert_task_ids(&next, &[]);
+    assert_held(&next, &task, "footprint_unresolved");
+    assert_held_finding(&next, &task, &done.id);
+    assert_eq!(ws.record(&drain)["approved"], json!([]));
+    assert_status(&ws, &task, TaskStatus::Proposed);
+}
+
+fn an_unresolved_footprint_naming_a_done_task_reports_its_finding() {
+    let (ws, drain) = harness();
+    std::fs::create_dir_all(ws.repo.join("docs/design")).unwrap();
+    ws.commit_file(RULEBOOK, "conventions\n", "add conventions");
+    let done = done_predecessor(&ws);
+    let task = ws.readme_task("ledger driven by done predecessor");
+    let gap = format!(
+        "predecessor ledger {} artifact unreadable under the pilot's read authority",
+        done.id
+    );
+    let after = pilot_once(
+        &ws,
+        &drain,
+        &task,
+        pilot_says(
+            &task,
+            "unassessed",
+            &[&gap],
+            &[&format!("file:{RULEBOOK}")],
+            json!([]),
+        ),
+    );
+    assert_eq!(after.complexity, Some(TaskComplexity::Low));
+    assert_status(&ws, &task, TaskStatus::Proposed);
+    let next = ws.select(&drain);
+    assert_task_ids(&next, &[]);
+    assert_held(&next, &task, "footprint_unresolved");
+    assert_held_finding(&next, &task, "Footprint unresolved");
+    assert_held_finding(&next, &task, &gap);
+    assert_eq!(ws.record(&drain)["approved"], json!([]));
+    assert_status(&ws, &task, TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     unresolved_footprint_scenarios,
     an_unresolved_footprint_keeps_the_tier_and_pool_and_holds_approval,
     an_identifiable_task_with_readable_evidence_is_rerated_and_approved,
     an_identifiable_task_with_unread_evidence_is_assessed_and_held_by_its_declared_finding,
-    a_truly_unidentifiable_task_stays_unassessed_and_held
+    a_truly_unidentifiable_task_stays_unassessed_and_held,
+    an_assessed_footprint_warning_naming_a_done_predecessor_still_holds,
+    an_explicit_footprint_warning_naming_a_done_predecessor_is_not_reused,
+    an_unresolved_footprint_naming_a_done_task_reports_its_finding
 );

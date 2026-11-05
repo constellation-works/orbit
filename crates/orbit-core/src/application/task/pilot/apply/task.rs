@@ -487,7 +487,10 @@ fn assess_with(
     .map_err(refused(task_id, "invalid"))?;
     let user_facing_ui =
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
-    hold_unresolved_footprint(&mut assessment, recommended, complexity);
+    let dependencies = current.dependencies();
+    hold_unresolved_footprint(&mut assessment, recommended, complexity, &|id: &str| {
+        dependencies.iter().any(|dep| dep == id) || context.runtime.warning_prerequisite_is_done(id)
+    });
     attach_host_findings(
         &mut assessment,
         snapshot,
@@ -640,22 +643,28 @@ fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedT
 /// Hold a task whose pilot could not establish its lock footprint, so the hold
 /// is independent of its tier and selectors [ORB-22153]. An `unassessed`
 /// recommendation that kept an assessed tier gets one `utility_warnings`
-/// finding naming the unread evidence. Any footprint finding already in the
-/// assessment is dropped first, so a pilot cannot supply the marker and a
-/// re-check cannot hold the task twice.
+/// finding naming the unread evidence. An assessed recommendation whose
+/// pilot declared the same unread source as a holding `utility_warnings`
+/// finding gets the marker stamped on that finding, so the hold is not
+/// released merely because the unread source names a done or dependency
+/// task. Any footprint finding already in the assessment is dropped first,
+/// so a pilot cannot supply the marker and a re-check cannot hold the task
+/// twice.
 fn hold_unresolved_footprint(
     assessment: &mut Value,
     recommended: TaskComplexity,
     applied: TaskComplexity,
+    prerequisite_covered: &dyn Fn(&str) -> bool,
 ) {
-    let gaps = assessment
+    let gaps_list = assessment
         .get("evidence_gaps")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join("; ");
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let gaps = gaps_list.join("; ");
     let kept = recommended == TaskComplexity::Unassessed && applied.is_assessed();
     let Some(warnings) = assessment
         .get_mut("utility_warnings")
@@ -666,6 +675,31 @@ fn hold_unresolved_footprint(
     warnings.retain(|finding| {
         finding.get("hold").and_then(Value::as_str) != Some(FOOTPRINT_UNRESOLVED)
     });
+    if recommended.is_assessed() {
+        // Stamp only the case the prerequisite exemption would otherwise
+        // release: the finding or its gaps name a task that is already a
+        // dependency or done. An uncovered footprint finding keeps its
+        // ordinary `warnings` hold, marker included in its findings.
+        let covered = gaps_list
+            .iter()
+            .map(String::as_str)
+            .chain(
+                warnings
+                    .iter()
+                    .filter_map(|finding| finding.get("text").and_then(Value::as_str)),
+            )
+            .flat_map(named_task_ids)
+            .any(|id| prerequisite_covered(&id));
+        if covered {
+            for finding in warnings.iter_mut() {
+                if pilot_declares_unresolved_footprint(finding, &gaps_list)
+                    && let Some(object) = finding.as_object_mut()
+                {
+                    object.insert("hold".to_string(), json!(FOOTPRINT_UNRESOLVED));
+                }
+            }
+        }
+    }
     if kept {
         warnings.push(json!({
             "text": format!(
@@ -679,6 +713,42 @@ fn hold_unresolved_footprint(
             "hold": FOOTPRINT_UNRESOLVED,
         }));
     }
+}
+
+/// Whole `ORB-` task ids named in `text`.
+fn named_task_ids(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_')))
+        .filter(|token| token.starts_with("ORB-") && token.len() > 4)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether an assessed pilot's holding utility finding declares an unread
+/// footprint source: it explicitly holds promotion and either names the
+/// footprint, describes the source as unread, or names a task the
+/// `evidence_gaps` also name as the unread source.
+fn pilot_declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
+    if finding.get("holds_promotion").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    let Some(text) = finding.get("text").and_then(Value::as_str) else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("footprint") {
+        return true;
+    }
+    if gaps.is_empty() {
+        return false;
+    }
+    if lower.contains("unread") {
+        return true;
+    }
+    // A task id the gaps also name ties the finding to the gap's source.
+    let gaps_text = gaps.join(" ");
+    named_task_ids(text)
+        .iter()
+        .any(|id| gaps_text.contains(id.as_str()))
 }
 
 /// The pilot never sees the deterministic findings — the lane's
