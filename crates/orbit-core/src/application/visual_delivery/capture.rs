@@ -31,7 +31,7 @@ use crate::application::visual_capture::{
     DriverReport, FROZEN_INSTANT, VisualCaptureMock, driver_mock_request, kit_not_established,
     mock_output_name, rules_dir_in, run_capture_driver,
 };
-use crate::bootstrap::browser_kit::{KitInspection, KitLayout};
+use orbit_exec::browser_kit::{KitInspection, KitLayout};
 
 /// One task's capture, as the step reports it and later steps read it.
 pub(super) struct TaskCapture {

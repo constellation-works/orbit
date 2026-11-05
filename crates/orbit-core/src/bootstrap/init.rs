@@ -13,8 +13,9 @@ use crate::application::job::seed_default_jobs;
 use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::skill::{
-    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills,
+    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills, skill_link_roots,
 };
+use crate::application::workspace_product_profile::ProductProfile;
 use crate::application::workspace_sync::{
     ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
 };
@@ -23,7 +24,6 @@ use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
 };
 use crate::bootstrap::policy::seed_default_policies;
-use crate::bootstrap::product_profile::ProductProfile;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::resolve_global_root;
@@ -407,13 +407,6 @@ fn resolve_init_target_from_root(orbit_root: &Path) -> InitTarget {
         orbit_root,
         skills_links_roots,
     }
-}
-
-pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
-    [".agents", ".claude"]
-        .into_iter()
-        .map(|dir| base_root.join(dir).join("skills"))
-        .collect()
 }
 
 fn prepare_workspace_root_layout(

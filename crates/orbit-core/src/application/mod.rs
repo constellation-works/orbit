@@ -63,6 +63,7 @@ pub(crate) mod visual_delivery;
 pub(crate) mod workflow;
 mod workspace;
 pub(crate) mod workspace_auto;
+pub(crate) use workspace::product_profile as workspace_product_profile;
 pub use workspace::{
     live_runs as workspace_live_runs, preset as workspace_preset, sync as workspace_sync,
 };

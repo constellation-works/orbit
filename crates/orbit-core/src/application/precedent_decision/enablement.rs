@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 
 use super::contract::PRECEDENT_DECISION_USE_CASE;
 use crate::OrbitRuntime;
+use crate::application::assistance::AssistanceServicePort;
 use crate::application::assistance::{AssistancePolicyIdentity, AssistanceService};
 use crate::runtime::plugin::paths::decision_channel_store_dir;
 use crate::runtime::plugin::sandbox_mask::{decision_channel_store_masked, not_visible};
@@ -409,7 +410,7 @@ impl OrbitRuntime {
         readout: &str,
         operator: &str,
     ) -> Result<PrecedentAssistStatus, OrbitError> {
-        let service = self.precedent_decision_service()?;
+        let service = self.assistance_service()?;
         self.enable_precedent_assist_with_service(category, readout, operator, &service)
     }
 
@@ -537,7 +538,7 @@ impl OrbitRuntime {
     /// Every category enablement on this host, with the state that governs
     /// answering now.
     pub fn precedent_assist_status(&self) -> Result<Vec<PrecedentAssistStatus>, OrbitError> {
-        let service = self.precedent_decision_service()?;
+        let service = self.assistance_service()?;
         self.precedent_assist_status_with_service(&service)
     }
 

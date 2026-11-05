@@ -88,7 +88,7 @@ introduced. See the [corpus design](docs/design/workspace-agent-corpus/1_scope.m
 | `orbit-tools` | internal | common, exec, policy, types |
 | `orbit-agent` | internal | common, types |
 | `orbit-automation` | internal | common, store, types |
-| `orbit-engine` | internal | agent, common, exec, store, tools, types |
+| `orbit-engine` | internal | agent, common, exec, store, tools, types (dev: engine) |
 | `orbit-runtime` | internal | common, config, engine, exec, policy, search, store, tools, types (dev: runtime) |
 | `orbit-mcp` | internal | common, registry, tools, types (dev: mcp) |
 | `orbit-core` | internal | automation, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
@@ -157,9 +157,10 @@ the base every `RuntimeHost` test double in Engine and Core builds on, so the
 `RuntimeHost` trait itself carries no defaults and shipped builds have no null
 host.
 
-The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
-regression tests. The dependency-direction guard
-also checks that dependencies defined in `[workspace.dependencies]` are inherited
+The `orbit-core` → `orbit-exec` edge is a production edge: Core's script steps,
+CodeQL fulfilment, plugin conformance, browser kit reads and Linux host probe use
+Exec, and its sandbox regression tests also enable Exec's `test-support` feature.
+The dependency-direction guard also checks that dependencies defined in `[workspace.dependencies]` are inherited
 in member manifests with `workspace = true`.
 
 ### Foundation and kernel
@@ -187,7 +188,7 @@ in member manifests with `workspace = true`.
 ### Application and surfaces
 
 - **orbit-runtime** is the runtime kernel: `RuntimeKernel` and its stores, engine handles, event bus, audit, claims, reservations, plugin host, workspace binding, host probes and process/tool execution mechanisms, plus the actor context, root paths and cost types. It is built from a config value that composition has already resolved, and it never depends on `orbit-core`. Where a kernel mechanism finishes through a use case (task reads, automation updates, audit records, run reconciliation, crew redraws), it calls `ApplicationPort`, which Core implements and passes in when it builds the kernel.
-- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. Its `runtime` module re-exports `orbit-runtime` and defines `OrbitRuntime`, which owns a `RuntimeKernel` and dereferences to it. Both layers define inherent methods on `OrbitRuntime`. Its application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < sweep_filing`; a lower module reaches a higher one only through a port trait the lower module owns and the higher one implements, and `scripts/check-dependency-direction.sh` refuses a path into a higher module or a call to any inherent method a higher module defines (names derived, not listed; `task/backlog_forecast/` is exempt from the `task` upper-module checks except `automation`, pending its move). The adapter sits above the whole application layer, so application reaches it only through ports the application layer owns and the adapter implements on `OrbitRuntime`: `contracts::ToolInvocationPort` for tool execution, which still runs the adapter's tool chokepoint, and `pull_drain::drain::PullTransportPort` for the pull drain's owner peer and leaf launcher. The guard refuses a `crate::adapter` path from application, and any call from application to an inherent method an `impl OrbitRuntime` block under `adapter/` defines [ORB-22004]. Core never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
+- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. `bootstrap` depends on `application`, because it seeds through application-owned definitions, and never the reverse. Application and the adapter don't name `bootstrap` or `composition`; they reach them through application-owned ports: `assistance::AssistanceServicePort`, which composition implements, and `contracts::TaskBundleMaintenancePort`, which bootstrap implements. The guard refuses those paths and any call from application or the adapter to an inherent method an `impl OrbitRuntime` block in `composition.rs` or under `bootstrap/` defines [ORB-22005]. Its `runtime` module re-exports `orbit-runtime` and defines `OrbitRuntime`, which owns a `RuntimeKernel` and dereferences to it. Both layers define inherent methods on `OrbitRuntime`. Its application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < sweep_filing`; a lower module reaches a higher one only through a port trait the lower module owns and the higher one implements, and `scripts/check-dependency-direction.sh` refuses a path into a higher module or a call to any inherent method a higher module defines (names derived, not listed; `task/backlog_forecast/` is exempt from the `task` upper-module checks except `automation`, pending its move). The adapter sits above the whole application layer, so application reaches it only through ports the application layer owns and the adapter implements on `OrbitRuntime`: `contracts::ToolInvocationPort` for tool execution, which still runs the adapter's tool chokepoint, and `pull_drain::drain::PullTransportPort` for the pull drain's owner peer and leaf launcher. The guard refuses a `crate::adapter` path from application, and any call from application to an inherent method an `impl OrbitRuntime` block under `adapter/` defines [ORB-22004]. Core never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
   - `review` runs the before-PR review gate (admit, settle, certificates, landing verification).
   - `landing` is the owner-side landing consumer for distributed drains, dispatched from the coordination outbox.
   - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.
@@ -306,7 +307,7 @@ with an audit warning. Ordinary writable runtimes reuse their audit handle.
 
 ## Product identity
 
-Orbit is the only supported application profile. A `.orbit-product` marker, checked in [`bootstrap::product_profile`](crates/orbit-core/src/bootstrap/product_profile.rs), stops another product from initializing or reconciling an Orbit root. Unmarked legacy roots still open. The marker guards against accident, not attack.
+Orbit is the only supported application profile. A `.orbit-product` marker, checked in [`application::workspace::product_profile`](crates/orbit-core/src/application/workspace/product_profile.rs), stops another product from initializing or reconciling an Orbit root. Unmarked legacy roots still open. The marker guards against accident, not attack.
 
 Before a second public profile can exist, it must be fixed before state opens and carried through every entry point, not just filtered in tool discovery. That means these entry points:
 - tool execution and command dispatch

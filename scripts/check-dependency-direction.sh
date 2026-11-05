@@ -61,8 +61,9 @@ allowed_internal_deps() {
       echo "orbit-common orbit-config orbit-engine orbit-exec orbit-policy orbit-runtime orbit-search orbit-store orbit-tools orbit-types"
       ;;
     orbit-core)
-      # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
-      # remains test-only and does not widen Core's production dependency graph.
+      # Core's script steps, CodeQL fulfilment, plugin conformance, browser kit
+      # reads and host probes use Exec in production; sandbox regression tests
+      # also compose Core with Exec's `test-support` feature.
       # Its dev-only self dependency enables the `test-support` feature.
       echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-runtime orbit-store orbit-tools orbit-types"
       ;;
@@ -293,9 +294,12 @@ fi
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application` and names one of the
-# `|`-separated modules `$3`; exit nonzero when one is found.
+# `|`-separated modules `$3`; exit nonzero when one is found. With `$4` set to
+# `crate-root`, `$1` is any layer under the crate source and the modules are
+# crate-root modules: a `super::` chain counts when it climbs out to the crate
+# root, and a `crate::` path or use-tree counts too [ORB-22005].
 super_chains_into() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import pathlib
 import re
 import sys
@@ -303,6 +307,9 @@ import sys
 app = pathlib.Path(sys.argv[1])
 module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
+crate_root = sys.argv[4] == "crate-root"
+climb_target = [] if crate_root else [app.name]
+path_starts = ("super", "crate") if crate_root else ("super",)
 token = re.compile(
     r"(?P<line>//[^\n]*)|(?P<block>/\*)"
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
@@ -367,14 +374,14 @@ for path in sorted((app / module).rglob("*.rs")):
     rel = path.relative_to(app)
     if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
         continue
-    parts = ["application", *rel.with_suffix("").parts]
+    parts = [app.name, *rel.with_suffix("").parts]
     if parts[-1] == "mod":
         parts.pop()
     source = path.read_text()
     tokens = list(code_tokens(source))
     index = 0
     while index + 1 < len(tokens):
-        if tokens[index][0] != "super" or tokens[index + 1][0] != "::":
+        if tokens[index][0] not in path_starts or tokens[index + 1][0] != "::":
             index += 1
             continue
         start = tokens[index][1]
@@ -383,8 +390,12 @@ for path in sorted((app / module).rglob("*.rs")):
             ups = 0
             while ups < len(segments) and segments[ups] == "super":
                 ups += 1
-            if (parts[: len(parts) - ups] == ["application"]
-                    and ups < len(segments) and segments[ups] in upper):
+            if segments[0] == "crate":
+                named = len(segments) > 1 and segments[1] in upper
+            else:
+                named = (parts[: len(parts) - ups] == climb_target
+                         and ups < len(segments) and segments[ups] in upper)
+            if named:
                 number = source.count("\n", 0, start) + 1
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True
@@ -403,6 +414,8 @@ PY
 # allowance for a same-named method on another type (a store read).
 # `$6` (default `$1`) is the directory `$3` is relative to, when the defining
 # modules are not application modules: `$3` empty means all of it [ORB-22004].
+# An entry of `$3` may name one source file rather than a module directory, and
+# `$1` may be another layer under the crate source [ORB-22005].
 inherent_calls_into() {
   python3 - "$1" "$2" "$3" "$4" "$5" "${6:-}" <<'PY'
 import pathlib, re, sys
@@ -442,7 +455,7 @@ def code_tokens(source):
         else:
             yield match.group(), match.start()
 def production(root, base):
-    for path in sorted(root.rglob("*.rs")):
+    for path in [root] if root.is_file() else sorted(root.rglob("*.rs")):
         rel = path.relative_to(base)
         if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
             continue
@@ -466,7 +479,7 @@ def visibility(toks, i, parts):
             if inner[:1] == ["in"] and inner[1:2] == ["crate"]:
                 return inner[2:]
     return None
-lower_path = ["application", *([module] if module else [])]
+lower_path = [app.name, *([module] if module else [])]
 names = set()
 for top in upper:
     for path, rel in production(defs_root / top, defs_root):
@@ -540,6 +553,25 @@ if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_ro
   echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
   fail=1
 fi
+
+# [ORB-22005] Composition is the only joiner, and `bootstrap -> application`
+# stays because bootstrap seeds through application-owned definitions, so
+# neither application nor the adapter may name bootstrap or composition or call
+# an inherent `OrbitRuntime` method either defines. They reach them only through
+# `assistance::AssistanceServicePort` and `contracts::TaskBundleMaintenancePort`.
+# The names are derived from the `impl OrbitRuntime` blocks in `composition.rs`
+# and under `bootstrap/`. Exact lines allowed: the lexical index store's own
+# `reindex_tasks`, and the `#[cfg(test)]` fixture that opens a runtime.
+core_src="$repo_root/crates/orbit-core/src"
+joiner_upcall_allowed='^search/runtime\.rs:[0-9]+:.*lexical_index\(\)\.store\(\)\?\.reindex_tasks\(|^test_support\.rs:[0-9]+:.*OrbitRuntime::from_roots\('
+for layer in application adapter; do
+  if ! super_chains_into "$core_src/$layer" "" 'bootstrap|composition' crate-root ||
+    ! inherent_calls_into "$core_src/$layer" "" 'composition.rs|bootstrap' \
+      "$joiner_upcall_allowed" '' "$core_src"; then
+    echo "orbit-core ${layer} must not name bootstrap or composition or call their inherent OrbitRuntime methods; reach them through an application-owned port [ORB-22005]"
+    fail=1
+  fi
+done
 
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and

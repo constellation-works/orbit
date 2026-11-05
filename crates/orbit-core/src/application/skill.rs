@@ -10,6 +10,14 @@ use super::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 
+/// The client skill-discovery directories under `base_root`.
+pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
+    [".agents", ".claude"]
+        .into_iter()
+        .map(|dir| base_root.join(dir).join("skills"))
+        .collect()
+}
+
 /// Every shipped skill file, keyed by its path relative to the skills root.
 ///
 /// Skills are directory trees rather than single documents, so their managed
@@ -324,9 +332,9 @@ impl OrbitRuntime {
             .collect();
         let global_root = self.global_root();
         if let Some(discovery_base) = global_root.parent() {
-            results.extend(doctor_client_skill_links(
-                &crate::bootstrap::init::skill_link_roots(discovery_base),
-            )?);
+            results.extend(doctor_client_skill_links(&skill_link_roots(
+                discovery_base,
+            ))?);
         }
         Ok(results)
     }

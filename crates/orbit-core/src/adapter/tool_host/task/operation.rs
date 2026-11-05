@@ -14,6 +14,7 @@ use orbit_types::task::{
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::TaskBundleMaintenancePort;
 use crate::application::task::{
     TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
     TaskWriteResponsePolicy, task_listing_field_json, task_pilot_warnings,
@@ -548,7 +549,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         payload["warnings"] = json!(warnings);
     }
     if empty {
-        let unindexed = runtime.unindexed_task_bundle_count()?;
+        let unindexed = runtime.count_unindexed_task_bundles()?;
         if unindexed > 0 {
             payload["unindexed_bundle_count"] = json!(unindexed);
         }

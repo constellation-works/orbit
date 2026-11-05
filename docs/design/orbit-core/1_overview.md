@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-03
+last_updated: 2026-11-04
 last_validated: 2026-10-30
 status: Accepted
 stage: shipped
@@ -13,7 +13,7 @@ summary: Directional runtime, application, adapter, bootstrap, and composition b
 tags: [orbit-core, orbit-cmd, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-cmd/**", "crates/orbit-registry/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17943, ORB-17972]
+related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17943, ORB-17972, ORB-22005]
 ---
 
 # Orbit Core — Overview
@@ -24,14 +24,18 @@ Orbit's runtime kernel lives in the internal `orbit-runtime` crate.
 
 ```text
 runtime <- application <- adapter
-   ^             ^           ^
-   +------ composition -------+
-              ^
-           bootstrap
+   ^         ^      ^        ^
+   |         |  bootstrap    |
+   |         |      ^        |
+   +------ composition ------+
 ```
 
-Composition loads resolved `orbit-config`, runs bootstrap, constructs the
-runtime, and attaches adapters. `orbit-runtime` never depends on `orbit-core`,
+An arrow points at what a layer depends on. Composition loads resolved
+`orbit-config`, runs bootstrap, constructs the runtime, and attaches adapters.
+Bootstrap depends on application because it seeds through application-owned
+definitions, and it opens the runtime too. Neither application nor the adapter names bootstrap or
+composition; they reach them through application-owned ports [ORB-22005].
+`orbit-runtime` never depends on `orbit-core`,
 so kernel code cannot import application or adapter code. Where a kernel
 mechanism finishes through a use case, it calls the `ApplicationPort` trait
 that composition supplies when it builds the kernel.
@@ -70,9 +74,14 @@ source scan, enforces the runtime direction.
   `orbit-engine::RuntimeHost` callback translation. Adapters may use both
   application operations and runtime mechanisms.
 - **Bootstrap** — initialization, managed/default assets, policy seeding, and
-  forward-only startup migrations [ORB-10012].
+  forward-only startup migrations [ORB-10012]. It depends on application for
+  the seed definitions, and implements `contracts::TaskBundleMaintenancePort`
+  so the adapter can publish tasks and count unindexed bundles [ORB-22005].
 - **Composition** — root resolution and the sole join of `orbit-config`,
-  bootstrap, runtime construction, and adapters.
+  bootstrap, runtime construction, and adapters. It implements
+  `assistance::AssistanceServicePort`, which gives the task-quality,
+  delivery-quality and precedent-decision consumers their assistance service
+  [ORB-22005].
 - **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
   `shared_root`, and `local_root`. On the primary checkout `shared_root` and
   `local_root` are equal; in a linked worktree `shared_root` is the primary
@@ -112,6 +121,8 @@ source scan, enforces the runtime direction.
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
+| Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
+| Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
 | Config loading and runtime assembly | `crates/orbit-core/src/composition.rs` | [ORB-10886] |
@@ -265,7 +276,13 @@ and job edges that had regrown past the fixed-name guard (all but
   bare `name(` is a free function, not an up-call, so only `receiver.name(`,
   `OrbitRuntime::name(` and `Self::name(` are checked. Same-named methods on
   other receivers (the skill catalog's `doctor`, the plugin store's
-  `list_plugins`) are exact-line allowances.
+  `list_plugins`) are exact-line allowances. [ORB-22005] It also fails when
+  `application` or `adapter` names `crate::bootstrap` or `crate::composition` by
+  path, grouped tree or `super::` chain, or calls an inherent `OrbitRuntime`
+  method that an `impl OrbitRuntime` block in `composition.rs` or under
+  `bootstrap/` defines with a visibility that reaches it. Same-named lines (the
+  lexical index store's `reindex_tasks` and the `#[cfg(test)]` fixture's
+  `OrbitRuntime::from_roots`) are exact-line allowances.
 
 The application layering, lowest first, is `contracts < task < job <
 automation < review < distributed < pull_drain < admission < workspace_auto <
@@ -296,6 +313,7 @@ task → admission and task → workspace_auto edges are the known exception.
 - [ORB-17972] — routed task's remaining inherent calls to `job` through `task::TaskJobPort` and guarded them; no task → job edge remains.
 - [ORB-22003] — routed the regrown task → job, task → distributed, job → distributed and job → pull_drain calls through the existing lower-owned ports and made the guard derive forbidden inherent names from each higher module's `impl OrbitRuntime` blocks; `task/backlog_forecast/` is exempt pending its move.
 - [ORB-22004] — moved the application's tool-invocation and pull-transport calls behind `contracts::ToolInvocationPort` and `pull_drain::drain::PullTransportPort`, which the adapter implements on `OrbitRuntime`, and guarded the application → adapter edge against inherent `OrbitRuntime` calls.
+- [ORB-22005] — removed the application → composition, application → bootstrap and adapter → bootstrap edges through `AssistanceServicePort`, `TaskBundleMaintenancePort` and moving `skill_link_roots` and `ProductProfile` into application, settled the direction as `bootstrap → application`, and guarded it.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 - [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
 

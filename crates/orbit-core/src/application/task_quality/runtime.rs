@@ -10,6 +10,7 @@ use super::ledger::{
     TaskQualityDismissal, TaskQualityDismissalReason, TaskQualityHistory, TaskQualitySnapshot,
 };
 use crate::OrbitRuntime;
+use crate::application::assistance::AssistanceServicePort;
 
 /// Drop a restored snapshot's stale admission receipt so the owner tick can
 /// mint a fresh attempt. The snapshot keeps its content-derived identity — and
@@ -72,7 +73,7 @@ impl OrbitRuntime {
     /// markers by reading committed tasks. No adapter/credential/network call.
     pub(crate) fn schedule_task_quality_after_commit(&self, task: &Task) {
         let result = self
-            .task_quality_service()
+            .assistance_service()
             .and_then(|service| self.schedule_task_quality_with_service(&task.id, &service));
         if result.is_err() {
             // Do not log task prose, settings, credentials or provider errors.
@@ -262,7 +263,7 @@ impl OrbitRuntime {
     /// Production owner-clock entry. Disabled workspaces return before scans,
     /// queue writes, credential resolution or provider calls.
     pub fn run_task_quality_tick(&self) -> Result<(), OrbitError> {
-        self.run_task_quality_with_service(&self.task_quality_service()?)
+        self.run_task_quality_with_service(&self.assistance_service()?)
     }
 
     /// Supported synthetic-adapter boundary. Reconcile at most 32 subjects and

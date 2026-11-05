@@ -12,12 +12,13 @@ use super::contract::{
 use super::ledger::QualityReceipt;
 use super::profile::{DeliveryQualityDimension, DeliveryQualityProfile, DeliveryQualitySource};
 use crate::OrbitRuntime;
+use crate::application::assistance::AssistanceServicePort;
 
 impl OrbitRuntime {
     /// Owner-only periodic composition; the service checks the global grant
     /// before source reads, consumer locks, queue writes or adapter work.
     pub fn run_delivery_quality_tick(&self) -> Result<(), OrbitError> {
-        let service = self.delivery_quality_service()?;
+        let service = self.assistance_service()?;
         let Some(epoch) = service
             .assistance_shadow_policy_epoch(&self.workspace_id()?, DELIVERY_QUALITY_USE_CASE)?
         else {

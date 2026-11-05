@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 
 use super::{attach_system_artifacts, json_artifact};
 use crate::OrbitRuntime;
-use crate::bootstrap::browser_kit::PLAYWRIGHT_VERSION;
+use orbit_exec::browser_kit::PLAYWRIGHT_VERSION;
 
 fn held(detail: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!(

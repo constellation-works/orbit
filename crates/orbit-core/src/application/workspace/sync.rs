@@ -167,7 +167,7 @@ fn reconcile_managed_artifacts(
     mode: ManagedAssetReconcileMode,
     host_global: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
-    crate::bootstrap::product_profile::ProductProfile::Orbit
+    super::product_profile::ProductProfile::Orbit
         .validate_roots(&[global_root, workspace_orbit_root])?;
     let policies = workspace_seeding_policies(global_root, workspace_orbit_root)?;
     let mut report = WorkspaceManagedArtifactSyncReport {

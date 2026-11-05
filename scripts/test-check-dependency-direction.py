@@ -52,6 +52,7 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/pull_drain",
             "crates/orbit-core/src/application/admission",
             "crates/orbit-core/src/application/workspace_auto",
+            "crates/orbit-core/src/adapter", "crates/orbit-core/src/bootstrap",
             "crates/orbit-runtime/src", "crates/orbit-automation/src",
             "crates/orbit-store/src/contracts", "crates/orbit-store/src/driver/file",
             "crates/orbit-store/src/driver/sqlite", "crates/orbit-store/src/fs",
@@ -95,6 +96,48 @@ class RelativeImportTests(unittest.TestCase):
                         "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
                         "        self.fresh_owner_method();\n    }\n}\n",
                 }, rejected=True)
+
+    def test_paths_into_bootstrap_and_composition_rejected(self):
+        for layer, relative in (("application", "workspace/sync.rs"),
+                                ("adapter", "../adapter/tool_host/operation.rs")):
+            for module in ("bootstrap", "composition"):
+                for tree in (
+                    f"crate::{module}::Probe",
+                    f"crate::{{{module}::Probe}}",
+                    f"crate::{{runtime::{{Other}}, /* note */ {module}::Probe}}",
+                    f"super::super::super::{module}::Probe",
+                    f"super::super::super::{{{module}::Probe}}",
+                ):
+                    with self.subTest(layer=layer, tree=tree):
+                        self.check_import(relative, f"use {tree};", rejected=True)
+
+    def test_inherent_calls_into_bootstrap_and_composition_rejected(self):
+        for owner in ("../composition.rs", "../bootstrap/init.rs"):
+            for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
+                with self.subTest(owner=owner, caller=caller):
+                    self.check_files({
+                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_joiner(&self) {}\n}\n",
+                        caller: "impl Probe {\n    fn drive(&self, runtime: &OrbitRuntime) {\n"
+                                "        runtime.fresh_joiner();\n    }\n}\n",
+                    }, rejected=True)
+
+    def test_joiner_ports_and_their_mentions_accepted(self):
+        for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
+            with self.subTest(caller=caller):
+                self.check_files({
+                    "../composition.rs":
+                        "impl OrbitRuntime {\n    fn private_joiner(&self) {}\n"
+                        "    pub(in crate::bootstrap) fn narrow_joiner(&self) {}\n}\n"
+                        "impl AssistanceServicePort for OrbitRuntime {\n"
+                        "    fn ported_service(&self) {}\n}\n",
+                    caller: "// crate::bootstrap::init is only named here.\n"
+                            'const NOTE: &str = "crate::composition::x";\n'
+                            "fn drive(runtime: &OrbitRuntime) {\n"
+                            "    runtime.ported_service();\n    runtime.private_joiner();\n"
+                            "    runtime.narrow_joiner();\n}\n",
+                    "../adapter/tests/fixture.rs": "use crate::bootstrap::init::Probe;\n",
+                    "task/tests/fixture.rs": "use crate::composition::Probe;\n",
+                }, rejected=False)
 
     def test_task_port_and_task_owned_calls_accepted(self):
         self.check_files({

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::bootstrap::browser_kit::{
+use orbit_exec::browser_kit::{
     KitInspection, KitLayout, PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
 };
 
