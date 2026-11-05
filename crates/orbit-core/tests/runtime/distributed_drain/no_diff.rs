@@ -10,6 +10,53 @@ mod task_artifacts;
 
 pub(crate) use support::*;
 
+fn assert_settles_to_review(fixture: &CleanLeaf, handoff: &TaskHandoff, case: &str) {
+    let settled = fixture
+        .settle(handoff)
+        .unwrap_or_else(|error| panic!("{case}: owner refused handoff: {error}"));
+    assert_eq!(settled["status"], "review", "{case}: {settled}");
+}
+
+fn add_regression_culprit(fixture: &CleanLeaf, title: &str, description: &str) -> String {
+    fixture
+        .pair
+        .wire
+        .owner
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": title, "description": description,
+                "complexity": "low", "model": "codex",
+                "workspace": fixture.pair.owner_repo.to_string_lossy(),
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn unfiled_findings(fixture: &CleanLeaf) -> Value {
+    let attached = fixture
+        .pair
+        .wire
+        .owner
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": fixture.task, "path": "unfiled-findings.json"}),
+        )
+        .expect("the handoff attaches the unfiled findings");
+    serde_json::from_str(attached["content"].as_str().unwrap()).unwrap()
+}
+
+fn clean_leaf_for_tag(tagged: bool) -> CleanLeaf {
+    if tagged {
+        CleanLeaf::review_only("done")
+    } else {
+        CleanLeaf::new(false, "done")
+    }
+}
+
 fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
     for (already_landed, job) in [
         (false, "task_claimed_pr_pipeline"),
@@ -308,10 +355,7 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
             handoff.execution_summary
         );
 
-        let settled = fixture
-            .settle(&handoff)
-            .expect("the owner accepts a tagged skip without logs");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        assert_settles_to_review(&fixture, &handoff, job);
         let owner = &fixture.pair.wire.owner;
         assert_eq!(fixture.pair.owner_status(&fixture.task), "review", "{job}");
         let artifacts = fixture
@@ -493,20 +537,11 @@ fn owner_refuses_a_no_diff_expected_skip_for_an_untagged_task() {
 fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() {
     let mut fixture = CleanLeaf::delivery_review("done");
     let owner = fixture.pair.wire.owner.clone();
-    let culprit = owner
-        .run_tool(
-            "orbit.task.add",
-            json!({
-                "title": "The delivery that introduced the defect",
-                "description": "Landed in the reviewed batch.",
-                "complexity": "low", "model": "codex",
-                "workspace": fixture.pair.owner_repo.to_string_lossy(),
-            }),
-        )
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let culprit = add_regression_culprit(
+        &fixture,
+        "The delivery that introduced the defect",
+        "Landed in the reviewed batch.",
+    );
     let relations = |culprit: &str| {
         json!([{"type": "spawned_from", "target": fixture.task},
                {"type": "regression_from", "target": culprit}])
@@ -556,13 +591,7 @@ fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() 
     }]);
     fixture.input["implementation"]["unfiled_findings"] = unfiled.clone();
     let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
-    let attached = owner
-        .run_tool(
-            "orbit.task.artifact.get",
-            json!({"id": fixture.task, "path": "unfiled-findings.json"}),
-        )
-        .expect("the handoff attaches the unfiled findings to the review task");
-    let record: Value = serde_json::from_str(attached["content"].as_str().unwrap()).unwrap();
+    let record = unfiled_findings(&fixture);
     assert_eq!(record["findings"], unfiled, "{record}");
     assert_eq!(record["claim_id"], binding.claim_id);
     assert_eq!(record["run_id"], fixture.leaf);
@@ -584,7 +613,6 @@ fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() 
 /// does a malformed field other than the findings [ORB-14927].
 fn a_published_candidates_string_findings_are_normalized_at_handoff() {
     let mut fixture = CleanLeaf::delivery_review("done");
-    let owner = fixture.pair.wire.owner.clone();
     let long = format!("{} and on", "A very long first sentence".repeat(8));
     let object = json!({
         "title": "Already structured",
@@ -597,13 +625,7 @@ fn a_published_candidates_string_findings_are_normalized_at_handoff() {
         long,
     ]);
     let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
-    let attached = owner
-        .run_tool(
-            "orbit.task.artifact.get",
-            json!({"id": fixture.task, "path": "unfiled-findings.json"}),
-        )
-        .expect("the handoff attaches the normalized findings");
-    let record: Value = serde_json::from_str(attached["content"].as_str().unwrap()).unwrap();
+    let record = unfiled_findings(&fixture);
     let findings = record["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 3, "{record}");
     assert_eq!(findings[0]["title"], "The owner refused this.");
@@ -645,21 +667,11 @@ fn a_published_candidates_string_findings_are_normalized_at_handoff() {
 /// refused and records nothing [F2026-10-453].
 fn a_claimed_implementers_regression_culprit_is_recorded_at_handoff() {
     let mut fixture = CleanLeaf::new(false, "review");
-    let owner = fixture.pair.wire.owner.clone();
-    let culprit = owner
-        .run_tool(
-            "orbit.task.add",
-            json!({
-                "title": "The delivery that broke CI",
-                "description": "Landed the failing change.",
-                "complexity": "low", "model": "codex",
-                "workspace": fixture.pair.owner_repo.to_string_lossy(),
-            }),
-        )
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let culprit = add_regression_culprit(
+        &fixture,
+        "The delivery that broke CI",
+        "Landed the failing change.",
+    );
     fixture.input["implementation"]["regression_from"] = json!([culprit]);
     let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
     assert_eq!(handoff.regression_from, vec![culprit.clone()]);
@@ -737,11 +749,7 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
                 | "oversize_log"
                 | "wrong_log_run"
         );
-        let fixture = if tagged {
-            CleanLeaf::review_only("done")
-        } else {
-            CleanLeaf::new(false, "done")
-        };
+        let fixture = clean_leaf_for_tag(tagged);
         let mut handoff = fixture.prepare_handoff();
         let mut restore_blob = None;
         match changed {
@@ -1043,13 +1051,10 @@ fn claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs() {
 /// action, even when the base advances again before landing [ORB-15074].
 fn a_claimed_no_diff_chore_completes_after_its_base_advances() {
     for tagged in [false, true] {
-        let fixture = if tagged {
-            let fixture = CleanLeaf::review_only("done");
+        let fixture = clean_leaf_for_tag(tagged);
+        if tagged {
             fixture.attach_coverage();
-            fixture
-        } else {
-            CleanLeaf::new(false, "done")
-        };
+        }
         let tip = fixture.advance_base(1);
         assert_ne!(tip, fixture.base);
 
@@ -1091,11 +1096,7 @@ fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
                 .map(move |action| (tagged, committed, action))
         })
     }) {
-        let fixture = if tagged {
-            CleanLeaf::review_only("done")
-        } else {
-            CleanLeaf::new(false, "done")
-        };
+        let fixture = clean_leaf_for_tag(tagged);
         let mut input = fixture.validate_input();
         if action == "claim_handoff" {
             let validated = fixture.action("claim_validate", &input);
@@ -1138,82 +1139,82 @@ fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
 /// deferred, even when only `review.baseline_commands` names it, and attaches
 /// its log beside the required command's. Before, only the required commands
 /// ran and the deferral was silently dropped [ORB-15287].
+#[derive(Clone, Copy, Debug)]
+enum BaselineReplay {
+    Deferred,
+    NoDeferral,
+    StillDeferred,
+    NoTests,
+}
+
+fn check_baseline_gate_replay(case: BaselineReplay) {
+    use BaselineReplay::*;
+    for job in NO_DIFF_ROUTES {
+        let mut fixture = CleanLeaf::gated("done");
+        let success = matches!(case, Deferred | NoDeferral);
+        if success {
+            fixture.attach_coverage();
+        }
+        if !matches!(case, NoDeferral) {
+            fixture.hand_off_deferral();
+        }
+        match case {
+            StillDeferred => fixture.gate.as_ref().unwrap().defers(),
+            NoTests => fixture.gate.as_ref().unwrap().executes(0),
+            _ => {}
+        }
+        if success {
+            let handoff = fixture.run_clean_pipeline(job);
+            let gate = fixture.gate.as_ref().unwrap();
+            let deferred = matches!(case, Deferred);
+            assert_eq!(gate.runs(), usize::from(deferred), "{job}: {case:?}");
+            let mut commands = vec![CHECK.to_string()];
+            if deferred {
+                commands.push(gate.command());
+                assert!(
+                    matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }),
+                    "{job}: {case:?}: the clean-base checkpoint is preserved"
+                );
+            }
+            assert_eq!(
+                fixture.owner_validated_commands(&handoff),
+                commands,
+                "{job}: {case:?}"
+            );
+            assert_settles_to_review(&fixture, &handoff, &format!("{job}: {case:?}"));
+            fixture.assert_no_blocked();
+        } else {
+            let refusal = fixture.refused_pipeline(job);
+            let environment_failure =
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&refusal));
+            if matches!(case, StillDeferred) {
+                assert!(environment_failure, "{job}: {case:?}: {refusal}");
+            } else {
+                assert!(
+                    !environment_failure && refusal.contains("replayed nothing"),
+                    "{job}: {case:?}: a policy denial, not an environment failure: {refusal}"
+                );
+            }
+            assert_eq!(fixture.gate.as_ref().unwrap().runs(), 1, "{job}: {case:?}");
+        }
+    }
+}
+
 fn a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate() {
-    for job in NO_DIFF_ROUTES {
-        let mut fixture = CleanLeaf::gated("done");
-        fixture.attach_coverage();
-        fixture.hand_off_deferral();
-        let handoff = fixture.run_clean_pipeline(job);
-        let gate = fixture.gate.as_ref().unwrap();
-        assert_eq!(gate.runs(), 1, "{job}: the deferred gate replays once");
-        assert_eq!(
-            fixture.owner_validated_commands(&handoff),
-            vec![CHECK.to_string(), gate.command()],
-            "{job}: the replay's log is attached beside the required command's"
-        );
-        assert!(
-            matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }),
-            "{job}: the clean-base checkpoint is preserved"
-        );
-        let settled = fixture
-            .settle(&handoff)
-            .expect("the owner accepts the replayed handoff");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
-        fixture.assert_no_blocked();
-    }
+    check_baseline_gate_replay(BaselineReplay::Deferred);
 }
 
-/// A replay that still defers on the validating host never ran the paths it
-/// was handed off for: the validation environment's failure, with no passing
-/// log attached and no handoff recorded.
 fn a_claimed_no_diff_replay_that_still_defers_is_refused() {
-    for job in NO_DIFF_ROUTES {
-        let mut fixture = CleanLeaf::gated("done");
-        fixture.hand_off_deferral();
-        fixture.gate.as_ref().unwrap().defers();
-        let refusal = fixture.refused_pipeline(job);
-        assert!(
-            orbit_types::workflow::is_validation_environment_failure(None, Some(&refusal)),
-            "{job}: {refusal}"
-        );
-        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 1, "{job}");
-    }
+    check_baseline_gate_replay(BaselineReplay::StillDeferred);
 }
 
-/// A replay that reports no executed test replayed nothing, so it cannot
-/// carry a deferral.
 fn a_claimed_no_diff_replay_that_ran_no_tests_is_refused() {
-    for job in NO_DIFF_ROUTES {
-        let mut fixture = CleanLeaf::gated("done");
-        fixture.hand_off_deferral();
-        fixture.gate.as_ref().unwrap().executes(0);
-        let refusal = fixture.refused_pipeline(job);
-        assert!(
-            !orbit_types::workflow::is_validation_environment_failure(None, Some(&refusal))
-                && refusal.contains("replayed nothing"),
-            "{job}: a policy denial, not an environment failure: {refusal}"
-        );
-        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 1, "{job}");
-    }
+    check_baseline_gate_replay(BaselineReplay::NoTests);
 }
 
-/// With nothing handed off, a gate named only as a baseline command stays
-/// unrun and the ordinary clean-base handoff delivers as before.
+/// With nothing handed off, the baseline-only gate stays unrun.
 fn a_claimed_no_diff_handoff_without_a_deferral_replays_nothing() {
-    for job in NO_DIFF_ROUTES {
-        let fixture = CleanLeaf::gated("done");
-        fixture.attach_coverage();
-        let handoff = fixture.run_clean_pipeline(job);
-        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 0, "{job}");
-        assert_eq!(
-            fixture.owner_validated_commands(&handoff),
-            vec![CHECK.to_string()],
-            "{job}"
-        );
-        let settled = fixture.settle(&handoff).expect("the owner accepts it");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
-        fixture.assert_no_blocked();
-    }
+    check_baseline_gate_replay(BaselineReplay::NoDeferral);
 }
 
 /// [ORB-15622] A replica whose `review.baseline_commands` lacks a gate the
@@ -1252,8 +1253,7 @@ fn a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral()
             vec![CHECK.to_string(), gate],
             "{job}"
         );
-        let settled = fixture.settle(&handoff).expect("the owner accepts it");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        assert_settles_to_review(&fixture, &handoff, job);
     }
 }
 
@@ -1942,8 +1942,7 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
             "{job}: {log:?}"
         );
 
-        let settled = fixture.settle(&handoff).expect("the owner accepts it");
-        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        assert_settles_to_review(&fixture, &handoff, job);
         fixture.land(&handoff);
         assert_eq!(fixture.pair.owner_status(&fixture.task), "done", "{job}");
         fixture.assert_no_blocked();
