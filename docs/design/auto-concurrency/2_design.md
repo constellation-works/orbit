@@ -1533,7 +1533,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   correction and phase-aligned profiles (§4.2).
 - [ORB-18010] — recorded the 2026-10-25 CPU bias-correction replay in
   §4.2.
-- [ORB-19199] — proposed count-based windows for forecasts, resource profiles
+- [ORB-19199] — implemented count-based windows for forecasts, resource profiles
   and other per-task analytics.
 - [ORB-19264] — replaced the newest-crew and Orbit-version profile regime
   with per-crew profiles and a union fallback.
