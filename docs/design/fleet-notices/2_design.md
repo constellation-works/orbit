@@ -1,8 +1,8 @@
 ---
 title: Fleet Notices — Design
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 feature: fleet-notices
 doc_role: design
@@ -38,9 +38,10 @@ decision-request precedent where supersession and expiry are derived when read. 
 for a notice to stop being in force; the closure materializer only tidies rows.
 
 The record is generic. Its vocabulary (scope, kind, author class, linked task, expiry) names Orbit
-concepts only. No field, kind or default knows about constellation, polaris, a specific host or a
-specific client; orbit-office's scribe routing `#board` markers to these tools ([ORB-21208]) is a
-client of the API and lives in its own repository.
+concepts. The optional `hosts` list names machine ids on maintenance notices and is display- and
+filter-only in v1; no field, kind or default hardcodes a particular host or client. The Orbit
+Office scribe's `#board` routing was proposed as a client in its own repository; [ORB-21208]
+remains someday work.
 
 ## 2. Placement in the code
 
@@ -96,7 +97,8 @@ tools' descriptions say which is which ([references/glossary.md](./references/gl
 
 ## 4. Managed agents posting
 
-A managed agent can always *read* notices through its brief. Posting needs the tool:
+Opted-in managed activities can *read* notices through their brief when `notice.brief_delivery`
+is on (the default). Posting needs the tool:
 
 - Slice 3 (built) adds `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` to the
   tool baselines of `agent_implement`, `agent_review_repair` and `final_recovery` for closing the
@@ -114,9 +116,9 @@ A managed agent can always *read* notices through its brief. Posting needs the t
   `notice_agent_posting_disabled`.
 
 The activity instruction for posting is short: post only when the problem is outside your task, will
-affect other agents, and you have a linked task or evidence; prefer linking the fix task; search
-open notices first (the brief already shows them); re-posting the same subject corroborates rather
-than duplicates.
+affect other agents, and you have a linked task or evidence; prefer linking the fix task; check
+open notices first (the brief shows them when delivery is enabled); re-posting the same subject
+corroborates rather than duplicates.
 
 ## 5. Brief delivery
 
@@ -199,7 +201,9 @@ dependencies run top to bottom, and ids are in Task References.
 4. **Federation** ([ORB-21214], done). Follower writes through the owner route, routed reads, the
    per-owner fan-out for workspace-less lists with `degraded` hosts, global aggregation, the
    closure materializer in the sweep for cross-workspace links, the federated-mcp doc amendment.
-   Depends on 1; reuses attention's fan-out when [ORB-21171] has landed.
+   Depends on 1. It uses the federated host's destination probing and owner routing but keeps
+   workspace-less notice-list aggregation in `notice_aggregate.rs`; it does not share the
+   attention fan-out's aggregation implementation ([ORB-21171]).
 5. **Dashboard and attention** ([ORB-21215], done). Banner, Notices view and forms; the `notice_open`
    attention kind with its severity rule and the attention spec amendment. Depends on 1, and on
    [ORB-21168] for the attention part.
@@ -232,7 +236,7 @@ The maintenance dispatch hold (§7) is deliberately not filed; it waits for v1 t
 ## Task References
 
 - [ORB-21207] — designed fleet notices and filed the implementation slices
-- [ORB-21208] — orbit-office scribe `#board` routing, a client of the notice tools
+- [ORB-21208] — proposes Orbit Office scribe `#board` routing to the notice tools
 - [ORB-21168] — attention slice 1, which the `notice_open` kind builds on
 - [ORB-21171] — attention federation, whose fan-out the notice list reuses
 - [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset

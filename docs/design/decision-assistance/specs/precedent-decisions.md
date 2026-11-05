@@ -1,7 +1,7 @@
 ---
 title: "Proposal: precedent-answered human decisions"
 owner: claude
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 last_validated: 2026-11-02
 status: Draft
 feature: decision-assistance
@@ -19,7 +19,7 @@ separate evaluation candidate. Its labels are real, structured human answers to
 [human decision channel](../../human-decision-channel/2_design.md) requests, not
 synthetic or agent-authored labels. Every mode defaults to `off`. Self-answering
 needs a measured pass per category and an explicit operator enablement. The
-implementation slices are filed as proposed tasks (see Phasing).
+implementation slices are recorded below; all seven have since been implemented.
 
 ## Purpose and limits
 
@@ -86,12 +86,11 @@ The model selects; the host decides what a selection means.
   have chosen an option whose meaning the request also offers; the model judges
   that correspondence, and the readout measures it.
 
-One service extension is needed: today an expanded template's choice questions
-must share identical allowed values. `decision_choice` needs a **packet-bound
-choice**, whose allowed values are copied from one host-built packet field (at
-most 8 ids, each at most 64 bytes) plus the template's fixed abstention value. The
-template digest binds the field name, bounds and abstention value, not the
-per-request ids. That is slice 4 below; the rest of the service contract is
+The assistance service supports a **packet-bound choice** for `decision_choice`.
+Its allowed values are copied from one host-built packet field (at most 8 ids,
+each at most 64 bytes) plus the template's fixed abstention value. The template
+digest binds the field name, bounds and abstention value, not the per-request
+ids. This is implemented in slice 4 below; the rest of the service contract is
 unchanged.
 
 ## Packet
@@ -511,19 +510,16 @@ agent's flow changes.
 
 ## Configuration
 
-Proposed, not yet in [CONFIG.md](../../../CONFIG.md):
-
-- An `[assistance]` policy with `use_case = "precedent_decision"`, `mode` `off`
-  (default) or `shadow`, the question-set contract digest, and evidence grants
-  covering the packet fields above. `advisory` mode is not used for this consumer.
-- Host-only consumer settings: precedent provider list (built-in, plus plugin tool
-  names in order), `k`, `precedent_half_life_days`, `assist_wait_seconds`,
-  holdback share, `demotion_window`, `max_vetoes`.
-- Category enablements live in the host-only enablement store written by
-  `orbit decision assist`, never in workspace configuration.
-
-With the consumer off, no assessment is enqueued, no provider is called, and the
-decision channel behaves exactly as today.
+The implemented host configuration is documented in
+[CONFIG.md](../../../CONFIG.md#precedent-decision-shadow-consumer). The
+`precedent_decision` assistance policy defaults to `off`; only `shadow`
+assesses requests, while `off` and `advisory` neither enqueue assessments nor
+consult precedent providers. The policy digest binds the granted question
+template, and its evidence fields and references control what may leave the
+host. Precedent retrieval has a separate host-only
+`assistance.precedent_providers` grant. Category enablements and their fixed
+consumer settings are stored beside the decision channels by
+`orbit decision assist`, never in workspace configuration.
 
 ## Concerns and honest limitations
 
@@ -553,29 +549,29 @@ decision channel behaves exactly as today.
   depend on the Decisions API's choice and predicate support with per-question
   probabilities, which activation must recheck, as for every consumer.
 
-## Phasing
+## Implementation
 
-Each slice is filed as a proposed task in `ws_orbit`. None is approved to build
-by this design.
+All seven implementation slices have landed. The consumer remains default-off;
+an operator must still measure and enable a category before it can self-answer.
 
-1. **Request risk tier and category** ([ORB-21091]). `risk_tier` per answer and
+1. **Request risk tier and category** ([ORB-21091], implemented). `risk_tier` per answer and
    per request, fixed core-gate tiers, optional raiser declaration, `unknown`
    default, a stored category, shown by list and show surfaces.
-2. **Model-answer provenance, review gate and veto** ([ORB-21092]). The `model`
+2. **Model-answer provenance, review gate and veto** ([ORB-21092], implemented). The `model`
    actor and citation, the `model_answer_review` gate, the generalised reversal,
    the digest `model_answered` section, confirmation-only precedent and corpus
    rules. Depends on 1. Implemented: the internal apply step answers agent
    requests only and its caller is slice 7's self-answer step; `model_answered` lists every
    model answer whose review is still open.
-3. **Precedent-provider contract and built-in provider** ([ORB-21093]). The
+3. **Precedent-provider contract and built-in provider** ([ORB-21093], implemented). The
    `orbit.precedent-provider/1` contract, host validation, the Orbit-history
    provider, the plugin-provider route and deterministic merge.
-4. **Packet-bound choice questions in the assistance service** ([ORB-21094]).
+4. **Packet-bound choice questions in the assistance service** ([ORB-21094], implemented).
    Allowed values copied from a packet field, bound by the template digest.
 5. **Shadow consumer** ([ORB-21095]). Implemented, default-off: packet builder,
    enqueue on raise, sealed predictions hidden from every surface, and the join
    export. The statistical readout remains slice 6. Depends on 1, 3, 4.
-6. **Evaluator contract `decision-assistance-eval/4`** ([ORB-21096]).
+6. **Evaluator contract `decision-assistance-eval/4`** ([ORB-21096], implemented).
    `recorded_human_decision` provenance, prospective windows, per-category
    targets, coverage, accuracy and calibration scoring.
 7. **Category enablement, self-answer and drift** ([ORB-21097]). The
@@ -589,12 +585,12 @@ task and depends only on slice 3's contract.
 ## Task References
 
 - [ORB-21097] — implements category enablement, self-answer, holdback and demotion.
-- [ORB-21096] — proposes the `decision-assistance-eval/4` evaluator contract.
-- [ORB-21095] — proposes the shadow precedent-decision consumer.
-- [ORB-21094] — proposes packet-bound choice questions in the assistance service.
-- [ORB-21093] — proposes the precedent-provider contract and built-in provider.
-- [ORB-21092] — proposes model-answer provenance, the review gate and veto.
-- [ORB-21091] — proposes risk tier and category on decision requests.
+- [ORB-21096] — implements the `decision-assistance-eval/4` evaluator contract.
+- [ORB-21095] — implements the shadow precedent-decision consumer.
+- [ORB-21094] — implements packet-bound choice questions in the assistance service.
+- [ORB-21093] — implements the precedent-provider contract and built-in provider.
+- [ORB-21092] — implements model-answer provenance, the review gate and veto.
+- [ORB-21091] — implements risk tier and category on decision requests.
 - [ORB-21089] — authors this design.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
