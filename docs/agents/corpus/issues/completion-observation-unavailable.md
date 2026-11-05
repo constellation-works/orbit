@@ -36,3 +36,15 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-30 08:02 | ORB-19981 | jrun-20261030-0653-c5 | GraphQL TLS timeout then source repair refused | merged outside Orbit at 2026-10-30T08:44Z, settled done |
 | 2026-10-29 15:00 | ORB-19845 | jrun-20261029-1333-c3 (final_recovery) | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
 | 2026-10-30 08:06 | ORB-19981 | jrun-20261030-0653-c5 (final_recovery) | completion observation unavailable / candidate-changed | blocked_task_triaged human_only in ORB-21505 resume pass |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 3 source occurrence(s) on 3 task(s); route `run_failure`, disposition `counted`. Change vs prior pass (ORB-22099): `new` (prior 0). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-29T04:58:43.043387100Z | ORB-19689 | jrun-20261029-0437-c18 | PR completion cannot observe GitHub/VCS, then completion reuse refused; source ORB-19689 history:final_recovery@2026-10-29T04:58:43.043387100Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-29T15:00:01.321517927Z | ORB-19845 | jrun-20261029-1333-c3 | PR completion cannot observe GitHub/VCS, then completion reuse refused; source ORB-19845 history:blocked_triage@2026-10-29T15:00:01.321517927Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T08:06:16.179969110Z | ORB-19981 | not recorded in triage comment | PR completion cannot observe GitHub/VCS, then completion reuse refused; source ORB-19981 history:blocked_triage@2026-10-30T08:06:16.179969110Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |

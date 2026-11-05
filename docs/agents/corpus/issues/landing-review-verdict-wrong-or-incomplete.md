@@ -35,3 +35,13 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 08:24 | ORB-18135 | jrun-20261025-0815-c3 | review missed a red guard test; gate diagnosis refuted | operator requeued at 2026-10-25T08:33Z |
 | 2026-10-26 15:07 | ORB-18547 | jrun-20261026-1425-c1 | review incomplete on Linux-only sandbox tests | operator requeued at 2026-10-26T15:10Z |
 | 2026-10-29 16:35 | ORB-19818 | jrun-20261029-1617-c1 | accept_with_fixes with zero changes | operator requeued at 2026-10-29T16:57Z |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 1 source occurrence(s) on 1 task(s); route `run_failure`, disposition `counted`. Change vs prior pass (ORB-22099): `shrank` (prior 2). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-29T16:39:47.118788157Z | ORB-19818 | jrun-20261029-1617-c1 | landing review verdict wrong or incomplete; source ORB-19818 history:blocked_triage@2026-10-29T16:39:47.118788157Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
