@@ -9,7 +9,11 @@
 //! `$HOME/.orbit/state/logs/orbit.jsonl`. Agent stdout/stderr uses the separately
 //! budgeted `orbit-agent.jsonl` beside it. Readers merge both feeds. Logging is
 //! global rather than workspace-local because logging starts before CLI argument parsing and
-//! runtime root resolution.
+//! runtime root resolution. The one exception is a managed child that carries
+//! an explicit `--root`/`ORBIT_ROOT` different from its managed registry root:
+//! its feed lives under that explicit root, so a scratch invocation cannot
+//! write startup tracing into the inherited registry. Unmanaged explicit-root
+//! invocations keep the ordinary `$HOME` (or managed-registry) feed.
 //!
 //! The JSONL file is opened on the first tracing event, not at subscriber
 //! init, so commands that never log (`orbit --help`) do not create the log
@@ -89,6 +93,7 @@ pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
 const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
 const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
 const ORBIT_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
+const ORBIT_ROOT_ENV: &str = "ORBIT_ROOT";
 
 /// Field formatter that redacts string-valued and `Debug`-formatted tracing
 /// event fields before they are written to stderr or the JSONL tracing feed.
@@ -517,7 +522,10 @@ pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
 /// (`$HOME/.orbit/state/logs/orbit.jsonl`, or the managed child's registry
 /// root). A managed child uses `ORBIT_REGISTRY_ROOT` only when the complete
 /// managed-run context is present, matching global-root resolution in
-/// `orbit-core`. Returned as `Result` because the path depends on environment
+/// `orbit-core` — except that an explicit `--root`/`ORBIT_ROOT` naming a
+/// different root diverts the feed under that root, keeping a scratch
+/// invocation's startup tracing out of the inherited registry. Returned as
+/// `Result` because the path depends on environment
 /// variables; callers that need a fallback should fall back to a
 /// workspace-relative path or fail with a clear error.
 ///
@@ -525,7 +533,12 @@ pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
 /// writes here, and `orbit log tail` reads here by default.
 pub fn global_jsonl_log_path() -> io::Result<PathBuf> {
     let orbit_root = match managed_registry_root()? {
-        Some(root) => root,
+        Some(managed_root) => match explicit_log_root()? {
+            Some(explicit_root) if !log_paths_equivalent(&explicit_root, &managed_root) => {
+                explicit_root
+            }
+            _ => managed_root,
+        },
         None => {
             let home = std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
@@ -570,6 +583,98 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
         ));
     }
     Ok(Some(root))
+}
+
+/// The explicit data root for log diversion, when argv or `ORBIT_ROOT` names
+/// one. Only consulted after [`managed_registry_root`] has proved a complete
+/// managed context, so unmanaged invocations never reach this diversion and
+/// keep their ordinary home feed (the friction-tracing fixture depends on
+/// that). `--root` is global and may appear after a subcommand (e.g.
+/// `orbit sweep --root …`), so the whole argv is scanned for its first
+/// occurrence, mirroring `plugin_root_override` in `orbit-cli`; scanning
+/// stops at `--`, after which `--root` belongs to a child command.
+fn explicit_log_root() -> io::Result<Option<PathBuf>> {
+    if let Some(raw) = explicit_root_arg_value() {
+        return resolve_explicit_log_root(&raw).map(Some);
+    }
+    let Some(value) = std::env::var_os(ORBIT_ROOT_ENV).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let raw = value.to_string_lossy();
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    resolve_explicit_log_root(&raw).map(Some)
+}
+
+fn explicit_root_arg_value() -> Option<String> {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy().into_owned();
+        if arg == "--" {
+            return None;
+        }
+        if let Some(value) = arg.strip_prefix("--root=") {
+            return (!value.trim().is_empty()).then(|| value.to_string());
+        }
+        if arg == "--root" {
+            return args
+                .next()
+                .map(|value| value.to_string_lossy().into_owned())
+                .filter(|value| !value.trim().is_empty());
+        }
+    }
+    None
+}
+
+/// Expand `~` and anchor a relative explicit root at the cwd, matching
+/// `resolve_generation_root` in `orbit-runtime`. No existence requirement:
+/// `orbit --root <new> init` logs before the root is created.
+fn resolve_explicit_log_root(raw: &str) -> io::Result<PathBuf> {
+    let value = raw.trim();
+    let path = if value == "~" || value.starts_with("~/") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|home| !home.is_empty())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "cannot expand '~' in explicit root because HOME/USERPROFILE is not set",
+                )
+            })?;
+        let suffix = value.strip_prefix("~/").unwrap_or("");
+        PathBuf::from(home).join(suffix.trim_start_matches('/'))
+    } else {
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        }
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        if !matches!(component, std::path::Component::CurDir) {
+            normalized.push(component.as_os_str());
+        }
+    }
+    if normalized
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Ok(normalized.canonicalize().unwrap_or(normalized));
+    }
+    Ok(normalized)
+}
+
+fn log_paths_equivalent(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// Lines each background JSONL writer may hold before it drops or blocks.
