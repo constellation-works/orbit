@@ -235,7 +235,7 @@ impl OrbitRuntime {
         let destination = PullDestination {
             owner_machine_id: machine_id.to_string(),
             selector: format!("{machine_id}/{logical}"),
-            owner_workspace_id: logical,
+            owner_workspace_id: self.workspace_id()?,
             execution_machine_id: machine_id.to_string(),
         };
         let mut input = json!({

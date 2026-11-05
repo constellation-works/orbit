@@ -563,6 +563,10 @@ pub struct ClaimSteeringReading {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimMutationResult {
+    /// Owner-measured revision of the winning failure commit. Older receipts
+    /// lack this fence and must not initiate automatic final recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_revision: Option<crate::contracts::FinalRecoveryTaskRevision>,
     pub claim_id: String,
     pub phase: ExecutionClaimPhase,
     pub status: TaskStatus,

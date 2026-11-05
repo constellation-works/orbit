@@ -16,15 +16,15 @@ use super::*;
 /// passed starts one repair-only pull against itself, which takes the repair
 /// as a pull would and revokes the superseded claim.
 fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
-    owner_fallback(false, false);
+    owner_fallback(false, false, false);
 }
 
 fn the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full() {
-    owner_fallback(true, false);
+    owner_fallback(true, false, false);
 }
 
 fn repair_and_backlog_share_the_owner_ceiling_with_other_pulls() {
-    owner_fallback(true, true);
+    owner_fallback(true, true, false);
 }
 
 /// A live worker holds each unrelated delivery until the scenario ends.
@@ -54,8 +54,30 @@ fn hold_owner_leaf(owner: &OrbitRuntime, task: &str) -> Worker {
     worker
 }
 
-fn owner_fallback(busy: bool, with_backlog: bool) {
-    let pair = Pair::new(1);
+fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
+    let pair = Pair::with_owner(1, |unbound| {
+        if !distinct_logical {
+            return unbound;
+        }
+        let partition = unbound.workspace_id().unwrap();
+        calm_host(
+            OrbitRuntime::from_roots_with_binding(
+                &unbound.global_root(),
+                &unbound.paths().repo_root.join(".orbit"),
+                orbit_core::WorkspaceRuntimeBinding {
+                    logical_workspace_id: "ws_catalog_owner".into(),
+                    task_partition_id: partition,
+                    owner_machine_id: None,
+                    checkout_role: None,
+                    repo_root: unbound.paths().repo_root.clone(),
+                    ship_mode: orbit_core::ShipMode::Pr,
+                    base_branch: Some("main".into()),
+                },
+            )
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.into())),
+        )
+    });
     let task = pair.tasks[0].clone();
     *pair.wire.accept_handoffs.lock().unwrap() = true;
     let follower_drain = pair.run_drain();
@@ -288,6 +310,21 @@ fn owner_fallback(busy: bool, with_backlog: bool) {
             .unwrap()
             .input
             .unwrap();
+        assert_eq!(
+            input["destination"]["owner_workspace_id"],
+            owner.workspace_id().unwrap()
+        );
+        let logical = owner
+            .workspace_runtime_binding()
+            .map(|b| b.logical_workspace_id.clone())
+            .unwrap_or_else(|| owner.workspace_id().unwrap());
+        assert_eq!(
+            input["destination"]["selector"],
+            format!("{OWNER}/{logical}")
+        );
+        if distinct_logical {
+            assert_ne!(logical, owner.workspace_id().unwrap());
+        }
         // The pass stops after the leaf exists and the owner bound its claim.
         itself.lose_next_reply("orbit.drain.claim.bind");
         let pass = owner
@@ -361,11 +398,97 @@ fn owner_fallback(busy: bool, with_backlog: bool) {
         "{repair}"
     );
     assert_eq!(pair.owner_status(&task), "in-progress");
+    if distinct_logical {
+        let leaf = repair["bound_run"]["run_id"]
+            .as_str()
+            .expect("repair leaf bound");
+        let record = owner_jobs.local_pull_for_run(leaf).unwrap().unwrap();
+        let claimed = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+        let binding = orbit_types::tool::WorkerInvocation {
+            owner_machine_id: OWNER.into(),
+            owner_workspace_id: record.destination.owner_workspace_id.clone(),
+            owner_destination: record.destination.selector.clone(),
+            task_id: task.clone(),
+            claim_id: claimed.claim_id.clone(),
+            execution: claimed.executed_on.clone(),
+            bound_run_id: leaf.into(),
+        };
+        let bound = owner
+            .clone()
+            .with_worker_invocation(
+                binding.clone(),
+                Arc::new(RepairOwnerCoordinator(owner.clone())),
+            )
+            .unwrap();
+        let source = owner
+            .paths()
+            .repo_root
+            .join(".orbit/tmp/repair-context.txt");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "owner evidence").unwrap();
+        bound.run_tool("orbit.task.artifact.put", json!({
+            "id": task, "path": "repair-context.txt", "source_path": source, "model": "codex"
+        })).unwrap();
+        assert_eq!(bound.get_task(&task).unwrap().id, task);
+        assert_eq!(
+            bound
+                .get_task_artifact(&task, "repair-context.txt")
+                .unwrap()
+                .unwrap()
+                .content,
+            b"owner evidence"
+        );
+        bound.run_tool("orbit.task.update", json!({
+            "id": task, "execution_summary": "repair advanced through owner coordination", "model": "codex"
+        })).unwrap();
+        assert_eq!(
+            owner.get_task(&task).unwrap().execution_summary,
+            "repair advanced through owner coordination"
+        );
+        let mut wrong = binding;
+        wrong.owner_workspace_id = "ws_catalog_owner".into();
+        let wrong = owner
+            .clone()
+            .with_worker_invocation(wrong, Arc::new(RepairOwnerCoordinator(owner.clone())))
+            .unwrap();
+        assert!(
+            wrong
+                .get_task(&task)
+                .unwrap_err()
+                .to_string()
+                .contains("worker owner destination mismatch")
+        );
+    }
+}
+
+fn a_registered_owner_binds_its_partition_instead_of_its_catalog_id() {
+    owner_fallback(false, false, true);
 }
 
 crate::scenario_table!(
     the_owner_drain_takes_a_repair_its_original_executor_never_pulls_scenarios,
     the_owner_drain_takes_a_repair_its_original_executor_never_pulls,
     the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full,
-    repair_and_backlog_share_the_owner_ceiling_with_other_pulls
+    repair_and_backlog_share_the_owner_ceiling_with_other_pulls,
+    a_registered_owner_binds_its_partition_instead_of_its_catalog_id
 );
+
+/// The owner's repair worker uses its own machine as the authenticated caller.
+struct RepairOwnerCoordinator(OrbitRuntime);
+
+impl OwnerCoordinator for RepairOwnerCoordinator {
+    fn call(
+        &self,
+        name: &str,
+        mut input: Value,
+        mut session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let binding = session.worker_invocation.clone().unwrap();
+        input["workspace"] = json!(binding.owner_workspace_id);
+        session.workspace = Some(binding.owner_workspace_id);
+        session.caller_machine_id = Some(binding.execution.machine_id);
+        session.transport = Some(McpTransport::SshMcp);
+        session.effective_capabilities = BTreeSet::from([McpCapability::Agent]);
+        self.0.execute_owner_coordination(name, input, session)
+    }
+}

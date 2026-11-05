@@ -1130,3 +1130,151 @@ fn a_later_candidateless_claim_requeues_onto_the_kept_candidate() {
         "a discarded candidate is not offered for resumption"
     );
 }
+
+/// A failure receipt is durable before best-effort recovery starts. Exercise
+/// that interrupted boundary directly, then deliver the exact settlement over
+/// the worker API after an operator has acted (or without any intervention).
+#[test]
+fn interrupted_claim_recovery_is_fenced_to_the_winning_failure_revision() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_store::contracts::ClaimFinalRecovery;
+    use orbit_types::task::TaskStatus;
+
+    if !isolated(
+        module_path!(),
+        "interrupted_claim_recovery_is_fenced_to_the_winning_failure_revision",
+    ) {
+        return;
+    }
+    for decision in [
+        FinalRecoveryDecision::Reject {
+            reason: "invalid request".into(),
+            evidence: "conflicting criteria".into(),
+        },
+        FinalRecoveryDecision::Archive {
+            reason: "obsolete request".into(),
+        },
+        FinalRecoveryDecision::Requeue {
+            reason: "prerequisite repaired".into(),
+        },
+    ] {
+        for intervention in ["description", "criteria", "episode", "none"] {
+            let pair = Pair::with_crews(&[Some("sol")]);
+            let drain = pair.run_drain();
+            let leaf = pair.running_leaf(&drain, 1);
+            let record = pair.admission(&leaf);
+            let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+            let owner = &pair.wire.owner;
+            let evidence = ClaimEvidence {
+                summary: Some("implementation failed".into()),
+                final_recovery: Some(ClaimFinalRecovery {
+                    run_id: leaf.clone(),
+                    decision: decision.clone(),
+                }),
+                ..Default::default()
+            };
+            let context = ClaimInvocation::trusted_worker(
+                claim.task_id.clone(),
+                claim.claim_id.clone(),
+                FOLLOWER.into(),
+                Some(ClaimRun {
+                    machine_id: FOLLOWER.into(),
+                    run_id: leaf.clone(),
+                }),
+            );
+            owner
+                .mutate_execution_claim(
+                    Some(&context),
+                    &format!("pull-fail:{}", claim.claim_id),
+                    &ClaimMutation::Fail(evidence.clone()),
+                )
+                .unwrap();
+            assert_eq!(
+                owner.get_task(&claim.task_id).unwrap().status,
+                TaskStatus::Blocked
+            );
+            // No recovery marker exists yet: this is the winning committed
+            // failure, interrupted before its best-effort applier ran.
+            match intervention {
+                "description" | "criteria" => {
+                    owner
+                        .update_task_as_human(
+                            &claim.task_id,
+                            TaskUpdateParams {
+                                description: (intervention == "description")
+                                    .then(|| "operator revised request".into()),
+                                acceptance_criteria: (intervention == "criteria")
+                                    .then(|| vec!["operator revised criterion".into()]),
+                                ..Default::default()
+                            },
+                            "human:fixture".into(),
+                        )
+                        .unwrap();
+                }
+                "episode" => {
+                    for status in [
+                        TaskStatus::Backlog,
+                        TaskStatus::InProgress,
+                        TaskStatus::Blocked,
+                    ] {
+                        owner
+                            .update_task_as_human(
+                                &claim.task_id,
+                                TaskUpdateParams {
+                                    status: Some(status),
+                                    ..Default::default()
+                                },
+                                "human:fixture".into(),
+                            )
+                            .unwrap();
+                    }
+                }
+                _ => {
+                    // Run bookkeeping may advance updated_at without granting
+                    // a new lifecycle episode or invalidating this recovery.
+                    owner
+                        .update_task_as_human(
+                            &claim.task_id,
+                            TaskUpdateParams {
+                                execution_summary: Some("settlement transport retried".into()),
+                                ..Default::default()
+                            },
+                            "human:fixture".into(),
+                        )
+                        .unwrap();
+                }
+            }
+            let input = json!({"claim_id": claim.claim_id, "run_id": leaf, "settlement": {"Fail": evidence}});
+            let before = owner.get_task(&claim.task_id).unwrap();
+            let replay = pair
+                .wire
+                .call("", "orbit.drain.claim.settle", input.clone())
+                .unwrap();
+            assert_eq!(replay["phase"], "failed");
+            let after = owner.get_task(&claim.task_id).unwrap();
+            if intervention == "none" {
+                let expected = match decision {
+                    FinalRecoveryDecision::Reject { .. } => TaskStatus::Rejected,
+                    FinalRecoveryDecision::Archive { .. } => TaskStatus::Archived,
+                    _ => TaskStatus::Backlog,
+                };
+                assert_eq!(after.status, expected, "unchanged failure resumes recovery");
+            } else {
+                assert_eq!(
+                    after.status,
+                    TaskStatus::Blocked,
+                    "stale {decision:?} overrode {intervention}"
+                );
+                assert_eq!(after.description, before.description);
+                assert_eq!(after.acceptance_criteria, before.acceptance_criteria);
+            }
+            let history = owner.get_task_history(&claim.task_id).unwrap();
+            let comments = owner.get_task_comments(&claim.task_id).unwrap();
+            pair.wire
+                .call("", "orbit.drain.claim.settle", input)
+                .unwrap();
+            assert_eq!(owner.get_task_history(&claim.task_id).unwrap(), history);
+            assert_eq!(owner.get_task_comments(&claim.task_id).unwrap(), comments);
+        }
+    }
+}

@@ -280,7 +280,13 @@ impl TaskCommitBoundary {
                 &journal_id,
                 params.reservation.as_ref(),
                 &params.rows,
-                make_rows,
+                &mut |reservation| {
+                    let mut rows = make_rows(reservation)?;
+                    if params.status_event.as_deref() == Some("claim_failed") {
+                        self.stamp_failure_revision(&mut rows, &bundle, &intent)?;
+                    }
+                    Ok(rows)
+                },
                 effects,
                 lease_notice
                     .as_ref()

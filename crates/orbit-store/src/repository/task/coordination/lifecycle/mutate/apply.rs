@@ -802,6 +802,7 @@ impl TaskCommitBoundary {
         state.age_seconds = None;
         params.status_event = history_event.then(|| state.last_event.clone());
         let result = ClaimMutationResult {
+            failure_revision: None,
             claim_id: claim.claim_id.clone(),
             phase: state.claim.phase,
             status: params.status.unwrap_or(expected_status),
@@ -857,10 +858,22 @@ impl TaskCommitBoundary {
             )
         })?;
         match outcome {
-            TaskCoordinationCommitOutcome::Committed(_) => Ok(ClaimMutationOutcome {
-                result: self.with_friction_result(result, receipt_id)?,
-                committed: true,
-            }),
+            TaskCoordinationCommitOutcome::Committed(_) => {
+                let result = if matches!(mutation, ClaimMutation::Fail(_)) {
+                    // The commit stamps the owner-measured failure revision on
+                    // the receipt, so the winner and a replay use one baseline.
+                    let receipt = self
+                        .coordination_row(RECEIPT, receipt_id)?
+                        .ok_or_else(|| invalid("committed claim receipt missing"))?;
+                    super::super::decode::<MutationReceipt>(&receipt.payload_json)?.result
+                } else {
+                    result
+                };
+                Ok(ClaimMutationOutcome {
+                    result: self.with_friction_result(result, receipt_id)?,
+                    committed: true,
+                })
+            }
             _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }
     }

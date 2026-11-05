@@ -845,12 +845,14 @@ never makes a second one.
 
 `--allow-crew sol,luna` restricts which crews this drain declares to the owner
 for its whole life, resume included: the owner hands it only tasks on those
-crews (or on a crew resolving to the same provider and model), and other tasks
-stay in its backlog on their own crews. It changes no configuration, task crew
+crews (or on a crew resolving to the same provider, model and account), and
+other tasks stay in its backlog on their own crews. It changes no configuration, task crew
 or owner pool. The owner's before-PR review crew is not restricted by it but
 must still run here. If nothing allowed is runnable, each pass reports
 `no_runnable_crew` and requests nothing; restart without the flag or with a
-crew that runs here.
+crew that runs here. A temporary capacity backoff or usage limit instead reports
+when its exclusions lift and the same drain resumes; this also applies to
+effort-qualified restrictions such as `sol@high`.
 
 A pull drain never approves `proposed` tasks: `--pull` conflicts with
 `--approve-proposed`, and only the owner approves work. The replica's dashboard
@@ -1121,6 +1123,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   class. `candidate` (the work failed) and `task_input` (final recovery
   rejected or archived the task) move the task to `blocked` on the owner, with
   a summary naming the leaf run, its failed step and that step's error.
+  A carried final-recovery decision is checked against the task revision
+  captured atomically with that failure. Interrupted application can resume
+  from its receipt only while the same failure revision still stands; later
+  operator content changes or lifecycle transitions take precedence. Legacy
+  receipts without that revision leave the task blocked for explicit recovery.
   External prerequisites, `environment` (missing validation tools or
   `validation_route_unavailable`) and `owner_route` (the leaf cannot reach its
   owner), keep release evidence but also block the task immediately. Read the
