@@ -3337,6 +3337,31 @@
         "## 3. Group by cause and route to the source",
         "## 4. Dedupe and file",
         "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "78be88af139529badc3a1baaec11835ad07cc6b966069a49b661f376bff93da1",
+      "revision": "247a96a5178e465f2a50b7726955a32c4594de35",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
         "## 6. Report and cursor",
         "## Rules and command surfaces"
       ],
@@ -3368,6 +3393,31 @@
       ],
       "digest": "ccf4c744e0bc240c372a01d85e4373870fcb55b4b09b1802abc95c51fd10ec78",
       "revision": "b7a27e60e2b3e7d0ab4455fd67dfc82aee3909a0",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "e92e654adda9b17f516e0f95f0c5d1b91541b387272a84b60579e5d71a68cde1",
+      "revision": "d6792376c888e8ed8c49037bb69eaadb3662b355",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

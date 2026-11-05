@@ -326,7 +326,10 @@ re-init does not overwrite a workspace-authored definition of the same name.
   is open) or host setup. It dedupes against open and 30-day-closed work, files
   at most 5 `proposed` fixes per pass, compares groups with the prior pass's
   `pilot-block-report.json`, and files a regression when a done fix did not
-  reduce its group. It never acts on an individual blocked or held task, and
+  reduce its group. When the workspace maps a tracked corpus index and provides
+  the corpus script, it proposes every observed group in the corpus and
+  regenerates its index; otherwise it records the missing prerequisite and
+  leaves a clean worktree. It never acts on an individual blocked or held task, and
   runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. For behavior changes, its instructions locate documentation,

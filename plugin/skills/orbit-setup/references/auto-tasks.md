@@ -566,6 +566,9 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   and files at most 5 `proposed` fix tasks per pass, tagged
   `pilot-block-patterns` and `no-auto-approve`, compares each group with the
   prior pass and files a regression when a done fix did not reduce its group.
+  When the workspace maps a tracked corpus index and provides the corpus script,
+  it proposes every observed group in the corpus and regenerates its index.
+  Otherwise it records the missing prerequisite and leaves a clean worktree.
   It never acts on an individual blocked or held task; that stays with
   `escalation_triage_pipeline`. Like `run-failure-patterns`, it runs on the owner
   and stops with `wrong_host` on a follower.
