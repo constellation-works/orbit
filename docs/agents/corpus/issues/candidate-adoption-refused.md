@@ -34,3 +34,13 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 10:39 | ORB-18164 | jrun-20261025-1037-c16 | requeue digest differs after crew redraw (F2026-10-594) | merged outside Orbit at 2026-10-25T10:40Z, settled done |
 | 2026-10-29 07:54 | ORB-19689 | jrun-20261029-0753-c30 | `resume_candidate` refused: published candidate lacks a unique requeue binding (F2026-10-685; final_recovery comment 2026-10-29T07:54:24.195724045Z) | blocked_task_triage comment 2026-10-29T07:59:25.718066023Z requires supported authenticated same-PR source-repair admission for publishing run jrun-20261029-0437-c18; no requeue is safe until admission is repaired. Human forced blocked->rejected at 2026-10-29T21:37Z |
 | 2026-11-01 00:36 | ORB-20625 | jrun-20261031-2344-c9 | failure handoff disagrees with the task's run record; resume refused | Daniel: "Discard and requeue"; fresh run jrun-20261101-0037-c3 landed PR #7390 at 2026-11-01T01:03Z |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 1 source occurrence(s) on 1 task(s); route `recovery`, disposition `counted`. Change vs prior pass (ORB-22099): `held` (prior 1). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-29T07:59:25.718066023Z | ORB-19689 | not recorded in triage comment | requeue/resume refused for published candidate (lacks unique requeue binding); source ORB-19689 history:blocked_triage@2026-10-29T07:59:25.718066023Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |

@@ -57,3 +57,14 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-30 18:37 | ORB-20216 | jrun-20261030-1831-t1 (pilot) | criterion needs tool lane lacks | pilot_warning_triaged human_only in ORB-21505 resume pass |
 | 2026-10-31 01:04 | ORB-20336 | jrun-20261031-0058-t1 (pilot) | criterion needs tool lane lacks | pilot_warning_triaged human_only in ORB-21505 resume pass |
 | 2026-10-25 04:04 | ORB-18089 | jrun-20261025-0353-t1 (pilot) | criterion reads a predecessor task's artifact; the claimed-owner bridge scopes reads to the claimed task | pilot_warning_triaged decision proposed a static template criterion; task done at 2026-10-25T07:15Z (ORB-22099 pass) |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 2 source occurrence(s) on 2 task(s); route `authoring`, disposition `counted`. Change vs prior pass (ORB-22099): `shrank` (prior 23). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-27T23:43:49.043109734Z | ORB-19240 | not recorded in triage comment | criterion names a tool the implementing lane cannot use; source ORB-19240 history:pilot_triage@2026-10-27T23:43:49.043109734Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-28T13:14:00.529046115Z | ORB-19532 | not recorded in triage comment | criterion names a tool the implementing lane cannot use; source ORB-19532 history:pilot_triage@2026-10-28T13:14:00.529046115Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |

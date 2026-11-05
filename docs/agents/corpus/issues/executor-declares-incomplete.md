@@ -40,3 +40,17 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-30 08:45 | ORB-20129 | jrun-20261030-0838-c25 (final_recovery) | executor declares incomplete (incomplete_scan) | blocked_task_triaged human_only in ORB-21505 resume pass |
 | 2026-10-30 23:23 | ORB-20310 | jrun-20261030-2316-c3 (implementation); jrun-20261030-2320-t2 (final_recovery) | executor declares incomplete (audit_incomplete) | blocked_task_triaged decision in ORB-21505 resume pass |
 | 2026-10-31 08:42 | ORB-20455 | jrun-20261031-0836-c16 (final_recovery) | executor declares incomplete (scan_incomplete) | blocked_task_triaged human_only in ORB-21505 resume pass |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 5 source occurrence(s) on 5 task(s); route `run_failure`, disposition `counted`. Change vs prior pass (ORB-22099): `grew` (prior 1). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-29T22:51:55.932753681Z | ORB-19960 | jrun-20261029-2251-t1 | executor returns incomplete examination/scan/audit early with no timeout; source ORB-19960 history:final_recovery@2026-10-29T22:51:55.932753681Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-29T23:15:27.163699320Z | ORB-19962 | jrun-20261029-2309-c3 | executor returns incomplete examination/scan/audit early with no timeout; source ORB-19962 history:blocked_triage@2026-10-29T23:15:27.163699320Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T08:45:08.414981133Z | ORB-20129 | not recorded in triage comment | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20129 history:blocked_triage@2026-10-30T08:45:08.414981133Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T08:50:21.017930639Z | ORB-20137 | not recorded in triage comment | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20137 history:blocked_triage@2026-10-30T08:50:21.017930639Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T08:42:56.814446639Z | ORB-20455 | jrun-20261031-0836-c16 | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20455 history:blocked_triage@2026-10-31T08:42:56.814446639Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |

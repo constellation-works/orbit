@@ -38,3 +38,17 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-28 21:28 | ORB-19593 | jrun-20261028-2120-c1 (pilot) | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
 | 2026-10-28 21:28 | ORB-19594 | jrun-20261028-2120-c1 (pilot) | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
 | 2026-10-28 21:30 | ORB-19595 | jrun-20261028-2121-t1 (pilot) | owner sign-off required before stable-tier deletion | pilot_warning_triaged human_only in ORB-21505 resume pass |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 5 source occurrence(s) on 3 task(s); route `authoring`, disposition `counted`. Change vs prior pass (ORB-22099): `grew` (prior 3). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-28T21:28:18.850337291Z | ORB-19593 | not recorded in triage comment | criterion requires owner sign-off for stable-tier deletion; source ORB-19593 history:pilot_triage@2026-10-28T21:28:18.850337291Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T21:28:25.315154403Z | ORB-19594 | not recorded in triage comment | criterion requires owner sign-off for stable-tier deletion; source ORB-19594 history:pilot_triage@2026-10-28T21:28:25.315154403Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T21:30:07.355730890Z | ORB-19595 | not recorded in triage comment | criterion requires owner sign-off for stable-tier deletion; source ORB-19595 history:pilot_triage@2026-10-28T21:30:07.355730890Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T21:35:16.280809158Z | ORB-19593 | jrun-20261028-2131-c14 | criterion requires owner sign-off for stable-tier deletion; source ORB-19593 history:final_recovery@2026-10-28T21:35:16.280809158Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-28T21:39:40.067927550Z | ORB-19594 | jrun-20261028-2132-c5 | criterion requires owner sign-off for stable-tier deletion; source ORB-19594 history:blocked_triage@2026-10-28T21:39:40.067927550Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |

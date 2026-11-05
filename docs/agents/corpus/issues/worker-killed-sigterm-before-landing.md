@@ -50,3 +50,13 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | 2026-11-02T03:28:56.631967965Z | ORB-21229 | jrun-20261102-0328-c3 | worker_terminated:process_not_found; run_lifecycle; SIGTERM from orbit with zero OOM and PID-limit counters; workflow run interrupted: job=task_pr_pipeline, run_id=jrun-20261102-0328-c3, error_code=worker_terminated, error=job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=3239733, pid_start_time=ps-lstart-utc-v2:pidns=4026531836:Mon Nov 2 03:28:01 2026); worker exit: its supervisor reaped pid 3239733 at 2026-11-02T03:28:56.453288474+00:00: killed by signal 15 (SIGTERM), sent by pid 3266805 (uid 1000, command 'orbit'); worker scope 'orbit-worker-jrun-20261102-0328-c2-53b89c8c.scope': memory.events oom_kill=0, pids.events max=0; resume with orbit job resume jrun-20261102-0328-c3; source ORB-21229 history:workflow_run_interrupted@2026-11-02T03:28:56.631967965Z | status_changed done at 2026-11-02T04:10:58.680990206Z |
 
 No open run-failure-patterns owner existed. ORB-21822 report maps broader class to F2026-11-081. New bug owns source investigation and repair, not failure-rate measurement. Initiating operation remains unknown.
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 1 source occurrence(s) on 1 task(s); route `run_failure`, disposition `counted`. Change vs prior pass (ORB-22099): `shrank` (prior 2). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-30T09:03:52.937051156Z | ORB-20155 | not recorded in triage comment | worker killed by SIGTERM before landing; source ORB-20155 history:blocked_triage@2026-10-30T09:03:52.937051156Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
