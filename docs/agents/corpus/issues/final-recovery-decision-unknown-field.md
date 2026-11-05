@@ -13,7 +13,7 @@ links: [ORB-20833]
 
 ## Mechanism
 
-The recovery agent returned a `friction_reported` decision that included `diagnosis`. The applier accepts `friction_id` or `friction_title` plus `friction_body`, with `human_action` and an optional `summary`. An unknown field fails the decision, and the engine escalates instead of applying it. This is a contract miss by the agent, not a lost run result. Whether a later schema added `diagnosis` was not re-checked beyond this occurrence.
+The recovery agent returned a `friction_reported` decision that included `diagnosis`. The applier accepts `friction_id` or `friction_title` plus `friction_body`, with `human_action` and an optional `summary`. An unknown field fails the decision, and the engine escalates instead of applying it. This is a contract miss by the agent, not a lost run result. The current schema still rejects `diagnosis` on `friction_reported`; `diagnosis` is accepted on `escalate`.
 
 ## Resolution
 
