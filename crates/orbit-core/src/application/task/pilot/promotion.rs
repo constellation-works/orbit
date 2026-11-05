@@ -52,6 +52,20 @@ pub(super) fn footprint_hold(assessment: &Value) -> Option<&Value> {
 /// Findings whose named prerequisites may already be enforced or completed.
 const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
+/// Whether a finding is a pilot-declared unresolved-footprint hold. The
+/// host-written marker is authoritative; a pilot's assessed finding that
+/// names the footprint itself is the same declaration before apply stamps
+/// the marker. Such a finding is about an unread source, not about waiting
+/// for a named task, so a done or dependency predecessor named in it does
+/// not release it.
+fn declares_unresolved_footprint(finding: &Value) -> bool {
+    finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED)
+        || warning_text(finding).is_some_and(|text| {
+            let text = text.to_ascii_lowercase();
+            text.contains(FOOTPRINT_UNRESOLVED) || text.contains("footprint")
+        })
+}
+
 /// Only surface and utility findings may explicitly be advisory. Legacy
 /// strings and malformed findings hold by default; prerequisite, conflict and
 /// deterministic validation findings cannot opt out through this flag.
@@ -134,6 +148,7 @@ fn holds_promotion(
 ) -> bool {
     finding_holds_promotion(field, finding)
         && (!PREREQUISITE_FIELDS.contains(&field)
+            || declares_unresolved_footprint(finding)
             || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 
