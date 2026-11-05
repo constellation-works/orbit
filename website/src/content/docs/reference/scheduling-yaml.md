@@ -95,7 +95,7 @@ A cron or interval definition that was asleep through several slots files one ma
 | `priority` | `medium` | `low`, `medium`, `high`, or `critical`. |
 | `complexity` | Omitted | `low`, `medium`, `hard`, or `xhard` when you want an assessment. Omit the key to leave the task unassessed. There is no `unassessed` value to write. |
 | `crew` | Omitted | Crew override. `--crew`. |
-| `status` | `backlog` | Status the task enters: `proposed`, `backlog`, `in-progress`, `review`, `done`, `blocked`, `archived`, `rejected`, or `someday`. Use `backlog`, or `proposed` when you want to approve each one. `--status`. |
+| `status` | `backlog` | Template status stored on the definition. The serialized default is `backlog`, but at mint a `backlog` template becomes `proposed` unless the normalized minted tags include `no-diff-expected`; explicit non-`backlog` statuses are preserved. `--status`. |
 
 Turn-based budget fields are not part of the template. An unknown template key rejects the file.
 
