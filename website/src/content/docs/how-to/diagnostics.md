@@ -57,11 +57,16 @@ orbit log tail --since 30m --target orbit.policy --lines 100
 ```
 
 `--level warn` includes warnings and errors; `--target` matches a tracing
-target prefix. The default feed merges the active operational log
-`~/.orbit/state/logs/orbit.jsonl` and agent relay feed. It is host-wide;
-`--workspace` does not filter these lines. `ORBIT_LOG_PATH` or `--path`
-can select another log path. A short tail is a sample, not proof that no
-earlier error occurred.
+target prefix. For ordinary processes, the default feed merges the active
+home-global operational log `~/.orbit/state/logs/orbit.jsonl` and agent relay
+feed. It is host-wide; `--workspace` does not filter these lines. An
+Orbit-managed run started with a different explicit `--root` or `ORBIT_ROOT`
+writes and reads both feeds under that root's `state/logs/` directory, so its
+events do not appear in the inherited registry's host feed. This diversion
+applies only in a managed-run context; root overrides on unmanaged commands
+leave their feeds at the home-global paths. `ORBIT_LOG_PATH` or `--path` can
+select another log path. A short tail is a sample, not proof that no earlier
+error occurred.
 
 These commands exit after the snapshot. For a live investigation,
 `log tail --follow` continues until Ctrl-C; `run logs "$RUN_ID" --follow`
