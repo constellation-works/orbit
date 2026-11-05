@@ -7,6 +7,8 @@ mod actions;
 mod admissions_stop;
 mod drain_cancel;
 mod owner;
+#[cfg(unix)]
+mod reconcile;
 
 use chrono::Utc;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};

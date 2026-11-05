@@ -1,9 +1,9 @@
 ---
 title: Owner Failover — Design
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
-status: Proposed
+last_updated: 2026-11-04
+last_validated: 2026-11-04
+status: Draft
 feature: owner-failover
 doc_role: design
 type: design
@@ -935,10 +935,14 @@ cannot fail over, and its behaviour is unchanged.
 8. **Retire the weekly routine?** On-change publication replaces it (§3.1). Should a
    workspace without failover keep the weekly option?
 
+[ORB-20620] wrote the proposal. [ORB-20639] refined the proposal to preserve withheld updates across rejoin. [ORB-20640] ensured rejoin inventories orphaned work even with no task delta, and [ORB-20641] corrected the publication-rate bounds.
+
 ## Task References
 
 - [ORB-20620] — wrote this proposal.
 - [ORB-20639] — made a withheld update below `change_seq` recoverable at rejoin.
+- [ORB-20640] — required orphaned-work inventory even when rejoin has no task delta.
+- [ORB-20641] — corrected the publication-rate upper bounds.
 - [ORB-12528] — landed the task commit boundary the change log would join.
 - [ORB-11076] — implemented the staged, rolled-back restore that takeover promotion reuses.
 - [ORB-11110] — made publication an exact compare-and-swap, the fence this design relies on.

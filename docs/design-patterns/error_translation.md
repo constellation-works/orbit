@@ -74,6 +74,12 @@ context, and choose the wire code according to the cause:
   codes and serializes as `Execution`. Query it with `private_vcs_failure()`.
   An Orbit diagnostic that reports such a failure keeps its class only when
   it is rebuilt from the cause; plain `Execution` text is never transient.
+- `ForgeUnavailable(ForgePushHoldFailure { hold, message })`: a delivery push
+  the forge refused past its retry budget. The push operation builds the hold
+  once, and the dispatcher lifts it to `DispatchError::ForgeUnavailableHold`. It
+  reads, codes and serializes as `Execution`. Query it with `forge_push_hold()`.
+  Only a persisted message with no structured hold is decoded from text, through
+  `ForgeUnavailableHold::from_text`.
 
 Each wildcard match in another crate must name the new variant wherever it
 names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed

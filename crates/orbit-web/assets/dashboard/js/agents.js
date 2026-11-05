@@ -12,6 +12,7 @@
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
 import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, clockStamp, relativeTime } from './common.js';
+import * as common from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
@@ -67,6 +68,7 @@ const TITLE_ID = "agents-title";
 let role = AGENT_ROLES[0];
 let requestScope = null;
 let scorecard = null;
+let scanTimer = null;
 let attribution = null;
 let implementerMatrix = null;
 let implementerTier = "";
@@ -109,6 +111,8 @@ function rowKey(row) {
 }
 
 function resetView() {
+  clearTimeout(scanTimer);
+  scanTimer = null;
   scorecard = null;
   attribution = null;
   implementerMatrix = null;
@@ -433,17 +437,32 @@ const SCAN_QUALIFIERS = {
 // The header line beside the window: the scan's time on the dashboard clock,
 // its age, and whether the server still counts it current.
 function scanNode(payload) {
-  const scan = scanFreshness(payload);
-  const node = el("span", { class: `agents-scan agents-scan-${scan.state}` });
-  node.dataset.freshness = scan.state;
-  if (scan.state === "unreported") {
-    node.append("Scan time not reported · freshness not judged");
-    return node;
-  }
-  const time = el("time", { text: formatDateTime(scan.at) });
-  time.setAttribute("datetime", scan.at);
-  clockStamp(time, scan.at);
-  node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, ` · ${SCAN_QUALIFIERS[scan.state](scan)}`);
+  clearTimeout(scanTimer);
+  const node = el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" });
+  const update = () => {
+    const scan = scanFreshness(payload);
+    node.className = `agents-scan agents-scan-${scan.state}`;
+    node.dataset.freshness = scan.state;
+    node.textContent = "";
+    if (scan.state === "unreported") {
+      node.append("Scan time not reported · freshness not judged");
+      return;
+    }
+    const time = el("time", { text: formatDateTime(scan.at) });
+    time.setAttribute("datetime", scan.at);
+    clockStamp(time, scan.at);
+    node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, ` · ${SCAN_QUALIFIERS[scan.state](scan)}`);
+    // Age the retained response even while a refresh is pending or failed.
+    // Refresh only this status, preserving ranks, selection and request errors.
+    const untilExpiry = Date.parse(scan.at) + scan.ttl * 1000 - Date.now() + 1;
+    const delay = scan.state === "fresh" ? Math.min(60_000, Math.max(1, untilExpiry)) : 60_000;
+    scanTimer = setTimeout(() => {
+      if (scorecard !== payload || node.parentNode !== $(META_ID)) return;
+      update();
+      common.updatePanelSettledNote(BODY_ID, SCAN_SETTLED[scanFreshness(payload).state]);
+    }, delay);
+  };
+  update();
   return node;
 }
 

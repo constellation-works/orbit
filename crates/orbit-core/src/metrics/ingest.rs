@@ -5,11 +5,11 @@ use super::summary::ratio;
 
 /// Fold a new invocation into persisted [`KnowledgeRunMetrics`].
 ///
-/// The v1 pack-compression path was removed in ORB-00391. ORB-10828 then
-/// retired the last builtin whose result tokens fed the read-token counters,
-/// so a fresh trace no longer creates knowledge metrics. Historical rows keep
-/// their stored `actual_fs_read_tokens_during_run` / `double_read_rate` values;
-/// later traces only accumulate LLM input tokens onto those rows.
+/// A trace alone never creates a row: without existing metrics there is
+/// nothing to merge into, so this returns `None`. For an existing row the
+/// merge accumulates the trace's LLM input tokens; stored
+/// `actual_fs_read_tokens_during_run` / `double_read_rate` values are left
+/// untouched.
 pub(crate) fn merge_invocation_trace(
     existing: Option<&KnowledgeRunMetrics>,
     trace: &InvocationTrace,

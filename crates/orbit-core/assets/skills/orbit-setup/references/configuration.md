@@ -933,8 +933,8 @@ claimed review. They do not turn on before-PR or before-landing review; set
 
 `review.verify_findings` is an advanced boolean, default `false`. When true,
 a review-filed task of type `bug` tagged `code-review`,
-`delivery-code-review`, `security-review` or `qa-sweep` must have a
-`CONFIRMED` finding-verification verdict for its current material before it
+`delivery-code-review`, `security-review`, `qa-sweep` or `visual-review` must
+have a `CONFIRMED` finding-verification verdict for its current material before it
 can be approved, promoted to `backlog` or admitted by a drain. Until then,
 readiness reports the `unverified_review_finding` hold. A `REJECTED` verdict
 still rejects the task even when verification is not required. The gate reads

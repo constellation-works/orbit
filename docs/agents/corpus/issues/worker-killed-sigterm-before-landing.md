@@ -1,7 +1,7 @@
 ---
 type: issue
 applies_to: [final_recovery]
-status: active
+status: resolved
 links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21229, ORB-21876]
 ---
 
@@ -13,7 +13,7 @@ links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21
 
 ## Mechanism
 
-An external process terminated the worker. Historical cases retained candidates; the November 2 cases include clean, pre-implementation attempts. Recorded senders include another `orbit` process; its initiating operation is unknown. OOM and PID-limit counters read zero. A parent scope name differing from a child run is not by itself evidence of faulty targeting.
+An external process terminated the worker. Historical cases retained candidates; the November 2 cases include clean, pre-implementation attempts. For the seven November 2 episodes the senders are confirmed explicit cancellations: ORB-21876's `sigterm-attribution.json` artifact records six dashboard requests (`actor=dashboard`, `source=web`, canceller PID 1227088, the `orbit-web` dashboard) and one CLI request (`actor=cli`, `source=run_cancel`, requester/sender PID 3266805), each canceller PID equal to the signal sender. The defect ORB-21876 repaired was reconciliation recording `interrupted` for the reaped worker before the canceller completed, so the cancellation ended `already_terminal` instead of `cancelled`; reconciliation now defers to an active cancellation request (`cancellation_owns_outcome` / `cancellation_is_settling`, see the After-ORB-21876 paragraph in `docs/design/activity-job/2_design.md`). The initiating operations of the older October episodes remain unknown. What remains uncertain for November 2 is who used the dashboard and why: dashboard cancel requests carry no user identity or reason. OOM and PID-limit counters read zero. A parent scope name differing from a child run is not by itself evidence of faulty targeting.
 
 ## Resolution
 
@@ -21,7 +21,7 @@ Check whether an operator cancelled it on purpose before resuming. When a contra
 
 ## Fix task
 
-ORB-21876 (proposed, tagged `run-failure-patterns`) owns investigation and repair of the recurring Orbit-origin SIGTERM episodes. The initiating operation is unconfirmed; sender command and zero resource-limit counters do not establish why it sent the signal.
+ORB-21876 (done 2026-11-04T08:37Z, PR #8082, tagged `run-failure-patterns`) changed job-run reconcile and drain-cancel handling so reconciliation leaves a run with an unfinished cancellation request to its canceller. Effectiveness is too early to judge: under three days have passed and no occurrence after landing has been read. For the seven November 2 episodes the initiating operation is confirmed explicit cancellation per ORB-21876's `sigterm-attribution.json` (six dashboard/web, one CLI `run_cancel`); sender command and zero resource-limit counters alone do not establish who used the dashboard or why. Older October initiators remain unconfirmed.
 
 ## Occurrences
 

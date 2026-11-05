@@ -512,6 +512,50 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
     }
 }
 
+/// An upgrade's designed pause of a claimed leaf is accounted apart from
+/// failures, from the leaf's recorded step code; a leaf interrupted any other
+/// way stays a failure. The claim is released to the backlog either way.
+fn an_upgrade_quiesced_leaf_settles_outside_the_failure_count() {
+    let (pair, drain, leaf, task) = claimed_sol();
+    pair.follower.record_upgrade_interruption_for_test(
+        &leaf,
+        4242,
+        orbit_common::fs::generation::ParticipantRole::Drain,
+    );
+    assert_eq!(pair.run_state(&leaf), JobRunState::Interrupted);
+    settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "backlog");
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let [settlement] = settlements.as_slice() else {
+        panic!("one settled claim: {settlements:?}");
+    };
+    assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Transient));
+    assert_eq!(
+        serde_json::to_value(settlement).unwrap()["accounting"],
+        json!({"outcome": "upgrade_paused", "counts_as_failure": false, "reason": "upgrade_quiesce"}),
+    );
+
+    let (pair, drain, leaf, _) = claimed_sol();
+    end_leaf_at(
+        &pair,
+        &leaf,
+        (1, "implement_one"),
+        JobRunState::Interrupted,
+        Some("process_not_found"),
+        "the worker process is gone: reason=process_not_found".into(),
+    );
+    settle_only(&pair, &drain);
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let [settlement] = settlements.as_slice() else {
+        panic!("one settled claim: {settlements:?}");
+    };
+    assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Transient));
+    assert_eq!(
+        serde_json::to_value(settlement).unwrap()["accounting"],
+        json!({"outcome": "failure", "counts_as_failure": true, "reason": "settlement_failure"}),
+    );
+}
+
 /// [ORB-14439] The owner's run history never holds a follower's leaf, so the
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
@@ -1370,6 +1414,56 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
     assert_resumes_candidate(&pair, &next, "forge hold");
 }
 
+/// A held leaf's persisted hold outranks whatever its step message carries;
+/// the scenario above, with no persisted hold, reads the legacy message.
+fn a_persisted_forge_hold_outranks_the_hold_in_a_held_message() {
+    let (pair, drain, leaf, _task) = claimed_sol();
+    leaf_completed(&pair, &leaf, prepared());
+    let now = Utc::now();
+    let persisted = ForgeUnavailableHold {
+        target_ref: format!("refs/heads/{BRANCH}"),
+        head_sha: HEAD.into(),
+        attempts: 30,
+        waited_ms: 7_190_000,
+        diagnostic: "! [remote rejected] (Internal Server Error)".into(),
+        step_id: "push".into(),
+        held_at: now,
+        held_since: now - chrono::TimeDelta::hours(2),
+    };
+    let message = ForgeUnavailableHold {
+        head_sha: "legacy-message-head".into(),
+        attempts: 2,
+        ..persisted.clone()
+    }
+    .text("step `push` held: the forge refused the push");
+    let mut state = pair
+        .follower
+        .read_run_state(&leaf)
+        .unwrap()
+        .expect("the leaf's pipeline state");
+    state.pull_drain.forge_hold = Some(persisted);
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    end_leaf_at(
+        &pair,
+        &leaf,
+        (0, "diagnostic"),
+        JobRunState::Held,
+        Some(FORGE_UNAVAILABLE_ERROR_CODE),
+        message,
+    );
+
+    settle_only(&pair, &drain);
+
+    let release = &settlement_of(&pair, &leaf)["Release"];
+    let reason = release["failure"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains(HEAD) && reason.contains("30 times"),
+        "{release}"
+    );
+    assert!(!reason.contains("legacy-message-head"), "{release}");
+    assert_eq!(release["forge_hold"]["head_sha"], HEAD, "{release}");
+}
+
 /// The candidate's own failure, and a task its final recovery judged, still
 /// block the task — typed, so `orbit run show` says which.
 fn a_candidate_failure_still_blocks_the_task() {
@@ -2189,6 +2283,7 @@ crate::scenario_table!(
     handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks,
     crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
+    an_upgrade_quiesced_leaf_settles_outside_the_failure_count,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
     the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once,
     hydration_observes_stored_runs_without_reconciliation,
@@ -2201,6 +2296,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew_scenarios,
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew,
+    a_persisted_forge_hold_outranks_the_hold_in_a_held_message,
     a_candidate_failure_still_blocks_the_task,
     a_pending_decision_flag_on_a_release_stays_a_failure,
     a_failed_leaf_names_its_cause_in_owner_history,

@@ -725,10 +725,14 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             let log = ci_job_log(
                 &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":job_id.to_string(),"deadline_ms":deadline.0}),
             )?;
-            if log["truncated"] != false || !log["fallback_error"].is_null() {
+            if log.truncated != Some(false) || log.fallback_error.is_some() {
                 return Err(unreadable("truncated/unreadable prerequisite log"));
             }
-            let log = text(&log, "log", unreadable)?;
+            let log = log
+                .log
+                .as_deref()
+                .filter(|log| !log.is_empty())
+                .ok_or_else(|| unreadable("log"))?;
             // Narrow evidence: an explicit gh HTTP 502/503/504 API failure.
             // A credential/permission diagnostic anywhere vetoes admission.
             let lower = log.to_ascii_lowercase();

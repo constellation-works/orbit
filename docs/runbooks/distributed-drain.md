@@ -1453,10 +1453,12 @@ Claims settled before the owner kept settlements read `unrecorded` unless
 their release kept a typed class; the task's history note carries the reason.
 
 Each settlement's `accounting` (`outcome`, `counts_as_failure`, `reason`) is how
-the scan counts it, derived from the typed kind, class and
-`review_decision_pending` flag, never from the reason text [ORB-21840].
+the scan counts it, derived from the typed kind, class,
+`review_decision_pending` flag and the leaf's recorded step code, never from the
+reason text [ORB-21840].
 `review_decision_hold` (a failed `candidate` settlement awaiting a recorded
-landing decision), `evidence_hold` and `operator_cancel` are held, not failed;
+landing decision), `evidence_hold`, `operator_cancel` and `upgrade_paused` (a
+`transient` settlement whose leaf recorded `upgrade_quiesce`) are held, not failed;
 `failure`, `baseline_red` and legacy `unrecorded` count. The flag on any other
 settlement stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting is read-only:
@@ -1831,12 +1833,13 @@ one. From then on:
     spent). Candidate failures keep their candidate repair/requeue route,
     and inherited failures keep their base update/wait route. Other failure
     classes stop in review naming the read failure, not `waiting_for_base`.
-    Without decisive evidence, `handoff_land` stops in review after
-    `max_base_ci_cycles` (default 3) observation cycles or the existing
-    `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
+    Without decisive evidence, `handoff_land` holds the candidate in review
+    as `delivery_base_checks_pending` after `max_base_ci_cycles` (default 3)
+    observation cycles or the existing `max_wait_seconds` deadline (default
+    3600 seconds), whichever comes first.
     A cycle is one landing poll that rechecks the same failed job against the
     accepted base ancestry.
-    Its stop evidence names the check, signature and missing rerun or base
+    Its hold evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.
   - **candidate**: anything else. The landing stops for the claim's one

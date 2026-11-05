@@ -656,6 +656,14 @@ export async function requestPanel(bodyId, scope, request, render, countId, sett
   }
 }
 
+// Update a retained panel's settled status without hiding pending/error notices.
+export function updatePanelSettledNote(bodyId, text) {
+  const state = panelRequests.get(bodyId);
+  if (!state || !state.loaded || state.settledText === text) return;
+  state.settledText = text;
+  panelMessage(bodyId, state);
+}
+
 // Append the selected workspace to an API path, unless one is already present
 // (aggregate endpoints like /api/tasks/all are called with no workspace set),
 // and address it to the selected host. Every request, link and stream scopes

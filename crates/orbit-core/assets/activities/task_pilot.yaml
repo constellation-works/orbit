@@ -532,48 +532,6 @@ spec:
        one. A task listed in `partition.rechecks` follows Re-check mode
        instead of this step.
 
-    ## Re-check mode
-
-    A task in `partition.rechecks` already has an assessment that holds
-    promotion, and the host has established that neither the repository at
-    its footprint paths nor the task's scope moved beyond a bounded edit since
-    then. Its input is host-produced and trusted: `prior_assessment` (every
-    prior field), `holding_findings` (each with `id`, `category`, `text`,
-    `evidence` and the original `finding`), `prior_source_revision`, and
-    `task_diff` (title and description similarity, criteria, context_files,
-    tags, dependencies, relations and answered decisions since then).
-
-    Steps 1 and 2 still apply, but read only what the re-check needs: the
-    current task, the code and records each holding finding cites, and the
-    material the diff touches. Do not repeat `orbit.search`, the duplicate
-    lead check or a selector sweep unless the diff makes them relevant. Then:
-
-    1. Return `recheck_findings` with exactly one entry per holding finding,
-       using its `id`: `resolved` (cite what resolved it), `still_holds`
-       (cite why it still holds) or `changed` (it still holds in another
-       form; put the new finding, in its category's shape, in `current`).
-    2. For each prior field the diff invalidates — footprint
-       (`context_files_after`), complexity, crew, `required_os`,
-       `duplicate_of` or `already_landed` — return the re-derived field.
-       Always return `operator_tool_classifications` with one entry per
-       `partition.operator_tool_candidates` mention for this task,
-       re-classified against the current criteria: apply never keeps the
-       prior classifications, so a mention you omit holds as `invoke`.
-       Omit every other field the diff leaves valid: apply keeps the prior
-       value, dropping `resolved` findings from kept finding fields and
-       replacing `changed` ones with `current`. A field you return
-       replaces the prior one entirely.
-    3. Return any new finding the diff introduces in its usual field.
-
-    When the evidence shows the re-check cannot be bounded (the prior
-    assessment no longer describes the task), pilot the task in full instead
-    and return a complete assessment without `recheck_findings`; apply
-    records it as a full assessment that a re-check escalated.
-
-    Report `observed_revision` and `observed_tree` as in step 2: apply holds
-    a re-check to the same revision proofs as a full assessment. Never write
-    `mode` or `prior_assessment_id`; the host records them.
-
     ## Selector rules
 
     `context_files_after` is the task's lock footprint: exact canonical `file:`,
@@ -593,8 +551,8 @@ spec:
       has no symbols (Markdown, config, manifests, generated output, data,
       goldens). Never declare a symbol that does not exist yet.
     - Omit read-only context: tests and fixtures only consulted, and shared
-      reference docs that need at most an incidental line update. Never list
-      `docs/CONFIG.md`. The implementer still updates such docs in the same PR.
+      reference docs that need at most an incidental line update. The
+      implementer still updates such docs in the same PR.
     - Derive targets from evidence, never by sweeping a directory or crate. For
       a removal or rename, propose the files that reference the symbol
       (`rg -l '<symbol>'` at `source_revision`), not every module in the crate
@@ -877,8 +835,8 @@ spec:
       Prerequisites already in `dependencies` or `blocked_by` relations need no
       holding finding.
     - `finding_invalid`: only for a review-filed bug (type `bug` tagged
-      `code-review`, `delivery-code-review`, `security-review` or
-      `qa-sweep`). Read the cited code at `source_revision` and decide
+      `code-review`, `delivery-code-review`, `qa-sweep`, `security-review` or
+      `visual-review`). Read the cited code at `source_revision` and decide
       whether the defect exists there. Return `{"evidence":"..."}` with
       `path:line` citations at `source_revision` only when it does not: the
       code does not do what the finding claims, or the claimed consequence
@@ -979,6 +937,48 @@ spec:
     - A defect the repository owns (a wrong dependency requirement, a broken
       manifest, a packaging-script bug) is ordinary work: return its selectors
       and leave `release_action_required` null.
+
+    ## Re-check mode
+
+    A task in `partition.rechecks` already has an assessment that holds
+    promotion, and the host has established that neither the repository at
+    its footprint paths nor the task's scope moved beyond a bounded edit since
+    then. Its input is host-produced and trusted: `prior_assessment` (every
+    prior field), `holding_findings` (each with `id`, `category`, `text`,
+    `evidence` and the original `finding`), `prior_source_revision`, and
+    `task_diff` (title and description similarity, criteria, context_files,
+    tags, dependencies, relations and answered decisions since then).
+
+    Steps 1 and 2 still apply, but read only what the re-check needs: the
+    current task, the code and records each holding finding cites, and the
+    material the diff touches. Do not repeat `orbit.search`, the duplicate
+    lead check or a selector sweep unless the diff makes them relevant. Then:
+
+    1. Return `recheck_findings` with exactly one entry per holding finding,
+       using its `id`: `resolved` (cite what resolved it), `still_holds`
+       (cite why it still holds) or `changed` (it still holds in another
+       form; put the new finding, in its category's shape, in `current`).
+    2. For each prior field the diff invalidates — footprint
+       (`context_files_after`), complexity, crew, `required_os`,
+       `duplicate_of` or `already_landed` — return the re-derived field.
+       Always return `operator_tool_classifications` with one entry per
+       `partition.operator_tool_candidates` mention for this task,
+       re-classified against the current criteria: apply never keeps the
+       prior classifications, so a mention you omit holds as `invoke`.
+       Omit every other field the diff leaves valid: apply keeps the prior
+       value, dropping `resolved` findings from kept finding fields and
+       replacing `changed` ones with `current`. A field you return
+       replaces the prior one entirely.
+    3. Return any new finding the diff introduces in its usual field.
+
+    When the evidence shows the re-check cannot be bounded (the prior
+    assessment no longer describes the task), pilot the task in full instead
+    and return a complete assessment without `recheck_findings`; apply
+    records it as a full assessment that a re-check escalated.
+
+    Report `observed_revision` and `observed_tree` as in step 2: apply holds
+    a re-check to the same revision proofs as a full assessment. Never write
+    `mode` or `prior_assessment_id`; the host records them.
 
     ## Repair attempt
 

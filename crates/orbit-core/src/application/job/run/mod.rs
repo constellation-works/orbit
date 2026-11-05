@@ -72,7 +72,7 @@ pub use projection::{
 };
 pub use root_cause::{
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
-    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
+    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents, run_upgrade_paused,
 };
 pub use types::{
     JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,
@@ -82,4 +82,7 @@ pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
 };
 pub(crate) use window_extension::{drain_deadline, pull_window_closed};
-pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitOutcome, DrainWorkerLimitRequest};
+pub use worker_limit::{
+    DrainWorkerLimitChange, DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome,
+    DrainWorkerLimitRequest,
+};

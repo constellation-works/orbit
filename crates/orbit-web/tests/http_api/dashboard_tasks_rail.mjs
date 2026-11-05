@@ -1712,6 +1712,16 @@ if (process.argv.includes('--browser')) {
             return url.searchParams.get('workspace') === 'ws_fixture'
               ? json({ items: [{ task_id: 'ORB-401' }] }) : json({ error: 'no workspace selected and no default configured' }, 400);
           }
+          if (url.pathname === '/api/dashboard/chrome') {
+            const component = body => ({ status: 200, body: JSON.stringify(body) });
+            const since = url.searchParams.get('since') || '24h';
+            return json({
+              notices: component({ open: [], recent: [], banner: [], degraded: [] }),
+              summary: component({ events: 0, failed_runs: 0, window: since, tool_call_failure_rate: { failed: 0, total: 0, denied: 0 } }),
+              routines: url.searchParams.get('routines') === 'true' ? component({ routines: [], clock: {} }) : null,
+              failures: url.searchParams.get('failures') === 'true' ? component({ failing: [] }) : null,
+            });
+          }
           if (url.pathname === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner', local: true }] });
           if (url.pathname === '/api/crews') return json({ crews: [] });
           if (url.pathname === '/api/tasks') return json({ items: [], total: 0, limit: 50 });

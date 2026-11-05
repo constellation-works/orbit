@@ -612,7 +612,183 @@ fn tag_changes_record_previous_and_new_tags_in_history() {
     );
 }
 
+fn claim_refused_start_leaves_document_status_history_and_artifacts_unchanged() {
+    use orbit_store::contracts::{
+        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    };
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+    std::fs::write(repo.join("free.txt"), "fixture\n").unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    let holder = runtime
+        .add_task(TaskAddParams {
+            title: "claim holder".into(),
+            plan: "Hold the shared footprint.".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::InProgress),
+            context_files: vec!["file:shared.txt".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let claim = ExecutionClaim {
+        claim_id: "claim-refused-start".into(),
+        task_id: holder.id.clone(),
+        request_id: "req-refused-start".into(),
+        executed_on: ExecutionLocation {
+            machine_id: "machine-1".into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: "jrun-holder-refused-start".into(),
+            job_name: "test-job".into(),
+            machine_name: None,
+        },
+        footprint: vec!["file:shared.txt".into()],
+        reservation_id: "res-refused-start".into(),
+        reservation_expires_at: (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        phase: ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    let workspace_id = runtime.workspace_id().unwrap();
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                workspace_id,
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let target = runtime
+        .add_task(TaskAddParams {
+            title: "Original title".into(),
+            description: "Original document".into(),
+            plan: "Original plan.".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            context_files: vec!["file:shared.txt".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let before = runtime.get_task(&target.id).unwrap();
+    let history = runtime.get_task_history(&target.id).unwrap();
+    let comments = runtime.get_task_comments(&target.id).unwrap();
+
+    // The reported path: `orbit.task.update` into in-progress (the screened
+    // start) carrying title and plan edits.
+    let refusal = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": target.id, "status": "in-progress",
+                "title": "Refused title", "plan": "Refused plan.", "model": "claude"
+            }),
+            None,
+            Some("claude".into()),
+        )
+        .expect_err("a start overlapping a protecting claim must be refused");
+    assert!(
+        refusal
+            .to_string()
+            .contains("task footprint overlaps an execution claim")
+            && refusal.to_string().contains(&holder.id)
+            && refusal.to_string().contains("jrun-holder-refused-start"),
+        "the refusal must name the overlapping claim: {refusal}"
+    );
+
+    // The same refusal through the direct start API must also keep a
+    // companion artifact from landing.
+    let artifact_refusal = runtime
+        .start_task_with_identity_and_crew(
+            &target.id,
+            None,
+            None,
+            None,
+            Some("claude".into()),
+            None,
+            Some("Refused plan.".into()),
+            TaskUpdateParams {
+                title: Some("Refused title".into()),
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "notes/refused.txt",
+                    "must not persist",
+                )],
+                ..Default::default()
+            },
+            None,
+        )
+        .expect_err("a direct start overlapping a protecting claim must be refused");
+    assert!(
+        artifact_refusal
+            .to_string()
+            .contains("task footprint overlaps an execution claim"),
+        "{artifact_refusal}"
+    );
+
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    assert_eq!(persisted.get_task(&target.id).unwrap(), before);
+    assert_eq!(
+        persisted.get_task(&target.id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(persisted.get_task_history(&target.id).unwrap(), history);
+    assert_eq!(persisted.get_task_comments(&target.id).unwrap(), comments);
+    assert!(
+        persisted
+            .get_task_artifact_manifest(&target.id)
+            .unwrap()
+            .is_empty(),
+        "a refused start must not persist companion artifacts"
+    );
+
+    // A combined start on an unclaimed footprint still persists every edit.
+    let free = runtime
+        .add_task(TaskAddParams {
+            title: "Free original".into(),
+            plan: "Free original plan.".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            context_files: vec!["file:free.txt".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": free.id, "status": "in-progress",
+                "title": "Free started", "plan": "Free started plan.", "model": "claude"
+            }),
+            None,
+            Some("claude".into()),
+        )
+        .expect("a combined start without a claim overlap must succeed");
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let started = persisted.get_task(&free.id).unwrap();
+    assert_eq!(started.status, TaskStatus::InProgress);
+    assert_eq!(started.title, "Free started");
+    assert_eq!(started.plan, "Free started plan.");
+}
+
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    claim_refused_start_leaves_document_status_history_and_artifacts_unchanged_scenarios,
+    claim_refused_start_leaves_document_status_history_and_artifacts_unchanged
+);
 crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
     activity_updates_refuse_replica_writes_and_preserve_owner_updates,

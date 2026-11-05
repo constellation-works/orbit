@@ -1,9 +1,9 @@
 ---
 title: Task Publication — Overview
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-11-02
-status: Accepted
+last_updated: 2026-11-04
+last_validated: 2026-11-04
+status: Implemented
 stage: shipped
 next: "—"
 feature: task-publication
@@ -116,6 +116,8 @@ encrypted secret store.
 | Same-authority publication recovery | [`orbit-store` restore workflow](../../../crates/orbit-store/src/workflow/task/restore.rs) | [ORB-11076] |
 | Operator CLI and network-free end-to-end contract | [`orbit-cli` publication commands](../../../crates/orbit-cli/src/command/task/publication.rs) | [ORB-11077] |
 | Portable migration archive primitives | [`orbit-store` task workflow](../../../crates/orbit-store/src/workflow/task/mod.rs) | — |
+
+The binding, snapshot, publication and inspection slices landed in [ORB-11072], [ORB-11073], [ORB-11074] and [ORB-11075], respectively. [ORB-18375] added shared repositories with separate branch-scoped lineages.
 
 ## Task References
 

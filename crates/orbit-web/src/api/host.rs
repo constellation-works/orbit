@@ -233,6 +233,7 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
+        | OrbitError::ForgeUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_)

@@ -371,10 +371,11 @@ recorded decision: the claim still fails and blocks the task, but failure scans
 count it separately. Older records without the flag read as false.
 
 Each settlement's `accounting` (`{outcome, counts_as_failure, reason}`) says how
-a failure scan counts it, derived from its typed kind, class and
-pending-decision flag, never its reason: `outcome` is `failure`,
+a failure scan counts it, derived from its typed kind, class, pending-decision
+flag and the leaf's recorded step code, never its reason: `outcome` is `failure`,
 `review_decision_hold` (the pending decision above), `evidence_hold`,
-`operator_cancel`, `baseline_red` or `unrecorded`, with `counts_as_failure`
+`operator_cancel`, `upgrade_paused` (a `transient` settlement whose leaf recorded
+`upgrade_quiesce`: an Orbit upgrade paused it), `baseline_red` or `unrecorded`, with `counts_as_failure`
 (true for `failure`, `baseline_red` and `unrecorded`) and a `reason` token
 naming the deciding evidence, such as
 `review_decision_pending_without_candidate_failure` for a flag on a settlement

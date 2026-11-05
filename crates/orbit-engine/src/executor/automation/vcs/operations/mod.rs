@@ -1,5 +1,6 @@
 mod check_annotations;
 mod ci;
+mod ci_log_answer;
 mod ci_rerun;
 mod dependency_record;
 mod dispatch;
@@ -14,6 +15,11 @@ mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 
+pub(super) use ci::{
+    CiCommitJobEvidence, CiCommitJobIdentity, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent,
+    CiJobPullRequests, CiJobStatus,
+};
+pub(super) use ci_log_answer::{CiJobLogAnswer, CiLogReadThrottle, CiLogSource};
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, carry_class, is_transient,

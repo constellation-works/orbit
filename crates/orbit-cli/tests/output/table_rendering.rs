@@ -433,20 +433,23 @@ pub(super) fn run_cli_on_terminal_at_width(
 
     let mut master = -1;
     let mut slave = -1;
-    let dimensions = libc::winsize {
+    let mut dimensions = libc::winsize {
         ws_row: 24,
         ws_col: width.parse().expect("terminal width"),
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
     // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+    // macOS declares the winsize parameter as *mut, Linux as *const. A raw *mut
+    // satisfies both (coercing to *const on Linux) and avoids
+    // clippy::unnecessary_mut_passed, which fires on `&mut` where *const suffices.
     let rc = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &dimensions,
+            std::ptr::addr_of_mut!(dimensions),
         )
     };
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());

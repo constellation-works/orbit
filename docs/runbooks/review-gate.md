@@ -286,8 +286,9 @@ The owner enforces what it is owed in two places:
   route, and inherited failures keep their base update/wait route. Other
   failure classes with unreadable rerun evidence stop naming the read failure.
   If the evidence remains incomplete,
-  `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
-  (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
+  `handoff_land` holds in review (`delivery_base_checks_pending`) after
+  `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`
+  (default 3600 seconds), whichever comes
   first, and names the missing evidence. Branch protection may still treat a skipped or
   neutral rerun of the failed required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.

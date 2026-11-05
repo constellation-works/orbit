@@ -113,10 +113,11 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (13)
+### Building (14)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Auditability](./design/auditability/1_overview.md) | Develop tamper evidence and joined queries | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
@@ -128,20 +129,18 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
+| [Ux Rules](./design/ux-rules/1_scope.md) | Apply ORB-19976's operator handoff so UX reviews consume routine results | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Evaluate the live experiment before default promotion | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (7)
+### Designing (5)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Application Approvals](./design/application-approvals/1_scope.md) | Daniel reviews the design; then file the slices in 2_design.md §9 (none filed yet) | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
-| [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 
 ### Shipped (38)
 
@@ -186,11 +185,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
-### Parked (1)
+### Parked (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
+| [Web Terminal](./design/web-terminal/1_scope.md) | Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume | claude |
 
 ## Designs
 
@@ -233,16 +233,16 @@ a conservative title/status fallback.
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
-| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Implemented | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
-| [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
-| [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Proposed | claude |
+| [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Implemented | codex |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Draft | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
-| [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
+| [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Implemented | codex |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | One manager session is the human's front door; each mandate gets a resident orchestrator that runs as bounded, checkpointed Orbit activity cycles on the existing clock, coordination only | Draft | claude |
 | [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Implemented | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
@@ -252,7 +252,7 @@ a conservative title/status fallback.
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Scope: a routine-built per-symbol index of body size, test coverage and regression-site history, read by admission riskiness and a test-priority view, each shipped only if its backtest beats today's model | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
-| [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
+| [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Implemented | codex |
 | [Task Risk](./design/task-risk/1_scope.md) | Advisory task-risk estimates separating model-relative complexity, repair burden and escaped regressions. | Draft | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Implemented | claude |

@@ -13,11 +13,13 @@ Final recovery records friction that owner failure scans cannot attribute or fol
 
 ## Mechanism
 
-A claimed leaf runs on a follower. Settlement on the owner keeps the task outcome without the leaf's run identity, build and root cause, so a later scan cannot tell which machine failed or why. The gap is in the settlement record, not in one scan's narrative.
+In the recorded incident, a claimed leaf ran on a follower and the owner kept its task outcome without the leaf's job, build and root cause. A later scan could not attribute the failure from that settlement. ORB-20906 has since added `leaf_run_report` capture and the owner's `run_evidence` projection; legacy settlements can still lack that evidence.
 
 ## Resolution
 
-Do not requeue the scan against the owner store and expect the leaf to appear. The repair is owner-side retention of follower identity, build and root cause. ORB-20906 is that repair. Its task record was already done when this pass read it (`updated_at` 2026-11-01T10:38:42Z), which is under three days before the scan end, so effectiveness is too early to judge.
+Read `orbit run settlements --no-reconcile --json` on the owner and inspect `run_evidence`; `orbit run show` still need not find the follower-local run. ORB-20906 implemented owner-side retention of the leaf's recorded job, build and root cause. Legacy records need the bounded operator-only `orbit run settlements-hydrate` route, and a build or cause never recorded by the leaf remains `unrecorded`. Requeueing the scan alone cannot recover it. See [the distributed-drain runbook](../../../runbooks/distributed-drain.md).
+
+The original pass read ORB-20906 as done (`updated_at` 2026-11-01T10:38:42Z), under three days before its scan end, and classified effectiveness as too early to judge. That dated observation is not a current effectiveness verdict.
 
 ## Fix task
 

@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::log_signature::error_signature;
+use super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
 use super::super::super::pr::RequiredChecks;
 
 use super::annotations::source_annotations;
@@ -71,7 +72,7 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     watched_head: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     run_id: u64,
     job_id: u64,
     deadline_ms: Option<u64>,
@@ -85,10 +86,10 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
             Some(throttle) => CheckReadGap::Deferred(Box::new(DeferredLogRead {
                 reason,
                 head: watched_head.to_string(),
-                repository: job["repository"].as_str().map(ToOwned::to_owned),
+                repository: job.repository.text().map(ToOwned::to_owned),
                 run_id,
                 job_id,
-                run_attempt: job["run_attempt"].as_u64(),
+                run_attempt: job.run_attempt.number(),
                 throttle,
             })),
             None => CheckReadGap::Unavailable(reason),
@@ -175,7 +176,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 }
             }
         };
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return HeadCheckEvidence::Stop(format!(
                 "the failed job behind check '{label}' reported no identity"
             ));
@@ -197,10 +198,10 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                     Some(throttle) => HeadCheckEvidence::ReadDeferred(DeferredLogRead {
                         reason,
                         head: head.to_string(),
-                        repository: job["repository"].as_str().map(ToOwned::to_owned),
+                        repository: job.repository.text().map(ToOwned::to_owned),
                         run_id,
                         job_id,
-                        run_attempt: job["run_attempt"].as_u64(),
+                        run_attempt: job.run_attempt.number(),
                         throttle,
                     }),
                     None => HeadCheckEvidence::Inconclusive(reason),
@@ -274,7 +275,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
 
 /// The jobs on one commit, or why they could not be read; read once per
 /// landing attempt.
-type CommitJobs = Option<Result<Vec<Value>, String>>;
+type CommitJobs = Option<Result<Vec<CiCommitJobEvidence>, String>>;
 
 /// An inherited failure, and whether the moved base tip passes the same job.
 struct Inheritance {
@@ -294,7 +295,7 @@ struct Inheritance {
 pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     head: &str,
     base: &str,
@@ -424,7 +425,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         else {
             return Ok(None);
         };
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Err("a failed job reported no identity".to_string().into());
         };
         let label = job_label(job);
@@ -496,7 +497,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
 /// checks, or `None` when each failed check's same job on it ran to success
 /// or failure.
 fn unproven_tip(
-    head_jobs: &[Value],
+    head_jobs: &[CiCommitJobEvidence],
     failed: &[(Option<String>, String)],
     tip_jobs: &CommitJobs,
 ) -> Option<&'static str> {
@@ -517,8 +518,8 @@ fn unproven_tip(
         }
         if !same.iter().any(|candidate| {
             matches!(
-                candidate["conclusion"].as_str(),
-                Some("success" | "failure")
+                candidate.conclusion.value(),
+                Some(CiJobConclusion::Success | CiJobConclusion::Failure)
             )
         }) {
             unproven = Some("whose same job did not run to a result there");
@@ -529,10 +530,10 @@ fn unproven_tip(
 
 /// A job GitHub has given a conclusion. An empty or absent conclusion is
 /// still running, queued, or waiting.
-fn job_concluded(job: &Value) -> bool {
-    job["conclusion"]
-        .as_str()
-        .is_some_and(|conclusion| !conclusion.is_empty())
+fn job_concluded(job: &CiCommitJobEvidence) -> bool {
+    job.conclusion
+        .value()
+        .is_some_and(CiJobConclusion::concluded)
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:
@@ -543,7 +544,7 @@ fn job_concluded(job: &Value) -> bool {
 fn inherited<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     signature: &str,
     head: &str,
@@ -561,8 +562,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
         .iter()
         .filter(|candidate| same_job(candidate, job) && unsuccessful(candidate))
     {
-        let (Some(run_id), Some(job_id)) =
-            (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+        let (Some(run_id), Some(job_id)) = (candidate.run_id.number(), candidate.job_id.number())
         else {
             return Err(format!("a failed job on base {base} reported no identity").into());
         };
@@ -608,7 +608,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
     // failure remains inherited below.
     let untouched = super::suspect::is_untouched_failure(workspace, head, base, log)?;
     if tip_jobs.iter().any(|candidate| {
-        same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+        same_job(candidate, job) && candidate.conclusion.value() == Some(&CiJobConclusion::Success)
     }) {
         if untouched {
             return Ok(None);
@@ -629,7 +629,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
                 continue;
             }
             let (Some(run_id), Some(job_id)) =
-                (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+                (candidate.run_id.number(), candidate.job_id.number())
             else {
                 continue;
             };
@@ -676,7 +676,7 @@ pub(super) fn onto_passing_tip(jobs: &[FailedJob]) -> bool {
 fn same_job_passes<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     tip: &str,
     tip_jobs: &mut CommitJobs,
 ) -> bool {
@@ -685,7 +685,8 @@ fn same_job_passes<H: RuntimeHost + ?Sized>(
     });
     read.as_ref().is_ok_and(|jobs| {
         jobs.iter().any(|candidate| {
-            same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+            same_job(candidate, job)
+                && candidate.conclusion.value() == Some(&CiJobConclusion::Success)
         })
     })
 }

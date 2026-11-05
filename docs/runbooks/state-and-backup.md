@@ -448,8 +448,12 @@ private file permissions; replacing a regular backup preserves its permissions.
 Task publication is an explicit, task-only durability channel. It does not
 replace the global-root/database backup above: audit events, run history,
 claims, reservations, configuration, machine identity, and runtime caches are not
-published. No task mutation publishes automatically, and v1 seeds no publication
-routine. A future routine trigger must be configured separately.
+published. No task mutation publishes automatically. `orbit workspace init`
+seeds the weekly `task-publication-<workspace>` routine disabled, and
+`orbit workspace sync` adds it to existing workspaces disabled. After reviewing
+the bound repository, credentials, and attachment policy, opt in by setting
+`enabled: true` in `.orbit/routines/task_publication.yaml`; it runs Sundays at
+04:47 host-local time.
 
 Follow [Publish Orbit Tasks to a Dedicated Repository](./task-publication.md) for the complete
 binding, SSH and HTTPS authentication, attachment policy, status verification, inspection,

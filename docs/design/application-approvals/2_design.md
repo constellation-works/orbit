@@ -1,7 +1,7 @@
 ---
 title: "Bounded application approvals — Design"
 owner: claude
-last_updated: 2026-11-01
+last_updated: 2026-11-04
 last_validated: 2026-11-01
 status: Draft
 feature: application-approvals
@@ -20,9 +20,11 @@ This doc specifies the mechanisms behind [1_scope.md](./1_scope.md). It compares
 three candidate flows and states the chosen flow's threat model, consent schema,
 admission algorithm and audit record. It then maps each office app approval action to
 allowed or refused, gives the migration for existing consents, and lists the
-implementation slices. Code anchors were checked at `9a03c7cc5` (2026-11-01). Line
-numbers are for orientation; the symbols are the anchors. orbit-office paths are from
-that repository at `b5654763e`, written as `orbit-office/<path>`.
+implementation slices. The original refusal snapshot is `9a03c7cc5` (2026-11-01).
+Orbit slices 1-5 have since shipped as [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042]; §1 describes current
+admission, while §6 retains the original office action map. Line numbers refer to the
+original layout and are for orientation; the symbols are the anchors. orbit-office
+paths are from that repository at `b5654763e`, written as `orbit-office/<path>`.
 
 ## 1. What admission does today
 
@@ -36,24 +38,28 @@ Other crates are named explicitly.
 
 1. **Consent** (`consent_application`, :68-179). It is operator-only. It refuses agent
    envelopes, application sessions and plugin callbacks (:79-88). The request needs an
-   application id, a future expiry, 1-64 scopes and at most 4 KiB (:89-112). Each
-   scope's operation and callbacks pass `validate_application_operation` (:113-129).
+   application id, a future expiry and 1-64 scopes. The 4 KiB total budget applies
+   only to v1 requests; v2 uses an 8 KiB per-operation budget and the host expiry cap
+   (§4.1). Each scope's operation and callbacks pass `validate_application_operation`.
    Orbit mints a credential and writes a SQLite record plus an owner-only witness under
    `state/application-consents/` (:130-169). It then writes a `consent` or `rotate`
    lifecycle audit event (:170-177).
-2. **Operation validation** (`validate_application_operation`, :222-305). The input must
-   be a JSON object. A plugin tool must name its installed, enabled manifest digest
-   (:231-266). A built-in must have a row in `APPLICATION_OPERATION_CEILINGS`
-   (`crates/orbit-common/src/governance/authorization/catalog/application.rs`). Its keys and
-   statuses are fixed lists (:270-296). Everything else is refused (:298-302). Admission
-   runs this again on every call, so a stale plugin digest refuses later calls.
+2. **Operation validation** (`validate_application_operation`). An operation must carry
+   exactly one of an exact JSON object (`input`) or a constrained field map (`fields`).
+   A plugin tool must name its installed, enabled manifest digest. A built-in must
+   have a row in `APPLICATION_OPERATION_CEILINGS`
+   (`crates/orbit-common/src/governance/authorization/catalog/application.rs`). Exact
+   operations retain their key and status lists; constrained operations also pass the
+   field, identity, transition and callback rules in `validation.rs` (§4.4). Admission
+   runs validation again on every call, so a stale plugin digest refuses later calls.
 3. **Admission** (`admit_application_call`, :310-412). Orbit resolves the invocation
    from an inherited callback record, the session, or the process credential descriptor
    (:317-342). It refuses agent and capability sessions (:347-354). It checks the record,
    the witness, `schema_version` 1 or 2, revocation, record equality, expiry (:355-368),
-   and the workspace id and checkout root (:369-375). A callback must exactly equal a
-   listed callback (:376-393). A direct call may match an exact scope's tool and input
-   or satisfy a constrained `fields` scope
+   and the workspace id and checkout root (:369-375). A callback must match a listed
+   exact callback or satisfy its constrained fields against the entry's bindings and
+   host-held task pin; the entry-bound artifact digest is rechecked. A direct call may
+   match an exact scope's tool and input or satisfy a constrained `fields` scope
    (:395-404). The admitted invocation goes into the session and the thread-local audit
    slot (:409-411).
 4. **Execution and audit.** An admitted built-in runs through `execute_application_builtin`
@@ -72,9 +78,10 @@ Admission runs before the capability chokepoint in `authorize_registered_tool`
 (`crates/orbit-core/src/adapter/tool_execution.rs:118-129`) and on every plugin callback
 (`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:493-499`).
 App-bound completion callbacks are sent to the host, because the witness is hidden from
-plugin sandboxes. The host route admits only `orbit.task.update` and
-`orbit.decision.answer` as application callbacks (`HOST_ROUTED_CALLBACK_TOOLS` and
-`is_application_completion_tool`, `crates/orbit-tools/src/plugin/callback/host_route.rs:53-76`).
+plugin sandboxes. `routes_on_host` in
+`crates/orbit-tools/src/plugin/callback/host_route.rs` routes every application callback
+listed by `application_callback_tool` in the ceiling table: task updates, exact decision
+answers, constrained task/artifact reads and payload-bound auto-task add/update calls.
 A plugin child's session record carries the bound invocation (`bind_application`,
 `crates/orbit-tools/src/plugin/callback/session.rs:121-140`, limited to 8 KiB). A
 long-lived MCP backend is keyed by the serialized invocation
@@ -286,7 +293,7 @@ A closed table in `crates/orbit-common/src/governance/authorization/catalog/appl
 may narrow a ceiling, never exceed it. Consent-time validation checks every scope
 against it, and admission checks again. Each row also keeps the v1 exact-form key list
 (`exact_fields`): `orbit.task.update` and `orbit.decision.answer` only, unchanged. The
-`orbit.auto_task.*` rows join the table in slice 5; until then they are refused.
+`orbit.auto_task.*` callback rows shipped in slice 5 (ORB-21042).
 
 | Tool | Entry | Callback | Fields at most | Status targets at most |
 |---|---|---|---|---|
@@ -294,8 +301,8 @@ against it, and admission checks again. Each row also keeps the v1 exact-form ke
 | `orbit.decision.answer` | yes (exact only) | yes (exact only) | `id`, `answer`, `note`, `workspace` | — |
 | `orbit.task.show` | no | yes | `id`, `fields` (subset of `id`, `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at`, `execution_summary`), `workspace` | — |
 | `orbit.task.artifact.get` | no | yes | `id`, `path` (`const` only), `workspace` | — |
-| `orbit.auto_task.add` | no | yes, slice 5 | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
-| `orbit.auto_task.update` | no | yes, slice 5 | `name` (`artifact_json`), `enabled`, `workspace` | — |
+| `orbit.auto_task.add` | no | yes | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
+| `orbit.auto_task.update` | no | yes | `name` (`artifact_json`), `enabled`, `workspace` | — |
 | plugin tool | yes | no (plugins cannot call plugins) | declared input schema | — |
 
 `orbit.task.update` targets `in-progress`, `review` and `backlog` only through a
@@ -481,12 +488,13 @@ it for payloads.
 
 ## 6. Office approval actions
 
-Each action named in ORB-20363, mapped to the current admission code that refuses it and
-to its outcome under the chosen flow. "Profile" means the consent the operator grants
-in slice 6. "Allowed after slice N" means Orbit admits the call once that slice lands;
-the app uses it once slice 6 has also landed.
+Each action named in ORB-20363, mapped to the exact-only admission snapshot at
+`9a03c7cc5` and to its outcome under the chosen flow. The refusal column is historical;
+Orbit slices 1-5 have shipped. "Profile" means the consent the operator grants in slice
+6, still tracked by ORB-20363. "Allowed after slice N" records the Orbit prerequisite;
+it does not establish that the office profile has been installed or exercised.
 
-| Action (app code) | Orbit calls | Refused today by | Under (a) | Code it changes |
+| Action (app code) | Orbit calls | Original refusal | Under (a) | Code it changes |
 |---|---|---|---|---|
 | **Accept** (`accept`, `orbit-office/app/packages/server/src/features/approvals/service.ts`) | `office.proposal-accept {id, sha256, choice?}`. Callbacks (`orbit-office/crates/office-tools/src/tools/proposals/accept.rs`): `orbit.task.show {id, fields}`, `orbit.task.artifact.get {id, path}`, `orbit.task.update` to `in-progress` with `plan` and `comment`, to `review` and to `done` with `execution_summary`. Auto-task kinds: `orbit.auto_task.add` and `orbit.auto_task.update {name, enabled}` | Entry: exact input (`application_authority.rs:395-404`). Callbacks: reads not consentable (`ApplicationOperationCeiling` docs in `catalog/application.rs`, `application_authority.rs:120-126`). `plan` and `execution_summary` keys (:270-286). `in-progress` and `review` statuses (:287-296). Host route lists only the two completion tools (`host_route.rs:53-76`) | **Allowed** after slices 1-3 for knowledge, runbook, retire-page and shared-conflict kinds. `auto_task` and retire-auto-task kinds are **allowed after slice 5**, with the office payload carrying the exact `orbit.auto_task.add` input (slice 6). Until then they are **refused** with the not-permitted message | Constraint evaluator and bindings (admission steps 5-6), ceiling table replacing `APPLICATION_BUILTIN_OPERATIONS`, executor fields, host-route callback list |
 | **Accept-all** (`acceptAll`) | One `office.proposal-accept` per proposal, in turn | Same as accept | **Allowed**, admitted per item. A refused item is reported and the rest continue, as today | Same |
@@ -539,7 +547,7 @@ consent record, `scope_index` and `callback`. v2 adds these fields, all non-secr
   provenance is `application consent <id> by <operator> (<provenance>)`.
 
 `docs/design/auditability/specs/event-schema.md` and the installed `applications.md`
-reference change in slice 4.
+reference were updated in slice 4 (ORB-21041).
 
 ## 8. Migration and compatibility
 
@@ -551,10 +559,10 @@ apply to every `input`-form scope.
 [state-compatibility](../state-compatibility/4_decisions.md#compatibility-paths-expire-on-a-30-day-release-gated-window)
 ([ORB-15732]).
 
-1. From slice 1, a request with no constrained or named scope is still written as
+1. A request whose scopes are all exact, unnamed and unlimited is still written as
    `schema_version: 1`. A host rolled back to 0.41.x keeps honoring it.
-2. A request with a constrained scope is written as `schema_version: 2`. An older binary
-   refuses it at admission (`application_authority.rs:360`). It fails closed, with the
+2. A request with any constrained, named or rate-limited scope is written as
+   `schema_version: 2`. An older binary refuses it at admission (`application_authority.rs:360`). It fails closed, with the
    "revoked, expired or replaced" message. Hosts upgrade in lockstep (polaris RB-15), so
    only a rollback sees this.
 3. After the window (slice 7), the writer emits `2` for every new consent. The v1
@@ -566,13 +574,14 @@ apply to every `input`-form scope.
 because the witness is what stops a modified row from creating authority. Upgrading a
 v1 consent means operator rotation, which is a fresh review.
 
-**Running plugin backends.** The callback session schema moves from 4 to 5 (`session.rs:49`).
-The reader keeps accepting schema 4 records, including app-bound ones, by defaulting the
-new invocation fields. This differs from today's rule, which drops the previous schema
-when it carries an application binding (`record_schema_is_readable`,
-`crates/orbit-tools/src/plugin/callback/storage.rs:97-103`). It keeps long-lived
-backends working across the upgrade. A schema 4 record reads with `pinned_task`
-defaulted; any bindings a slice 2 host wrote into it are host-written and read as they
+**Running plugin backends.** Slice 3 moved the callback session schema from 4 to 5
+(`SESSION_SCHEMA_VERSION`, `crates/orbit-tools/src/plugin/callback/session.rs`). The
+reader accepts schema 4 records too, including app-bound ones, by defaulting the new
+invocation fields (`record_schema_is_readable`,
+`crates/orbit-tools/src/plugin/callback/storage.rs`). The session byte limit remains
+8 KiB (`MAX_SESSION_BYTES`); the proposed increase to 16 KiB has not shipped. This keeps
+readable long-lived backend records working across the upgrade. A schema 4 record reads
+with `pinned_task` defaulted; any bindings a slice 2 host wrote into it are host-written and read as they
 are. The MCP backend key already serializes the invocation (`mcp.rs:167-185`), so
 constrained invocations get one backend per bound entry, never a shared one; slice 3
 changes no key. The pin is per host route, so it never crosses backends.
@@ -585,9 +594,12 @@ profile in slice 6. Until then its exact consents, if any, behave as today.
 
 ## 9. Implementation slices
 
-Proposed follow-up tasks, **not filed**. They are filed after Daniel approves this
-design. Each is one deliverable PR. Slices 1-5 and 7 belong to `ws_orbit`, slice 6 to
-`ws_orbit-office`.
+The original delivery sequence is retained below. Slices 1-5 shipped as [ORB-21038],
+[ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042], respectively. Slice 6 remains [ORB-20363]
+(`someday`), and slice 7 is [ORB-21043] (`someday`, compatibility window outstanding).
+Slices 1-5 and 7 belong to `ws_orbit`, slice 6 to `ws_orbit-office`. Statements about a
+slice's future work below describe its original deliverable, not a current admission
+restriction.
 
 1. **Application consent v2 schema and consent-time validation.** Add the constraint
    types, scope names, the `fields` / `input` exclusivity, the ceiling table
@@ -643,9 +655,9 @@ design. Each is one deliverable PR. Slices 1-5 and 7 belong to `ws_orbit`, slice
   closed constraint set, the ceilings and the always-refused list limit how much a slip
   can admit.
 - **Consent review gets harder.** A constrained scope is harder for an operator to read
-  than an exact call. `orbit application consent` should print a plain summary of each
-  scope (slice 4), for example: "accept any task tagged proposal in status proposed whose
-  proposal.json digest equals the call's sha256".
+  than an exact call. `orbit application consent` now prints a plain summary of each
+  constrained scope (slice 4), for example: "accept any task tagged proposal in status
+  proposed whose proposal.json digest equals the call's sha256".
 - **The expiry cap adds operator work.** Monthly rotation at the 30-day default is a real
   cost on a one-user host. The host may raise the cap with
   `machine.application_consent_max_days` (resolved question 1).
@@ -659,7 +671,13 @@ design. Each is one deliverable PR. Slices 1-5 and 7 belong to `ws_orbit`, slice
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-20362] — shipped scoped, audited application authority (orbit 0.41.0).
 - [ORB-20363] — wires the office app's approval actions to application authority;
-  blocked on this design and re-scoped by slice 6.
+  office profile integration remains outstanding (slice 6).
 - [ORB-20852] — this design.
+- [ORB-21038] — shipped Orbit slice 1 (schema and consent-time validation).
+- [ORB-21039] — shipped Orbit slice 2 (constrained entry admission).
+- [ORB-21040] — shipped Orbit slice 3 (bound and read callbacks).
+- [ORB-21041] — shipped Orbit slice 4 (audit fields and documentation).
+- [ORB-21042] — shipped Orbit slice 5 (payload-bound auto-task callbacks).
+- [ORB-21043] — compatibility retirement (slice 7).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

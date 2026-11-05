@@ -25,6 +25,7 @@ use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWor
 use orbit_core::application::routines::{
     RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
 };
+use orbit_core::metrics::reliability::ReliabilityWindow;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AuditEventFilter,
@@ -34,7 +35,7 @@ use orbit_store::contracts::{
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobTargetType, PipelineState, REVIEW_CONTRACT_VERSION,
-    ReviewAdmission, ReviewTiming,
+    ReviewAdmission, ReviewTiming, RunRootCause,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
@@ -933,6 +934,116 @@ fn clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_cha
         tick(&ctx);
         assert_skipped(&ctx, &changed, "review_admission_changed");
     }
+}
+
+/// The real interruption path leaves a run the failure rate does not count, and
+/// a failed wrapper echoing it counts as neither a failure nor a second pause.
+/// A lost worker, and a wrapper echoing one, still count. The paused run stays
+/// `interrupted` and the clock still resumes it.
+#[test]
+fn upgrade_quiesced_runs_stay_resumable_outside_the_failure_count() {
+    let test_name =
+        "upgrade_resume::upgrade_quiesced_runs_stay_resumable_outside_the_failure_count";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let ctx = setup_context();
+    let insert = || {
+        ctx.jobs
+            .insert_job_run("test_pipeline", 1, Utc::now(), Some(json!({})), None)
+            .unwrap()
+            .run_id
+    };
+    let echo = |leaf: &str, code: &str| {
+        let run_id = insert();
+        let mut state = PipelineState::new(run_id.clone(), "test_pipeline".into(), json!({}));
+        state.root_cause = Some(RunRootCause {
+            leaf_run_id: leaf.into(),
+            task_id: None,
+            step: None,
+            code: Some(code.into()),
+        });
+        ctx.jobs.write_run_state(&run_id, &state).unwrap();
+        ctx.jobs
+            .mark_job_run_running(&run_id, Utc::now(), std::process::id())
+            .unwrap();
+        ctx.jobs
+            .finalize_job_run(&run_id, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+        run_id
+    };
+
+    let paused = insert();
+    ctx.jobs
+        .write_run_state(
+            &paused,
+            &PipelineState::new(paused.clone(), "test_pipeline".into(), json!({})),
+        )
+        .unwrap();
+    ctx.runtime
+        .record_upgrade_interruption_for_test(&paused, 4242, ParticipantRole::Drain);
+    let stored = ctx.jobs.get_job_run(&paused).unwrap().unwrap();
+    assert_eq!(stored.state, JobRunState::Interrupted);
+    echo(&paused, "upgrade_quiesce");
+    // A second pause whose leaf settled on another host: only its echo is here.
+    echo("jrun-elsewhere", "upgrade_quiesce");
+    let lost = insert();
+    let now = Utc::now();
+    ctx.jobs
+        .complete_job_run_step(
+            &lost,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 1,
+                target_type: JobTargetType::Job,
+                target_id: "test_pipeline".to_string(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Interrupted,
+                error_code: Some("process_not_found".to_string()),
+                error_message: Some("worker process is gone".to_string()),
+            },
+        )
+        .unwrap();
+    ctx.jobs
+        .finalize_job_run(&lost, JobRunState::Interrupted, now, None)
+        .unwrap();
+    echo(&lost, "process_not_found");
+
+    let window =
+        ReliabilityWindow::ending_at("1h", Utc::now() + Duration::minutes(1), Duration::hours(1));
+    let reliability = ctx.runtime.pipeline_reliability(&window).unwrap();
+    let overall = serde_json::to_value(&reliability.job_runs.overall).unwrap();
+    assert_eq!(overall["failed"], 1, "only the lost worker: {overall}");
+    assert_eq!(overall["upgrade_paused"], 2, "{overall}");
+    assert_eq!(overall["cascaded"], 2, "{overall}");
+    assert_eq!(overall["total"], 5, "{overall}");
+    assert_eq!(
+        serde_json::to_value(&reliability.job_runs.by_job[0].counts).unwrap()["upgrade_paused"],
+        2,
+    );
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
+        .expect("sweep runs");
+    assert_eq!(
+        ctx.jobs.job_run_retries(&paused, 1).unwrap().len(),
+        1,
+        "the clock still resumes the paused run"
+    );
+    assert!(
+        ctx.jobs.job_run_retries(&lost, 1).unwrap().is_empty(),
+        "a lost worker is not an upgrade's to resume"
+    );
 }
 
 #[test]

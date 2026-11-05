@@ -2400,6 +2400,14 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
         forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
 
         let error = land_now(&forge).expect_err("the surviving failure stops the landing");
+        if tip_passes {
+            // A red tip keeps its deadline hold below; a green tip's survivor is
+            // repaired or requeued, so it must end the run failed, never held.
+            assert!(
+                !matches!(&error, OrbitError::DeliveryRefused { .. }),
+                "{label}: a surviving inherited failure on a green tip ends the run failed: {error}"
+            );
+        }
 
         assert_sent_len(&forge, "pr.update_branch", 1, label);
         assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], label);
@@ -2459,6 +2467,10 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         }
 
         let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
+        assert!(
+            !matches!(&error, OrbitError::DeliveryRefused { .. }),
+            "candidate-caused: a candidate failure ends the run failed, never held: {error}"
+        );
 
         assert_steps(&forge.steps(), &[step], "candidate-caused");
         assert_reason(
@@ -2664,8 +2676,10 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
     }
 }
 
-/// A base-suspect hold with no decisive base result escalates at the configured
-/// observation-cycle limit and keeps the failed check and signature in its stop.
+/// A base-suspect hold with no decisive base result is held in review as
+/// `delivery_base_checks_pending` at the configured observation-cycle limit,
+/// and keeps the failed check and signature in its evidence. The run is held,
+/// not failed: the base's own result is still owed, so nothing is repaired.
 #[test]
 fn untouched_failure_escalates_after_configured_base_ci_cycles() {
     let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
@@ -2684,13 +2698,13 @@ fn untouched_failure_escalates_after_configured_base_ci_cycles() {
             )
         },
     )
-    .expect_err("the unresolved base evidence is escalated");
+    .expect_err("the unresolved base evidence is held");
 
     assert!(
-        error
-            .to_string()
-            .contains("escalated after 2 base CI observation cycles"),
-        "{error}"
+        matches!(&error, OrbitError::DeliveryRefused { refusal, message }
+            if refusal.error_code() == "delivery_base_checks_pending"
+                && message.contains("escalated after 2 base CI observation cycles")),
+        "the exhausted base budget holds as delivery_base_checks_pending: {error}"
     );
     assert_reason(
         &forge,
@@ -2952,7 +2966,11 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
         if lands {
             assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
         } else {
-            outcome.expect_err("a second transient failure stops");
+            let error = outcome.expect_err("a second transient failure stops");
+            assert!(
+                !matches!(&error, OrbitError::DeliveryRefused { .. }),
+                "transient: a second transient failure ends the run failed, never held: {error}"
+            );
             assert_steps(
                 &forge.steps(),
                 &[HandoffLandingStep::Stop { repairable: false }],

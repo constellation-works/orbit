@@ -245,6 +245,14 @@ operator's comment-only update: orbit-core flags it, and `update_task_history` a
 the claim only when its sole effect is appending one comment, recording no creation grant.
 Every other write inside that update still takes the ordinary fence. Frozen
 claim footprints also participate in ordinary reservation conflicts after TTL expiry.
+A coordinated record update that starts work (`started`, `pulled_by` or
+`resume_readmitted` into `in-progress`) runs the ordinary footprint guard
+before its companion artifact, document and history writes, against the
+footprint the update would start on; the guard inside `update_task_history`,
+under the task lock, remains the authoritative check. A claim refusal
+therefore leaves the task's fields, status, history and artifacts unchanged,
+while a proposed task's separate approval write to `backlog` still stands
+and is named in the refusal.
 
 ## When to reach for it
 

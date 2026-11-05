@@ -15,6 +15,8 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, ClaimFailureClass, OrbitBuild};
 use serde::Serialize;
 
+use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
+
 /// Events a failure or release settlement leaves as the claim's last event
 /// when it settles. Claims settled before [`ClaimInspection::settlement`]
 /// existed are found by these.
@@ -83,6 +85,9 @@ pub enum SettlementOutcome {
     EvidenceHold,
     /// An operator cancelled the launched leaf.
     OperatorCancel,
+    /// An Orbit upgrade paused the leaf at a step boundary. Its claim is
+    /// released for a later drain to re-admit: nothing broke.
+    UpgradePaused,
     /// A required check failed on the base as well. It keeps its existing
     /// accounting: it counts as a failure.
     BaselineRed,
@@ -150,6 +155,19 @@ impl SettlementAccounting {
             }
             "baseline_red" => Self::of(Outcome::BaselineRed, "baseline_red"),
             "unrecorded" => Self::of(Outcome::Unrecorded, "unrecorded"),
+            // The leaf's own recorded step code, on the class an interrupted
+            // leaf settles under. A follower that sent no run record, or any
+            // other interruption, stays a failure.
+            _ if class == Some(ClaimFailureClass::Transient)
+                && settlement
+                    .run_evidence
+                    .root_cause
+                    .as_ref()
+                    .and_then(|cause| cause.code.as_deref())
+                    == Some(UPGRADE_QUIESCE_ERROR_CODE) =>
+            {
+                Self::of(Outcome::UpgradePaused, UPGRADE_QUIESCE_ERROR_CODE)
+            }
             _ if settlement.kind.is_none() => Self::of(Outcome::Failure, "legacy_release_class"),
             _ if class == Some(ClaimFailureClass::Candidate) => {
                 Self::of(Outcome::Failure, "candidate_failure")

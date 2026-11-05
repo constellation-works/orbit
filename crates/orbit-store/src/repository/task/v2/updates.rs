@@ -540,6 +540,40 @@ impl TaskV2Store {
         })
     }
 
+    /// Pre-flight form of the work-start guard in [`Self::update_task_history`]:
+    /// same target/event classification and same claim check, evaluated
+    /// against the footprint the combined write would start work on.
+    pub(crate) fn check_ordinary_work_start_footprint(
+        &self,
+        id: &str,
+        status: Option<TaskStatus>,
+        status_event: Option<&str>,
+        context_files: Option<&[String]>,
+    ) -> Result<(), OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if !matches!(
+            status_event,
+            Some("started" | "pulled_by" | "resume_readmitted")
+        ) {
+            return Ok(());
+        }
+        self.with_task_read_lock(id, || {
+            let bundle = self.read_existing_bundle(id)?;
+            let target_status = status.unwrap_or(bundle.envelope.status);
+            if target_status != TaskStatus::InProgress {
+                return Ok(());
+            }
+            let effective_files: Vec<String> = match context_files {
+                Some(files) => files.to_vec(),
+                None => bundle.envelope.context_files.clone(),
+            };
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(target_status, &effective_files)?;
+            }
+            Ok(())
+        })
+    }
+
     pub(crate) fn update_task_history(
         &self,
         id: &str,

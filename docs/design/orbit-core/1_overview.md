@@ -241,10 +241,11 @@ and job edges that had regrown past the fixed-name guard (all but
   names `distributed`, `pull_drain`, `admission`, `automation`, `review`,
   `sweep_filing` or `workspace_auto` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
-  receiver. Since [ORB-22003] those method names are not listed: the guard
-  derives them from the `impl OrbitRuntime` blocks under each higher module
-  (methods whose visibility reaches the caller), so a new inherent method is
-  covered as soon as it exists, and port methods must use distinct names.
+  receiver, `automation` included [ORB-22035]. Since [ORB-22003] those method
+  names are not listed: the guard derives them from the `impl OrbitRuntime`
+  blocks under each higher module (methods whose visibility reaches the
+  caller), so a new inherent method is covered as soon as it exists, and port
+  methods must use distinct names.
   Same-named methods on other types are exact-line allowances (store reads
   through `stores().jobs()` and `stores().tasks()`). `task/backlog_forecast/`
   is the one exempt path: it still calls `job`, `admission` and
@@ -296,5 +297,6 @@ task → admission and task → workspace_auto edges are the known exception.
 - [ORB-22003] — routed the regrown task → job, task → distributed, job → distributed and job → pull_drain calls through the existing lower-owned ports and made the guard derive forbidden inherent names from each higher module's `impl OrbitRuntime` blocks; `task/backlog_forecast/` is exempt pending its move.
 - [ORB-22004] — moved the application's tool-invocation and pull-transport calls behind `contracts::ToolInvocationPort` and `pull_drain::PullTransportPort`, which the adapter implements on `OrbitRuntime`, and guarded the application → adapter edge against inherent `OrbitRuntime` calls.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
+- [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

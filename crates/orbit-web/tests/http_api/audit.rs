@@ -834,6 +834,73 @@ fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
 }
 
 #[test]
+fn zero_limit_returns_an_empty_page_with_and_without_predicates() {
+    isolated(
+        "audit::zero_limit_returns_an_empty_page_with_and_without_predicates",
+        || {
+            let fixture = Fixture::new();
+            // More than the 200-row HTTP maximum, so a fallthrough to the
+            // store's internal default is visible as more than one page.
+            for index in 0..250 {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("zero-{index}"),
+                        Some("orbit.task.show"),
+                        AuditEventStatus::Success,
+                    ))
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let response = server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=0");
+            assert!(
+                response.headers().get("x-audit-next-before").is_none(),
+                "an empty zero-limit page carries no resume cursor"
+            );
+            let plain = json_ok(response);
+            let plain = plain.as_array().unwrap();
+            assert!(
+                plain.is_empty(),
+                "limit=0 is an empty ordinary page, got {} rows",
+                plain.len()
+            );
+            // `q` is a Rust-side predicate, so this exercises the scan path;
+            // it must agree with the direct store window above.
+            let filtered = json_ok(
+                server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=0&q=codex"),
+            );
+            let filtered = filtered.as_array().unwrap();
+            assert!(
+                filtered.is_empty(),
+                "limit=0 with a Rust-side predicate is also empty, got {} rows",
+                filtered.len()
+            );
+            assert_eq!(
+                filtered.len(),
+                plain.len(),
+                "zero-limit pages are consistent with and without predicates"
+            );
+            let huge =
+                json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=100000"));
+            assert_eq!(
+                huge.as_array().unwrap().len(),
+                200,
+                "a huge limit is still clamped to the HTTP maximum"
+            );
+            let omitted = json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h"));
+            assert_eq!(
+                omitted.as_array().unwrap().len(),
+                50,
+                "an omitted limit keeps the default page"
+            );
+            let positive =
+                json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=5"));
+            assert_eq!(positive.as_array().unwrap().len(), 5);
+        },
+    );
+}
+
+#[test]
 fn dashboard_renders_callable_failure_counts_and_denial_only_tools() {
     let result = std::process::Command::new("node")
         .args([

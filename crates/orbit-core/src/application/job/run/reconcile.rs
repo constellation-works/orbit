@@ -13,6 +13,8 @@ use crate::application::job::pipeline::reconciled_worker_exit_clause;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
+use super::actions::cancellation_is_settling;
+#[cfg(unix)]
 use super::owner::OwnerIdentity;
 use super::owner::{
     PendingStaleReason, owner_identity_error_code, pending_run_stale_reason,
@@ -262,6 +264,10 @@ impl OrbitRuntime {
         if self.job_run_is_parked(&current) {
             return Ok(false);
         }
+        #[cfg(unix)]
+        if self.cancellation_owns_outcome(&current.run_id) {
+            return Ok(false);
+        }
         if !self.provider_evidence_allows_orphan_finalization(&current.run_id, provider_probe) {
             return Ok(false);
         }
@@ -330,6 +336,23 @@ impl OrbitRuntime {
             state: JobRunState::Interrupted.to_string(),
         })?;
         Ok(true)
+    }
+
+    /// A cancel's signal makes the owner read as gone before the canceller has
+    /// looked at the run again. That dead owner is the cancellation working, not
+    /// worker loss, so its outcome stays `cancelled`, with the operator's task
+    /// disposition, rather than `interrupted`. Unreadable evidence defers.
+    #[cfg(unix)]
+    fn cancellation_owns_outcome(&self, run_id: &str) -> bool {
+        cancellation_is_settling(self.stores().audit_events(), run_id).unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                run_id,
+                %error,
+                "orphan finalization deferred: cancellation evidence unreadable",
+            );
+            true
+        })
     }
 
     /// A stale owner is not sufficient to condemn a run while any durable,

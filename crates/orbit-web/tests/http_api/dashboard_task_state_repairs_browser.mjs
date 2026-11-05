@@ -45,7 +45,7 @@ const tasks = [
 ];
 const fx = globalThis.fx = {
   copied, posts: [], patches: [], runPolls: 0, refuseAdmission: true, holdPatch: null, patchRelease: null, holdRecord: false, recordRelease: null, refuseRecord: false,
-  tasks, detailGets: [],
+  tasks, detailGets: [], holdDetail: false, detailRelease: null,
 };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (input, options = {}) => {
@@ -56,7 +56,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
   if (api === '/api/tasks' || api === '/api/tasks/all') return json({ items: tasks, total: tasks.length, limit: 50, truncated: false });
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
-  if (api === '/api/crews') return json({ default_crew: 'sol', crews: [{ name: 'sol' }] });
+  if (api === '/api/crews') return json({ default_crew: 'sol', crews: [{ name: 'sol' }, { name: 'opus' }] });
   if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: [] });
   const run = /^\\/api\\/runs\\/([^/]+)$/.exec(api);
   if (run) { fx.runPolls += 1; return json({ run: { run_id: run[1], state: 'running' }, steps: [] }); }
@@ -65,7 +65,12 @@ globalThis.fetch = async (input, options = {}) => {
     const id = decodeURIComponent(sub[1]);
     const task = tasks.find(candidate => candidate.id === id);
     if (!task) return json({ error: 'not found' }, 404);
-    if (!sub[2] && method === 'GET') { fx.detailGets.push(id); return json(task); }
+    if (!sub[2] && method === 'GET') {
+      fx.detailGets.push(id);
+      const response = json(task);
+      if (fx.holdDetail) await new Promise(resolve => { fx.detailRelease = resolve; });
+      return response;
+    }
     if (!sub[2] && method === 'PATCH') {
       const body = JSON.parse(options.body);
       fx.patches.push({ id, body });
@@ -406,6 +411,52 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
   });
+
+  // A pinned GET serialized before a completed save cannot undo that save.
+  for (const width of [1440, 375]) for (const field of ['crew', 'complexity', 'description']) {
+    await scenario(`pinnedSaveRefresh ${field} ${width}`, async () => {
+      const { page, errors, context } = await open('#tasks?status=backlog&open=DOC-3', { width, height: width === 375 ? 812 : 900, clock: true });
+      const detail = page.locator('#task-detail-body');
+      await detail.locator('.task-pane-title', { hasText: 'Finished task outside the filter' }).waitFor();
+      await detail.locator('.criteria-block button.field-edit').first().click();
+      await detail.locator('.criteria-block textarea').fill('Keep this unsent criterion');
+      await page.evaluate(() => { fx.holdDetail = true; });
+      // The real Refresh caller starts the pinned read after refreshing the list.
+      await page.locator('#refresh-btn').evaluate(button => button.click());
+      await page.waitForFunction(() => typeof fx.detailRelease === 'function');
+      const value = field === 'crew' ? 'opus' : field === 'complexity' ? 'hard' : 'Confirmed saved description';
+      if (field === 'description') {
+        await detail.locator('.description-block button.field-edit').first().click();
+        await detail.locator('.description-block textarea').fill(value);
+        await detail.locator('.description-block button.action.save').click();
+        await detail.locator('.description-block .mutation-feedback.success').waitFor();
+      } else {
+        await detail.locator(`.task-${field}-select`).selectOption(value);
+        await detail.locator(`.${field}-cell .mutation-feedback.success`).waitFor();
+      }
+      await page.evaluate(async () => {
+        const { refreshPinnedTask } = await import('/js/task-nav.js');
+        const pending = refreshPinnedTask(); // Join the real caller's in-flight read.
+        fx.holdDetail = false;
+        fx.detailRelease();
+        await pending;
+      });
+      const records = await page.evaluate(async field => {
+        const { taskState } = await import('/js/task-shared.js');
+        const { taskDetailSnapshot } = await import('/js/task-data.js');
+        return { pin: taskState.pinnedExternalTask.task[field], cache: taskDetailSnapshot('DOC-3')[field] };
+      }, field);
+      const shown = field === 'description'
+        ? await detail.locator('.description-block .field-editor-cell .markdown-body').innerText()
+        : await detail.locator(`.task-${field}-select`).inputValue();
+      await page.screenshot({ path: path.join(evidence, `pinned-save-refresh-${field}-dark-${width}.png`) });
+      assert.deepEqual(records, { pin: value, cache: value }, 'confirmed save survives the older pinned GET in both records');
+      assert.equal(shown, value, 'visible control keeps the confirmed save');
+      assert.equal(await detail.locator('.criteria-block textarea').inputValue(), 'Keep this unsent criterion');
+      assert.deepEqual(errors, []);
+      await context.close();
+    });
+  }
 
   // 8. Complexity low -> medium -> low beside an unsaved draft (ORB-21486).
   await scenario('complexityDraft', async () => {

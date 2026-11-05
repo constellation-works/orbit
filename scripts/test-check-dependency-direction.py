@@ -70,6 +70,43 @@ class RelativeImportTests(unittest.TestCase):
         finally:
             path.unlink()
 
+    def check_files(self, files, rejected):
+        paths = [self.app / relative for relative in files]
+        try:
+            for path, source in zip(paths, files.values()):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source)
+            result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.stderr, "", result.stderr)
+            self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+
+    def test_inherent_calls_from_task_into_upper_modules_rejected(self):
+        for owner in ("automation", "job", "review", "distributed", "pull_drain",
+                      "admission", "sweep_filing", "workspace_auto"):
+            with self.subTest(owner=owner):
+                self.check_files({
+                    f"{owner}/state.rs":
+                        "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
+                    "task/worker.rs":
+                        "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                        "        self.fresh_owner_method();\n    }\n}\n",
+                }, rejected=True)
+
+    def test_task_port_and_task_owned_calls_accepted(self):
+        self.check_files({
+            "task/mod.rs": "pub(crate) trait TaskAutomationPort {\n    fn schedule_probe(&self);\n}\n",
+            "task/worker.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.schedule_probe();\n        self.task_local_probe();\n    }\n}\n",
+            "task/state.rs": "impl OrbitRuntime {\n    pub(crate) fn task_local_probe(&self) {}\n}\n",
+            "automation/port.rs":
+                "impl TaskAutomationPort for OrbitRuntime {\n    fn schedule_probe(&self) {}\n}\n",
+        }, rejected=False)
+
     def test_grouped_relative_imports_rejected(self):
         for module in ("distributed", "pull_drain"):
             for relative, tree in (

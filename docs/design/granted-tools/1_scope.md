@@ -2,7 +2,7 @@
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-04
 status: Accepted
 stage: shipped
 next: "Operate the shipped grants and reviewed mutation proposal path"
@@ -40,8 +40,9 @@ so a task can revise an auto-task definition as part of its work.
 Before this feature that was impossible by design.
 `agent_implement`'s `tool_disallow_list`
 names `orbit.auto_task.add`, `orbit.auto_task.mint`, `orbit.auto_task.update`,
-`orbit.command.exec`, `orbit.pipeline.invoke`, `orbit.workflow.run.resume`
-and `orbit.workflow.ship`. Listing one in `required_tools` does not help:
+`orbit.command.exec`, `orbit.pipeline.invoke`, `orbit.workflow.land`,
+`orbit.workflow.run.resume` and `orbit.workflow.ship`. Listing one in
+`required_tools` does not help:
 `admit_required_tools` in
 [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs)
 fails implementer admission when the deny policy covers a requirement, and
@@ -73,7 +74,7 @@ denied ones.
 
 | Fact | Source |
 |---|---|
-| `agent_implement` denies the seven tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
+| `agent_implement` denies the eight tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
 | A requirement that the deny list covers fails implementer admission; non-implementers drop it with a note [ORB-15162] | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) (`admit_required_tools`, `resolve_activity_tool_denials`), [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs) (`drops_disallowed_requirements`) |
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
 | Field-level operator authorization: `orbit.auto_task.update` carrying `expected_enabled`, and `orbit.auto_task.mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`operations.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operations.rs) (`orbit.routine.control`, Operator-only) |
@@ -144,7 +145,8 @@ session, because that input separately requires `orbit.routine.control`.
 
 **Always-operator-only tools are not grantable.** If a tool's governed row
 admits only `Operator` (or `Operator` + `Runner`) — e.g.
-`orbit.command.exec`, `orbit.workflow.ship`, `orbit.workflow.run.resume`,
+`orbit.command.exec`, `orbit.workflow.land`, `orbit.workflow.ship`,
+`orbit.workflow.run.resume`,
 `orbit.auto_task.delete` — grant validation refuses it at grant time,
 naming the governed row. Granting it would either be dead weight (the
 capability gate still refuses every agent call, confusingly) or, if a
@@ -166,7 +168,7 @@ its allowed set. `orbit.auto_task.update` (ungoverned except for the
 [`authorization/grants.rs`](../../../crates/orbit-common/src/governance/authorization/grants.rs),
 beside the governed-operation catalog. Authorization reviewers own additions
 and any change to repeat-safety, as they do catalog rows. It classifies all
-seven shipped deny entries: the three auto-task operations are grantable;
+eight shipped deny entries: the three auto-task operations are grantable;
 the command, pipeline and workflow operations are always operator-only.
 Every current entry is mutating: definition edits, task minting, arbitrary
 commands and run submission/resumption can all change live state. There are
@@ -316,7 +318,8 @@ admission and application in
   unapplied until an operator investigates the actual outcome. The runbook
   requires retained evidence and separate operator work; no automatic
   pending-receipt reconciliation command is shipped. An unreviewed, changed
-  or failed proposal fails the step after the others run, with a task comment naming each.
+  or failed proposal fails application for that task after the other proposals
+  on that task have been considered, with a task comment naming each failure.
 - *Completion.* A task is never `done`, except by a human force, while any
   proposal lacks an applied receipt. That also covers the local route,
   which has no review gate.

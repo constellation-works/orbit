@@ -522,8 +522,10 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   claimed leaves sent (`orbit run settlements --no-reconcile`), counting a
   settlement as a failure only when its typed `accounting.counts_as_failure`
   is true and reporting designed holds (`review_decision_hold`,
-  `evidence_hold`, `operator_cancel`) in a separate `held_7d` counter, so raw
-  occurrences equal failures plus holds. It folds
+  `evidence_hold`, `operator_cancel`, `upgrade_paused`) in a separate `held_7d`
+  counter, so raw occurrences equal failures plus holds. A run an Orbit upgrade
+  paused (`upgrade_paused` in its history row) counts there too, while a lost
+  or killed worker stays a failure. It folds
   parent pipelines into their child by the recorded `root_cause` (a parent of
   a `held` child is no failure) and splits review refusals by escalation
   category. It accounts for the Pareto set — the top classes covering at least

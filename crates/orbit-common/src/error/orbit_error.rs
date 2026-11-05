@@ -3,9 +3,9 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
-    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
-    PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
-    SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    DependencyNotDelivered, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind,
+    NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
+    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -201,6 +201,12 @@ pub enum OrbitError {
     #[error("execution failed: {}", .0.message)]
     #[serde(rename = "Execution", serialize_with = "serialize_private_vcs_failure")]
     PrivateVcs(Box<PrivateVcsFailure>),
+    /// The forge refused a delivery push past its retry budget. Displays and
+    /// serializes exactly as [`Self::Execution`]; the hold travels here, so
+    /// callers never read it from the text.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(rename = "Execution", serialize_with = "serialize_forge_push_hold")]
+    ForgeUnavailable(Box<ForgePushHoldFailure>),
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -434,6 +440,13 @@ fn serialize_absorbed_candidate<S: serde::Serializer>(
 
 fn serialize_private_vcs_failure<S: serde::Serializer>(
     failure: &PrivateVcsFailure,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&failure.message)
+}
+
+fn serialize_forge_push_hold<S: serde::Serializer>(
+    failure: &ForgePushHoldFailure,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&failure.message)

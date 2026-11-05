@@ -922,6 +922,60 @@ try {
   assert.equal(scorecardWindows.filter(entry => entry.role === 'reviewers').at(-1).window, 'last1000');
   fs.writeFileSync(path.join(evidence, 'agents-window-round-trip.json'), JSON.stringify(roundTrip, null, 2));
   pass('selected Agents window round-trips through reload and copied links', { roundTrip });
+  // Retain one response across its expiry while the next refresh cannot succeed.
+  await page.clock.install({ time: Date.now() });
+  for (const refresh of ['pending', 'failed']) {
+    computedAt = await page.evaluate(() => new Date(Date.now() - 295_000).toISOString());
+    await page.locator('#agents-roles [data-view="orchestrators"]').click();
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(at => document.querySelector('#agents-meta time')?.getAttribute('datetime') === at, computedAt);
+    assert.equal(await scan.getAttribute('data-freshness'), 'fresh');
+    await page.evaluate(() => {
+      window.retainedAgentRanking = document.querySelector('.agents-table-wrap');
+      window.retainedAgentDetail = document.getElementById('agents-detail');
+    });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const match = /\/api\/agents\/orchestrators\/scorecard\?/;
+    const intercepted = [];
+    const handler = route => {
+      const handled = (async () => {
+        if (refresh === 'pending') { await gate; await route.continue(); }
+        else await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Scan unavailable"}' });
+      })();
+      intercepted.push(handled);
+      return handled;
+    };
+    await page.route(match, handler);
+    try {
+      await page.evaluate(() => {
+        import('/static/js/agents.js').then(agents => agents.fetchAndRenderAgents().catch(() => {}));
+      });
+      await page.waitForFunction(expected => document.querySelector('#agents-body [data-panel-status]')?.textContent.includes(expected), refresh === 'pending' ? 'Refreshing' : 'Refresh failed');
+      await page.clock.fastForward(5_001);
+      assert.equal(await scan.getAttribute('data-freshness'), 'stale', `${refresh}: expiry requires no successful response`);
+      assert.equal(await scan.getAttribute('role'), 'status');
+      assert.equal(await scan.getAttribute('aria-live'), 'polite');
+      assert.match(await scan.textContent(), /5 min ago/);
+      assert.equal(await page.evaluate(() => window.retainedAgentRanking === document.querySelector('.agents-table-wrap')
+        && window.retainedAgentDetail === document.getElementById('agents-detail')), true, 'expiry keeps ranking and detail nodes');
+      assert.doesNotMatch(await body.locator('[data-panel-status]').textContent(), /Scan current/);
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: width === 375 ? 812 : 1100 });
+        await page.locator('#agents-controls').scrollIntoViewIfNeeded();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        await shot(`agents-expiry-${refresh}-dark-${width}`);
+      }
+      pass(`retained scan expires during ${refresh} refresh`);
+    } finally {
+      computedAt = await page.evaluate(() => new Date().toISOString());
+      release();
+      await Promise.all(intercepted);
+      await page.unroute(match, handler);
+    }
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => document.querySelector('#agents-meta .agents-scan')?.dataset.freshness === 'fresh');
+  }
   assert.deepEqual(errors, []);
   assert.equal(requests.some(entry => entry.includes('/detail')), false, 'the dashboard never requests agent detail');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));

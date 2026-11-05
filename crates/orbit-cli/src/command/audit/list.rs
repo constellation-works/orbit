@@ -1,5 +1,6 @@
 use clap::Args;
-use orbit_core::{AuditEventFilter, AuditEventStatus, OrbitRuntime};
+use orbit_core::application::audit_event::{AuditListingColumns, AuditListingProfile};
+use orbit_core::{AuditEventStatus, OrbitRuntime};
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::Value;
 
@@ -67,34 +68,36 @@ impl Execute for AuditListArgs {
             role: self.role.is_some(),
             tool: self.tool.is_some(),
         };
-        let events = runtime.list_audit_events_filtered(&AuditEventFilter {
-            since,
-            tool_name: self.tool,
-            target_type: self.kind,
-            status: self.status,
-            role: self.role,
-            // Only the explicit flag scopes this. The audit log is one
-            // host-global table, and a row written before (or without)
-            // workspace resolution stores a NULL `workspace_id` — the
-            // global-seam denial for an unknown or unadvertised MCP tool name,
-            // and workspace setup failures. `workspace_id = ?` cannot match
-            // NULL, so defaulting the filter to the bound workspace silently
-            // drops exactly the rows an operator audits for.
-            workspace_id: self.workspace_id,
-            caller_machine_id: self.caller_machine,
-            process_machine_id: self.process_machine,
-            transport: self.transport,
-            capability: self.capability,
-            origin_session_id: self.origin_session,
-            mcp_call_id: self.mcp_call,
-            job_run_id: self.run,
-            lease_id: self.lease,
-            before_id: None,
-            exclude_unverified_success: false,
-            application_entry_execution_id: None,
-            limit: self.limit,
-            offset: 0,
-        })?;
+        let events = runtime
+            .audit_listing_page(
+                AuditListingColumns {
+                    since,
+                    tool_name: self.tool,
+                    status: self.status,
+                    role: self.role,
+                    // Only the explicit flag scopes this. The audit log is one
+                    // host-global table, and a row written before (or without)
+                    // workspace resolution stores a NULL `workspace_id` — the
+                    // global-seam denial for an unknown or unadvertised MCP tool name,
+                    // and workspace setup failures. `workspace_id = ?` cannot match
+                    // NULL, so defaulting the filter to the bound workspace silently
+                    // drops exactly the rows an operator audits for.
+                    workspace_id: self.workspace_id,
+                    caller_machine_id: self.caller_machine,
+                    process_machine_id: self.process_machine,
+                    transport: self.transport,
+                    capability: self.capability,
+                    origin_session_id: self.origin_session,
+                    mcp_call_id: self.mcp_call,
+                    job_run_id: self.run,
+                    lease_id: self.lease,
+                },
+                AuditListingProfile::Cli {
+                    target_type: self.kind,
+                    limit: self.limit,
+                },
+            )?
+            .events;
 
         let values: Vec<Value> = events.iter().map(audit_event_to_json).collect();
         Ok(Payload::list(values, audit_event_table(&events, filtered)).into())

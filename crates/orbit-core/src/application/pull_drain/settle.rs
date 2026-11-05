@@ -119,7 +119,7 @@ impl OrbitRuntime {
                 recorded_base_no_longer_red(self, repo, hold)
             });
         let settlement = attach_claimed_review(settlement, self.claimed_review_carry(run_id));
-        let settlement = attach_leaf_attribution(settlement, Some(&run));
+        let settlement = attach_leaf_attribution(settlement, Some(&run), diagnostic);
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -240,6 +240,7 @@ impl OrbitRuntime {
             &LocalPullMutation::Settle(Box::new(attach_leaf_attribution(
                 operator_cancel_release(record, why, candidate),
                 Some(leaf),
+                None,
             ))),
         ) {
             Ok(settling) => Ok(settling),
