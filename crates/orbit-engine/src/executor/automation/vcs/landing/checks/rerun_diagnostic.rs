@@ -336,6 +336,10 @@ pub(in crate::executor::automation::vcs) fn append_ci_rerun_diagnostic(
             failure.message.push_str(&suffix);
             OrbitError::PrivateVcs(failure)
         }
+        OrbitError::ForgeUnavailable(mut failure) => {
+            failure.message.push_str(&suffix);
+            OrbitError::ForgeUnavailable(failure)
+        }
         other => other,
     }
 }

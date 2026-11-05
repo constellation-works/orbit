@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForgePushHoldFailure, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -255,6 +256,14 @@ impl OrbitError {
     pub fn private_vcs_failure(&self) -> Option<&PrivateVcsFailure> {
         match self {
             Self::PrivateVcs(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// The delivery push the forge held, if this is one.
+    pub fn forge_push_hold(&self) -> Option<&ForgePushHoldFailure> {
+        match self {
+            Self::ForgeUnavailable(failure) => Some(failure),
             _ => None,
         }
     }

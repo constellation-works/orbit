@@ -51,8 +51,8 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
         }
         Err(error) => {
             if let Some(context) = handoff.as_ref() {
-                match ForgeUnavailableHold::from_text(&error.to_string()) {
-                    Some(hold) => record_forge_hold(host, context, &hold)?,
+                match error.forge_push_hold() {
+                    Some(failure) => record_forge_hold(host, context, &failure.hold)?,
                     None => record_failed_handoff(
                         host,
                         context,

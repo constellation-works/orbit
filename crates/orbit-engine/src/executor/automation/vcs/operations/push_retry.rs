@@ -2,8 +2,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use orbit_common::process::jitter::JitterRng;
+use orbit_common::{ForgePushHoldFailure, OrbitError};
 use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
@@ -248,12 +248,13 @@ impl PushFailure {
             held_at: Utc::now(),
             held_since: exhausted.first_refused_at,
         };
-        OrbitError::Execution(hold.text(&format!(
+        let message = hold.text(&format!(
             "the forge refused the push {} times over {} s: {}",
             exhausted.attempts,
             exhausted.waited_ms / 1000,
             exhausted.error
-        )))
+        ));
+        OrbitError::ForgeUnavailable(Box::new(ForgePushHoldFailure { hold, message }))
     }
 }
 
