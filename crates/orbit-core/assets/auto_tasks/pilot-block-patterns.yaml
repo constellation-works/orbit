@@ -279,7 +279,7 @@ template:
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
   - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
-  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite and the worktree is clean.
+  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
   task_type: chore
   tags:
   - pilot-block-patterns
