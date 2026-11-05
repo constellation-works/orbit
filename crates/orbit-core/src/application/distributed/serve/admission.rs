@@ -79,6 +79,9 @@ impl OrbitRuntime {
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
     ) -> Result<AdmissionLookup, OrbitError> {
+        // Do this before the admission section: reconciliation writes task
+        // declarations, which that section deliberately fences.
+        self.reconcile_pull_recovery_context()?;
         let mut admission_holds = self
             .live_local_delivery_runs()?
             .into_iter()
