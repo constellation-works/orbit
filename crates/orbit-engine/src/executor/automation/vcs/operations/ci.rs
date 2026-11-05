@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 
 use super::DEFAULT_TIMEOUT_MS;
+use super::ci_log_answer::CiJobLogAnswer;
 use super::input::{required_string, valid_expected_remote_sha};
 use super::process::execute_with_transient_retry;
 
@@ -42,7 +43,7 @@ pub(in crate::executor::automation::vcs) enum CiJobObservation<T> {
 }
 
 impl<T> CiJobObservation<T> {
-    fn decode(wire: Option<Value>, parse: impl FnOnce(&Value) -> Option<T>) -> Self {
+    pub(super) fn decode(wire: Option<Value>, parse: impl FnOnce(&Value) -> Option<T>) -> Self {
         match wire {
             None => Self::Missing,
             Some(Value::Null) => Self::Null,
@@ -577,7 +578,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
 /// failed primary read, is the provider's typed throttling answer. Complete command evidence or bounded
 /// failure regions accompany the display with their source; callers must bind
 /// them to the provider's failed job and step before recovery.
-pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn ci_job_log(input: &Value) -> Result<CiJobLogAnswer, OrbitError> {
     let run_id = required_string(input, "run_id")?;
     let job_id = required_string(input, "job_id")?;
     let workspace_path = required_string(input, "workspace_path")?;
@@ -605,25 +606,7 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;
     }
-    let mut answer = json!({
-        "log": read.log.text,
-        "truncated": read.log.truncated,
-        "source_complete": read.log.source_complete,
-        "diagnostic": read.log.diagnostic,
-        "diagnostic_command": read.log.diagnostic_command,
-        "failure_regions": read.log.failure_regions,
-        "source_bytes": read.log.total_bytes,
-        "source_jobs": read.source_jobs,
-        "source": read.source,
-        "fallback_error": read.fallback_error,
-    });
-    // Present only beside `fallback_error`, so readers that refuse an
-    // unreadable log keep refusing it.
-    if let Some(throttle) = read.fallback_throttle {
-        answer["read_throttle"] = serde_json::to_value(throttle)
-            .map_err(|error| OrbitError::Execution(error.to_string()))?;
-    }
-    Ok(answer)
+    Ok(CiJobLogAnswer::from_read(read))
 }
 
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
