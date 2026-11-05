@@ -9,8 +9,11 @@ last_validated: 2026-11-01
 # Delivery automation operations [ORB-11330]
 
 Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
-definitions in-process. Routines submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
-approval/admission lifecycle. There is no new daemon or coverage submission tool.
+definitions in-process. Routines submit ordinary jobs; auto-task definitions mint
+ordinary tasks through the normal approval/admission lifecycle. A `backlog`
+template becomes `proposed` unless its normalized minted tags include
+`no-diff-expected`, and explicit non-`backlog` statuses are preserved. There is
+no new daemon or coverage submission tool.
 
 Delivery observation reuses recorded provider results, including a confirmed
 absence of a PR. A lookup that fails or returns ambiguous identities retries
