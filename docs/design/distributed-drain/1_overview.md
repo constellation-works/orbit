@@ -1,11 +1,11 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 stage: building
-next: "Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424)."
+next: "Owner review of the building stage now receipts have an operator caller (ORB-19424)."
 feature: distributed-drain
 doc_role: overview
 type: design

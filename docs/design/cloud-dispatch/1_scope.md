@@ -9,8 +9,8 @@ doc_role: scope
 type: design
 summary: "Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence."
 tags: [cloud, dispatch, claude, copilot, routines, pr, polling]
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 ---
 
 # Scope: Cloud dispatch
@@ -389,7 +389,9 @@ chooses `mode: cloud`. Phase 3 lets task-pilot mark candidates as `cloud-eligibl
      line as a placeholder. `load_handoff_context` runs the same predicate at `pr_promote`
      (`docs/design/activity-job/2_design.md`, the `reject_failed_delivery` paragraph), so an
      exact `Outcome: failed` line is refused there too, as a second barrier. The cloud check's
-     prefix match is what catches the same-line form.
+     prefix match is what catches the same-line form. [ORB-19606] corrected this paragraph's
+     blocked-summary contract: the unchanged gate does not refuse `Outcome: blocked`, only the
+     cloud check does.
 4. **PR ref.** Stamp `{system: "github-pr", id: <number>}` (`task/model/support.rs`) and set
    `pr_status`.
 
@@ -583,7 +585,6 @@ gates: make ci-lint && make ci-fast
 
 ## Task References
 
-None yet. Phase tasks will be filed in `ws_orbit` on a Linux host once the open questions
-are answered.
+- [ORB-19606] — corrected the adoption gate contract for blocked summaries: the unchanged gate does not refuse `Outcome: blocked`, only the cloud check does.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

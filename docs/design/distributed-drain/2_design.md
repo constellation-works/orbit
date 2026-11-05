@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -1816,5 +1816,7 @@ this table retains its requirements without claiming the entire matrix was execu
 - [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
 - [ORB-17641] — removed the unused admission receipt accounting API.
 - [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
+- [ORB-21458] — kept the owner waiting for reported-but-running required checks within `max_wait_seconds` instead of stopping the handoff.
+- [ORB-21840] — counted review-decision holds separately from failure accounting (`accounting.outcome: review_decision_hold`).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

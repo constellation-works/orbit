@@ -1,9 +1,9 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-04
-last_validated: 2026-10-30
-status: Accepted
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 stage: shipped
 next: "—"
 feature: orbit-core
@@ -318,5 +318,6 @@ task → admission and task → workspace_auto edges are the known exception.
 - [ORB-22005] — removed the application → composition, application → bootstrap and adapter → bootstrap edges through `AssistanceServicePort`, `TaskBundleMaintenancePort` and moving `skill_link_roots` and `ProductProfile` into application, settled the direction as `bootstrap → application`, and guarded it.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 - [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
+- [ORB-22159] — closed the derived-name guard's UFCS gap so `<OrbitRuntime>::name` and the qualified-self forms are checked as up-calls.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
