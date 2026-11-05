@@ -40,25 +40,60 @@ pub(super) const WARNING_FIELDS: [&str; 6] = [
 /// promotion however either is set.
 pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
 
-/// The footprint hold in an applied assessment, if the apply boundary wrote one.
+/// The footprint hold in an applied assessment, if the apply boundary wrote
+/// one or the pilot declared the same unread source in a form applied
+/// assessments written before the marker was stamped for later-finishing
+/// predecessors still carry [ORB-22178].
 pub(super) fn footprint_hold(assessment: &Value) -> Option<&Value> {
+    let gaps = assessment_evidence_gaps(assessment);
     assessment
         .get("utility_warnings")
         .and_then(Value::as_array)?
         .iter()
-        .find(|finding| finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED))
+        .find(|finding| declares_unresolved_footprint(finding, &gaps))
+}
+
+/// The assessment's `evidence_gaps` as plain strings, for the unread-source
+/// declaration check the apply boundary also makes.
+fn assessment_evidence_gaps(assessment: &Value) -> Vec<String> {
+    assessment
+        .get("evidence_gaps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 /// Findings whose named prerequisites may already be enforced or completed.
 const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
-/// Whether a finding carries the host-written unresolved-footprint marker.
-/// The apply boundary stamps it on a pilot finding that describes an unread
-/// source, so a done or dependency predecessor named in such a finding does
-/// not release it. Wording alone never counts: a prerequisite that merely
-/// mentions the footprint stays an ordinary prerequisite.
-fn declares_unresolved_footprint(finding: &Value) -> bool {
-    finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED)
+/// Whether a finding is an unresolved-footprint hold: it carries the
+/// host-written marker, or it is the pilot declaration the apply boundary
+/// stamps — a holding finding that, with `evidence_gaps` present, describes
+/// its source as unread or names a task the gaps also name as that source.
+/// The second form keeps assessments applied before the marker covered
+/// later-finishing predecessors held [ORB-22178]. Wording alone never
+/// counts: a prerequisite that merely mentions the footprint, or a finding
+/// with no evidence gap behind it, stays an ordinary prerequisite.
+fn declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
+    if finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED) {
+        return true;
+    }
+    if finding.get("holds_promotion").and_then(Value::as_bool) != Some(true) || gaps.is_empty() {
+        return false;
+    }
+    let Some(text) = warning_text(finding) else {
+        return false;
+    };
+    if text.to_ascii_lowercase().contains("unread") {
+        return true;
+    }
+    let gaps_text = gaps.join(" ");
+    finding_task_ids(finding)
+        .iter()
+        .any(|id| gaps_text.contains(id.as_str()))
 }
 
 /// Only surface and utility findings may explicitly be advisory. Legacy
@@ -138,12 +173,13 @@ pub(super) fn blocked_by_holds_promotion(
 fn holds_promotion(
     field: &str,
     finding: &Value,
+    gaps: &[String],
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> bool {
     finding_holds_promotion(field, finding)
         && (!PREREQUISITE_FIELDS.contains(&field)
-            || declares_unresolved_footprint(finding)
+            || declares_unresolved_footprint(finding, gaps)
             || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 
@@ -199,6 +235,7 @@ pub(crate) fn promotion_findings<'a>(
             ));
         }
     }
+    let gaps = assessment_evidence_gaps(assessment);
     let warnings = WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -207,7 +244,7 @@ pub(crate) fn promotion_findings<'a>(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
+                .filter(|value| holds_promotion(field, value, &gaps, dependencies, is_done))
                 .map(move |value| json!({ "field": field, "value": value }))
         })
         .collect();
@@ -225,6 +262,7 @@ pub(crate) fn warning_hold_findings(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> Vec<DrainHoldFinding> {
+    let gaps = assessment_evidence_gaps(assessment);
     WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -233,7 +271,7 @@ pub(crate) fn warning_hold_findings(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
+                .filter(|value| holds_promotion(field, value, &gaps, dependencies, is_done))
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),

@@ -487,10 +487,7 @@ fn assess_with(
     .map_err(refused(task_id, "invalid"))?;
     let user_facing_ui =
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
-    let dependencies = current.dependencies();
-    hold_unresolved_footprint(&mut assessment, recommended, complexity, &|id: &str| {
-        dependencies.iter().any(|dep| dep == id) || context.runtime.warning_prerequisite_is_done(id)
-    });
+    hold_unresolved_footprint(&mut assessment, recommended, complexity);
     attach_host_findings(
         &mut assessment,
         snapshot,
@@ -647,14 +644,14 @@ fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedT
 /// pilot declared the same unread source as a holding `utility_warnings`
 /// finding gets the marker stamped on that finding, so the hold is not
 /// released merely because the unread source names a done or dependency
-/// task. Any footprint finding already in the assessment is dropped first,
-/// so a pilot cannot supply the marker and a re-check cannot hold the task
-/// twice.
+/// task — whether that task was already done or a dependency at apply time
+/// or finishes only later [ORB-22178]. Any footprint finding already in the
+/// assessment is dropped first, so a pilot cannot supply the marker and a
+/// re-check cannot hold the task twice.
 fn hold_unresolved_footprint(
     assessment: &mut Value,
     recommended: TaskComplexity,
     applied: TaskComplexity,
-    prerequisite_covered: &dyn Fn(&str) -> bool,
 ) {
     let gaps_list = assessment
         .get("evidence_gaps")
@@ -676,27 +673,15 @@ fn hold_unresolved_footprint(
         finding.get("hold").and_then(Value::as_str) != Some(FOOTPRINT_UNRESOLVED)
     });
     if recommended.is_assessed() {
-        // Stamp only the case the prerequisite exemption would otherwise
-        // release: the finding or its gaps name a task that is already a
-        // dependency or done. An uncovered footprint finding keeps its
-        // ordinary `warnings` hold, marker included in its findings.
-        let covered = gaps_list
-            .iter()
-            .map(String::as_str)
-            .chain(
-                warnings
-                    .iter()
-                    .filter_map(|finding| finding.get("text").and_then(Value::as_str)),
-            )
-            .flat_map(named_task_ids)
-            .any(|id| prerequisite_covered(&id));
-        if covered {
-            for finding in warnings.iter_mut() {
-                if pilot_declares_unresolved_footprint(finding, &gaps_list)
-                    && let Some(object) = finding.as_object_mut()
-                {
-                    object.insert("hold".to_string(), json!(FOOTPRINT_UNRESOLVED));
-                }
+        // Stamp every pilot-declared unread-source finding, not only one
+        // whose named task is already a dependency or done at apply time:
+        // a predecessor that finishes later must not release the hold while
+        // the evidence remains unread [ORB-22178].
+        for finding in warnings.iter_mut() {
+            if pilot_declares_unresolved_footprint(finding, &gaps_list)
+                && let Some(object) = finding.as_object_mut()
+            {
+                object.insert("hold".to_string(), json!(FOOTPRINT_UNRESOLVED));
             }
         }
     }
