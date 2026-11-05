@@ -1,7 +1,7 @@
 ---
 title: "Scope: visual review of UI changes"
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-05
 last_validated: 2026-11-03
 status: Draft
 stage: building
@@ -196,8 +196,9 @@ review contract.
 - **Vision is established per crew and host.** Claude, Codex and Muse image routes passed
   the phase 1 Linux probes ([ORB-19977]); that does not establish every model or host.
   Crews without a declaration or with `vision = false` remain excluded (§9).
-- **Claimed live delivery is incomplete.** [ORB-20264] keeps it safely held; [ORB-21963]
-  tracks the owner-verifiable final-candidate proof needed to fulfill that part of the design.
+- **Legacy claimed live routes remain held unless they negotiate proof.** The negotiated
+  schema 1 contract and owner-side final-candidate check are implemented for supported live PR
+  routes ([ORB-21963]); legacy or unsupported claims remain safely held ([ORB-20264]).
 - **The self-check's effect is not measured on its own.** It runs in both experiment arms
   (§12.1), so its value is read from the comparison findings over time, not from a control.
 

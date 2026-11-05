@@ -1,8 +1,8 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 stage: parked
 next: "Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume"
@@ -157,16 +157,18 @@ is the expected WebSocket path.
 ### Configuration
 
 Host settings (`machine.*`): each host reads its own, and nothing propagates from the serving
-host.
+host. Phase 1 implements `machine.web_terminal.enabled` for the browser-session credential and
+`machine.web_session.ttl`. Phases 2–5 remain deferred, so the other values below are design
+defaults, not current runtime keys.
 
-| Key | Default | Meaning |
+| Key | Default / planned default | Current status and meaning |
 |---|---|---|
-| `machine.web_terminal.enabled` | `false` | Serve the terminal routes on this host's dashboard. |
-| `machine.web_terminal.max_sessions` | `4` | Live sessions per host. |
-| `machine.web_terminal.idle_timeout` | `30m` | End a session with no input or output for this long. |
-| `machine.web_terminal.detach_grace` | `10m` | Keep a detached session alive for reattach. |
-| `machine.web_terminal.scrollback_bytes` | `262144` | Scrollback replayed on reattach. |
-| `machine.web_session.ttl` | `43200` | Lifetime of a browser session cookie, in seconds. |
+| `machine.web_terminal.enabled` | `false` | Implemented in phase 1; enables the browser-session credential. Terminal routes are not implemented. |
+| `machine.web_terminal.max_sessions` | `4` (planned) | Proposed for deferred phase 2; not a current config key. |
+| `machine.web_terminal.idle_timeout` | `30m` (planned) | Proposed for deferred phase 2; not a current config key. |
+| `machine.web_terminal.detach_grace` | `10m` (planned) | Proposed for deferred phase 2; not a current config key. |
+| `machine.web_terminal.scrollback_bytes` | `262144` (planned) | Proposed for deferred phase 2; not a current config key. |
+| `machine.web_session.ttl` | `43200` | Implemented; lifetime of a browser session cookie, in seconds. |
 
 ### Surfaces
 
