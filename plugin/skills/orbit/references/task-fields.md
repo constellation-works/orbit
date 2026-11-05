@@ -184,13 +184,18 @@ on the operator-only `orbit.workflow.run.show`.
     - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
     - `unclassified`: the evidence does not settle the nature.
   - `escape` — why the delivery gates missed it:
-    - `no_test`: no test covered the broken behavior.
-    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `no_test`: no test exercised the broken behavior at the culprit commit.
+    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
     - `platform_only`: it shows only on a platform or host the gates did not exercise.
     - `review_missed`: it was visible in the diff and review did not flag it.
     - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
     - `unclassified`: the evidence does not settle the escape.
+    Choose the escape by inspecting the tests and gate selection at the culprit
+    commit: `no_test` when no test exercises the broken behavior there, and
+    `test_not_selected` when a covering test exists but the culprit's gates did
+    not run it. Mere visibility in the diff is not evidence for `review_missed`
+    when no test exercises the broken behavior.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
   field, like `plan`, `status` and `dependencies`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired
