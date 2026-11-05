@@ -7,6 +7,7 @@ use orbit_tools::github_cli::{SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
 use serde_json::{Value, json};
 
 use super::super::super::operations;
+use super::super::super::operations::CiCommitJobEvidence;
 use crate::context::RuntimeHost;
 
 /// One failed job's log. A read that recovered no text, which the log
@@ -18,7 +19,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     run_id: u64,
     job_id: u64,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     deadline_ms: Option<u64>,
 ) -> Result<String, OrbitError> {
     let mut input = json!({
@@ -117,7 +118,7 @@ fn timestamp_prefixed(line: &str) -> bool {
 /// Regions omit source bytes, so attribution must come from the collector's
 /// complete-command proof and the provider's unique failed step, never from
 /// the display tail. This is the same binding the CI sweep requires.
-fn bound_failure_regions<'a>(response: &'a Value, job: &Value) -> Option<&'a str> {
+fn bound_failure_regions<'a>(response: &'a Value, job: &CiCommitJobEvidence) -> Option<&'a str> {
     let regions = &response["failure_regions"];
     if response["source_complete"] != true
         || regions["kind"] != "runner_failure_regions"
@@ -129,19 +130,17 @@ fn bound_failure_regions<'a>(response: &'a Value, job: &Value) -> Option<&'a str
     let text = regions["text"]
         .as_str()
         .filter(|text| !text.trim().is_empty())?;
-    let steps = job["failed_steps"].as_array()?;
+    let steps = job.failed_steps.value()?;
     let [step] = steps.as_slice() else {
         return None;
     };
-    let step = step.as_str().filter(|step| !step.trim().is_empty())?;
-    if job["failed_step"].as_str() != Some(step) {
+    let step = step.text().filter(|step| !step.trim().is_empty())?;
+    if job.failed_step.text() != Some(step) {
         return None;
     }
     match response["source"].as_str()? {
         SOURCE_RUN_LOG => {
-            let name = job["name"]
-                .as_str()
-                .filter(|name| !name.trim().is_empty())?;
+            let name = job.name.text().filter(|name| !name.trim().is_empty())?;
             let mut label = None;
             for line in text.lines() {
                 let mut columns = line.splitn(3, '\t');

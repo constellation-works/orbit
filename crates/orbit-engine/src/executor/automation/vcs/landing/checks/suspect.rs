@@ -9,6 +9,10 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::super::ci::log_signature;
+use super::super::super::operations::{
+    CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent, CiJobPullRequests,
+    CiJobStatus,
+};
 use super::super::super::{
     git::{git_output, git_output_paths},
     operations,
@@ -45,7 +49,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     tasks: &[String],
     head: &str,
     base_branch: Option<&str>,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     signature: &str,
     pr_number: Option<u64>,
@@ -113,10 +117,10 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
             // final recovery with auto-fix disabled).
             let record = json!({
                 "base": tip.trim(), "head": head, "check": jobs::job_label(job),
-                "signature": signature, "run_id": job["run_id"], "job_id": job["job_id"],
-                "run_attempt": job["run_attempt"], "pr_number": pr_number,
-                "event": job["event"], "started_at": job["started_at"],
-                "completed_at": job["completed_at"], "reason": reason,
+                "signature": signature, "run_id": job.run_id, "job_id": job.job_id,
+                "run_attempt": job.run_attempt, "pr_number": pr_number,
+                "event": job.event, "started_at": job.started_at,
+                "completed_at": job.completed_at, "reason": reason,
             });
             // A refused write must keep the hold: an error here would reach
             // completion's final recovery as an unjudged failure. The next
@@ -179,7 +183,7 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     base: &str,
     tip: &str,
     base_branch: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
 ) -> Result<UntouchedBaseEvidence, String> {
     let paths = repository_citations(workspace, head, log)?;
@@ -204,13 +208,12 @@ pub(super) fn is_untouched_failure(
 
 /// Whether `other` started at or after `job` completed. Missing or
 /// unparseable timestamps are never fresh evidence.
-pub(super) fn started_after_completion(job: &Value, other: &Value) -> bool {
-    let completed = job["completed_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-    let started = other["started_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+pub(super) fn started_after_completion(
+    job: &CiCommitJobEvidence,
+    other: &CiCommitJobEvidence,
+) -> bool {
+    let completed = job.completed_time;
+    let started = other.started_time;
     match (completed, started) {
         (Some(completed), Some(started)) => started >= completed,
         _ => false,
@@ -228,7 +231,7 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     base: &str,
     tip: &str,
     base_branch: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     paths: BTreeSet<String>,
 ) -> Result<UntouchedBaseEvidence, String> {
     if paths.is_empty() {
@@ -244,14 +247,14 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
             json!({"commit":base,"workspace_path":workspace,"latest_push_branch":base_branch,"base_push_tip":tip}),
         )
         .map_err(|error| format!("the base re-check on {tip} could not be read: {error}"))?;
-    let base_jobs = response["jobs"]
-        .as_array()
-        .ok_or("the base re-check carried no job list")?;
+    let base_jobs = CiCommitJobsAnswer::decode_response(response)
+        .ok_or("the base re-check carried no job list")?
+        .jobs;
     if base_jobs.iter().any(|base_job| {
         jobs::same_job(base_job, job)
-            && base_job["run_status"] == "completed"
-            && base_job["status"] == "completed"
-            && base_job["conclusion"] == "success"
+            && base_job.run_status.value() == Some(&CiJobStatus::Completed)
+            && base_job.status.value() == Some(&CiJobStatus::Completed)
+            && base_job.conclusion.value() == Some(&CiJobConclusion::Success)
     }) {
         return Ok(UntouchedBaseEvidence::PassingBaseRun);
     }
@@ -266,30 +269,8 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
 
 /// The pull-request numbers a job's provider metadata names, in any of
 /// the shapes the adapter or a history note carries them.
-pub(super) fn pull_request_numbers(job: &Value) -> Vec<u64> {
-    let mut numbers = Vec::new();
-    let mut push = |value: &Value| {
-        if let Some(number) = value
-            .as_u64()
-            .or_else(|| value["number"].as_u64())
-            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        {
-            numbers.push(number);
-        }
-    };
-    for key in ["pull_request_numbers", "pull_requests"] {
-        if let Some(list) = job[key].as_array() {
-            for value in list {
-                push(value);
-            }
-        }
-    }
-    for key in ["pr_number", "pull_request_number", "pr"] {
-        if !job[key].is_null() {
-            push(&job[key]);
-        }
-    }
-    numbers
+fn legacy_pull_request_numbers(job: &Value) -> Vec<u64> {
+    CiJobPullRequests::from_legacy(job).numbers
 }
 
 /// Whether `job` is authenticated provider evidence of a `pull_request`
@@ -297,14 +278,14 @@ pub(super) fn pull_request_numbers(job: &Value) -> Vec<u64> {
 /// tested head must all agree. Metadata that names no PR, or a different
 /// one, is not a PR rerun.
 pub(super) fn is_verified_pull_request_job(
-    job: &Value,
+    job: &CiCommitJobEvidence,
     pr_number: Option<u64>,
     head: &str,
 ) -> bool {
-    if job["event"].as_str() != Some("pull_request") {
+    if job.event.value() != Some(&CiJobEvent::PullRequest) {
         return false;
     }
-    if let Some(sha) = job["head_sha"].as_str()
+    if let Some(sha) = job.head_sha.text()
         && sha != head
     {
         return false;
@@ -312,7 +293,7 @@ pub(super) fn is_verified_pull_request_job(
     let Some(pr_number) = pr_number else {
         return false;
     };
-    pull_request_numbers(job).contains(&pr_number)
+    job.association.numbers.contains(&pr_number)
 }
 
 /// Whether task history records an earlier failed attempt with this same
@@ -331,7 +312,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
     head: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     check: &str,
     signature: &str,
     pr_number: Option<u64>,
@@ -339,14 +320,12 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     if !is_verified_pull_request_job(job, pr_number, head) {
         return false;
     }
-    let current_start = job["started_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+    let current_start = job.started_time;
     let Some(current_start) = current_start else {
         return false;
     };
     let (Some(current_run), Some(current_attempt)) =
-        (job["run_id"].as_u64(), job["run_attempt"].as_u64())
+        (job.run_id.number(), job.run_attempt.number())
     else {
         return false;
     };
@@ -378,10 +357,10 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             return false;
         }
         for plan in same_head {
-            if job["repository_id"].as_u64() != Some(plan.repository_id)
-                || job["repository"].as_str() != Some(plan.repository.as_str())
-                || job["head_branch"].as_str() != Some(plan.head_branch.as_str())
-                || job["head_sha"].as_str() != Some(head)
+            if job.repository_id.number() != Some(plan.repository_id)
+                || job.repository.text() != Some(plan.repository.as_str())
+                || job.head_branch.text() != Some(plan.head_branch.as_str())
+                || job.head_sha.text() != Some(head)
             {
                 return false;
             }
@@ -389,7 +368,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                 || plan.pr_number.parse::<u64>().ok() != pr_number
                 || plan.run_id != current_run
                 || plan.run_attempt.checked_add(1) != Some(current_attempt)
-                || job["workflow_id"].as_u64() != Some(plan.workflow_id)
+                || job.workflow_id.number() != Some(plan.workflow_id)
             {
                 continue;
             }
@@ -402,7 +381,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                     && root.check == check
                     && root.signature == signature
                     && prior.is_some_and(|prior| {
-                        prior["name"] == job["name"]
+                        job.name.matches_legacy(&prior["name"])
                             && prior["completed_at"]
                                 .as_str()
                                 .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
@@ -425,7 +404,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                 continue;
             };
             // A note that names a different PR cannot be this PR's rerun.
-            let noted = pull_request_numbers(&note);
+            let noted = legacy_pull_request_numbers(&note);
             if !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number)) {
                 continue;
             }
