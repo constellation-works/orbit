@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::context::RuntimeHost;
 
@@ -12,6 +12,7 @@ use super::super::super::super::ci::log_signature::{
 };
 use super::super::super::baseline::network_inconclusive;
 use super::super::super::operations;
+use super::super::super::operations::{CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion};
 
 use super::recovery::{CheckFailureClass, FailedJob};
 
@@ -28,10 +29,10 @@ const RUNNER_LOSS: &[&str] = &[
 ];
 
 /// The step a failed job's signature falls back to naming.
-pub(super) fn failed_step(job: &Value) -> &str {
-    job["failed_step"]
-        .as_str()
-        .or_else(|| job["name"].as_str())
+pub(super) fn failed_step(job: &CiCommitJobEvidence) -> &str {
+    job.failed_step
+        .text()
+        .or_else(|| job.name.text())
         .unwrap_or_default()
 }
 
@@ -41,36 +42,43 @@ pub(super) fn commit_jobs<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     commit: &str,
-) -> Result<Vec<Value>, OrbitError> {
+) -> Result<Vec<CiCommitJobEvidence>, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::CI_COMMIT_JOBS,
         json!({"commit": commit, "workspace_path": workspace.to_string_lossy()}),
     )?;
-    response["jobs"].as_array().cloned().ok_or_else(|| {
-        OrbitError::Execution(format!("the jobs answer for {commit} carried no job list"))
-    })
+    CiCommitJobsAnswer::decode_response(response)
+        .map(|answer| answer.jobs)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!("the jobs answer for {commit} carried no job list"))
+        })
 }
 
 /// A job that finished without passing.
-pub(super) fn unsuccessful(job: &Value) -> bool {
-    super::super::super::super::ci::unsuccessful_conclusion(job["conclusion"].as_str())
+pub(super) fn unsuccessful(job: &CiCommitJobEvidence) -> bool {
+    job.conclusion
+        .value()
+        .is_some_and(CiJobConclusion::unsuccessful)
 }
 
 /// Whether rollup entry `check` is this job's check run.
-pub(super) fn answers(job: &Value, (workflow, name): &(Option<String>, String)) -> bool {
-    job["name"].as_str().map(str::trim) == Some(name.as_str())
+pub(super) fn answers(
+    job: &CiCommitJobEvidence,
+    (workflow, name): &(Option<String>, String),
+) -> bool {
+    job.name.text().map(str::trim) == Some(name.as_str())
         && workflow
             .as_deref()
-            .is_none_or(|workflow| job["workflow"].as_str().map(str::trim) == Some(workflow))
+            .is_none_or(|workflow| job.workflow.text().map(str::trim) == Some(workflow))
 }
 
-pub(super) fn same_job(left: &Value, right: &Value) -> bool {
-    left["name"] == right["name"] && left["workflow"] == right["workflow"]
+pub(super) fn same_job(left: &CiCommitJobEvidence, right: &CiCommitJobEvidence) -> bool {
+    left.name.same_observation(&right.name) && left.workflow.same_observation(&right.workflow)
 }
 
-pub(super) fn job_label(job: &Value) -> String {
-    let name = job["name"].as_str().unwrap_or("unnamed job");
-    match job["workflow"].as_str() {
+pub(super) fn job_label(job: &CiCommitJobEvidence) -> String {
+    let name = job.name.text().unwrap_or("unnamed job");
+    match job.workflow.text() {
         Some(workflow) => format!("{workflow} / {name}"),
         None => name.to_string(),
     }
@@ -135,11 +143,8 @@ pub(super) fn exclusive_awaited_stop(log: &str) -> Option<AwaitedStop> {
 }
 
 /// A job the provider stopped, as opposed to one whose step failed.
-pub(super) fn concluded_stopped(job: &Value) -> Option<&str> {
-    match job["conclusion"].as_str() {
-        Some(conclusion @ ("cancelled" | "timed_out")) => Some(conclusion),
-        _ => None,
-    }
+pub(super) fn concluded_stopped(job: &CiCommitJobEvidence) -> Option<&str> {
+    job.conclusion.value().and_then(CiJobConclusion::stopped)
 }
 
 /// Signature of a stop classified from the job conclusion, with no log.

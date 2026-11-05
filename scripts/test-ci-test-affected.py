@@ -152,7 +152,11 @@ elif arguments[0] == "tree":
         features.add(os.environ["GUARD_TEST_TREE_WORKSPACE_ONLY"])
     features = sorted(features)
     print("tokio v1.0.0\t" + ",".join(features))
-    print("tokio v1.0.0\t" + ",".join(features) + " (*)")
+    # A repeat prints only when another crate reaches the dependency. Colored
+    # output wraps its marker in escapes, as CI's CARGO_TERM_COLOR=always does.
+    colored = os.environ.get("CARGO_TERM_COLOR") == "always" and "--color" not in arguments
+    if len(selected) > 1:
+        print("tokio v1.0.0\t" + ",".join(features) + (" \x1b[33m\x1b[2m(*)\x1b[39m\x1b[22m" if colored else " (*)"))
 elif arguments == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("GUARD_TEST_NO_NEXTEST", "0")))
 elif "--doc" in arguments:
@@ -411,6 +415,10 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                          "orbit-cli orbit-cmd orbit-web")
         self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --lib --bins --tests"],
                          "a selection that already resolves the workspace's features builds alone")
+        # [ORB-22077] CI colors Cargo's output. A colored repeat marker must not
+        # read as a feature gap: it added three needless anchors to hosted builds.
+        self.assertEqual(build("orbit-tools", CARGO_TERM_COLOR="always"),
+                         ["orbit-tools", "-p orbit-tools --lib --bins --tests"])
         # A crate the checkout lacks, or a gap no member closes, builds the workspace.
         self.assertEqual(build("orbit-retired")[0], "workspace")
         self.assertEqual(build("orbit-cli", GUARD_TEST_TREE_WORKSPACE_ONLY="signal")[0], "workspace")

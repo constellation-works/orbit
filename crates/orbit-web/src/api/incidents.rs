@@ -21,7 +21,6 @@ use orbit_core::{
     FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
     JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, PropagationLink,
 };
-use orbit_types::identity::{infer_agent_family_from_model, normalize_attribution_label};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -374,12 +373,6 @@ fn propagation_to_json(link: &PropagationLink) -> Value {
             .map(event_ref_to_json)
             .collect::<Vec<_>>(),
     })
-}
-
-/// Maps a free-form audit `role` onto a canonical agent family.
-pub(super) fn agent_family_key(role: &str) -> String {
-    let normalized = normalize_attribution_label(role, None);
-    infer_agent_family_from_model(&normalized).unwrap_or(normalized)
 }
 
 /// Scan cap for the audit-summary rollups, which only need counts. Held

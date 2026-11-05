@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{
-    JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step,
+    JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step, run_upgrade_paused,
 };
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, RunRootCause};
 use serde_json::json;
@@ -104,9 +104,15 @@ pub(crate) fn run_history_payload(
         return failure_history_payload(runtime, read, &runs, &states);
     }
 
-    // [ORB-15202] Each incident keeps one row: its leaf's when listed.
+    // [ORB-15202] Each incident keeps one row: its leaf's when listed. An
+    // upgrade's designed pause is no incident; it is only counted.
+    let mut upgrade_paused = 0;
     let rows = if incidents {
-        fold_run_incidents(&runs, &states)
+        let (paused, incidents): (Vec<_>, Vec<_>) = fold_run_incidents(&runs, &states)
+            .into_iter()
+            .partition(|incident| incident.upgrade_paused);
+        upgrade_paused = paused.len();
+        incidents
             .into_iter()
             .map(|incident| (incident.index, Some(incident.cascaded_run_ids)))
             .collect::<Vec<_>>()
@@ -120,10 +126,16 @@ pub(crate) fn run_history_payload(
             if let Some(cascaded) = cascaded {
                 value["cascaded_run_ids"] = json!(cascaded);
             }
+            if run_upgrade_paused(&runs[*index], states[*index]) {
+                value["upgrade_paused"] = json!(true);
+            }
             value
         })
         .collect::<Vec<_>>();
-    let doc = json!({ "runs": values });
+    let mut doc = json!({ "runs": values });
+    if upgrade_paused > 0 {
+        doc["upgrade_paused"] = json!(upgrade_paused);
+    }
 
     let errors = rows
         .iter()
@@ -206,7 +218,15 @@ pub(crate) fn run_history_payload(
     if !waiting.is_empty() {
         blocks.push(Block::text(waiting.join("\n")));
     }
+    if upgrade_paused > 0 {
+        blocks.push(Block::text(upgrade_paused_note(upgrade_paused)));
+    }
     Ok(Payload::blocks(doc, blocks).with_records(values).into())
+}
+
+/// The line that discloses upgrade pauses left out of a failure listing.
+fn upgrade_paused_note(count: usize) -> String {
+    format!("Upgrade-paused, not failures: {count}")
 }
 
 /// One `--failures` row: a task and the root-cause run behind it.
@@ -221,7 +241,7 @@ struct FailureRow {
 /// Fold the listing into one row per task and root cause.
 ///
 /// Echoes of the same leaf collapse, including a held or interrupted parent.
-/// The cause is the root-cause run's own error, first line only, with no
+/// An upgrade's designed pause is left out and only counted. The cause is the root-cause run's own error, first line only, with no
 /// character cap. `--limit` still bounds the runs scanned.
 fn failure_history_payload(
     runtime: &OrbitRuntime,
@@ -237,6 +257,11 @@ fn failure_history_payload(
     let mut loaded: HashMap<String, FailureFacts> = HashMap::new();
     let mut seen = HashSet::new();
     let mut rows = Vec::new();
+    let paused_leaves = fold_run_incidents(runs, states)
+        .into_iter()
+        .filter(|incident| incident.upgrade_paused)
+        .map(|incident| incident.leaf_run_id)
+        .collect::<HashSet<_>>();
     for (index, run) in runs.iter().enumerate() {
         if !is_reported_failure(run.state) {
             continue;
@@ -249,6 +274,9 @@ fn failure_history_payload(
         let root_id = recorded
             .map(|cause| cause.leaf_run_id.as_str())
             .unwrap_or(run.run_id.as_str());
+        if paused_leaves.contains(root_id) {
+            continue;
+        }
         let (mut task_ids, mut step, crew, cause) =
             root_facts(runtime, read, runs, &listed, &mut loaded, root_id);
         if step.is_none() {
@@ -290,7 +318,7 @@ fn failure_history_payload(
             })
         })
         .collect::<Vec<_>>();
-    let doc = json!({ "failures": values });
+    let mut doc = json!({ "failures": values });
 
     use crate::output::table::{Column, Table};
     let columns = vec![
@@ -315,7 +343,15 @@ fn failure_history_payload(
             Cell::new(format!("orbit run show {}", row.run_id)),
         ]);
     }
-    Ok(Payload::enveloped_list(doc, values, table).into())
+    if paused_leaves.is_empty() {
+        return Ok(Payload::enveloped_list(doc, values, table).into());
+    }
+    doc["upgrade_paused"] = json!(paused_leaves.len());
+    let blocks = vec![
+        Block::table(table),
+        Block::text(upgrade_paused_note(paused_leaves.len())),
+    ];
+    Ok(Payload::blocks(doc, blocks).with_records(values).into())
 }
 
 fn is_reported_failure(state: JobRunState) -> bool {

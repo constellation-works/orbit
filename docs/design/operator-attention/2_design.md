@@ -1,8 +1,8 @@
 ---
 title: Operator Attention — Design
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 feature: operator-attention
 doc_role: design
@@ -77,7 +77,7 @@ for its kind and workspace and the rest of the list is returned.
 Layering follows [ARCHITECTURE.md](../../../ARCHITECTURE.md); no new cross-crate dependency is
 needed, which the slice verifies before it merges.
 
-| Concern | Location (proposed) |
+| Concern | Location |
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | `crates/orbit-common/src/governance/attention/registry.rs` (operations-as-data; no clap or runtime types) |
@@ -141,24 +141,24 @@ counts as a condition; those are code and spec, so two operators' lists mean the
 
 ## 6. Slices
 
-Each slice ships a usable feed. Daniel dropped the session hook; [ORB-21165] is archived and is not a dependency or deliverable. Dependencies run top to bottom. Task ids are in Task
-References below; each is a proposed `ws_orbit` task tagged `operator-attention` with acceptance criteria.
+[ORB-21164] designed the feed and filed its slices. Each slice ships a usable feed. Daniel dropped the session hook; [ORB-21165] is archived and is not a dependency or deliverable. Dependencies run top to bottom. Task ids are in Task
+References below; all four implementation tasks are done.
 
-1. **Tool, CLI, filters and cursor over the task-level kinds** ([ORB-21168]). Item types and schema;
+1. **Done — tool, CLI, filters and cursor over the task-level kinds** ([ORB-21168]). Item types and schema;
    `pilot_warning`, `pilot_hold`, `blocked`, `decision_open` (with folding) and
    `review_waiting`; severity and `next`; every filter in the filter spec; fingerprint and the
    `--since` cursor; single-workspace and local `--all`; goldens, skill reference and docs.
    Owns the FULL shared `[attention]` configuration: typed settings, validated defaults, registry, resolution and readback for every §5 key. Later slices consume this owner and create no competing schemas.
-2. **Runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
+2. **Done — runtime kinds: `run_failed`, `run_stuck`, `claim_stale`** ([ORB-21169]). Capability-gated sources with
    `degraded` reporting for sessions without the Operator capability; liveness check
    documented per platform (the probe and its limitations are described below). Consumes the shared §5 settings from slice 1. Depends on slice 1.
-3. **Provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
+3. **Done — provider and record kinds: `ci_red`, `friction_untriaged`** ([ORB-21170]). Adds the cached provider
    read and the friction adapter; offline degrade. Consumes the shared §5 settings from slice 1. Depends on slice 1.
    The provider read stays behind `github.run.list` (Orbit stays generic); freshness binds to the
-   current base-branch head, pending or unknown observations are not green, and `since` is the
+   fetched `origin/<base>` head ([ORB-21680]), pending or unknown observations are not green, and `since` is the
    failing run's `updated_at` labelled as an onset-time proxy (`detail.since_source`), because the
    provider projection supplies no exact completion timestamp.
-4. **Federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
+4. **Done — federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
    fan-out and merge, unreachable hosts as items, session-binding refusal, the
    federated-mcp doc amendment, and the local doctor / drain-probe sources for
    `host_unhealthy`. The fan-out hop is the candidate read in
@@ -234,5 +234,6 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-21169] — slice 2: runtime kinds `run_failed`, `run_stuck`, `claim_stale`
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation across workspaces and hosts, and `host_unhealthy`
+- [ORB-21680] — made CI attention use the fetched base-branch head
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

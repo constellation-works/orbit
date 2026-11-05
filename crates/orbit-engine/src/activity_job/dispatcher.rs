@@ -748,6 +748,9 @@ fn run_deterministic(
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }
+                OrbitError::ForgeUnavailable(failure) => {
+                    DispatchError::ForgeUnavailableHold(Box::new(failure.hold))
+                }
                 error
                     if error.private_vcs_failure().is_some_and(|failure| {
                         failure.class == PrivateVcsFailureClass::CompletionObservationUnavailable
@@ -758,20 +761,10 @@ fn run_deterministic(
                         message: error.to_string(),
                     }
                 }
-                // Only the delivery push writes this hold; a refusal text
-                // that merely quotes the marker carries no parseable hold.
-                // A nested match, not an `if let` guard: guards need a newer
-                // toolchain than the workspace MSRV.
-                error => {
-                    let message = error.to_string();
-                    match orbit_types::workflow::ForgeUnavailableHold::from_text(&message) {
-                        Some(hold) => DispatchError::ForgeUnavailableHold(Box::new(hold)),
-                        None => DispatchError::DeterministicActionFailed {
-                            action: spec.action.clone(),
-                            message,
-                        },
-                    }
-                }
+                error => DispatchError::DeterministicActionFailed {
+                    action: spec.action.clone(),
+                    message: error.to_string(),
+                },
             })?
         }
         Some(DeterministicAction::Core(_)) | None => host.run_deterministic(

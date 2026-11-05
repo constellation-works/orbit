@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how orbit attention spans workspaces and hosts: authority per host, fan-out, unreachable hosts as items, and session binding"
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 title: Spec — Attention federation
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164, ORB-21171]
-last_updated: 2026-11-02
+last_updated: 2026-11-04
 ---
 
 # Spec: Attention federation
@@ -315,6 +315,8 @@ tool, `orbit.attention`. This is not store replication, synchronization or silen
 nothing is written, nothing is cached, and no item is presented without its host. Slice 4
 edits the federated-mcp design and spec to say so, including this hop
 ([4_decisions.md](../4_decisions.md#fan-out-is-a-named-exception-in-the-federated-mux)).
+
+[ORB-21164] specified federation; [ORB-21182] specified its untruncated candidate read.
 
 ## Task References
 

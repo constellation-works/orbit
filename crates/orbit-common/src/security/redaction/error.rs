@@ -212,6 +212,14 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             failure.message = redact(&failure.message);
             OrbitError::PrivateVcs(failure)
         }
+        OrbitError::ForgeUnavailable(mut failure) => {
+            failure.hold.target_ref = redact(&failure.hold.target_ref);
+            failure.hold.head_sha = redact(&failure.hold.head_sha);
+            failure.hold.diagnostic = redact(&failure.hold.diagnostic);
+            failure.hold.step_id = redact(&failure.hold.step_id);
+            failure.message = redact(&failure.message);
+            OrbitError::ForgeUnavailable(failure)
+        }
         OrbitError::ExecutionTimeout {
             timeout_ms,
             message,

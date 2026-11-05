@@ -69,7 +69,10 @@ pub use contract::{
 };
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryRefusal, RESOURCE_THROTTLED};
-pub use follower::WorkspacePullRequest;
+pub use follower::{
+    PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, PullStartOptionsSupplied,
+    WorkspacePullRequest, pull_start_review_refusal,
+};
 pub use leaf_hydration::{
     DEFAULT_LEAF_HYDRATION_LIMIT, FollowerRunObserver, LeafHydrationOutcome, LeafHydrationReport,
     LeafHydrationRequest, LeafHydrationRow, MAX_LEAF_HYDRATION_LIMIT,

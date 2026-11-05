@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention fingerprints and the stateless --since cursor: format, delta semantics, validity, expiry and the caller polling protocol"
-last_validated: 2026-11-02
+last_validated: 2026-11-04
 title: Spec — Attention fingerprint and cursor
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention]
 related_artifacts: [ORB-21164, ORB-21165]
-last_updated: 2026-11-02
+last_updated: 2026-11-04
 ---
 
 # Spec: Attention fingerprint and cursor
@@ -146,6 +146,8 @@ On 2026-11-02, one sequential observation of the real claimed Orbit workspace th
 | Effective open decisions | 0.080 | unavailable: `owner_route_unavailable` on this claimed worker’s nested owner route; the granted MCP call independently returned the same refusal in 0.040 seconds |
 
 Evidence is attached as `attention-source-costs.json` and the corresponding per-source records. Full per-source candidate timings on the live owner remain unmeasured: candidate binaries are permitted only in disposable homes, and this worker cannot reach the effective decision source. No substituted replica or synthetic load was used. The disposable-workspace boundary checks validate behavior without claiming live-owner latency.
+
+[ORB-21164] specified the fingerprint and cursor.
 
 ## Task References
 

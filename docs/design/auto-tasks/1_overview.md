@@ -272,7 +272,8 @@ re-init does not overwrite a workspace-authored definition of the same name.
   reads the failure and release settlements followers' claimed leaves sent,
   through `orbit run settlements --no-reconcile`, since those leaves never
   enter the owner's run history, and counts one as a failure only when its
-  typed `accounting.counts_as_failure` is true; designed holds go to a
+  typed `accounting.counts_as_failure` is true; designed holds, and runs or leaves an
+  Orbit upgrade paused (`upgrade_paused`), go to a
   separate `held_7d` counter so raw occurrences reconcile [ORB-21840]. A follower settlement duplicates an owner
   history row only when all three match: the row's `executed_on.machine_id`
   equals the settlement's `machine_id`, the row's `run_id` equals the

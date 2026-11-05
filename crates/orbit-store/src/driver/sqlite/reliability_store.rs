@@ -2,7 +2,7 @@
 //!
 //! These queries exist so pipeline-reliability reporting never has to load the
 //! wide row shapes that the token/cost metrics path uses. Every column read
-//! here is an identifier, a state, or a timestamp: no token column and no cost
+//! here is an identifier, a state, an error code or a timestamp: no token column and no cost
 //! column is referenced, projected, or aggregated. That is deliberate — the
 //! worker run store and `invocations` disagree on token accounting by an order
 //! of magnitude (friction F2026-08-031), so any rate derived from those fields
@@ -33,11 +33,13 @@ use crate::contracts::{
 
 impl Store {
     /// Lists every job run created in `[since, until)` for one workspace,
-    /// projected to `(run_id, job_id, state, created_at)`.
+    /// projected to `(run_id, job_id, state, created_at)`, plus an
+    /// `interrupted` run's recorded error code.
     ///
-    /// Unlike [`Store::list_job_runs_for_workspace`], this does not read step
+    /// Unlike [`Store::list_job_runs_for_workspace`], this does not load step
     /// rows, input payloads, or model attribution — a reliability window can
     /// span thousands of runs and the per-run step fan-out would dominate.
+    /// Only an `interrupted` row looks at its steps, by primary key.
     ///
     /// Rows are ordered newest-first and capped at `max_rows`; when the cap
     /// binds, the returned [`BoundedFacts::truncated`] flag is set.
@@ -58,7 +60,17 @@ impl Store {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT run_id, job_id, state, created_at
+                SELECT run_id, job_id, state, created_at,
+                    CASE WHEN state = 'interrupted' THEN (
+                        SELECT step.error_code
+                        FROM job_run_steps step
+                        WHERE step.workspace_id = job_runs.workspace_id
+                          AND step.run_id = job_runs.run_id
+                          AND step.state <> 'skipped'
+                          AND (step.error_code IS NOT NULL OR step.error_message IS NOT NULL)
+                        ORDER BY step.step_index DESC
+                        LIMIT 1
+                    ) END
                 FROM job_runs
                 WHERE workspace_id = ?1 AND created_at >= ?2 AND created_at < ?3
                 ORDER BY created_at DESC, run_id ASC
@@ -79,6 +91,7 @@ impl Store {
                         job_id: row.get(1)?,
                         state: row.get(2)?,
                         created_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
+                        interrupted_error_code: row.get(4)?,
                     })
                 },
             )

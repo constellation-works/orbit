@@ -9,6 +9,7 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::distributed::PullStartOptionsSupplied;
 use orbit_core::application::job::{DrainAdmissionsStopRequest, SubmissionKind};
 use orbit_core::{DrainEntryPoint, WorkspacePullRequest};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
@@ -206,46 +207,23 @@ impl AutoDrainBody {
         }
     }
 
-    /// The first start option `orbit run auto --pull` refuses, worded as the
-    /// CLI's argument parser words it (`AutoCommand`'s `conflicts_with_all`
-    /// on `--pull`, then its `--review` refusal), so a pull window refuses
-    /// here exactly what the equivalent command refuses.
-    fn pull_conflict(&self) -> Option<String> {
-        let conflicts = [
-            (self.auto_concurrency.is_some(), "--auto-concurrency <MODE>"),
-            (self.complete, "--complete"),
-            (self.approve_proposed, "--approve-proposed"),
-            (self.auto_fix, "--auto-fix"),
-            (
-                self.strict_worker_containment,
-                "--strict-worker-containment",
-            ),
-            (
-                self.low_complexity_crews.is_some(),
-                "--low-complexity-crews [<CREW>...]",
-            ),
-            (
-                self.medium_complexity_crews.is_some(),
-                "--medium-complexity-crews [<CREW>...]",
-            ),
-            (
-                self.hard_complexity_crews.is_some(),
-                "--hard-complexity-crews [<CREW>...]",
-            ),
-            (
-                self.xhard_complexity_crews.is_some(),
-                "--xhard-complexity-crews [<CREW>...]",
-            ),
-            (self.claim_token.is_some(), "--claim-token <CLAIM_TOKEN>"),
-        ];
-        if let Some((_, flag)) = conflicts.iter().find(|(set, _)| *set) {
-            return Some(format!(
-                "the argument '--pull <SELECTOR>' cannot be used with '{flag}'"
-            ));
+    /// Which pull-start options this body supplied, for the shared decision.
+    fn pull_start_options(&self) -> PullStartOptionsSupplied {
+        PullStartOptionsSupplied {
+            pull: self.pull.is_some(),
+            host: self.host.is_some(),
+            auto_concurrency: self.auto_concurrency.is_some(),
+            complete: self.complete,
+            approve_proposed: self.approve_proposed,
+            auto_fix: self.auto_fix,
+            strict_worker_containment: self.strict_worker_containment,
+            low_complexity_crews: self.low_complexity_crews.is_some(),
+            medium_complexity_crews: self.medium_complexity_crews.is_some(),
+            hard_complexity_crews: self.hard_complexity_crews.is_some(),
+            xhard_complexity_crews: self.xhard_complexity_crews.is_some(),
+            claim_token: self.claim_token.is_some(),
+            review: self.review.is_some(),
         }
-        self.review
-            .is_some()
-            .then(|| orbit_core::application::review::pull_review_request_refusal().to_string())
     }
 }
 
@@ -355,20 +333,15 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         Ok(seconds) => seconds,
         Err(message) => return bad_request(message),
     };
+    if let Some(refusal) = body.pull_start_options().pull_start_refusal() {
+        return bad_request(refusal);
+    }
     if body.pull.is_some() {
-        if let Some(conflict) = body.pull_conflict() {
-            return bad_request(conflict);
-        }
         let global_root = state.global_root().to_path_buf();
         return start_blocking("pull-drain workflow", move || {
             pull_drain_start(&runtime, &global_root, &body, for_seconds)
         })
         .await;
-    }
-    if body.host.is_some() {
-        return bad_request(
-            "the following required arguments were not provided: --pull <SELECTOR>".to_string(),
-        );
     }
     let completion = if body.complete {
         match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session()) {

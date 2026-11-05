@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: every orbit attention filter, its tool-input twin, and how filters combine, validate and order"
-last_validated: 2026-11-01
+last_validated: 2026-11-04
 title: Spec — Attention filters
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, host-registry, federated-mcp]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-02
+last_updated: 2026-11-04
 ---
 
 # Spec: Attention filters
@@ -120,6 +120,8 @@ orbit attention --task ORB-21164                        # why is this task liste
 orbit attention --all --older-than 24h --tag operator-ux
 orbit attention --all --since atc1.… --json             # a caller's later injection
 ```
+
+[ORB-21164] specified the attention filters.
 
 ## Task References
 

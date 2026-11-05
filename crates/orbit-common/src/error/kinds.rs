@@ -399,6 +399,16 @@ impl std::fmt::Display for CandidateAbsorbed {
     }
 }
 
+/// A delivery push the forge kept refusing past its retry budget, decided where
+/// the push gave up. Callers read the hold from here, never from `message`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgePushHoldFailure {
+    /// The push the forge refused.
+    pub hold: orbit_types::workflow::ForgeUnavailableHold,
+    /// The rendered message, without the `execution failed: ` prefix.
+    pub message: String,
+}
+
 /// How a failed private automation VCS operation reads, decided once where
 /// the provider's diagnostic is read rather than from a rendered message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,8 @@
 ---
 title: "Scope: Scheduled tasks (not_before)"
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-11-02
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Draft
 stage: shipped
 next: "Consumer calendar and Schedule picker in orbit-office"
@@ -200,11 +200,12 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 
 1. **Core:** the field, the `Scheduled` exclusion, the ship-by-id refusal
    with the operator override, and readiness and run-show reporting.
+   (done, [ORB-19214])
 2. **Surfaces:** the `orbit.task.list` range filter and `--scheduled`,
    the dashboard detail and an editable field, and
-   the forecast placement.
+   the forecast placement. (done, [ORB-19215])
 3. **Consumers:** orbit-office's To-dos "Schedule…" picker and calendar
-   blocks (in that repository's own docs).
+   blocks (in that repository's own docs; pending in orbit-office).
 
 ## Open questions
 

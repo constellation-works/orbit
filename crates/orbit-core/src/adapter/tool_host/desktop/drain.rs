@@ -1,6 +1,8 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
-use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
+use crate::application::job::{
+    DrainWorkerLimitChangeProfile, DrainWorkerLimitRequest, SubmissionKind,
+};
 use crate::application::workflow::drain_window_input_error;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
@@ -236,15 +238,11 @@ fn resize(
         source: "tool",
         claim_token: claim,
     })?;
-    Ok(json!({
-        "action": "resize",
-        "run_id": change.run_id,
-        "job_id": change.job_id,
-        "outcome": change.outcome,
-        "previous_concurrency": change.previous_max_active_leaf_runs,
-        "concurrency": change.max_active_leaf_runs,
-        "revision": change.revision,
-    }))
+    let mut result = change.to_json(DrainWorkerLimitChangeProfile::Standalone);
+    if let Value::Object(map) = &mut result {
+        map.shift_insert(0, "action".to_string(), json!("resize"));
+    }
+    Ok(result)
 }
 
 fn optional_u32(input: &Value, field: &str) -> Result<Option<u32>, OrbitError> {

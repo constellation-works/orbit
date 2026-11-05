@@ -1,6 +1,6 @@
 //! Audit event listing and summary tile aggregation.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use crate::state::{DashboardState, Ws};
@@ -8,21 +8,24 @@ use axum::extract::{Query, State};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
+use orbit_core::application::audit_event::{
+    AuditListingColumns, AuditListingExactIds, AuditListingHttpWindow, AuditListingPredicates,
+    AuditListingProfile,
+};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::{
-    AuditEventFilter, AuditEventStatus, AuditToolAggregate, FailureClass, FailureIncidentQuery,
+    AuditEventStatus, AuditToolAggregate, FailureClass, FailureIncidentQuery,
     FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, JobRunState, LIFECYCLE_DIAGNOSTIC_LABEL,
     OrbitError, OrbitRuntime, is_failure_only_diagnostic_surface,
 };
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
-use super::incidents::{ROLLUP_SCAN_LIMIT, agent_family_key, failure_category_summaries};
+use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
 use super::jobs::FAILED_RUN_STATES;
 use super::{
-    AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
-    HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
-    truncate_to_hour,
+    AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, bad_request, blocking,
+    map_runtime_error, server_error, truncate_to_hour,
 };
 use crate::parse::{parse_duration_seconds, parse_since};
 use crate::projections::audit_event_to_json;
@@ -33,12 +36,6 @@ use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 /// switch the tile to alert state without a second round-trip.
 const DEFAULT_DENIAL_THRESHOLD: i64 = 10;
 
-/// Largest `?offset=` accepted by `GET /audit`. SQLite walks and discards
-/// every skipped row, so an unbounded offset is an unbounded scan. Rejecting
-/// (rather than clamping) keeps a too-deep page from silently returning rows
-/// from the wrong position.
-const AUDIT_MAX_OFFSET: usize = 100_000;
-
 /// Longest `GET /audit/summary` window. Dashboard selections are `1h`, `24h`,
 /// `7d`, and `30d` (`all` falls back to 24h). A wider `since` is rejected.
 const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
@@ -47,13 +44,9 @@ const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
 /// the truncated start hour. [`build_sparkline`] never emits more than this.
 const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
-/// The incident rollup itself is bounded to this many source rows, so an
-/// exact incident drilldown never needs more IDs than this.
-const MAX_AUDIT_EVENT_IDS: usize = 10_000;
-
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
-    let event_ids = match q.ids.as_deref() {
-        Some(raw) => match parse_audit_event_ids(raw) {
+    let exact_ids = match q.ids.as_deref() {
+        Some(raw) => match AuditListingExactIds::parse_comma_separated(raw) {
             Ok(ids) => Some(ids),
             Err(message) => return bad_request(message),
         },
@@ -79,13 +72,10 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         None => None,
     };
 
-    let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    let offset = q.offset.unwrap_or(0);
-    if offset > AUDIT_MAX_OFFSET {
-        return bad_request(format!(
-            "offset must be <= {AUDIT_MAX_OFFSET}; got {offset}"
-        ));
-    }
+    let window = match AuditListingHttpWindow::from_request(q.limit, q.offset) {
+        Ok(window) => window,
+        Err(message) => return bad_request(message),
+    };
     let tool = q.tool.filter(|s| !s.is_empty());
     let role = q.role.filter(|s| !s.is_empty());
     let transport = match q
@@ -113,10 +103,9 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         None => None,
     };
 
-    let mut filter = AuditEventFilter {
+    let columns = AuditListingColumns {
         since,
         tool_name: tool,
-        target_type: None,
         status,
         role,
         workspace_id: q.workspace_id.filter(|value| !value.is_empty()),
@@ -128,64 +117,23 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         mcp_call_id: q.mcp_call.filter(|value| !value.is_empty()),
         job_run_id: q.job_run_id.filter(|value| !value.is_empty()),
         lease_id: q.lease.filter(|value| !value.is_empty()),
+    };
+    let profile = AuditListingProfile::Http {
+        window,
         before_id: q.before,
         exclude_unverified_success: q.hide_unverified.unwrap_or(false),
-        application_entry_execution_id: None,
-        limit,
-        offset,
-    };
-
-    let post_filter = AuditPostFilter {
-        agent_family: q
-            .agent_family
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(agent_family_key),
-        non_success,
-        execution_id: q
-            .execution_id
-            .as_deref()
-            .or(q.run_id.as_deref())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        profile: q
-            .profile
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        needle: q
-            .q
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_lowercase),
+        predicates: AuditListingPredicates {
+            agent_family: q.agent_family,
+            non_success,
+            execution_id: q.execution_id.or(q.run_id),
+            fs_profile: q.profile,
+            text: q.q,
+        },
+        exact_ids,
     };
 
     match blocking("audit list", move || {
-        let page = if let Some(ids) = event_ids.as_deref() {
-            AuditPage {
-                events: runtime.list_audit_events_by_ids(ids, filter.workspace_id.as_deref())?,
-                next_before: None,
-            }
-        } else if post_filter.is_empty() {
-            // Every requested predicate has a column, so the page is exactly the
-            // SQL window: no prefetch, no Rust-side slicing.
-            let events = runtime.list_audit_events_filtered(&filter)?;
-            let next_before = if events.len() >= limit {
-                events.last().map(|event| event.id)
-            } else {
-                None
-            };
-            AuditPage {
-                events,
-                next_before,
-            }
-        } else {
-            scan_audit_page(&runtime, &mut filter, &post_filter, offset, limit)?
-        };
-        Ok(page)
+        runtime.audit_listing_page(columns, profile)
     })
     .await
     {
@@ -208,176 +156,6 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
 /// cannot say whether a short page is the end or a capped scan, so the server
 /// states it.
 pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
-
-struct AuditPage {
-    events: Vec<orbit_core::AuditEvent>,
-    next_before: Option<i64>,
-}
-
-fn parse_audit_event_ids(raw: &str) -> Result<Vec<i64>, String> {
-    if raw.split(',').count() > MAX_AUDIT_EVENT_IDS {
-        return Err(format!(
-            "ids must contain at most {MAX_AUDIT_EVENT_IDS} values"
-        ));
-    }
-
-    let mut ids = Vec::new();
-    let mut seen = HashSet::new();
-    for raw_id in raw.split(',') {
-        let id = raw_id
-            .parse::<i64>()
-            .map_err(|_| "ids must be comma-separated positive audit row IDs".to_string())?;
-        if id <= 0 {
-            return Err("ids must be comma-separated positive audit row IDs".to_string());
-        }
-        if seen.insert(id) {
-            ids.push(id);
-        }
-    }
-    if ids.is_empty() {
-        return Err("ids must include at least one audit row ID".to_string());
-    }
-    Ok(ids)
-}
-
-/// Predicates without a direct store filter, applied to each fetched row in Rust.
-struct AuditPostFilter {
-    agent_family: Option<String>,
-    non_success: bool,
-    execution_id: Option<String>,
-    profile: Option<String>,
-    /// Lowercased free-text needle.
-    needle: Option<String>,
-}
-
-impl AuditPostFilter {
-    fn is_empty(&self) -> bool {
-        self.agent_family.is_none()
-            && !self.non_success
-            && self.execution_id.is_none()
-            && self.profile.is_none()
-            && self.needle.is_none()
-    }
-
-    fn matches(&self, e: &orbit_core::AuditEvent) -> bool {
-        if let Some(family) = self.agent_family.as_deref()
-            && agent_family_key(&e.role) != family
-        {
-            return false;
-        }
-        if self.non_success && e.status == AuditEventStatus::Success {
-            return false;
-        }
-        if let Some(eid) = self.execution_id.as_deref()
-            && e.execution_id != eid
-        {
-            return false;
-        }
-        if let Some(profile) = self.profile.as_deref()
-            && !arguments_json_matches_profile(e.arguments_json.as_deref(), profile)
-        {
-            return false;
-        }
-        if let Some(needle) = self.needle.as_deref() {
-            let haystacks = [
-                e.command.as_str(),
-                e.subcommand.as_deref().unwrap_or(""),
-                e.tool_name.as_deref().unwrap_or(""),
-                e.target_id.as_deref().unwrap_or(""),
-                e.target_type.as_deref().unwrap_or(""),
-                e.role.as_str(),
-                e.error_message.as_deref().unwrap_or(""),
-            ];
-            if !haystacks.iter().any(|h| h.to_lowercase().contains(needle)) {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-/// Rows a single `/api/audit` request may pull from SQLite while satisfying
-/// a Rust-side predicate. Bounds the cost of a needle that matches nothing
-/// in a long history; a page that hits the cap simply comes back short.
-const AUDIT_POST_FILTER_SCAN_CAP: usize = 10_000;
-
-/// Walk the SQL window in `HISTORY_MAX_LIMIT` batches, keeping rows that pass
-/// `post_filter`, until `offset + limit` matches are in hand, the store runs
-/// dry, or the scan cap is reached. `filter.limit`/`filter.offset` are used
-/// as scratch for the batch window. `next_before` resumes after the last row
-/// examined, so a capped scan can be continued instead of looking finished.
-fn scan_audit_page(
-    runtime: &OrbitRuntime,
-    filter: &mut AuditEventFilter,
-    post_filter: &AuditPostFilter,
-    offset: usize,
-    limit: usize,
-) -> Result<AuditPage, OrbitError> {
-    let mut to_skip = offset;
-    let mut events = Vec::new();
-    let mut scanned = 0usize;
-    let mut last_scanned_id = None;
-    let mut exhausted = false;
-    filter.limit = HISTORY_MAX_LIMIT;
-    filter.offset = 0;
-    while events.len() < limit && scanned < AUDIT_POST_FILTER_SCAN_CAP {
-        let batch = OrbitRuntime::list_audit_events_filtered(runtime, filter)?;
-        let fetched = batch.len();
-        scanned += fetched;
-        last_scanned_id = batch.last().map(|event| event.id).or(last_scanned_id);
-        // Keep only the requested page; matches before `offset` are counted,
-        // not buffered.
-        for event in batch.into_iter().filter(|e| post_filter.matches(e)) {
-            if to_skip > 0 {
-                to_skip -= 1;
-            } else if events.len() < limit {
-                events.push(event);
-            }
-        }
-        if fetched < HISTORY_MAX_LIMIT {
-            exhausted = true;
-            break;
-        }
-        filter.offset += fetched;
-    }
-    let next_before = if events.len() >= limit {
-        events.last().map(|event| event.id)
-    } else if exhausted {
-        None
-    } else {
-        last_scanned_id
-    };
-    Ok(AuditPage {
-        events,
-        next_before,
-    })
-}
-
-/// Best-effort match of a stringified `arguments_json` payload against a
-/// requested fsProfile name. Looks for any of the conventional keys
-/// (`fsProfile`, `fs_profile`, `profile`) at the top level of the parsed
-/// object. Returns `false` for malformed or empty payloads — the SQLite schema
-/// has no profile column, so absence cannot be distinguished from mismatch.
-fn arguments_json_matches_profile(raw: Option<&str>, expected: &str) -> bool {
-    let Some(raw) = raw else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return false;
-    };
-    const KEYS: &[&str] = &["fsProfile", "fs_profile", "profile"];
-    let Some(obj) = value.as_object() else {
-        return false;
-    };
-    for key in KEYS {
-        if let Some(Value::String(found)) = obj.get(*key)
-            && found == expected
-        {
-            return true;
-        }
-    }
-    false
-}
 
 pub(super) async fn audit_summary(
     State(state): State<DashboardState>,
