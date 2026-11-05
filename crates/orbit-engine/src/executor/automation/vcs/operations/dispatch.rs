@@ -44,7 +44,8 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         CI_PREREQUISITE_EVIDENCE => super::prerequisite::evidence(input),
         CI_PREREQUISITE_OBSERVE => super::prerequisite::observe(input),
         CI_COMMIT_JOBS => ci_commit_jobs(input),
-        CI_JOB_LOG => ci_job_log(input),
+        CI_JOB_LOG => serde_json::to_value(ci_job_log(input)?)
+            .map_err(|error| OrbitError::Execution(error.to_string())),
         CI_RERUN_FAILED => ci_rerun_failed(input),
         super::CI_CHECK_ANNOTATIONS => super::check_annotations::ci_check_annotations(input),
         other => Err(OrbitError::InvalidInput(format!(

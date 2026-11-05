@@ -1,6 +1,6 @@
 //! Bounded retry diagnostics bound to one provider failure and trusted source.
 use orbit_common::OrbitError;
-use orbit_tools::github_cli::{SOURCE_JOB_API_LOG, SOURCE_RUN_LOG, strip_ansi_sequences};
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -8,6 +8,7 @@ use super::super::super::ci::log_signature::log_payload;
 use super::super::completion_deadline::Deadline;
 use super::{
     ci::ci_job_log,
+    ci_log_answer::CiLogSource,
     input::{number, text},
     prerequisite::unreadable,
 };
@@ -29,7 +30,7 @@ pub(super) fn complete_job_log(
     let read = ci_job_log(
         &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":number(job,"id",unreadable)?.to_string(),"deadline_ms":deadline.0}),
     )?;
-    if read["source_complete"] != true || !read["fallback_error"].is_null() {
+    if read.source_complete != Some(true) || read.fallback_error.is_some() {
         return Err(unreadable(
             "retry diagnostic source is incomplete or unreadable; recover the complete job log",
         ));
@@ -54,24 +55,30 @@ pub(super) fn complete_job_log(
     {
         return Err(unreadable("retry failed step identity is ambiguous"));
     }
-    let (kind, selected) = if let Some(unit) = read["diagnostic"].as_str() {
+    let (kind, selected) = if let Some(unit) = read.diagnostic.as_deref() {
         ("complete_command", unit)
-    } else if read["failure_regions"].is_object() {
-        let regions = &read["failure_regions"];
-        if regions["kind"] != "runner_failure_regions"
-            || regions["command_complete"] != true
-            || regions["selection_complete"] != true
-        {
+    } else if let Some(regions) = &read.failure_regions {
+        if !regions.selection_proven() {
             return Err(unreadable(
                 "retry failure-region selection is incomplete; recover complete selected failures",
             ));
         }
         (
             "selected_failure_regions",
-            text(regions, "text", unreadable)?,
+            regions
+                .text
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| unreadable("text"))?,
         )
-    } else if read["truncated"] == false {
-        ("complete_failed_step", text(&read, "log", unreadable)?)
+    } else if read.truncated == Some(false) {
+        (
+            "complete_failed_step",
+            read.log
+                .as_deref()
+                .filter(|log| !log.is_empty())
+                .ok_or_else(|| unreadable("log"))?,
+        )
     } else {
         return Err(unreadable(
             "shortened retry display has no complete command or selected failure regions",
@@ -80,8 +87,8 @@ pub(super) fn complete_job_log(
     if selected.trim().is_empty() {
         return Err(unreadable("empty retry diagnostic"));
     }
-    let binding = match read["source"].as_str() {
-        Some(SOURCE_RUN_LOG) => {
+    let binding = match &read.source {
+        Some(CiLogSource::RunLog) => {
             for line in selected.lines() {
                 let mut columns = line.splitn(3, '\t');
                 if columns.next() != Some(text(job, "name", unreadable)?)
@@ -95,17 +102,14 @@ pub(super) fn complete_job_log(
             }
             json!({"kind":"provider_columns","step":step})
         }
-        Some(SOURCE_JOB_API_LOG) => {
-            let jobs = read["source_jobs"]
-                .as_array()
-                .ok_or_else(|| unreadable("fallback source jobs"))?;
-            let [observed] = jobs.as_slice() else {
+        Some(CiLogSource::JobApiLog) => {
+            let [observed] = read.source_jobs.as_slice() else {
                 return Err(unreadable("fallback log has no unique source job"));
             };
-            if observed["job_id"] != job["id"]
-                || ["name", "status", "conclusion"]
-                    .iter()
-                    .any(|field| observed[field] != job[field])
+            if !observed.job_id.matches_legacy(&job["id"])
+                || !observed.name.matches_legacy(&job["name"])
+                || !observed.status.matches_legacy(&job["status"])
+                || !observed.conclusion.matches_legacy(&job["conclusion"])
             {
                 return Err(unreadable("fallback source differs from the provider job"));
             }
@@ -117,7 +121,7 @@ pub(super) fn complete_job_log(
                     "raw fallback needs a unique complete failing command; step columns are unavailable",
                 ));
             }
-            let display = read["diagnostic_command"].as_str().ok_or_else(|| unreadable("raw fallback lacks a complete unique failing-command display; recover step-column logs"))?;
+            let display = read.diagnostic_command.as_deref().ok_or_else(|| unreadable("raw fallback lacks a complete unique failing-command display; recover step-column logs"))?;
             let mut binding = workflow_command_binding(source, job, step, display)?;
             binding["provider_timing"] = raw_step_timing(
                 job,
@@ -130,11 +134,11 @@ pub(super) fn complete_job_log(
         }
         _ => return Err(unreadable("unknown retry diagnostic source")),
     };
-    let mut regions = read["failure_regions"].clone();
-    if let Some(regions) = regions.as_object_mut() {
-        regions.remove("text");
-    }
-    let proof = json!({"kind":kind,"source":read["source"],"source_complete":true,"display_truncated":read["truncated"],"source_bytes":read["source_bytes"],"run_id":run_id,"job_id":job["id"],"source_jobs":read["source_jobs"],"diagnostic_command":read["diagnostic_command"],"failure_regions":regions,"binding":binding});
+    let regions = read
+        .failure_regions
+        .as_ref()
+        .map(|regions| regions.audit_wire());
+    let proof = json!({"kind":kind,"source":read.source,"source_complete":true,"display_truncated":read.truncated,"source_bytes":read.source_bytes,"run_id":run_id,"job_id":job["id"],"source_jobs":read.source_jobs,"diagnostic_command":read.diagnostic_command,"failure_regions":regions,"binding":binding});
     // Keep raw bounded evidence for audit and for the command/quoted-record
     // classifier. Removing prefixes before classification can reinterpret tabs.
     Ok(RetryJobLog {
