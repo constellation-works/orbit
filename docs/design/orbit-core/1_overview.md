@@ -274,7 +274,9 @@ and job edges that had regrown past the fixed-name guard (all but
   through `pull_drain::drain::PullTransportPort`, both implemented on `OrbitRuntime` by
   the adapter; the adapter's inherent tool methods stay for its own callers. A
   bare `name(` is a free function, not an up-call, so only `receiver.name(`,
-  `OrbitRuntime::name(` and `Self::name(` are checked. Same-named methods on
+  `OrbitRuntime::name(`, `Self::name(` and the qualified-self forms
+  `<OrbitRuntime>::name(` and `<crate::OrbitRuntime>::name(` are checked
+  [ORB-22159]. Same-named methods on
   other receivers (the skill catalog's `doctor`, the plugin store's
   `list_plugins`) are exact-line allowances. [ORB-22005] It also fails when
   `application` or `adapter` names `crate::bootstrap` or `crate::composition` by

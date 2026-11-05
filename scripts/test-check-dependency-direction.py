@@ -97,6 +97,48 @@ class RelativeImportTests(unittest.TestCase):
                         "        self.fresh_owner_method();\n    }\n}\n",
                 }, rejected=True)
 
+    def test_qualified_self_inherent_calls_rejected(self):
+        # [ORB-22159] `<OrbitRuntime>::name(` names the same inherent method as
+        # `OrbitRuntime::name(`, but the guard's previous-token filter skipped
+        # it. The existing receiver and path forms stay refused beside it.
+        forms = (
+            "<OrbitRuntime>::fresh_owner_method(self)",
+            "<crate::OrbitRuntime>::fresh_owner_method(self)",
+            "<Self>::fresh_owner_method(self)",
+            "OrbitRuntime::fresh_owner_method(self)",
+            "crate::OrbitRuntime::fresh_owner_method(self)",
+            "Self::fresh_owner_method(self)",
+            "self.fresh_owner_method()",
+        )
+        for owner, caller in (
+            ("job/state.rs", "task/worker.rs"),
+            ("../adapter/state.rs", "task_quality/runtime.rs"),
+        ):
+            for call in forms:
+                with self.subTest(owner=owner, call=call):
+                    self.check_files({
+                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
+                        caller: "impl OrbitRuntime {\n    pub(crate) fn drive(&self) {\n"
+                                f"        {call};\n    }}\n}}\n",
+                    }, rejected=True)
+
+    def test_bare_and_other_type_calls_to_inherent_names_accepted(self):
+        for owner, caller in (
+            ("job/state.rs", "task/worker.rs"),
+            ("../adapter/state.rs", "task_quality/runtime.rs"),
+        ):
+            for call in (
+                "fresh_owner_method(runtime)",
+                "<Other>::fresh_owner_method(runtime)",
+                "Vec::<OrbitRuntime>::fresh_owner_method(runtime)",
+            ):
+                with self.subTest(owner=owner, call=call):
+                    self.check_files({
+                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
+                        caller: "fn drive(runtime: &OrbitRuntime) {\n"
+                                f"    {call};\n}}\n",
+                    }, rejected=False)
+
     def test_paths_into_bootstrap_and_composition_rejected(self):
         for layer, relative in (("application", "workspace/sync.rs"),
                                 ("adapter", "../adapter/tool_host/operation.rs")):
