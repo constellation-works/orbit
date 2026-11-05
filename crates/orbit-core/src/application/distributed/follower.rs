@@ -36,6 +36,11 @@
 //! A drain submitted without a window (`for_seconds` zero) is authorized for
 //! exactly one admission pass, which its run state records as consumed before
 //! that pass sends a request ([`PullSinglePass`]).
+//!
+//! [`WorkspacePullRequest`] holds only the settings a pull drain accepts, so
+//! the options it refuses are decided beside it for the surfaces that collect
+//! them: the CLI's parser declares [`PULL_START_CONFLICT_ARG_IDS`], and the
+//! dashboard asks [`PullStartOptionsSupplied::pull_start_refusal`].
 
 use std::collections::BTreeMap;
 
@@ -70,6 +75,136 @@ pub struct WorkspacePullRequest<'a> {
     /// means every crew the window can run.
     pub allowed_crews: &'a [String],
     pub actor: Option<&'a str>,
+}
+
+/// One start option that cannot sit beside `--pull`: its CLI argument id, its
+/// usage as the CLI's parser prints it, and whether a start supplied it.
+struct PullStartConflict {
+    arg_id: &'static str,
+    usage: &'static str,
+    supplied: fn(&PullStartOptionsSupplied) -> bool,
+}
+
+/// Every option a pull drain refuses beside `--pull`, in refusal order. A
+/// local drain's settings have no meaning on a claim the owner decides.
+const PULL_START_CONFLICTS: [PullStartConflict; 10] = [
+    PullStartConflict {
+        arg_id: "auto_concurrency",
+        usage: "--auto-concurrency <MODE>",
+        supplied: |options| options.auto_concurrency,
+    },
+    PullStartConflict {
+        arg_id: "complete",
+        usage: "--complete",
+        supplied: |options| options.complete,
+    },
+    PullStartConflict {
+        arg_id: "approve_proposed",
+        usage: "--approve-proposed",
+        supplied: |options| options.approve_proposed,
+    },
+    PullStartConflict {
+        arg_id: "auto_fix",
+        usage: "--auto-fix",
+        supplied: |options| options.auto_fix,
+    },
+    PullStartConflict {
+        arg_id: "strict_worker_containment",
+        usage: "--strict-worker-containment",
+        supplied: |options| options.strict_worker_containment,
+    },
+    PullStartConflict {
+        arg_id: "low_complexity_crews",
+        usage: "--low-complexity-crews [<CREW>...]",
+        supplied: |options| options.low_complexity_crews,
+    },
+    PullStartConflict {
+        arg_id: "medium_complexity_crews",
+        usage: "--medium-complexity-crews [<CREW>...]",
+        supplied: |options| options.medium_complexity_crews,
+    },
+    PullStartConflict {
+        arg_id: "hard_complexity_crews",
+        usage: "--hard-complexity-crews [<CREW>...]",
+        supplied: |options| options.hard_complexity_crews,
+    },
+    PullStartConflict {
+        arg_id: "xhard_complexity_crews",
+        usage: "--xhard-complexity-crews [<CREW>...]",
+        supplied: |options| options.xhard_complexity_crews,
+    },
+    PullStartConflict {
+        arg_id: "claim_token",
+        usage: "--claim-token <CLAIM_TOKEN>",
+        supplied: |options| options.claim_token,
+    },
+];
+
+/// The argument ids of every option refused beside `--pull`, for a parser to
+/// declare, so its syntactic refusal comes before any owner lookup.
+pub const PULL_START_CONFLICT_ARG_IDS: [&str; PULL_START_CONFLICTS.len()] = {
+    let mut ids = [""; PULL_START_CONFLICTS.len()];
+    let mut index = 0;
+    while index < ids.len() {
+        ids[index] = PULL_START_CONFLICTS[index].arg_id;
+        index += 1;
+    }
+    ids
+};
+
+/// The argument id `--host` requires: it names the owner of a `--pull` and
+/// means nothing without one.
+pub const PULL_START_HOST_REQUIRES_ARG_ID: &str = "pull";
+
+/// `--pull` as the CLI's parser prints it, for a surface repeating its words.
+const PULL_ARG_USAGE: &str = "--pull <SELECTOR>";
+
+/// Which options a start supplied. Presence is what counts: a supplied empty
+/// crew pool or claim token is supplied, and a flag left at its default is not.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PullStartOptionsSupplied {
+    pub pull: bool,
+    pub host: bool,
+    pub auto_concurrency: bool,
+    pub complete: bool,
+    pub approve_proposed: bool,
+    pub auto_fix: bool,
+    pub strict_worker_containment: bool,
+    pub low_complexity_crews: bool,
+    pub medium_complexity_crews: bool,
+    pub hard_complexity_crews: bool,
+    pub xhard_complexity_crews: bool,
+    pub claim_token: bool,
+    pub review: bool,
+}
+
+impl PullStartOptionsSupplied {
+    /// Why these options cannot start, in the words of `orbit run auto`, for a
+    /// surface with no argument parser. It decides from the input alone, so a
+    /// caller checks it before any owner lookup.
+    pub fn pull_start_refusal(&self) -> Option<String> {
+        if !self.pull {
+            return self.host.then(|| {
+                format!("the following required arguments were not provided: {PULL_ARG_USAGE}")
+            });
+        }
+        if let Some(conflict) = PULL_START_CONFLICTS
+            .iter()
+            .find(|conflict| (conflict.supplied)(self))
+        {
+            return Some(format!(
+                "the argument '{PULL_ARG_USAGE}' cannot be used with '{}'",
+                conflict.usage
+            ));
+        }
+        pull_start_review_refusal(self.review).map(ToOwned::to_owned)
+    }
+}
+
+/// Why a pull drain refuses a review request, when one was made. The CLI asks
+/// this after its owner preflight, once its parser has refused the conflicts.
+pub fn pull_start_review_refusal(review_requested: bool) -> Option<&'static str> {
+    review_requested.then(crate::application::review::pull_review_request_refusal)
 }
 
 impl crate::OrbitRuntime {

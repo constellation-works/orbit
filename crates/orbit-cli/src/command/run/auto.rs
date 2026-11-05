@@ -1,6 +1,9 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
+use orbit_core::application::distributed::{
+    PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, pull_start_review_refusal,
+};
 use orbit_core::application::job::{DrainAdmissionsStopOutcome, SubmissionKind};
 use orbit_core::{
     CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
@@ -68,11 +71,11 @@ pub struct AutoCommand {
     #[arg(
         long,
         value_name = "SELECTOR",
-        conflicts_with_all = ["auto_concurrency", "complete", "approve_proposed", "auto_fix", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+        conflicts_with_all = PULL_START_CONFLICT_ARG_IDS
     )]
     pub pull: Option<String>,
     /// Owner host for `--pull <workspace>` (name or `machine_id`).
-    #[arg(long, value_name = "HOST", requires = "pull")]
+    #[arg(long, value_name = "HOST", requires = PULL_START_HOST_REQUIRES_ARG_ID)]
     pub host: Option<String>,
     /// Workspace claim token (default: `ORBIT_WORKSPACE_CLAIM_TOKEN`).
     #[arg(long)]
@@ -91,10 +94,8 @@ impl Execute for AutoCommand {
             return execute_stop(runtime, self.claim_token.as_deref());
         }
         if let Some(selector) = self.pull.as_deref() {
-            if self.review.is_some() {
-                return Err(orbit_core::OrbitError::InvalidInput(
-                    orbit_core::application::review::pull_review_request_refusal().into(),
-                ));
+            if let Some(refusal) = pull_start_review_refusal(self.review.is_some()) {
+                return Err(orbit_core::OrbitError::InvalidInput(refusal.into()));
             }
             let for_seconds = self
                 .for_duration
