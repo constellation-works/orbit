@@ -923,7 +923,7 @@ see the caller-side implementation status in design §3.
 - [ORB-14791] — added a verified clean-base checkpoint for claimed no-diff-expected tasks.
 - [ORB-14849] — added before-landing review against the published PR head.
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
-- [ORB-15106] — held the admission section on the exclusive host lock, stalling every partition's ordinary work while admission runs.
+- [ORB-15106] — removed host-wide stalls for partition-local admission: it runs under a shared host lock with the candidate's partition held exclusively, and only a decision reading another partition's dependency keeps the host-wide section.
 - [ORB-15192] — made before-landing review selectable by executor machine.
 - [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
 - [ORB-15514] — reserved owner-admitted wave footprints before leaf dispatch.
