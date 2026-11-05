@@ -96,6 +96,35 @@ pub struct DrainWorkerLimitChange {
     pub revision: u32,
 }
 
+/// Compatibility profile for a worker-ceiling change's JSON response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainWorkerLimitChangeProfile {
+    /// The CLI concurrency and MCP resize record, including run and job IDs.
+    Standalone,
+    /// The concurrency record nested in a window extension, without IDs.
+    Nested,
+}
+
+impl DrainWorkerLimitChange {
+    /// Project the shared response fields in their existing wire order.
+    /// Surface-specific envelopes, such as MCP's action, stay with the caller.
+    #[must_use]
+    pub fn to_json(&self, profile: DrainWorkerLimitChangeProfile) -> Value {
+        let mut value = match profile {
+            DrainWorkerLimitChangeProfile::Standalone => json!({
+                "run_id": self.run_id,
+                "job_id": self.job_id,
+            }),
+            DrainWorkerLimitChangeProfile::Nested => json!({}),
+        };
+        value["outcome"] = json!(self.outcome);
+        value["previous_concurrency"] = json!(self.previous_max_active_leaf_runs);
+        value["concurrency"] = json!(self.max_active_leaf_runs);
+        value["revision"] = json!(self.revision);
+        value
+    }
+}
+
 impl OrbitRuntime {
     /// Set the live worker ceiling of an auto or pull drain that is still
     /// running.

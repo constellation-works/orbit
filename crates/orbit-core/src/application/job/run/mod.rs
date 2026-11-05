@@ -82,4 +82,7 @@ pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
 };
 pub(crate) use window_extension::{drain_deadline, pull_window_closed};
-pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitOutcome, DrainWorkerLimitRequest};
+pub use worker_limit::{
+    DrainWorkerLimitChange, DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome,
+    DrainWorkerLimitRequest,
+};
