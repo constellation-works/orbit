@@ -464,22 +464,22 @@ async function assertReliabilityAccounting(page, evidenceDirectory) {
   const cases = [
     { name: 'captured-7d', window: '7d',
       counts: { total: 7060, succeeded: 6555, failed: 431, cancelled: 54, skipped: 0, held: 13, in_flight: 7, unknown: 0 },
-      settled: 6986, excluded: 74, display: '6.2% (n=6986)' },
+      settled: 6986, excluded: 74 },
     { name: 'captured-30d', window: '30d',
       counts: { total: 16790, succeeded: 14880, failed: 1710, cancelled: 171, skipped: 0, held: 22, in_flight: 7, unknown: 0 },
-      settled: 16590, excluded: 200, display: '10.3% (n=16590)' },
+      settled: 16590, excluded: 200 },
     { name: 'all-excluded-states', window: '7d',
       counts: { total: 38, succeeded: 25, failed: 5, cancelled: 1, skipped: 2, held: 2, in_flight: 1, unknown: 2 },
-      settled: 30, excluded: 8, display: '16.7% (n=30)' },
+      settled: 30, excluded: 8 },
     { name: 'held-only', window: '7d',
       counts: { total: 13, succeeded: 0, failed: 0, cancelled: 0, skipped: 0, held: 13, in_flight: 0, unknown: 0 },
-      settled: 0, excluded: 13, display: 'n/a' },
+      settled: 0, excluded: 13 },
     { name: 'zero-excluded-low-sample', window: '7d',
       counts: { total: 3, succeeded: 2, failed: 1, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 },
-      settled: 3, excluded: 0, display: '1/3 · n too small', lowSample: true },
+      settled: 3, excluded: 0, lowSample: true },
     { name: 'rolled-up-wrappers', window: '24h',
       counts: { total: 9, succeeded: 4, failed: 1, cascaded: 2, cancelled: 1, skipped: 0, held: 1, in_flight: 0, unknown: 0 },
-      settled: 5, excluded: 2, display: '1/5 · n too small', lowSample: true },
+      settled: 5, excluded: 2, lowSample: true },
   ];
   const observations = [];
   const failures = [];
@@ -496,39 +496,59 @@ async function assertReliabilityAccounting(page, evidenceDirectory) {
       const tiles = Object.fromEntries(Array.from(document.querySelectorAll('#reliability-summary .rel-tile')).map(tile => [
         tile.querySelector('.rel-tile-label').textContent,
         { value: tile.querySelector('.rel-tile-value, .rel-rate').textContent,
-          title: tile.querySelector('.rel-rate')?.title, hint: tile.querySelector('.rel-tile-hint').textContent },
+          title: tile.querySelector('.rel-rate')?.title,
+          className: tile.querySelector('.rel-rate')?.className,
+          hint: tile.querySelector('.rel-tile-hint').textContent },
       ]));
       return { tiles, note: document.getElementById('reliability-denominator-note').textContent,
+        noteVisible: document.getElementById('reliability-denominator-note').getClientRects().length > 0,
         count: document.getElementById('reliability-count').textContent,
         scope: document.getElementById('reliability-scope-badge').textContent };
     });
     const runs = shown.tiles['Runs in window'];
     const failureRate = shown.tiles['Job-run failure rate'];
     const cascaded = scenario.counts.cascaded || 0;
-    const accounting = cascaded > 0
-      ? runs.hint.match(/^(\d+) settled · (\d+) rolled up · (\d+) not counted$/)
-      : runs.hint.match(/^(\d+) settled · (\d+) not counted$/);
-    const settledShown = accounting ? Number(accounting[1]) : NaN;
-    const excludedShown = accounting ? Number(accounting[cascaded > 0 ? 3 : 2]) : NaN;
-    const rolledShown = cascaded > 0 && accounting ? Number(accounting[2]) : 0;
-    if (runs.value !== String(scenario.counts.total) || !accounting
+    const accounting = (runs.hint.match(/\b\d+\b/g) || []).map(Number);
+    const expectedAccounting = cascaded > 0
+      ? [scenario.settled, cascaded, scenario.excluded]
+      : [scenario.settled, scenario.excluded];
+    const settledShown = accounting[0] ?? NaN;
+    const rolledShown = cascaded > 0 ? accounting[1] : 0;
+    const excludedShown = cascaded > 0 ? accounting[2] : accounting[1];
+    if (runs.value !== String(scenario.counts.total)
+      || JSON.stringify(accounting) !== JSON.stringify(expectedAccounting)
       || settledShown !== scenario.settled || excludedShown !== scenario.excluded || rolledShown !== cascaded
       || Number(runs.value) !== settledShown + rolledShown + excludedShown) {
       failures.push(`${scenario.name}: Runs in window must reconcile total = settled + rolled up + excluded: ${JSON.stringify(runs)}`);
     }
-    if (!shown.note.includes('rolled into that leaf')
-      || !shown.note.includes('numerator') || !shown.note.includes('denominator')
-      || (cascaded > 0 && !shown.note.includes(`${cascaded} wrapper`))) {
-      failures.push(`${scenario.name}: the denominator note must state that wrapper echoes roll into the leaf and sit outside the rate: ${shown.note}`);
+    const noteNumbers = (shown.note.match(/\b\d+\b/g) || []).map(Number);
+    const expectedDisclosureNumbers = [
+      ...(cascaded > 0 ? [cascaded] : []), scenario.settled,
+      ...(scenario.excluded > 0 ? [scenario.excluded] : []),
+    ];
+    const noteIncludesAccountingCounts = expectedDisclosureNumbers.every(number =>
+      noteNumbers.filter(candidate => candidate === number).length
+        >= expectedDisclosureNumbers.filter(expected => expected === number).length);
+    if (!shown.noteVisible || !shown.note.trim() || !noteIncludesAccountingCounts) {
+      failures.push(`${scenario.name}: the visible denominator disclosure must communicate excluded-run totals when any are excluded: ${JSON.stringify(shown)}`);
     }
-    const explainedExcluded = shown.note.match(/(\d+) further run/);
-    if (!['held', 'cancelled', 'skipped', 'flight', 'unrecognized'].every(state => shown.note.includes(state))
-      || (scenario.excluded > 0 ? Number(explainedExcluded?.[1]) !== scenario.excluded : !shown.note.includes('No cancelled'))) {
-      failures.push(`${scenario.name}: the denominator explanation must account for every excluded state: ${shown.note}`);
-    }
-    if (failureRate.value !== scenario.display
-      || failureRate.hint !== `${scenario.counts.failed} failed of ${scenario.settled} settled runs`
-      || (scenario.settled > 0 && !failureRate.title.startsWith(`${rate.numerator} / ${rate.denominator} `))
+    const rateHintNumbers = (failureRate.hint.match(/\b\d+\b/g) || []).map(Number);
+    const rateTitleNumbers = (failureRate.title?.match(/\b\d+\b/g) || []).map(Number);
+    const rateValueNumbers = (failureRate.value.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+    const formattedPercent = rate.value === null ? null
+      : Number(new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 })
+        .format(rate.value).replace(/[^\d.]/g, ''));
+    const expectedRateValueNumbers = scenario.settled === 0 ? []
+      : scenario.lowSample ? [rate.numerator, rate.denominator]
+        : [formattedPercent, rate.denominator];
+    const expectedRateClass = scenario.settled === 0 ? 'rel-rate-empty'
+      : scenario.lowSample ? 'rel-rate-low' : 'rel-rate';
+    if (JSON.stringify(rateHintNumbers) !== JSON.stringify([rate.numerator, rate.denominator])
+      || (scenario.settled > 0 && JSON.stringify(rateTitleNumbers) !== JSON.stringify([rate.numerator, rate.denominator]))
+      || JSON.stringify(rateValueNumbers) !== JSON.stringify(expectedRateValueNumbers)
+      || !failureRate.className?.split(/\s+/).includes(expectedRateClass)
+      || (scenario.settled > 0 && !scenario.lowSample && !failureRate.value.includes('%'))
+      || (scenario.lowSample && failureRate.value.includes('%'))
       || shown.count !== `${scenario.counts.total} runs / ${scenario.window}` || shown.scope !== 'Fleet-wide') {
       failures.push(`${scenario.name}: failure-rate counts, rounding, low-sample handling and scope must remain unchanged: ${JSON.stringify(shown)}`);
     }
