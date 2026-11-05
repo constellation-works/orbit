@@ -512,6 +512,26 @@ for top in upper:
                         k += 1
                     i = k
             i += 1
+identifier = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*")
+def qualified_type(toks, end):
+    """The type that the `::` after `toks[end]` qualifies, or None.
+
+    `Type::` and `<Type>::` (or `<path::Type>::`) name the type; `<Type>` is
+    the qualified-self form. A turbofish (`Vec::<T>::`) names `Vec`, not `T`.
+    """
+    if end < 0:
+        return None
+    if toks[end][0] != ">":
+        return toks[end][0]
+    k = end - 1
+    if k < 0 or not identifier.fullmatch(toks[k][0]):
+        return None
+    name = toks[k][0]
+    while k >= 2 and toks[k - 1][0] == "::" and identifier.fullmatch(toks[k - 2][0]):
+        k -= 2
+    if k >= 1 and toks[k - 1][0] == "<" and not (k >= 2 and toks[k - 2][0] == "::"):
+        return name
+    return None
 failed = False
 for path, rel in production(app / module, app):
     if any(str(rel).startswith(e) for e in exempt):
@@ -525,11 +545,12 @@ for path, rel in production(app / module, app):
         nxt = toks[i + 1][0]
         if nxt != "(" and not (nxt == "::" and i + 2 < len(toks) and toks[i + 2][0] == "<"):
             continue
-        # An inherent method is reached by `receiver.name(` or `OrbitRuntime::name(`
-        # (or `Self::`); a bare `name(` is a free function, which the path checks
-        # already cover, so it is not an up-call.
+        # An inherent method is reached by `receiver.name(`, `OrbitRuntime::name(`
+        # (or `Self::`), or the qualified-self form `<OrbitRuntime>::name(` and
+        # `<crate::OrbitRuntime>::name(` [ORB-22159]. A bare `name(` is a free
+        # function, which the path checks already cover, so it is not an up-call.
         prev = toks[i - 1][0]
-        if prev != "." and not (prev == "::" and i >= 2 and toks[i - 2][0] in ("OrbitRuntime", "Self")):
+        if prev != "." and not (prev == "::" and qualified_type(toks, i - 2) in ("OrbitRuntime", "Self")):
             continue
         number = source.count("\n", 0, start) + 1
         hit = f"{rel}:{number}:{lines[number - 1]}"
