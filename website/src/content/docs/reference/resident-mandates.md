@@ -18,7 +18,7 @@ orbit task artifact put <task id> ./mandate.json --path resident/mandate.json
 
 Use the ID of the new task in place of `<task id>`.
 
-The dashboard's **Automation › Residents** view does both steps in one: its form takes the mandate fields, checks them with the same rules as below, and creates nothing when a field is refused. See [From the dashboard](#from-the-dashboard).
+The dashboard's **Automation › Residents** view does both steps in one: its **Start a resident** flow takes the mandate fields, checks them with the same rules as below, and creates nothing when a field is refused. The same flow can also grant rights and turn the cycle routine on, as up to three separate writes; if a later write is refused, the message names the step and says what already exists. See [From the dashboard](#from-the-dashboard).
 
 ## Mandate format
 
