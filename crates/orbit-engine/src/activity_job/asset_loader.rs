@@ -8,7 +8,8 @@ use orbit_types::workflow::SchemaHeader;
 use orbit_types::workflow::activity_job::job_v2::AUTO_TASK_WAIT_KEYS;
 use orbit_types::workflow::activity_job::{
     ASSET_SCHEMA_VERSION, AUTO_TASK_JOB_SCHEMA_VERSION, AUTO_TASK_REF_PREFIX, ActivityV2,
-    ActivityV2Spec, TrustedHostActivityError, validate_trusted_host_activity,
+    ActivityV2Spec, ResponseCorrectionActivityError, TrustedHostActivityError,
+    validate_response_correction_activity, validate_trusted_host_activity,
 };
 
 fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
@@ -75,6 +76,11 @@ pub enum AssetLoadError {
     },
     #[error(transparent)]
     TrustedHostActivity(#[from] TrustedHostActivityError),
+    #[error("activity `{activity}` response_correction invalid: {source}")]
+    ResponseCorrection {
+        activity: String,
+        source: ResponseCorrectionActivityError,
+    },
 }
 
 /// Activity-asset loader for schemaVersion 2 assets.
@@ -98,6 +104,14 @@ pub fn load_activity_asset(yaml: &str) -> Result<ActivityAsset, AssetLoadError> 
         &res.metadata.name,
         matches!(&res.spec.spec, ActivityV2Spec::AgentLoop(spec) if spec.trusted_host_execution),
     )?;
+    // A correction is a repeated invocation, so it is legal only where
+    // repeating one cannot repeat a mutation. [ORB-22426]
+    validate_response_correction_activity(&res.spec).map_err(|source| {
+        AssetLoadError::ResponseCorrection {
+            activity: res.metadata.name.clone(),
+            source,
+        }
+    })?;
     Ok(ActivityAsset {
         name: res.metadata.name,
         spec: res.spec,

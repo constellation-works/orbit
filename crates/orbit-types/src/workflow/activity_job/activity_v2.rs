@@ -181,6 +181,18 @@ pub struct AgentLoopSpec {
     /// that budget or changes what the step's success means.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete_continuation: Option<IncompleteContinuationPolicy>,
+    /// Bounded correction of a reply whose envelope says `success` and also
+    /// carries an `error` object, which the response parser rejects
+    /// [ORB-22426]. Absent, that reply fails the step. Present, the runner may
+    /// start a fresh invocation with the same crew, tools and sandbox, inside
+    /// the unspent part of this activity's wall-clock budget, and only a newly
+    /// valid reply succeeds. Asset load admits it only on a read-only activity
+    /// ([`validate_response_correction_activity`]), so a repeated invocation
+    /// cannot repeat a mutation.
+    ///
+    /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_correction: Option<ResponseCorrectionPolicy>,
     /// Program allowlist enforced before `proc.spawn` executes a request.
     /// An empty `Some(vec![])` denies every program (fail-closed).
     ///
@@ -234,6 +246,18 @@ pub struct IncompleteContinuationPolicy {
     pub max_rounds: u32,
     /// Unspent wall-clock budget, in seconds, a continuation needs before it
     /// may start. A smaller remainder keeps the declared failure.
+    pub min_remaining_seconds: u64,
+}
+
+/// Bounds on [`AgentLoopSpec::response_correction`] [ORB-22426].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseCorrectionPolicy {
+    /// Most correction invocations one step dispatch may start after its
+    /// first. Zero admits none.
+    pub max_rounds: u32,
+    /// Unspent wall-clock budget, in seconds, a correction needs before it may
+    /// start. A smaller remainder keeps the rejected reply's failure.
     pub min_remaining_seconds: u64,
 }
 

@@ -86,6 +86,7 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     };
 
     let outcome = dispatch_v2_activity(V2DispatchInput {

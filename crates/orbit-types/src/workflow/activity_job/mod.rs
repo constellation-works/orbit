@@ -29,6 +29,7 @@ pub mod audit_envelope;
 pub mod explore;
 pub mod job_v2;
 pub mod provider_sandbox;
+pub mod response_correction;
 pub mod retired;
 pub mod schema_header;
 pub mod script;
@@ -205,8 +206,8 @@ pub use activity_v2::{
     OnDenial, Provider, ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint,
     ProviderIdentity, ProviderParseError, ProviderResolution, ProviderResolveRequest,
     ProviderSource, RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION,
-    RetiredAgentBackend, check_retired_backend_value, requires_native_inspection,
-    retired_provider_id,
+    ResponseCorrectionPolicy, RetiredAgentBackend, check_retired_backend_value,
+    requires_native_inspection, retired_provider_id,
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
@@ -218,6 +219,9 @@ pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobStage, JobTaskDelivery, JobV2, JobV2Step,
     JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, SteeringGateSpec,
     TargetRef, TargetStep,
+};
+pub use response_correction::{
+    ResponseCorrectionActivityError, validate_response_correction_activity,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;

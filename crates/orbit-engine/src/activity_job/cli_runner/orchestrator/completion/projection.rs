@@ -9,16 +9,19 @@ use super::super::super::response_diagnostics::{
 use super::super::super::spawn_diagnostics::linux_bwrap_failed_write_diagnostic;
 use super::super::super::stdout_preview::{
     BoundedMessage, FINAL_MESSAGE_LIMIT_BYTES, STDOUT_TEXT_PREVIEW_LIMIT_BYTES, StdoutTextPreview,
-    bounded_assistant_message, stdout_text_preview,
+    bounded_assistant_message, bounded_redacted_text, stdout_text_preview,
 };
 use super::super::limit::{record_limit, record_usage_windows, structured_provider_limit};
 use super::ProviderExit;
 use super::failure;
-use super::frames::{structured_provider_auth_error, structured_provider_refusal};
+use super::frames::{
+    provider_reported_failure, structured_provider_auth_error, structured_provider_refusal,
+};
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
 use orbit_agent::{
-    ParsedStdout, assign_recorded_tool_calls, muse_terminal_failure_diagnostic,
-    normalize_cli_stdout, project_cli_response, provider_long_prompt_requests,
+    ParsedStdout, assign_recorded_tool_calls, is_success_carrying_error_violation,
+    muse_terminal_failure_diagnostic, normalize_cli_stdout, project_cli_response,
+    provider_long_prompt_requests,
 };
 use orbit_common::security::redaction::redact_all_json;
 use serde_json::Value;
@@ -215,6 +218,41 @@ pub(in super::super) fn project_completion(
         })
         .flatten();
 
+    // [ORB-22426] The reply the parser rejected for saying `success` and
+    // carrying `error`, read only when that rejection is the step's sole
+    // failure. `parsed_result` exists only for a clean exit. Any failure frame
+    // the provider wrote, even one no reader above recognizes, rules it out:
+    // the turn may have ended for that reason rather than for its formatting.
+    // The correction loop in the dispatch entry decides admission.
+    let response_correction_request = (spec.response_correction.is_some()
+        && spec.require_response_envelope
+        && provider_auth_error.is_none()
+        && provider_refusal.is_none()
+        && provider_limit.is_none()
+        && muse_terminal_failure.is_none()
+        && !completion_protocol_violation
+        && !print_timeout_reached
+        && !completion_status_failure
+        && !provider_reported_failure(&provider, stdout.protocol_bytes())
+        && matches!(
+            parsed_result.as_ref(),
+            Some(Err(error)) if is_success_carrying_error_violation(error)
+        ))
+    .then(|| answer_parsed.peek_response_envelope())
+    .flatten()
+    .map(|reply| {
+        let reply = bounded_redacted_text(
+            &reply.to_string(),
+            redaction,
+            false,
+            FINAL_MESSAGE_LIMIT_BYTES,
+        );
+        serde_json::json!({
+            "rejected_reply": reply.text,
+            "rejected_reply_truncated": reply.truncated,
+        })
+    });
+
     // A conflict-recovery provider repairs files only. Once its process has
     // satisfied the activity completion contract, the host-side boundary
     // independently revalidates live ownership, stages the resolved conflict
@@ -374,6 +412,12 @@ pub(in super::super) fn project_completion(
                 Value::Null,
                 |request| serde_json::json!({ "remaining_work": request.remaining_work }),
             ),
+        );
+    }
+    if spec.response_correction.is_some() {
+        output.insert(
+            super::super::response_correction::REQUEST_OUTPUT_KEY.into(),
+            response_correction_request.unwrap_or(Value::Null),
         );
     }
     output.insert(

@@ -167,6 +167,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     }
 }
 

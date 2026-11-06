@@ -23,6 +23,7 @@ use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::dispatch::dispatch_cli_invocation;
 use super::prepare::{invocation_timeout_seconds, trusted_host_admission};
+use super::response_correction;
 use crate::context::RuntimeHost;
 
 /// Orbit-owned step output key carrying the typed request the projection
@@ -83,11 +84,20 @@ pub(crate) fn run_cli_backend_for_step(
             fs_profile,
         )
     };
-    let mut outcome = invoke(spec, input)?;
-    let Some(policy) = spec.incomplete_continuation else {
-        return Ok(outcome);
+    // The superseded invocation's usage is still spent by this step; the
+    // executor persists only the trace of the outcome it receives.
+    let persist_superseded_trace = |outcome: &DispatchOutcome| {
+        if let Some(invocation) = outcome.invocation.as_ref()
+            && let Err(error) = host.persist_invocation_trace(run_id, step_id, input, invocation)
+        {
+            audit.note_telemetry_failure("invocation_trace", Some(step_id), &error);
+        }
     };
-    // The budget the first invocation was admitted with. Continuations
+    let mut outcome = invoke(spec, input)?;
+    if spec.incomplete_continuation.is_none() && spec.response_correction.is_none() {
+        return Ok(outcome);
+    }
+    // The budget the first invocation was admitted with. Later invocations
     // spend what it left; build-admission waits never refill it.
     let trusted_host = trusted_host_admission(spec, activity_name, input)?;
     let budget = Duration::from_secs(invocation_timeout_seconds(
@@ -96,6 +106,23 @@ pub(crate) fn run_cli_backend_for_step(
         trusted_host.as_ref(),
         input,
     ));
+    if let Some(policy) = spec.response_correction {
+        // Asset load keeps this apart from `incomplete_continuation`: a
+        // correction's activity is read-only, so it has no work to continue.
+        let correction = response_correction::ResponseCorrectionRun {
+            spec,
+            input,
+            run_id,
+            step_id,
+            policy,
+            started,
+            budget,
+        };
+        return correction.correct_rejected_replies(outcome, invoke, persist_superseded_trace);
+    }
+    let Some(policy) = spec.incomplete_continuation else {
+        return Ok(outcome);
+    };
 
     let mut rounds = 0u32;
     let mut original_message: Option<String> = None;
@@ -117,13 +144,7 @@ pub(crate) fn run_cli_backend_for_step(
                     .unwrap_or_else(|| "implementation declared incomplete".to_string()),
             );
         }
-        // The superseded invocation's usage is still spent by this step;
-        // the executor persists only the trace of the outcome it receives.
-        if let Some(invocation) = outcome.invocation.as_ref()
-            && let Err(error) = host.persist_invocation_trace(run_id, step_id, input, invocation)
-        {
-            audit.note_telemetry_failure("invocation_trace", Some(step_id), &error);
-        }
+        persist_superseded_trace(&outcome);
         tracing::info!(
             target: "orbit.engine.cli_runner",
             run_id,

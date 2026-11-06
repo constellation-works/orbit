@@ -32,6 +32,11 @@ pub(in super::super) fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Val
     })
 }
 
+/// Did the provider report any failure of its own, recognized or not?
+pub(super) fn provider_reported_failure(provider: &str, stdout: &[u8]) -> bool {
+    stdout_frames(stdout).any(|frame| provider_failure(provider, &frame).is_some())
+}
+
 /// The failure a provider wrote in its own control-plane `frame`, never
 /// assistant or tool text, and never an Orbit envelope, which describes the
 /// work rather than the provider.

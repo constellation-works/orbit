@@ -153,6 +153,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     }
 }
 

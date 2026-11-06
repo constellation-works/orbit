@@ -62,6 +62,10 @@ The common `agent_loop` fields are:
   bounds the fresh invocations an implementer that declares the typed
   `implementation_incomplete` signal may get inside its own wall-clock budget —
   see §7.6a; only `agent_implement` declares it)
+- optional `response_correction` (`{max_rounds, min_remaining_seconds}`; bounds
+  the fresh invocations a read-only activity may get to replace a reply that
+  says `success` and carries `error`, inside its own wall-clock budget — see
+  §7.6a; `agent_explore` and `task_pilot` declare it)
 - optional `regression_risk_instruction` (declaring it asks the host, through
   `RuntimeHost::regression_risk_for_agent_input`, for the task's
   regression-risk marks; the engine adds them to the envelope's task snapshot
@@ -1151,6 +1155,30 @@ in `task_pr_pipeline`:
   records `incomplete_continuation: {rounds, max_rounds, refusal}`. This is
   not recovery: `step_failure_recovery` still repairs only completed delivery
   candidates.
+- **A contradictory reply can be corrected inside the budget.** A reply that says
+  `status: "success"` and carries an `error` object stays a parser refusal: neither
+  the parser nor the provider schema changes, and the error is never dropped.
+  An activity that declares `response_correction` may replace that reply. The
+  projection records the request only when that exact refusal is the invocation's
+  sole failure (clean exit, no failure frame from the provider, recognized or not,
+  and no print-budget failure), so explicit `failed`/`timeout` replies and other malformed
+  replies never start one. The step entry
+  (`cli_runner/orchestrator/response_correction.rs`) then starts a fresh invocation
+  through the ordinary per-invocation dispatch (same crew, tool grant and sandbox),
+  with `input.response_correction` carrying the round, the remaining budget, the
+  parser error and the redacted reply, bounded to 64 KiB. It refuses once
+  `max_rounds` corrections have run or when less than `min_remaining_seconds` of the
+  original wall-clock budget is unspent; each correction's timeout is that remainder.
+  Only a reply that itself parses succeeds. Otherwise the step returns the latest
+  failure with `after N response correction(s)`, any refusal and the original error
+  appended. The step output records `response_correction: {rounds, max_rounds,
+  refusal, original_error, original_stdout_blob_ref}`, and each superseded
+  invocation's trace is persisted. A correction repeats a whole invocation, and only
+  its prompt asks it to change nothing but the reply, so asset load
+  (`validate_response_correction_activity`) admits the policy only with
+  `require_response_envelope`, `fsProfile: reviewer` and no grant of a task, delivery
+  or dispatch tool, and never with `incomplete_continuation` or
+  `trustedHostExecution`.
 - **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
   whose `recovery_activity` resolves dispatches it for a `success: false`
   outcome exactly as it does for an `Err` — once retries are exhausted, if the
