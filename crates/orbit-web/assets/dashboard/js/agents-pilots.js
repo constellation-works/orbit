@@ -8,7 +8,7 @@
 // says when the missed-scope-block source did not run in the window, so its
 // zero is not read as no misses. Every node is built with `el()`.
 
-import { el } from './common.js';
+import { el, pinnedInfoHint } from './common.js';
 
 const TIER_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "X-hard" };
 
@@ -90,10 +90,6 @@ function card(row, matrix) {
 function render({ rows }) {
   const cards = rows.map((row) => [row, matrixOf(row)]).filter(([, matrix]) => matrix);
   return [
-    el("p", {
-      class: "agents-muted",
-      text: "Rows are the tier each task was assessed at; columns are the tier its total implementation cost placed it in, after cutting the window's cost ranking in the proportions the pilots assigned. The diagonal earns tier calibration. Too easy: assessed below the observed tier. Too hard: assessed above it. Tasks without a tier or a priced implementation are not placed.",
-    }),
     cards.length
       ? el("div", { class: "agents-tier-cards" }, cards.map(([row, matrix]) => card(row, matrix)))
       : el("p", { class: "agents-cost-empty", text: "No row has an assessed tier in this window." }),
@@ -106,8 +102,8 @@ function banner({ scorecard }) {
   const source = scorecard && scorecard.sources && scorecard.sources.missed_scope_blocks;
   if (!source || source.available !== false) return null;
   const node = el("p", {}, [
-    el("strong", { text: "Missed scope blocks unmeasured. " }),
-    el("span", { text: source.detail || "No blocked-task triage record in this window, so the term reads 0." }),
+    el("strong", { text: "Missed scope blocks unmeasured" }),
+    pinnedInfoHint(source.detail || "No blocked-task triage record in this window, so the term reads 0."),
   ]);
   node.dataset.source = "missed_scope_blocks";
   return node;
@@ -118,4 +114,6 @@ const HOW = [
   "A clean assessment whose task is promoted and later blocked on a decision that blocked-task triage proposed is a missed scope block. Confirmed, dismissed and missed warnings are rated per 100 settled assessments, held or clean, and stay provisional below the window's warning minimum support.",
 ];
 
-export const pilotsPanel = { title: "Tier calibration", render, banner, how: HOW };
+const hint = () => "Rows are the tier each task was assessed at; columns are the tier its total implementation cost placed it in, after cutting the window's cost ranking in the proportions the pilots assigned. The diagonal earns tier calibration. Too easy: assessed below the observed tier. Too hard: assessed above it. Tasks without a tier or a priced implementation are not placed.";
+
+export const pilotsPanel = { title: "Tier calibration", hint, render, banner, how: HOW };

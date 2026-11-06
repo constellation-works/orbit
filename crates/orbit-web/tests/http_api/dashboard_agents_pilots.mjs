@@ -29,7 +29,7 @@ assert.deepEqual(part('detail').querySelectorAll('span.agents-term-weight').map(
 const banner = part('banner');
 assert.ok(banner, 'an unmeasured missed-scope-block source has a banner');
 assert.equal(banner.querySelector('p').dataset.source, 'missed_scope_blocks');
-assert.match(banner.textContent, /Missed scope blocks unmeasured\. Unavailable: no blocked-task triage record/);
+assert.match(banner.textContent, /Missed scope blocks unmeasuredUnavailable: no blocked-task triage record/);
 
 const headTitle = key => part('ranking').querySelectorAll('thead th').find(th => th.textContent === key).title;
 assert.match(headTitle('Confirmed warnings'), /^Confirmed warnings per 100 settled assessments \(weight \+3\)/, 'a warning term names its own unit');

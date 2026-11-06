@@ -3,7 +3,7 @@
 // history, and every check with its definition behind Details.
 
 import {
-  el, forecastView, forecastCard, forecastHint, forecastMoreSection, reportsReviewMode,
+  el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, reportsReviewMode,
 } from './forecast-shared.js';
 import {
   forecastBaselineFigures, forecastCount, forecastUnavailableInfo, num, recordedPoolsContainGaps,
@@ -188,7 +188,7 @@ function gapGroup(title, items) {
   const rows = [...items]
     .sort((a, b) => num(b[2]) - num(a[2]))
     .map(([key, label, value, hint]) => el("div", { class: key === "regression_history_missing" ? "fc-gap fc-gap-key" : "fc-gap" }, [
-      el("dt", {}, [label, forecastHint(hint)]),
+      el("dt", {}, [label, pinnedInfoHint(hint)]),
       el("dd", { class: "fc-gap-count", text: String(value) }),
     ]));
   return forecastCard(title, null, [rows.length

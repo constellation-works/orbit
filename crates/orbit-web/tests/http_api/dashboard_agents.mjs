@@ -140,6 +140,7 @@ windows.dataset.fallbackWindow = 'last500';
 for (const value of ['last500', 'last1000', '7d', '30d']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
 const executionControl = make('div', 'agents-execution-control', layout);
 executionControl.hidden = true;
+make('div', 'agents-tier-control', layout).hidden = true;
 const executions = make('div', 'agents-execution-selector', executionControl);
 for (const value of ['managed', 'all', 'interactive']) make('button', null, executions, 'scoreboard-window-seg').dataset.execution = value;
 
@@ -353,7 +354,7 @@ assert.ok(segments[0].classList.contains('is-current'));
 // The ranking: rank, crew and model, the score, support, then one column per
 // term; the below-support row is greyed, tagged and unranked.
 assert.deepEqual(rankingRows().map(entry => entry.dataset.row.split('\0')[0]), ['opus', 'sonnet', 'haiku']);
-assert.deepEqual(part('ranking').querySelectorAll('thead th').map(th => th.textContent),
+assert.deepEqual(part('ranking').querySelectorAll('thead th').map(th => (th.children[0] || th).textContent),
   ['Rank', 'Crew · model', 'Score', 'Support', 'Landed', 'Spec defects', 'Spec-caused rework']);
 assert.ok(rowNamed('haiku').classList.contains('agents-row-below'));
 assert.match(rowNamed('haiku').textContent, /below 10/);
@@ -514,8 +515,8 @@ await settle();
 answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
 assert.equal(byId['agents-count-reviewers'].textContent, '2 ranked');
-assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['strip', 'banner', 'ranking', 'detail', 'how', 'panel'], 'the banner sits under the strip');
-assert.match(part('banner').textContent, /Provisional\. 16 of 43 reviews in this window are younger than the 30-day miss lookback/);
+assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['banner', 'ranking', 'detail', 'panel', 'how', 'strip'], 'the banner leads the ranking; the panel follows it, then the collapsed reference');
+assert.match(part('banner').textContent, /Provisional · 16 of 43 reviewsThese reviews are younger than the 30-day miss lookback/);
 assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often', 'unjudged'], 'only the row well above its peers is tagged accepts often, and the unjudged row is marked');
 const nova = rowNamed('nova');
 assert.equal(rankingRows().at(-1), nova, 'the unjudged row is listed last');

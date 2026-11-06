@@ -30,7 +30,7 @@ import {
   renderPanelPlaceholder,
   syncNodes,
 } from './common.js';
-import { forecastHint } from './forecast-shared.js';
+import { pinnedInfoHint } from './forecast-shared.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -522,6 +522,6 @@ export function wireDoctorPanel() {
   const button = $("doctor-refresh");
   if (button) button.addEventListener("click", () => { void refreshDoctor(); });
   const meta = $("doctor-meta");
-  if (meta) meta.after(forecastHint(PANEL_HINT));
+  if (meta) meta.after(pinnedInfoHint(PANEL_HINT));
   NARROW_LAYOUT.addEventListener("change", applySelection);
 }

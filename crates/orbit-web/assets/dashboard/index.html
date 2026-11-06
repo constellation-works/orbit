@@ -667,10 +667,10 @@
         <section class="panel" id="agents-panel">
           <header>
             <span id="agents-title">Orchestrators</span>
+            <span class="scoreboard-controls-meta agents-meta" id="agents-meta"></span>
             <span class="count" id="agents-count">—</span>
           </header>
           <div class="scoreboard-controls agents-controls" id="agents-controls">
-            <p class="agents-purpose">Scoring <span class="agents-purpose-hint"></span></p>
             <div class="scoreboard-control-group">
               <span class="scoreboard-control-label">window</span>
               <div class="scoreboard-window-selector" id="agents-window-selector" data-fallback-window="last500" role="tablist" aria-label="Agent scorecard window">
@@ -688,7 +688,17 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-execution="interactive" aria-selected="false" tabindex="-1" title="Tasks worked in an interactive session, without a job, as their own series">Interactive</button>
               </div>
             </div>
-            <span class="scoreboard-controls-meta" id="agents-meta"></span>
+            <div class="scoreboard-control-group" id="agents-tier-control" hidden>
+              <label class="scoreboard-control-label" for="agents-tier">rank within</label>
+              <select id="agents-tier">
+                <option value="">All tiers</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+                <option value="xhard">Xhard</option>
+              </select>
+              <span class="agents-muted" id="agents-tier-unavailable" hidden>Tier scores unavailable</span>
+            </div>
           </div>
           <div class="body agents-body" id="agents-body" tabindex="0" role="region" aria-label="Agent scorecard"></div>
         </section>

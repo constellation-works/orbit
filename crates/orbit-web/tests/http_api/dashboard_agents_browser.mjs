@@ -223,7 +223,7 @@ try {
     const box = wrap.getBoundingClientRect();
     const inside = node => { const rect = node.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5; };
     const heads = [...document.querySelectorAll('.agents-table thead th')];
-    const head = text => heads.find(th => th.textContent.trim() === text);
+    const head = text => heads.find(th => th.firstChild.textContent.trim() === text);
     const rows = [...document.querySelectorAll('.agents-row')];
     return {
       headersInside: ['Rank', 'Crew · model', 'Score'].map(text => [text, inside(head(text))]),
@@ -328,8 +328,8 @@ try {
     };
   });
 
-  // A rendered panel occupies the row under the disclosure, one gap below it.
-  // A banner, when that role has one, sits one gap under the strip.
+  // A rendered panel occupies the row under the ranking (under the stacked
+  // detail on a phone), one gap below it, above the reference disclosures. A banner, when that role has one, sits one gap above the ranking.
   const assertPanelOccupiesItsRow = async label => {
     const placed = await page.evaluate(() => {
       const node = document.querySelector('#agents-body');
@@ -338,24 +338,24 @@ try {
       const panel = node.querySelector('.agents-role-panel');
       const panelBox = panel ? panel.getBoundingClientRect() : null;
       const banner = node.querySelector('.agents-banner');
-      const strip = node.querySelector('.agents-strip').getBoundingClientRect();
       const ranking = node.querySelector('.agents-ranking').getBoundingClientRect();
       const bannerBox = banner ? banner.getBoundingClientRect() : null;
       return {
         areas: style.gridTemplateAreas,
         rowGap: parseFloat(style.rowGap),
         panelHeight: panelBox ? panelBox.height : 0,
-        panelGap: panelBox ? panelBox.top - how.bottom : null,
-        bannerGap: bannerBox ? bannerBox.top - strip.bottom : null,
+        // Below 900px the detail column stacks between the ranking and the panel.
+        panelGap: panelBox ? panelBox.top - (window.innerWidth <= 900 ? node.querySelector('.agents-detail') : node.querySelector('.agents-ranking')).getBoundingClientRect().bottom : null,
+        howGap: panelBox ? how.top - panelBox.bottom : null,
         rankingGap: bannerBox ? ranking.top - bannerBox.bottom : null,
         width: window.innerWidth,
       };
     });
     assert.ok(placed.areas.includes('panel'), `${label} keeps a panel area: ${JSON.stringify(placed)}`);
     assert.ok(placed.panelHeight > 20, `${label} panel has content height: ${JSON.stringify(placed)}`);
-    assert.ok(Math.abs(placed.panelGap - placed.rowGap) <= 1, `${label} panel sits one gap under the disclosure: ${JSON.stringify(placed)}`);
-    if (placed.bannerGap != null) {
-      assert.ok(Math.abs(placed.bannerGap - placed.rowGap) <= 1, `${label} banner sits one gap under the strip: ${JSON.stringify(placed)}`);
+    assert.ok(Math.abs(placed.panelGap - placed.rowGap) <= 1, `${label} panel sits one gap under the row above it: ${JSON.stringify(placed)}`);
+    assert.ok(Math.abs(placed.howGap - placed.rowGap) <= 1, `${label} reference disclosures sit one gap under the panel: ${JSON.stringify(placed)}`);
+    if (placed.rankingGap != null) {
       assert.ok(Math.abs(placed.rankingGap - placed.rowGap) <= 1, `${label} ranking sits one gap under the banner: ${JSON.stringify(placed)}`);
     }
     return placed;
@@ -463,7 +463,7 @@ try {
   await page.locator('#agents-roles [data-view="reviewers"]').click();
   await body.locator('.agents-banner').waitFor();
   assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d&span=30d');
-  assert.match(await body.locator('.agents-banner').textContent(), /Provisional\. 150 of 191 reviews in this window are younger than the 30-day miss lookback/);
+  assert.match(await body.locator('.agents-banner').textContent(), /Provisional · 150 of 191 reviewsThese reviews are younger than the 30-day miss lookback/);
   assert.deepEqual(await body.locator('.agents-row .agents-crew').allTextContents(), ['codex-review', 'claude-review', 'gemini-review', 'sol-review'], 'the unjudged row is listed after every other row');
   assert.deepEqual(await body.locator('.agents-row .agents-tag').allTextContents(), ['accepts often', 'unjudged']);
   const unjudged = body.locator('.agents-row', { hasText: 'sol-review' });
@@ -475,9 +475,11 @@ try {
   assert.equal(await body.locator('.agents-row', { hasText: 'claude-review' }).locator('.agents-tag').count(), 1, 'the tag sits on the row accepting well above its peers');
   const order = await page.evaluate(() => {
     const top = selector => document.querySelector(selector).getBoundingClientRect();
-    return { strip: top('.agents-strip').bottom, banner: top('.agents-banner').top, bannerBottom: top('.agents-banner').bottom, ranking: top('.agents-ranking').top, width: top('.agents-banner').width, body: top('#agents-body').width };
+    return { bannerBottom: top('.agents-banner').bottom, ranking: top('.agents-ranking').top, rankingBottom: top('.agents-ranking').bottom, strip: top('.agents-strip').top, width: top('.agents-banner').width, body: top('#agents-body').width };
   });
-  assert.ok(order.strip <= order.banner && order.bannerBottom <= order.ranking, `the banner sits between the strip and the ranking: ${JSON.stringify(order)}`);
+  assert.ok(order.bannerBottom <= order.ranking && order.rankingBottom <= order.strip, `the banner leads the ranking and the strip follows it: ${JSON.stringify(order)}`);
+  assert.equal(await page.locator('#agents-execution-control').isVisible(), false, 'the execution control belongs to Implementers');
+  assert.equal(await page.locator('#agents-tier-control').isVisible(), false, 'the tier control belongs to Implementers');
   assert.ok(order.width > order.body * 0.9, 'the banner spans the body');
   await body.locator('.agents-row', { hasText: 'claude-review' }).locator('.agents-row-select').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'claude-review');
@@ -528,7 +530,7 @@ try {
   assert.equal(await body.locator('.agents-cost-plot, .agents-cost-point, .agents-cost-frontier, .agents-cost-axis, .agents-cost-legend, .agents-tier-table').count(), 0);
   const implementersText = await body.textContent();
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
-  assert.equal(await body.evaluate(node => node.querySelector('.agents-how')?.nextElementSibling?.classList.contains('agents-role-panel') ?? false), true, 'the panel directly follows the disclosure, whatever sections come after it');
+  assert.equal(await body.evaluate(node => node.querySelector('.agents-role-panel')?.nextElementSibling?.classList.contains('agents-how') ?? false), true, 'the reference disclosures directly follow the panel');
   assert.equal(await body.locator('.agents-execution').count(), 1, 'the interactive-work section stays rendered for implementers');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
   const shownNotScored = await body.locator('.agents-stats').textContent();
@@ -691,7 +693,7 @@ try {
   await page.reload();
   await body.locator('.agents-row').first().waitFor();
   assert.equal(await page.locator('#agents-tier').isDisabled(), true);
-  assert.match(await body.locator('.agents-tier-control').textContent(), /Tier scores unavailable/);
+  assert.equal(await page.locator('#agents-tier-unavailable').isVisible(), true, 'an unavailable matrix says so on the page');
   assert.equal(await body.locator('.agents-row').count(), 6);
   await shot('agents-implementers-unavailable-dark-1440');
   await page.setViewportSize({ width: 375, height: 812 });
@@ -796,6 +798,7 @@ try {
   // its own box, the detail stacks below it, and touch targets are 44px.
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(150);
+  if (!(await body.locator('.agents-strip').evaluate(node => node.open))) await body.locator('.agents-strip > summary').click();
   const phone = await page.evaluate(() => {
     const wrap = document.querySelector('.agents-table-wrap');
     const ranking = document.querySelector('.agents-ranking').getBoundingClientRect();

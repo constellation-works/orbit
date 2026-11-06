@@ -4,10 +4,11 @@
 // against. The server keeps one scan per workspace, so a role or window
 // change only slices it.
 //
-// One renderer serves every role: the strip, the ranking, the detail column
-// and the "How the score works" disclosure. A role's own panel comes from its
-// module in ROLE_PANELS (js/agents-<role>.js); a role without one shows none.
-// A panel may also add a banner under the strip and tags beside a row's name.
+// One renderer serves every role: the ranking first, its detail column, then
+// the "How the score works" and attribution disclosures. A role's own panel
+// comes from its module in ROLE_PANELS (js/agents-<role>.js); a role without
+// one shows none. A panel may also add a one-line banner above the ranking and
+// tags beside a row's name. Explanations sit behind info hints, not on the page.
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
@@ -29,6 +30,7 @@ const ROLE_LABELS = {
 };
 // Each role's panel below the shared layout: `{ title, render(context) }`,
 // where `render` returns the panel's child nodes. Optional hooks:
+// `hint(context)` returns the explanation behind the icon beside its title,
 // `banner(context)` returns the banner's content or null, `rowTags(row)`
 // returns the tags shown under a row's name, `scoreNote(row)` returns
 // `{ text, detail }` shown beside the row's score (the short text in the
@@ -79,8 +81,12 @@ let execution = "managed";
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
 let countsRequest = 0;
-// "How the score works" stays as the reader left it across polls and roles.
+// "How the score works" and the attribution strip stay as the reader left them
+// across polls and roles.
 let howOpen = false;
+let stripOpen = false;
+// The info hint beside the implementer tier control, whose text follows its state.
+let tierHint = null;
 
 export function getAgentsRole() {
   return role;
@@ -126,6 +132,7 @@ export function placeholdAgentsAggregate() {
   requestScope = null;
   resetView();
   renderPanelPlaceholder(BODY_ID);
+  syncTierControl();
   const count = $(COUNT_ID);
   if (count) count.textContent = "—";
   for (const each of AGENT_ROLES) setRoleCount(each, null);
@@ -181,12 +188,6 @@ function setCountWindow(next) {
 /// Wire the Agents window selector: its count tabs are the panel's own, its
 /// calendar tabs the shared window.
 export function wireAgentControls() {
-  const purposeHint = document.querySelector(".agents-purpose-hint");
-  if (purposeHint) {
-    purposeHint.replaceWith(common.infoHint(
-      "One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it.",
-    ));
-  }
   const selector = $("agents-window-selector");
   if (selector) selector.dataset.panelWindow = countWindow || "";
   wireWindowSelector("agents-window-selector", {
@@ -204,6 +205,16 @@ export function wireAgentControls() {
       fetchAndRenderAgents();
     });
   }
+  const tier = $("agents-tier");
+  if (tier) {
+    tierHint = common.pinnedInfoHint("");
+    tier.after(tierHint);
+    tier.addEventListener("change", () => {
+      implementerTier = tier.value;
+      syncSelection();
+      render();
+    });
+  }
 }
 
 function syncExecutionSelector() {
@@ -214,6 +225,24 @@ function syncExecutionSelector() {
     button.classList.toggle("on", on);
     button.setAttribute("aria-selected", on ? "true" : "false");
     button.tabIndex = on ? 0 : -1;
+  }
+}
+
+function syncTierControl() {
+  const control = $("agents-tier-control");
+  if (control) control.hidden = role !== "implementers" || isAggregateView();
+  const select = $("agents-tier");
+  if (select) {
+    select.value = implementerTier;
+    select.disabled = !implementerMatrix;
+  }
+  const unavailable = $("agents-tier-unavailable");
+  if (unavailable) unavailable.hidden = Boolean(implementerMatrix);
+  if (tierHint) {
+    tierHint.firstChild.textContent = !implementerMatrix
+      ? "Tier scores are unavailable. Refresh to retry."
+      : implementerTier ? "Ranks by tier crew score and support; the detail column's evidence covers all tiers."
+        : "All tiers compares each row with the fleet on its own tier mix. A tier ranks by that tier's crew score.";
   }
 }
 
@@ -400,6 +429,12 @@ function plural(n, one, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+// The window as the panel header names it: a count window keeps to its count,
+// with how far it reaches back behind the header's hint.
+function windowShortLabel() {
+  return scorecard && scorecard.window_attempts ? `last ${scorecard.window_attempts} attempts` : windowLabel();
+}
+
 function windowLabel() {
   if (!scorecard) return "";
   // A count window names how far back its attempts reach.
@@ -434,14 +469,14 @@ function scanFreshness(payload, now = Date.now()) {
 }
 
 const SCAN_QUALIFIERS = {
-  fresh: (scan) => `current, within its ${scan.ttl} s cache window`,
-  stale: () => "stale",
-  unjudged: () => "no cache window reported, so freshness is not judged",
-  ahead: () => "ahead of this browser's clock, so freshness is not judged",
+  fresh: (scan) => `Current, within its ${scan.ttl} s cache window.`,
+  stale: (scan) => `Past its ${scan.ttl} s cache window; a background refresh may be running or may have failed.`,
+  unjudged: () => "No cache window reported, so freshness is not judged.",
+  ahead: () => "Ahead of this browser's clock, so freshness is not judged.",
 };
 
-// The header line beside the window: the scan's time on the dashboard clock,
-// its age, and whether the server still counts it current.
+// The header figure: the scan's time on the dashboard clock and its age. Only
+// a stale scan says so on the page; the other qualifiers sit behind the hint.
 function scanNode(payload) {
   clearTimeout(scanTimer);
   const node = el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" });
@@ -451,16 +486,13 @@ function scanNode(payload) {
     node.dataset.freshness = scan.state;
     node.textContent = "";
     if (scan.state === "unreported") {
-      node.append("Scan time not reported · freshness not judged");
+      node.append("Scan time not reported", common.pinnedInfoHint("Freshness is not judged."));
       return;
     }
     const time = el("time", { text: formatDateTime(scan.at) });
     time.setAttribute("datetime", scan.at);
     clockStamp(time, scan.at);
-    node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, ` · ${SCAN_QUALIFIERS[scan.state](scan)}`);
-    if (scan.state === "stale") {
-      node.append(" ", common.infoHint(`Past its ${scan.ttl} s cache window; a background refresh may be running or may have failed.`));
-    }
+    node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, scan.state === "stale" ? " · stale" : "", common.pinnedInfoHint(SCAN_QUALIFIERS[scan.state](scan)));
     // Age the retained response even while a refresh is pending or failed.
     // Refresh only this status, preserving ranks, selection and request errors.
     const untilExpiry = Date.parse(scan.at) + scan.ttl * 1000 - Date.now() + 1;
@@ -476,7 +508,7 @@ function scanNode(payload) {
 }
 
 // The panel's status note once a response settles, in place of "Updated.". It
-// is the live region's reading of the scan; the header line above shows it.
+// is the live region's reading of the scan; the header above shows it.
 const SCAN_SETTLED = {
   fresh: "Scan current.",
   stale: "Scan stale: past its cache window.",
@@ -514,6 +546,7 @@ function contribution(term, row) {
 
 function render() {
   syncExecutionSelector();
+  syncTierControl();
   const body = $(BODY_ID);
   if (!body || !scorecard) return;
   const ranking = rows();
@@ -528,20 +561,21 @@ function render() {
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
+      ? `${units} ${scorecard.unit} in ${windowShortLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
     if (scorecard.status === "ok") {
       const notes = [
+        ...(scorecard.window_attempts ? [`Window: ${windowLabel()}.`] : []),
         `Rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked.`,
       ];
       if (ranking.some((row) => row.unjudged)) notes.push("unjudged rows are listed last, without a score.");
       if (role === "implementers") notes.push(`Counting ${EXECUTION_LABELS[scorecard.execution] || "managed"} tasks.`);
-      meta.append(" ", common.infoHint(notes.join(" ")));
+      meta.append(common.pinnedInfoHint(notes.join("\n")));
     }
     meta.append(" · ", scanNode(scorecard));
   }
   const panel = ROLE_PANELS[role];
-  const nodes = [stripNode()];
+  const nodes = [];
   const banner = panel && panel.banner && scorecard.status === "ok" ? panel.banner({ scorecard, rows: ranking, roleHref }) : null;
   if (banner) nodes.push(bannerNode(banner));
   if (scorecard.status !== "ok") {
@@ -557,8 +591,9 @@ function render() {
     const row = selectedRow();
     if (row) nodes.push(detailNode(row));
   }
-  nodes.push(howNode());
+  // Compare, then see what is behind the ranks; how it is scored is reference.
   if (panel && scorecard.status === "ok" && ranking.length) nodes.push(rolePanelNode(panel));
+  nodes.push(howNode(), stripNode());
   if (role === "implementers" && scorecard.status === "ok") nodes.push(executionSplitNode());
   syncNodes(body, nodes);
 }
@@ -595,8 +630,7 @@ function executionSplitNode() {
     : el("p", { class: "agents-execution-none", text: `No interactive work in ${windowLabel()}: every counted task was worked by a job.` });
   if (shown.length) content.tabIndex = 0;
   const node = el("section", { class: "agents-execution", "aria-label": "Interactive work by crew" }, [
-    el("h3", { text: "Interactive work by crew" }),
-    el("p", { class: "agents-execution-note", text: "Tasks worked in an interactive session have no job run, so no cost, tokens or run time. They are left out of the counts above unless the execution control includes them; cost and run time always count managed tasks only." }),
+    el("h3", {}, ["Interactive work by crew", common.pinnedInfoHint("Tasks worked in an interactive session have no job run, so no cost, tokens or run time. They are left out of the counts above unless the execution control includes them; cost and run time always count managed tasks only.")]),
     content,
   ]);
   node.dataset.key = "execution";
@@ -621,9 +655,9 @@ function stateNode(key, heading, text) {
   return node;
 }
 
-// Who each problem counts against: one bar across the window's problems by
-// owning role plus Not scored, the current role highlighted, each legend
-// entry linking to its role.
+// Who each problem counts against, a collapsed disclosure under the ranking:
+// one bar across the window's problems by owning role plus Not scored, the
+// current role highlighted, each legend entry linking to its role.
 function stripNode() {
   const owners = (attribution && attribution.owners) || {};
   const notScored = owners.not_scored || { count: 0, reasons: {} };
@@ -646,7 +680,7 @@ function stripNode() {
   const reasons = Object.entries(notScored.reasons || {})
     .filter(([, count]) => count)
     .map(([reason, count]) => `${count} ${NOT_SCORED_REASONS[reason] || reason.replace(/_/g, " ")}`);
-  const stripContext = common.infoHint("Ownership counts include unscored context; rankings use only each role's scored terms.");
+  const stripContext = common.pinnedInfoHint("Ownership counts include unscored context; rankings use only each role's scored terms.");
   stripContext.id = "agents-strip-context";
   stripContext.setAttribute("role", "note");
   const legend = el("ul", { class: "agents-strip-legend" });
@@ -669,41 +703,18 @@ function stripNode() {
     legend.append(item);
   }
   const children = [
-    el("header", { class: "agents-strip-head" }, [
-      el("h3", {}, ["Who each problem counts against", " ", stripContext]),
+    el("summary", { class: "agents-strip-head" }, [
+      el("h3", {}, ["Who each problem counts against", stripContext]),
       el("span", { class: "agents-strip-total", text: attribution ? `${plural(total, "problem")} in ${windowLabel()}` : "Loading…" }),
     ]),
     total ? bar : el("p", { class: "agents-strip-none", text: "No problem was recorded in this window." }),
     legend,
   ];
-  if (role === "implementers") {
-    const select = el("select", { id: "agents-tier", "aria-label": "Implementer tier" },
-      [["", "All tiers"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"]]
-        .map(([value, text]) => {
-          const option = el("option", { text });
-          option.value = value;
-          return option;
-        }));
-    select.value = implementerTier;
-    select.disabled = !implementerMatrix;
-    select.addEventListener("change", () => {
-      implementerTier = select.value;
-      syncSelection();
-      render();
-    });
-    const label = el("label", { text: "Rank within" });
-    label.htmlFor = "agents-tier";
-    children.push(el("div", { class: "agents-tier-control" }, [
-      label, select,
-      el("span", { class: "agents-muted", text: !implementerMatrix
-        ? "Tier scores unavailable. Refresh to retry."
-        : implementerTier ? "Tier crew score and support; detail evidence covers all tiers."
-          : "Fleet comparison on each row's tier mix." }),
-    ]));
-  }
-  const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against", "aria-describedby": "agents-strip-context" }, children);
+  const node = el("details", { class: "agents-strip agents-disclosure", "aria-label": "Who each problem counts against", "aria-describedby": "agents-strip-context" }, children);
+  node.open = stripOpen;
+  node.addEventListener("toggle", () => { stripOpen = node.open; });
   node.dataset.key = "strip";
-  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow(), implementerTier, Boolean(implementerMatrix)]);
+  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow()]);
   return node;
 }
 
@@ -728,6 +739,8 @@ function scoreBar(value, scale) {
   return track;
 }
 
+const SCORE_HINT = "One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
+
 function rankingNode(ranking) {
   const scale = scoreScale(ranking);
   const selectedKey = selected.get(role);
@@ -735,7 +748,7 @@ function rankingNode(ranking) {
   const header = el("tr", {}, [
     el("th", { class: "agents-num", text: "Rank" }),
     el("th", { text: "Crew · model" }),
-    el("th", { class: "agents-score-col", text: "Score" }),
+    el("th", { class: "agents-score-col" }, [el("span", { text: "Score" }), common.pinnedInfoHint(SCORE_HINT)]),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
     ...(role === "implementers" && implementerTier ? [] : terms()).map((term) => el("th", {
       class: "agents-num",
@@ -750,11 +763,10 @@ function rankingNode(ranking) {
       class: "agents-row-select",
       type: "button",
       "aria-pressed": isSelected ? "true" : "false",
-      title: `Show ${row.crew} · ${row.model} in the detail column`,
+      title: `Show ${row.crew} · ${row.model} in the detail column. ${effortSummary(row)}`,
     }, [
       el("span", { class: "agents-crew", text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
-      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]);
     select.addEventListener("click", () => selectRow(row));
     const tags = [...(row.unjudged ? [unjudgedTag()] : []), ...(panel && panel.rowTags ? panel.rowTags(row) : [])];
@@ -941,7 +953,7 @@ function radarNode(row) {
       if (p) plot.append(svg("circle", { cx: p[0], cy: p[1], r: 3, class: `agents-radar-${series}` }));
     });
   }
-  const tooltip = el("p", { id: "agents-radar-tooltip", class: "agents-radar-tooltip", role: "status", text: "Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values." });
+  const tooltip = el("p", { id: "agents-radar-tooltip", class: "agents-radar-tooltip", role: "status", text: "Hover or focus a vertex for its evidence." });
   const tableBody = el("tbody");
   const heading = (text, scope) => {
     const node = el("th", { text });
@@ -988,8 +1000,7 @@ function radarNode(row) {
   ]);
   const profile = el("div", { class: "visually-hidden" }, [table]);
   return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
-    el("h4", { text: "Agent profile" }),
-    el("p", { class: "agents-muted", text: "Outward is better · each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis." }),
+    el("h4", {}, ["Agent profile", common.pinnedInfoHint("Outward is better. Each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values.")]),
     ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
     plot,
     el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
@@ -1068,9 +1079,12 @@ function detailNode(rankedRow) {
       el("strong", { text: number(rankedRow.score) }),
       el("span", { text: rankedRow.unjudged ? "no score until a unit is judged" : tierView ? `${implementerTier} tier crew score` : "score" }),
     ]),
-    ...(tierView ? [el("p", { class: "agents-detail-note", text: `${rankedRow.units} tasks in this tier. Tier crew scores use two-sided shrinkage toward 100 with 30 tasks of reference evidence. All tiers score: ${number(row.score)}. The profile, breakdown and unscored context below cover all tiers.` })] : []),
+    ...(tierView ? [el("p", { class: "agents-detail-note" }, [
+      `${rankedRow.units} tasks in this tier · all tiers score ${number(row.score)}`,
+      common.pinnedInfoHint("Tier crew scores use two-sided shrinkage toward 100 with 30 tasks of reference evidence. The profile, breakdown and unscored context below cover all tiers."),
+    ])] : []),
     el("p", { class: "agents-detail-raw", text: `${tierView ? "All tiers: " : ""}${rawText(row)}` }),
-    ...(scoreNote ? [el("p", { class: "agents-detail-note", text: scoreNote.detail })] : []),
+    ...(scoreNote ? [el("p", { class: "agents-detail-note" }, [el("span", { text: scoreNote.text }), common.pinnedInfoHint(scoreNote.detail)])] : []),
     radarNode(row),
     el("h4", { text: tierView ? "All tiers score breakdown" : "Score breakdown" }),
     breakdown,
@@ -1100,7 +1114,7 @@ function howNode() {
   }
   const unit = scorecard.unit;
   const panel = ROLE_PANELS[role];
-  const details = el("details", { class: "agents-how" }, [
+  const details = el("details", { class: "agents-how agents-disclosure" }, [
     el("summary", { text: "How the score works" }),
     list,
     el("p", { text: role === "implementers"
@@ -1135,7 +1149,10 @@ function ownUnitText() {
 
 function rolePanelNode(panel) {
   const node = el("section", { class: `agents-role-panel agents-role-panel-${role}`, "aria-label": panel.title }, [
-    el("h3", { text: panel.title }),
+    el("header", { class: "agents-role-panel-head" }, [
+      el("h3", { text: panel.title }),
+      ...(panel.hint ? [common.pinnedInfoHint(panel.hint({ scorecard }))] : []),
+    ]),
     ...panel.render({ scorecard, rows: rows(), roleHref, rerender: render }),
   ]);
   node.dataset.key = "panel";

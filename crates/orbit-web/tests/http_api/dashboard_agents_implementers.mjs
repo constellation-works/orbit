@@ -38,11 +38,13 @@ assert.equal(byId['agents-count'].textContent, '6 rows · 5 ranked');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 6);
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 const body = byId['agents-body'];
-assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how', 'panel', 'execution']);
+assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['ranking', 'detail', 'panel', 'how', 'strip', 'execution']);
 assert.deepEqual([...executions], ['managed'], 'implementer scorecard, matrix and curves requests name the managed default');
 assert.equal(byId['agents-execution-control'].hidden, false, 'the execution control shows for implementers');
 assert.match(part('execution').textContent, /No interactive work/, 'a window without interactive work says so');
 const curves = part('panel');
+// The panel's sampling rules follow the curves into its hint once they load.
+assert.match(curves.querySelector('.info-hint-text').textContent, /7 days of follow-up[\s\S]*fewer than 10 tasks are not drawn[\s\S]*fewer than 5 regressed tasks[\s\S]*30 or more tasks are drawn by default/);
 // SVG classes are attributes in this DOM; series groups carry `data-crew`.
 const svgClass = node => node.getAttribute('class') || '';
 assert.deepEqual(curves.querySelectorAll('g').map(node => node.dataset.crew).filter(Boolean), ['opus@medium'], 'only default-selected crews are drawn');
@@ -147,6 +149,13 @@ for (const source of ['refresh', 'complexity']) {
     assertLatestCurves(`${label} after a picker redraw`);
   }
 }
+// A failed read has no sampling rules to name, so the hint keeps only the definition.
+const failedCurves = holdComplexityCurves('hard');
+failedCurves.curve.resolve(response({ error: 'curves failed' }, 500));
+await settle();
+assert.match(part('panel').querySelector('.agents-error').textContent, /Size curves unavailable/);
+assert.match(part('panel').querySelector('.info-hint-text').textContent, /Wilson 95% intervals/);
+assert.doesNotMatch(part('panel').querySelector('.info-hint-text').textContent, /follow-up|not drawn/);
 // Restore all complexities for the existing profile checks below.
 const resetCurves = holdComplexityCurves('');
 resetCurves.curve.resolve(response(sizeCurves(resetCurves.curve.url)));
@@ -219,4 +228,12 @@ await selectCrew('peer-a');
 for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the outlier does not move the fleet median ring, got ${radius}`);
 assert.ok(radarRadius('weighted_landed') < 78 && Math.abs(radarRadius('weighted_landed') - peerLandedBefore) < 26, 'the outlier does not move a normal crew toward the rim on landed');
 assert.ok(!hasClass(radarVertex('first_pass_accepts'), 'is-gap'), 'a reviewed crew keeps its first-pass vertex');
+
+// The tier control lives in the page's control row, so it must leave with the
+// scorecard when the aggregate view has no workspace to rank.
+assert.equal(byId['agents-tier-control'].hidden, false, 'implementers show the tier control');
+common.setWorkspace('');
+await agents.fetchAndRenderAgents();
+assert.equal(byId['agents-tier-control'].hidden, true, 'the aggregate view has no tier control');
+common.setWorkspace('ws-a');
 console.log('dashboard implementers ok');

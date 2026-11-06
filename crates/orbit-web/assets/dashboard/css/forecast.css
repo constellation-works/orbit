@@ -41,22 +41,6 @@
   padding: 1px 7px; border-radius: 10px; background: var(--warn-wash); color: var(--warn-fg); font-size: 12px;
 }
 
-/* Info icons: a 44px target around the 14px circle, and a bubble fixed to the
-   viewport by forecastHint, so no scroll box clips it. */
-.info-hint.fc-info {
-  box-sizing: border-box; width: 44px; height: 44px; margin: -15px -15px -15px -9px; vertical-align: middle;
-  border: 0; border-radius: 6px; background: none; flex: none;
-}
-.info-hint.fc-info::before {
-  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
-  width: 14px; height: 14px; border: 1px solid currentColor; border-radius: 50%;
-}
-.info-hint.fc-info:hover > .info-hint-text,
-.info-hint.fc-info:focus > .info-hint-text {
-  position: fixed; left: var(--fc-tip-left, 12px); right: auto; top: var(--fc-tip-top, 0);
-  width: var(--fc-tip-width, 280px); z-index: 30;
-}
-
 /* Scenario switch, with the arrival rates behind its icon. */
 .fc-scenario-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .fc-scenario .mx-seg-btn { min-height: 44px; padding: 0 14px; }

@@ -2,7 +2,7 @@
 // charts and the previous model's line, with the whole-backlog scores, stored
 // forecasts and method collapsed.
 
-import { el, forecastView, forecastCard, forecastHint, forecastMoreSection, forecastTable, COMPLEXITY_LABELS, reportsReviewMode, scheduleShowsReview } from './forecast-shared.js';
+import { el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, forecastTable, COMPLEXITY_LABELS, reportsReviewMode, scheduleShowsReview } from './forecast-shared.js';
 import { formatDateTime } from './common.js';
 import { fmtShare, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, num } from './forecast-summary.js';
 
@@ -160,7 +160,7 @@ function calibrationCard() {
     ]),
     previousModelLine(calibration),
   ], "fc-calibration");
-  node.querySelector(".mx-card-title")?.append(forecastHint(about));
+  node.querySelector(".mx-card-title")?.append(pinnedInfoHint(about));
   return node;
 }
 
@@ -294,7 +294,7 @@ function residualsCard() {
     });
     return button;
   }));
-  const about = forecastHint(`One bar per stored forecast, oldest first: the median across its finished tasks of ln(actual ÷ forecast p50) for task ${metric[1].toLowerCase()}, so tasks of different size compare. Zero is a hit on the p50; +0.69 means twice the forecast, −0.69 half. Earlier model versions are muted and split off, since their quantiles differ.`);
+  const about = pinnedInfoHint(`One bar per stored forecast, oldest first: the median across its finished tasks of ln(actual ÷ forecast p50) for task ${metric[1].toLowerCase()}, so tasks of different size compare. Zero is a hit on the p50; +0.69 means twice the forecast, −0.69 half. Earlier model versions are muted and split off, since their quantiles differ.`);
   const charts = [
     taskRows.length ? residualChart(`Task ${metric[1].toLowerCase()}`, taskRows, current) : el("div", { class: "mx-empty-note", text: `No task ${metric[1].toLowerCase()} residuals scored yet.` }),
     drainRows.length ? residualChart("Whole-backlog time to drain", drainRows, current) : el("div", { class: "mx-empty-note", text: "No whole-backlog drain time scored yet; it settles up to 90 days after a forecast." }),

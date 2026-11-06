@@ -259,15 +259,13 @@ function cohortText() {
   const counted = series().reduce((sum, each) => sum + each.tasks, 0);
   const { immature = 0, no_size: noSize = 0 } = curves.excluded || {};
   const tier = complexity ? `${TIER_LABELS[complexity] || complexity} · ` : "";
-  return `${tier}${plural(counted, "landed task")} with ${curves.follow_up_days} days of follow-up`
-    + ` · ${immature} landed too recently and ${noSize} with no recorded diff size left out`;
+  return `${tier}${plural(counted, "landed task")} · ${immature} too recent · ${noSize} no size`;
 }
 
 function render({ scorecard, rerender }) {
   const selectedWindow = scorecard.requested_window;
   redraw = rerender;
   const nodes = [
-    el("p", { class: "agents-muted", text: "Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. Shaded bands are Wilson 95% intervals. Shown, not scored." }),
     controlsNode(selectedWindow, scorecard.execution, rerender),
   ];
   if (!curves) {
@@ -294,9 +292,18 @@ function render({ scorecard, rerender }) {
       ? `No chosen crew has a bucket with ${curves.min_bucket_tasks} or more tasks yet.`
       : "Choose a crew above to draw its curve." }));
   }
-  nodes.push(el("p", { class: "agents-muted", text: `Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Crews with ${curves.min_series_tasks} or more tasks are drawn by default; the count beside each crew is regressed/landed.` }));
   if (chosen.length) nodes.push(tableNode(chosen));
   return nodes;
+}
+
+// What the panel's figures mean, with the sampling rules once the curves name them.
+function panelHint() {
+  const lines = ["Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. Shaded bands are Wilson 95% intervals. Shown, not scored."];
+  if (curves && !curves.failed) {
+    lines.push(`Counts tasks with ${curves.follow_up_days} days of follow-up: too recent and no recorded diff size are left out.`);
+    lines.push(`Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Crews with ${curves.min_series_tasks} or more tasks are drawn by default; the count beside each crew is regressed/landed.`);
+  }
+  return lines.join("\n");
 }
 
 // The panel node is rebuilt when the curves or the reader's choices change.
@@ -311,6 +318,7 @@ function fetchFor(selectedWindow, execution) {
 
 export const implementersPanel = {
   title: "Regression rate by change size",
+  hint: panelHint,
   render,
   hash,
   fetch: fetchFor,

@@ -697,3 +697,19 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
   overflow-wrap: anywhere;
   text-align: left;
 }
+
+/* pinnedInfoHint(): a 44px target around the 14px circle, and a bubble fixed to
+   the viewport, so no scroll box clips it. */
+.info-hint.info-hint-pinned {
+  box-sizing: border-box; width: 44px; height: 44px; margin: -15px -15px -15px -9px; vertical-align: middle;
+  border: 0; border-radius: 6px; background: none; flex: none;
+}
+.info-hint.info-hint-pinned::before {
+  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border: 1px solid currentColor; border-radius: 50%;
+}
+.info-hint.info-hint-pinned:hover > .info-hint-text,
+.info-hint.info-hint-pinned:focus > .info-hint-text {
+  position: fixed; left: var(--hint-tip-left, 12px); right: auto; top: var(--hint-tip-top, 0);
+  width: var(--hint-tip-width, 280px); z-index: 30;
+}
