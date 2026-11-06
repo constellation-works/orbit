@@ -75,6 +75,16 @@ pub enum ResidentMandateState {
     Invalid,
 }
 
+/// The job every workspace's seeded resident cycle routine targets.
+pub(crate) const RESIDENT_CYCLE_ROUTINE_TARGET: &str = "job:resident_cycle_pipeline";
+
+/// Why a mandate cannot fire while its workspace cycle routine is disabled.
+pub(crate) fn resident_cycle_routine_disabled_reason(routine_name: &str) -> String {
+    format!(
+        "the workspace's resident cycle routine `{routine_name}` is disabled, so no resident cycle will fire until it is enabled"
+    )
+}
+
 /// Whether a task status ends its mandate.
 pub(crate) fn resident_mandate_ended(status: TaskStatus) -> bool {
     matches!(
@@ -241,12 +251,35 @@ fn control_json(view: &ResidentView) -> Value {
 }
 
 impl OrbitRuntime {
+    /// The name of this workspace's resident cycle routine when it is
+    /// loaded and its versioned `enabled` is false; `None` when it is
+    /// enabled, missing, or its status cannot be read (a failed lookup
+    /// never fails the caller's read).
+    pub(crate) fn resident_cycle_routine_disabled(&self) -> Option<String> {
+        let report = crate::application::routines::status::checkout_routine_statuses(self).ok()?;
+        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
+        let orbit_dir = canonical(&self.paths().orbit_dir)?;
+        report
+            .statuses
+            .iter()
+            .find(|status| {
+                canonical(&status.routine.source_orbit_dir).as_ref() == Some(&orbit_dir)
+                    && status.routine.definition.target.as_ref_string()
+                        == RESIDENT_CYCLE_ROUTINE_TARGET
+                    && !status.routine.definition.enabled
+            })
+            .map(|status| status.routine.definition.name.clone())
+    }
+
     /// Why an active mandate is stalled, as attention and the reads report
-    /// it; `None` for any other state.
+    /// it; `None` for any other state. When the workspace's cycle routine
+    /// is disabled (`cycle_routine_disabled` names it), that is named as
+    /// the cause, since no cycle can fire until it is enabled.
     pub(crate) fn resident_stall_of(
         &self,
         view: &ResidentView,
         now: chrono::DateTime<chrono::Utc>,
+        cycle_routine_disabled: Option<&str>,
     ) -> Result<Option<due::ResidentStall>, OrbitError> {
         let Ok(mandate) = &view.mandate else {
             return Ok(None);
@@ -255,7 +288,15 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let comments = self.get_task_comments(&view.task.id)?;
-        Ok(due::resident_stall(&view.task, mandate, &comments, now))
+        let mut stall = due::resident_stall(&view.task, mandate, &comments, now);
+        if let (Some(stall), Some(routine_name)) = (&mut stall, cycle_routine_disabled) {
+            stall.reason = format!(
+                "{}; {}",
+                stall.reason,
+                resident_cycle_routine_disabled_reason(routine_name)
+            );
+        }
+        Ok(stall)
     }
 
     pub(crate) fn resident_view(
@@ -300,10 +341,14 @@ impl OrbitRuntime {
         let live_cycle = cycle::live_cycle_from_history(&history)?
             .filter(|live| live.expires_at > chrono::Utc::now());
         let (state, reason) = view.state();
-        let stall = self.resident_stall_of(&view, chrono::Utc::now())?;
+        let cycle_routine_disabled = self.resident_cycle_routine_disabled();
+        let stall =
+            self.resident_stall_of(&view, chrono::Utc::now(), cycle_routine_disabled.as_deref())?;
         let mut value = json!({
             "task_id": view.task.id,
             "control": control_json(&view),
+            "cycle_routine_disabled": cycle_routine_disabled.is_some(),
+            "cycle_routine_name": cycle_routine_disabled,
             "stalled": stall.is_some(),
             "stalled_reason": stall.map(|stall| stall.reason),
             "title": view.task.title,
@@ -335,6 +380,7 @@ impl OrbitRuntime {
     /// `orbit.resident.list`: every task tagged `resident`, ended ones only
     /// with `include_ended`.
     pub fn list_resident_mandates(&self, include_ended: bool) -> Result<Value, OrbitError> {
+        let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut rows = Vec::new();
         for task in self.list_task_metadata()? {
             if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
@@ -346,7 +392,11 @@ impl OrbitRuntime {
             let history = self.get_task_history(&task.id)?;
             let view = self.resident_view(task, &history)?;
             let (state, reason) = view.state();
-            let stalled = self.resident_stall_of(&view, chrono::Utc::now())?.is_some();
+            let stall = self.resident_stall_of(
+                &view,
+                chrono::Utc::now(),
+                cycle_routine_disabled.as_deref(),
+            )?;
             let effective = view.effective();
             let mandate = view.mandate.as_ref().ok();
             rows.push(json!({
@@ -361,7 +411,10 @@ impl OrbitRuntime {
                 "workspaces": effective.workspaces,
                 "authority_revision": view.authority.as_ref().ok().map(|authority| authority.revision),
                 "open_requests": view.open_requests.len(),
-                "stalled": stalled,
+                "cycle_routine_disabled": cycle_routine_disabled.is_some(),
+                "cycle_routine_name": cycle_routine_disabled,
+                "stalled": stall.is_some(),
+                "stalled_reason": stall.map(|stall| stall.reason),
             }));
         }
         Ok(json!({ "count": rows.len(), "mandates": rows }))
