@@ -131,7 +131,9 @@ orbit demo status --subject reader
 such as `{ $ref: schemas/status-input.json }` within the plugin root. Output is
 checked against the declared output schema. `cli.verb` can rename the derived
 subcommand; `cli.positional` lists top-level input properties to promote to
-positionals. Those properties remain available as flags.
+positionals (every property except JSON-shaped ones — objects, arrays of
+objects or booleans, and untyped shapes — which keep only their
+`--<name>-json` flag). Those properties remain available as flags.
 
 Set `execution_kind` to `read_only` or `mutating` to describe the operation.
 Read-only tools admit agents, operators and runners. Mutating tools require

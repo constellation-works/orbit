@@ -350,8 +350,10 @@ behind `orbit-core`, not `orbit-engine`, so the listener reaches dispatch throug
 existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
-registration is a plugin backend, plus the five host-credentialed reads and the claimed
-worker's owner calls above. That covers `orbit tool run <ns>.<verb>`, its
+registration is a plugin backend, plus the five host-credentialed reads, the claimed
+worker's owner calls above, a host-submitted explorer (`orbit.agent.invoke`) and the guarded
+resident actions (`orbit.workflow.ship`, `orbit.decision.raise`, `orbit.workflow.land` and
+the move to `done` via `orbit.task.update`) below. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an
@@ -494,8 +496,13 @@ service side regardless.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
   nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
-  five read-only `github.*` tools and `CLAIMED_OWNER_TOOLS` (§3). Claimed-owner calls also pass
-  the claim-specific scope checks described above. The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
+  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS`, a host-submitted explorer
+  submission and a resident cycle's guarded ship, decision raise, landing and move to `done`
+  (§3). Claimed-owner calls also pass
+  the claim-specific scope checks described above; explorer submissions pass the activity
+  policy, agent-facing and deny-policy checks for the run the broker serves, and resident
+  actions run only when the served job run is a cycle, through the tool host's cycle guard.
+  The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
   brokered call, where an in-process call with no activity would be unrestricted.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
@@ -765,7 +772,7 @@ anything:
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
 | A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
-| A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused`; the marker follows the activity-dependent scopes in §3. An ordinary `agent_implement` read of `review-report.json` or `review-manifest.json` fails the reviewer activity check first with `claimed_review_bridge_refused`. An admitted reviewer, live final recovery or the findings-read route can reach the claimed-task check, which returns `claimed_owner_bridge_refused`. Nothing reaches the owner. |
+| A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused` with `claimed_owner_bridge_refused` before any activity-dependent scope in §3; nothing reaches the owner. The claimed-task check runs first for every activity, so an ordinary `agent_implement` read of another task's `review-report.json` or `review-manifest.json` never reaches the reviewer activity check. Same-task reads keep the §3 scopes: an ordinary `agent_implement` read of its own task's `review-report.json` or `review-manifest.json` fails the reviewer activity check with `claimed_review_bridge_refused`, while an admitted reviewer, a live final recovery and the findings-read route serve their own named artifacts. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain preserves release evidence, the owner holds the task for an operator decision, and the drain suppresses its host for the window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
