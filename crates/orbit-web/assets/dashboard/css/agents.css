@@ -1,8 +1,10 @@
 /* Observe › Agents: role tabs, the ranking with its detail column, the "How
    the score works" and attribution disclosures and the role panel. The body is
    one grid: the detail column sits right of the ranking on a wide screen and
-   under it on a phone. The panel row is reserved only while a role panel is
-   rendered, so a role without one leaves no empty track and no gap for it. */
+   under it below 1800px, where the widest ranking (eleven columns) cannot sit
+   beside it without clipping its last columns. The panel row is reserved only
+   while a role panel is rendered, so a role without one leaves no empty track
+   and no gap for it. */
 .agents-role-count {
   margin-left: 6px;
   font-size: 12px;
@@ -304,7 +306,14 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-outcome-outcome_unresolved { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
 .agents-cause-total { text-align: right; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
 
-@media (max-width: 900px) {
+/* The detail column stacks under the ranking below 1800px. The widest ranking
+   (eleven columns) is about 1050px wide; beside the 360px detail column it fits
+   from a viewport of about 1700px, and 1800px leaves room for longer crew and
+   model names. At 1440px the side-by-side ranking showed about 790px and clipped
+   its last columns. Stacked, the ranking takes the full body width, so every
+   column fits without scrolling down to about 1325px; narrower, it scrolls
+   within its own box. */
+@media (max-width: 1800px) {
   .agents-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "ranking" "detail" "how" "strip";
