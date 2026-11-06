@@ -112,6 +112,8 @@ JUDGED_REVIEWERS.filter(row => !row.below_support).sort((a, b) => b.score - a.sc
 let computedAt = new Date(Date.now() - 30_000).toISOString();
 const requests = [];
 let matrixUnavailable = false;
+// Workspace review timing off: no row has a reviewed delivery.
+let reviewTimingOff = false;
 const scorecardWindows = [];
 const sizeCurveWindows = [];
 
@@ -125,7 +127,18 @@ function header(role, url) {
 }
 function scorecard(role, url) {
   const head = header(role, url);
-  if (role === 'implementers') return { ...implementerCard(), ...head };
+  if (role === 'implementers') {
+    const card = { ...implementerCard(), ...head };
+    if (reviewTimingOff) {
+      const reviewTerms = ['first_pass_accepts', 'review_rejects', 'reviewer_repairs'];
+      card.rows = card.rows.map(each => ({
+        ...each, reviewed_units: 0,
+        counts: { ...each.counts, ...Object.fromEntries(reviewTerms.map(key => [key, 0])) },
+        per_100: { ...each.per_100, ...Object.fromEntries(reviewTerms.map(key => [key, null])) },
+      }));
+    }
+    return card;
+  }
   if (role === 'reviewers') {
     const rows = url.searchParams.get('window') === '1h' ? [] : REVIEWER_ROWS;
     return { ...head, fleet_average: rows.length ? REVIEWER_FLEET : null, provisional: rows.reduce((sum, row) => sum + row.provisional, 0), rows };
@@ -710,6 +723,29 @@ try {
   await page.locator('#agents-window-selector [data-window="30d"]').click();
   await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
   pass('implementer tier matrix failure keeps all tiers usable and recovers');
+
+  // Review timing off: the three review columns leave the table, one note says
+  // why, and every remaining ranking column still fits the 1440px ranking.
+  reviewTimingOff = true;
+  await page.reload();
+  await body.locator('.agents-row').first().waitFor();
+  assert.equal(await body.locator('.agents-table td[data-term="first_pass_accepts"]').count(), 0, 'no row repeats an empty review cell');
+  assert.equal(await body.locator('.agents-ranking-note').count(), 1, 'the reason appears once');
+  assert.equal((await body.locator('.agents-ranking').textContent()).split('no reviewed deliveries').length - 1, 0, 'the ranking never repeats the row phrase');
+  const unreviewedHeads = await body.locator('.agents-table thead th').allTextContents();
+  assert.ok(unreviewedHeads.includes('Crew-caused rework') && unreviewedHeads.includes('Escaped regressions'), `the other term columns remain: ${unreviewedHeads}`);
+  assert.ok(!unreviewedHeads.some(text => /First-pass accepts|Review rejects|Reviewer repairs/.test(text)), `the empty review columns are gone: ${unreviewedHeads}`);
+  const unreviewedRanking = await rankingVisibility();
+  assert.equal(unreviewedRanking.scrolls, false, `every remaining ranking column fits 1440px without scrolling: ${JSON.stringify(unreviewedRanking)}`);
+  assert.equal(unreviewedRanking.pageOverflow, false, 'the page has no horizontal overflow at 1440px');
+  await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-unreviewed-table-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-unreviewed-table-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  reviewTimingOff = false;
+  await page.reload();
+  await body.locator('.agents-row').first().waitFor();
+  pass('implementers with review timing off hide empty review columns behind one note and fit 1440px');
 
   // Pilots: the shared ranking and detail, then one tier matrix per row with
   // its diagonal and its too-easy and too-hard counts, at both widths.

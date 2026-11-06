@@ -87,8 +87,11 @@ the **Score breakdown** beside it carries those exact contributions.
   `reviewer_repairs`) are gaps with the reason **no reviewed deliveries**,
   never a centre (worst) or rim (best) zero. `reviewed_units` is a
   count of the row's tasks with a settled first review and the scoring
-  denominator for those three terms. With none, the ranking cells also say
-  **no reviewed deliveries**, API rates are null, and contributions are zero.
+  denominator for those three terms. With none, API rates are null and contributions are zero. In the
+  ranking, a review column that no row can score leaves the table and one note
+  above it names the hidden terms and why; a column some rows can score keeps its
+  values and marks the rest with a compact **—** (title **no reviewed
+  deliveries**). Measured zeros stay values.
   Any positive reviewed count is measured, without a separate provisional
   threshold. Reviewers' pending
   `provisional` reviews make the missed-regressions axis provisional, while
