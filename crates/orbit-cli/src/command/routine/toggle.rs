@@ -3,10 +3,10 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::OrbitError;
 use orbit_core::application::routines::{
     RoutineToggleOutcome, RoutineToggleRefusal, toggle_listed_routine,
 };
+use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
 #[derive(Args)]
@@ -22,14 +22,22 @@ pub struct RoutineDisableArgs {
 }
 
 impl RoutineEnableArgs {
-    pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
-        set_enabled(global_root, &self.name, true)
+    pub fn execute_without_runtime(
+        self,
+        global_root: &Path,
+        runtime: Option<&OrbitRuntime>,
+    ) -> CommandOut {
+        set_enabled(global_root, runtime, &self.name, true)
     }
 }
 
 impl RoutineDisableArgs {
-    pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
-        set_enabled(global_root, &self.name, false)
+    pub fn execute_without_runtime(
+        self,
+        global_root: &Path,
+        runtime: Option<&OrbitRuntime>,
+    ) -> CommandOut {
+        set_enabled(global_root, runtime, &self.name, false)
     }
 }
 
@@ -38,7 +46,24 @@ impl RoutineDisableArgs {
 /// operator-only `routine enable`/`routine disable` authorization at the CLI
 /// chokepoint (which needs a runtime, so these two verbs open one) and the
 /// command audit row is written around the call.
-fn set_enabled(global_root: &Path, name: &str, enabled: bool) -> CommandOut {
+///
+/// Routine names are selected host-wide, but the audit row is recorded under
+/// the workspace the runtime is bound to (the `--workspace` selection, else the
+/// cwd's). A routine from any other workspace is refused before any write, so
+/// the file that changes and the workspace the audit row names cannot differ.
+fn set_enabled(
+    global_root: &Path,
+    runtime: Option<&OrbitRuntime>,
+    name: &str,
+    enabled: bool,
+) -> CommandOut {
+    let runtime = runtime.ok_or_else(|| {
+        OrbitError::Execution(
+            "routine enable/disable requires a workspace runtime for authorization and audit"
+                .to_string(),
+        )
+    })?;
+    let shared_root = runtime.shared_root();
     let report = routine_statuses(global_root)?;
     // Observe the definition's current state and target, then hand both back as
     // the expectation the atomic edit re-checks against the file it rewrites.
@@ -58,10 +83,25 @@ fn set_enabled(global_root: &Path, name: &str, enabled: bool) -> CommandOut {
             ))),
         };
     };
+    let routine = &status.routine;
+    if routine.source_orbit_dir != shared_root {
+        return Err(OrbitError::InvalidInput(format!(
+            "routine '{name}' belongs to workspace '{}', not the selected workspace; \
+             rerun with `--workspace {}`",
+            routine.source_workspace, routine.source_workspace
+        )));
+    }
     let target = status.routine.definition.target.as_ref_string();
     let expected_enabled = status.routine.definition.enabled;
-    let outcome = toggle_listed_routine(&report, name, None, &target, expected_enabled, enabled)?
-        .map_err(|refusal| match refusal {
+    let outcome = toggle_listed_routine(
+        &report,
+        name,
+        Some((&routine.source_workspace, &shared_root)),
+        &target,
+        expected_enabled,
+        enabled,
+    )?
+    .map_err(|refusal| match refusal {
         RoutineToggleRefusal::OwnerAuthority { reason, .. } => {
             OrbitError::CapabilityRefused(reason)
         }

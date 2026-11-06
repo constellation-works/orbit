@@ -501,6 +501,182 @@ fn routine_pause_rejects_unknown_names_and_reports_json_for_known_ones() {
     assert_home_empty(&fixture.home);
 }
 
+/// `routine enable`/`disable` select a routine host-wide but audit under the
+/// workspace the command runs in, so a routine of another workspace is refused
+/// without a write and a routine of the invoking workspace is audited there.
+#[test]
+fn routine_toggle_edits_and_audits_only_the_invoking_workspace() {
+    if crate::isolated_test::run_in_child(
+        "routine_root::routine_toggle_edits_and_audits_only_the_invoking_workspace",
+    ) {
+        return;
+    }
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create isolated home");
+    let mut repos = Vec::new();
+    for (index, workspace) in ["toggle-a", "toggle-b"].into_iter().enumerate() {
+        let repo = temp.path().join(workspace);
+        fs::create_dir_all(&repo).expect("create repo");
+        crate::git_repo::SeededRepo::new(&repo)
+            .readme("# routine toggle test\n")
+            .build();
+        if index == 0 {
+            run_success(
+                &repo,
+                &home,
+                &[
+                    "init",
+                    "--non-interactive",
+                    "--machine-name",
+                    "routine-toggle-host",
+                    "--task-prefix",
+                    "RT",
+                ],
+                None,
+            );
+        }
+        run_success(
+            &repo,
+            &home,
+            &["workspace", "init", "--name", workspace],
+            None,
+        );
+        let routine = format!("resident-cycle-{}", &workspace[7..]);
+        fs::write(
+            repo.join(format!(".orbit/routines/{routine}.yaml")),
+            format!(
+                "schemaVersion: 1\nname: {routine}\nenabled: false\ntrigger:\n  \
+                 cron: \"17 5 * * 1\"\n  missed_run: skip\ntarget: job:store_gc_pipeline\n"
+            ),
+        )
+        .expect("write the workspace's own routine");
+        repos.push((workspace, repo, routine));
+    }
+    let (name_a, repo_a, routine_a) = &repos[0];
+    let (name_b, repo_b, routine_b) = &repos[1];
+    let definition = |repo: &Path, routine: &str| {
+        fs::read_to_string(repo.join(format!(".orbit/routines/{routine}.yaml")))
+            .expect("read routine definition")
+    };
+    let applied_toggles = |workspace_repo: &Path| -> Vec<String> {
+        let id = workspace_id(workspace_repo);
+        run_json(
+            workspace_repo,
+            &home,
+            &["audit", "list", "--workspace-id", &id, "--json"],
+            None,
+        )
+        .as_array()
+        .expect("audit rows")
+        .iter()
+        // A refused attempt is audited as a failure under the invoking workspace.
+        .filter(|row| row["command"] == "routine" && row["status"] == "success")
+        .map(|row| {
+            format!(
+                "{}:{}",
+                row["subcommand"].as_str().unwrap_or_default(),
+                row["target_id"].as_str().unwrap_or_default()
+            )
+        })
+        .collect()
+    };
+    // The toggle verbs are operator-only; the override is recorded in the audit.
+    let operator = |cwd: &Path, args: &[&str]| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(args)
+            .assert()
+    };
+    let refuse = |cwd: &Path, args: &[&str]| {
+        let output = operator(cwd, args).failure().get_output().clone();
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    let (before_a, before_b) = (definition(repo_a, routine_a), definition(repo_b, routine_b));
+
+    // An explicit selector for A cannot reach B's routine, in either direction.
+    let stderr = refuse(
+        repo_a,
+        &["--workspace", name_a, "routine", "enable", routine_b],
+    );
+    assert!(
+        stderr.contains(name_b) && stderr.contains("--workspace"),
+        "mismatch names the routine's workspace: {stderr}"
+    );
+    // Neither does the cwd: running from A cannot enable B's routine.
+    refuse(repo_a, &["routine", "enable", routine_b]);
+    refuse(
+        repo_b,
+        &["--workspace", name_b, "routine", "disable", routine_a],
+    );
+    assert_eq!(
+        (definition(repo_a, routine_a), definition(repo_b, routine_b)),
+        (before_a.clone(), before_b.clone()),
+        "a refused toggle changes neither definition"
+    );
+
+    // Selecting the routine's own workspace works from any cwd, and the audit
+    // row lands under that workspace rather than the cwd's.
+    for (verb, enabled) in [("enable", true), ("disable", false)] {
+        let stdout = operator(
+            repo_a,
+            &["--workspace", name_b, "routine", verb, routine_b, "--json"],
+        )
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+        let out: Value = serde_json::from_slice(&stdout).expect("toggle JSON");
+        assert_eq!(out["enabled"], enabled, "{out}");
+        assert_eq!(out["changed"], true, "{out}");
+        assert_eq!(
+            definition(repo_b, routine_b).contains("enabled: true"),
+            enabled,
+            "B's definition follows `{verb}`"
+        );
+        assert_eq!(definition(repo_a, routine_a), before_a, "A is untouched");
+    }
+    operator(repo_a, &["routine", "enable", routine_a]).success();
+    assert!(definition(repo_a, routine_a).contains("enabled: true"));
+    assert_eq!(
+        definition(repo_b, routine_b),
+        before_b,
+        "B is back to its disabled definition"
+    );
+
+    assert_eq!(
+        applied_toggles(repo_b),
+        [
+            format!("disable:{routine_b}"),
+            format!("enable:{routine_b}")
+        ],
+        "B's audit holds exactly the toggles applied to B, newest first"
+    );
+    assert_eq!(
+        applied_toggles(repo_a),
+        [format!("enable:{routine_a}")],
+        "A's audit holds only the toggle applied to A, not the ones aimed at B"
+    );
+}
+
+fn workspace_id(repo: &Path) -> String {
+    let config: serde_yaml::Value = serde_yaml::from_slice(
+        &fs::read(repo.join(".orbit/config.yaml")).expect("read workspace config"),
+    )
+    .expect("parse workspace config");
+    config["workspace_id"]
+        .as_str()
+        .expect("workspace_id")
+        .to_owned()
+}
+
 fn run_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
