@@ -81,6 +81,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{ActivityInvocationCount, InvocationRunCoverage, JobRunOutcomeFact};
 use orbit_types::workflow::{JobActivityRoles, JobRunState};
 
+pub use crate::application::job::catalog::JobDefinitionReads;
 use crate::runtime::OrbitRuntime;
 use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
@@ -380,6 +381,17 @@ impl OrbitRuntime {
         &self,
         window: &ReliabilityWindow,
     ) -> Result<RuntimeReliability, OrbitError> {
+        self.pipeline_reliability_sharing_reads(window, &JobDefinitionReads::default())
+    }
+
+    /// [`Self::pipeline_reliability`] for one workspace of a fleet read, taking
+    /// the job definition reads the whole request shares so each shared
+    /// definition file is read once per request, not once per workspace.
+    pub fn pipeline_reliability_sharing_reads(
+        &self,
+        window: &ReliabilityWindow,
+        definition_reads: &JobDefinitionReads,
+    ) -> Result<RuntimeReliability, OrbitError> {
         if window.since >= window.until {
             return Err(OrbitError::InvalidInput(
                 "reliability window `since` must be earlier than `until`".to_string(),
@@ -388,6 +400,7 @@ impl OrbitRuntime {
         // The partition `job_runs` and `invocations` are recorded under.
         let workspace_id = self.stores().jobs().workspace_id().to_string();
         let store = self.sqlite_store()?;
+        let mut phase = PhaseClock::start();
 
         let facts = store.list_job_run_outcome_facts(
             &workspace_id,
@@ -395,12 +408,16 @@ impl OrbitRuntime {
             window.until,
             MAX_JOB_RUN_FACTS,
         )?;
+        let facts_us = phase.lap();
         let echoes = self.failure_echoes(&facts.facts)?;
+        let echoes_us = phase.lap();
         let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated, &echoes);
 
         let counts =
             store.count_invocations_by_activity(&workspace_id, window.since, window.until)?;
-        let roles = self.job_activity_roles()?;
+        let invocations_us = phase.lap();
+        let roles = self.job_activity_roles(definition_reads)?;
+        let roles_us = phase.lap();
         // Distinct counts do not sum across activities.
         let recovery_ids = roles.recovery_only().into_iter().collect::<Vec<_>>();
         let coverage = store.count_invocation_job_runs(
@@ -409,7 +426,20 @@ impl OrbitRuntime {
             window.until,
             &recovery_ids,
         )?;
+        let coverage_us = phase.lap();
         let recovery = aggregate_recovery(&counts, &roles, coverage);
+        tracing::debug!(
+            workspace = %workspace_id,
+            facts = facts.facts.len(),
+            echoed = echoes.leaves.len(),
+            activities = counts.len(),
+            facts_us,
+            echoes_us,
+            invocations_us,
+            roles_us,
+            coverage_us,
+            "pipeline reliability phases"
+        );
 
         Ok(RuntimeReliability {
             window: window.clone(),
@@ -446,6 +476,22 @@ impl OrbitRuntime {
             echoes.leaves.insert(run_id, cause.leaf_run_id);
         }
         Ok(echoes)
+    }
+}
+
+/// Microsecond laps for the per-workspace phase breakdown logged at debug.
+struct PhaseClock(std::time::Instant);
+
+impl PhaseClock {
+    fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+
+    fn lap(&mut self) -> u128 {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.0).as_micros();
+        self.0 = now;
+        elapsed
     }
 }
 

@@ -22,7 +22,8 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
 use orbit_core::metrics::cost::MetricsWindow;
 use orbit_core::metrics::reliability::{
-    BucketOutcomeRow, JobOutcomeRow, OutcomeCounts, Rate, ReliabilityWindow, RuntimeReliability,
+    BucketOutcomeRow, JobDefinitionReads, JobOutcomeRow, OutcomeCounts, Rate, ReliabilityWindow,
+    RuntimeReliability,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -132,6 +133,10 @@ fn pipeline_reliability_json(
     // `totals` and `unreadable_workspaces` keep their serial order and the
     // single pinned snapshot stays the authority for every read.
     let entries = pinned.entries();
+    // Every workspace layers the same global and plugin job definitions; one
+    // request-scoped read set reads each shared file once instead of once per
+    // workspace (ORB-22422), and is dropped with the request.
+    let definition_reads = JobDefinitionReads::default();
     let reads = fan_out(entries.len(), |index| {
         let entry = &entries[index];
         if !entry.active {
@@ -149,7 +154,7 @@ fn pipeline_reliability_json(
         };
         // Same for one whose query fails: failing the whole fleet view would
         // hide every healthy workspace behind the broken one.
-        match runtime.pipeline_reliability(&window) {
+        match runtime.pipeline_reliability_sharing_reads(&window, &definition_reads) {
             Ok(reliability) => {
                 let elapsed_ms = query_start.elapsed().as_millis();
                 tracing::debug!(
