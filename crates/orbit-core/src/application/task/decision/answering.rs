@@ -14,6 +14,11 @@ use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{PilotAdmissionHold, TaskJobPort, TaskRecords, TriageTarget};
 
+/// What an answer's comment says when its rewrite discarded the task's
+/// published or kept candidate, which the rewritten specification no longer
+/// matches.
+const CANDIDATE_DISCARDED_NOTE: &str = "\nCandidate discarded: the rewrite changed the specification the task's published candidate implements, so that candidate (and its open pull request) is closed and the next run implements fresh.";
+
 impl OrbitRuntime {
     /// Apply `answer_id` to the open request `request_id` as the human
     /// `actor_label`, returning the request as it then reads (`answered`).
@@ -192,9 +197,7 @@ impl OrbitRuntime {
                     edit.target.as_str(),
                     edit.replacement
                 );
-                let comment = decision_comment(request, answer_id, chosen, via, note, &consequence);
                 let mut params = TaskUpdateParams {
-                    comment: Some(comment),
                     status: Some(TaskStatus::Backlog),
                     ..Default::default()
                 };
@@ -204,6 +207,25 @@ impl OrbitRuntime {
                     }
                     TriageTarget::Description => params.description = Some(edit.replacement),
                 }
+                let task = self.get_task(task_id)?;
+                params.discard_candidate = self.rewrite_strands_candidate(
+                    &task,
+                    params.description.as_deref(),
+                    params.acceptance_criteria.as_deref(),
+                )?;
+                let consequence = if params.discard_candidate {
+                    format!("{consequence}{CANDIDATE_DISCARDED_NOTE}")
+                } else {
+                    consequence
+                };
+                params.comment = Some(decision_comment(
+                    request,
+                    answer_id,
+                    chosen,
+                    via,
+                    note,
+                    &consequence,
+                ));
                 self.update_task_as_human(task_id, params, actor_label.to_string())?;
                 Ok(None)
             }
@@ -404,9 +426,24 @@ impl OrbitRuntime {
             self.ensure_proposal_admissible(task_id)?;
         }
 
+        // A rewrite that changes the specification a published or kept
+        // candidate implements would be refused for that candidate; the
+        // answer discards it with the rewrite instead, and says so.
+        let discards = blocked
+            && rewrites
+            && self.rewrite_strands_candidate(
+                &task,
+                params.description.as_deref(),
+                params.acceptance_criteria.as_deref(),
+            )?;
+        params.discard_candidate = discards;
+
         let mut consequence = format!("Consequence: {}", answer.consequence);
         if !applied.is_empty() {
             consequence.push_str(&format!("\nApplied: {}.", applied.join(", ")));
+        }
+        if discards {
+            consequence.push_str(CANDIDATE_DISCARDED_NOTE);
         }
         if let Some(kind) = action_kind {
             consequence.push_str(&format!("\nAction: {kind}."));

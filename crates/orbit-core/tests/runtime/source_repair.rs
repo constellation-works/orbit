@@ -13,6 +13,8 @@ use std::path::PathBuf;
 mod association;
 #[path = "source_repair/crew_redraw.rs"]
 mod crew_redraw;
+#[path = "source_repair/decision_answer.rs"]
+mod decision_answer;
 #[path = "source_repair/desktop_native.rs"]
 mod desktop_native;
 #[path = "source_repair/discarded_successors.rs"]

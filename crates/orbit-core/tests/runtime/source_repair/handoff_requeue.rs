@@ -25,9 +25,9 @@ use std::sync::{Arc, Mutex};
 
 /// One open delivery PR; records every close.
 #[derive(Clone)]
-struct Forge {
+pub(super) struct Forge {
     open: ForgePullRequest,
-    closed: Arc<Mutex<Vec<(u64, String)>>>,
+    pub(super) closed: Arc<Mutex<Vec<(u64, String)>>>,
 }
 
 impl TaskPrForge for Forge {
@@ -58,7 +58,7 @@ impl TaskPrForge for Forge {
 }
 
 /// A forge holding the fixture's PR 17 open, as Orbit authored it.
-fn delivery_forge(f: &Fixture) -> Forge {
+pub(super) fn delivery_forge(f: &Fixture) -> Forge {
     Forge {
         open: ForgePullRequest {
             number: 17,
@@ -118,7 +118,7 @@ pub(super) fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::O
     )
 }
 
-fn status(f: &Fixture) -> TaskStatus {
+pub(super) fn status(f: &Fixture) -> TaskStatus {
     f.runtime.get_task(&f.task).unwrap().status
 }
 
@@ -533,7 +533,7 @@ fn a_human_word_on_a_transient_block_stands() {
 }
 
 /// History entries of `event` recorded by Orbit on the fixture task.
-fn recorded(f: &Fixture, event: &str) -> usize {
+pub(super) fn recorded(f: &Fixture, event: &str) -> usize {
     f.runtime
         .get_task_history(&f.task)
         .unwrap()
