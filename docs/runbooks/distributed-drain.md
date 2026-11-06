@@ -932,7 +932,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   A leaf whose implementation proves no change is needed hands off `NoDiff`
   instead. The implementer writes `no-diff.json` (or `already-landed.json`)
   and its validation logs beneath `.orbit/tmp/`, returning their artifact paths
-  and scratch `source_path`s as `no_diff_artifacts`. Commit imports these
+  and scratch `source_path`s as `no_diff_artifacts`, unless it takes the
+  report-free `already_resolved` route below. Commit imports these
   bounded files through the claim and verifies them before the leaf skips PR
   preparation and publication. Required task artifacts (such as ledgers and
   screenshots) use a separate `task_artifacts: [{path, source_path}]` output
@@ -950,14 +951,21 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   The handoff pins that verifier report; the owner rechecks it against its live
   base and completes without a PR under the same completion authority. A moved
   base or changed report requires fresh validation; a skip flag alone is refused.
-  When the tests that show the base already resolves the task run only
-  outside the agent sandbox, the implementer also returns `already_resolved`
-  `{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}`.
-  `claim_validate` replays each selector on the base, outside the agent
-  sandbox in a detached worktree, after the required commands, and pins each
-  passing log beside theirs. A failing replay fails the claim with its output
-  (the owner blocks the task); an empty list, a selector outside that
-  grammar, or a run that executes no test or prints a skip is refused.
+  The report-free route [ORB-22407]: when the tests that show the base already
+  resolves the task run only outside the agent sandbox, the implementer returns
+  `already_resolved`
+  `{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` with its
+  execution summary and no `no_diff_artifacts`. Commit settles that as
+  `verified_already_resolved`, embedding the selectors and summary, when neither
+  clean-tree report artifact exists. `claim_validate` then runs the required
+  commands on the base and replays each selector on the base, outside the agent
+  sandbox in a detached worktree, pinning each passing log beside theirs. A
+  failing replay fails the claim with its output (the owner blocks the task); an
+  empty list, a selector outside that grammar, or a run that executes no test or
+  prints a skip is refused. A candidate that also changes the base is refused for
+  this outcome. A supplied report stays authoritative: one that is malformed or
+  fails verification is refused, never replaced by the selectors, and a summary
+  alone is refused.
 - Before a follower receives a claim, the owner excludes tasks whose immutable
   `required_tools` cannot be satisfied in a remote claimed implementer. The
   pull receipt names the required tool and restriction in `deferred_conflicts`:

@@ -850,14 +850,14 @@ rules the executor applied. Accepted revisions go through one shared rule that
 handoff acceptance and the landing attempt both call.
 
 A claimed leaf that verifies a clean base instead delivers `NoDiff`, with a digest-pinned
-clean-tree verifier checkpoint (`verified_no_diff` or `verified_already_landed`) and captured
-required validation. The sandboxed implementer writes the report and every declared log beneath `.orbit/tmp/`
+clean-tree verifier checkpoint (`verified_no_diff`, `verified_already_landed` or `verified_already_resolved`) and captured
+required validation. On the report route, the sandboxed implementer writes the report and every declared log beneath `.orbit/tmp/`
 and returns `no_diff_artifacts` entries with artifact `path` and scratch `source_path`.
 Commit confines and bounds those reads, imports only the report and its declared logs
 through the claim, and reuses the existing no-diff/already-landed verifier; a skip flag
 alone refuses this route. An `already_resolved` outcome names `cargo test` selectors that
 `claim_validate` replays on the base outside the agent sandbox, each required to pass at
-least one test; their logs join the handoff's validation [ORB-15747]. A `no-diff-expected` task whose implementer returns no report
+least one test; their logs join the handoff's validation [ORB-15747]. Those selectors may stand without a report [ORB-22407]: when neither clean-tree report artifact exists, commit records `verified_already_resolved` with the selectors and the implementer's summary as its evidence, and `claim_validate` still runs the required commands and the replays before handoff. A supplied report stays authoritative, so a malformed or failed one is refused, and a summary alone is refused. A `no-diff-expected` task whose implementer returns no report
 (a review that files findings) instead commits to a `skipped_no_diff_expected` checkpoint
 naming its task, run and pinned base [ORB-14791]. The owner's own pipeline skips the same
 clean commit on the tag alone; the claimed checkpoint lets the owner recheck that its copy

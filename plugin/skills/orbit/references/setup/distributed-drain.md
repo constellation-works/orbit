@@ -157,7 +157,8 @@ Tagged `no-diff-expected` tasks are claimable and hand off `NoDiff` with no
 PR; a review needs no report and runs no required validation or replay, which
 the owner accepts while its copy of the task keeps the tag, and a tagged claim
 that changes code is refused as `no_diff_expected_changed`. An ordinary claim that proves its
-implementation changes nothing may also hand off `NoDiff`. In claimed mode the implementer writes the verifier report
+implementation changes nothing may also hand off `NoDiff`. Unless it returns the
+`already_resolved` outcome below, its implementer writes the verifier report
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
 references; commit imports and verifies them through the claim. Required
 ledgers, screenshots and other task artifacts use a separate
@@ -171,11 +172,28 @@ report name or a report's declared log names, and cannot use the reserved
 `no_diff_artifacts` remains limited to the report and its logs. Owner mode
 uses `orbit.task.artifact.put`.
 The owner rechecks the report against its live base before authorized completion
-without a PR. A changed base or evidence requires fresh validation. When the tests that
+without a PR. A changed base or evidence requires fresh validation.
+
+The report-free alternative is the `already_resolved` outcome. When the tests that
 show the base resolves the task run only outside the agent sandbox, the
-implementer also names them as `already_resolved` `cargo test` selectors, and
-`claim_validate` replays each on the base on the claim host; a failing or empty
-replay never completes the task. A handoff may also carry `owed_criteria`:
+implementer may return `already_resolved`
+`{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` with its
+execution summary and no `no_diff_artifacts`. Commit settles that as
+`verified_already_resolved`, embedding the selectors and summary, when neither
+clean-tree report artifact exists, and the leaf hands off `NoDiff` without a PR.
+The claim host then runs the required commands on the base and replays each
+selector outside the agent sandbox before handoff, pinning the passing logs. A
+failing replay fails the claim, as does one that runs no test or prints a skip;
+an empty selector list or a selector outside that grammar is refused before
+anything runs. A candidate that also changes the base is refused for this
+outcome. The owner accepts the checkpoint only when it names this task and its
+pinned base and its selectors still admit.
+
+Artifact-backed evidence stays authoritative. A verifier report or already-landed
+report that the implementer supplies is imported and verified first, and a
+malformed or failed report is refused rather than replaced by selectors. A
+summary alone, with neither a report nor selectors, is refused. A handoff may
+also carry `owed_criteria`:
 criteria the owner's pilot typed `post_deploy`, which only the deployed build
 can evidence. The owner refuses the settlement when its own pilot finding does
 not type each one, and otherwise lands the handoff with the task left in
