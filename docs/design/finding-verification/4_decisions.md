@@ -2,7 +2,7 @@
 title: Finding Verification — Decisions
 owner: claude
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-05
 status: Accepted
 feature: finding-verification
 doc_role: decisions

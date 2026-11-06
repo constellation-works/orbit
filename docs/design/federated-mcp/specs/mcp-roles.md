@@ -1,11 +1,11 @@
 ---
 type: design
 summary: "Spec: MCP roles — every tool in one toolset, roles as named toolset sets, --role and machine.mcp.role, refusal, remote and federated forwarding, size budgets"
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 last_validated: 2026-11-05
 title: Spec — MCP roles and toolsets
 owner: claude
-status: Draft
+status: Implemented
 feature: federated-mcp
 tags: [federated-mcp, mcp, spec, resident-orchestrator]
 related_features: [federated-mcp, mcp-bridge, resident-orchestrator, fleet-notices]
@@ -19,6 +19,8 @@ is a named set of toolsets for one kind of session (operator console,
 manager, resident cycle, managed agent, read-only viewer), so each session
 carries only the tools its job needs. The decision is recorded in
 [4_decisions.md](../4_decisions.md#an-mcp-role-limits-the-surface-never-the-authority).
+The role grouping was implemented by [ORB-21263], extending the opt-in
+toolset surface introduced by [ORB-20234].
 
 ## Toolsets
 
@@ -44,7 +46,7 @@ carries only the tools its job needs. The decision is recorded in
   `plugins`. The selection name `default` stands for them, so an existing
   `--toolset default` or `machine.mcp.toolsets = ["default"]` keeps its
   meaning. `leases`, `experiments`, `analytics`, `decision-channel`,
-  `agent-invoke`, `notice` and `resident` stay opt-in.
+  `agent-invoke`, `notice` [ORB-21211] and `resident` [ORB-21242] stay opt-in.
 
 ## Roles
 
@@ -115,6 +117,7 @@ filters. `orbit mcp listen` takes the same `--role` and `--toolset`.
 ## Task References
 
 - [ORB-21263] — roles, the toolset split, `--role` and `machine.mcp.role`
+- [ORB-21242] — added resident tools that the role grouping serves
 - [ORB-20234] — opt-in toolsets and the `toolset_not_enabled` refusal
 - [ORB-21245] — the resident toolset that joins the manager and resident roles
 - [ORB-21211] — the `notice` toolset

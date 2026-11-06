@@ -2,7 +2,7 @@
 title: Federated MCP — Decisions
 owner: grok
 last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -244,7 +244,6 @@ Rejected alternative: **a `resident` add-on toolset for the resident orchestrato
 
 ## Task References
 
-- [ORB-11008] — recorded the prior federated MCP policy that these rules implement
 - [ORB-11009] — recorded these standing rules as the contract home (PR #1139)
 - [ORB-11010] — closed the PR #1139 review holes (selector wording, tool class, error precedence, competing authorities)
 - [ORB-11044] — implicit local membership for federated serve

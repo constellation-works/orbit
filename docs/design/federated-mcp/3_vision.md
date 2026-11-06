@@ -2,7 +2,7 @@
 title: Federated MCP — Vision
 owner: grok
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -30,7 +30,7 @@ Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs
 
 ### Policy recorded in host-registry / remote-access
 
-[ORB-11008] wrote the federated policy (one namespace, live descriptors, fail-closed routing, destination authority, no replica protocol) into host-registry and remote-access vision. That write-up is superseded as a contract home; those docs now cross-link here as a standing constraint. They no longer hold the five-point policy list.
+[ORB-11008] wrote the federated policy (one namespace, live descriptors, fail-closed routing, destination authority, no replica protocol) into host-registry and remote-access vision. [ORB-11009] turned that policy into an implementable contract, and [ORB-11010] closed its review holes. That write-up is superseded as a contract home; those docs now cross-link here as a standing constraint. They no longer hold the five-point policy list.
 
 ### Host-registry catalog roles
 

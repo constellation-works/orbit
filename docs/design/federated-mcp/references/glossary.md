@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Glossary: Federated MCP"
-last_updated: 2026-10-29
-last_validated: 2026-11-04
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 title: Glossary — Federated MCP
 owner: grok
 status: Draft
@@ -35,6 +35,7 @@ Vocabulary for the federated MCP mux. Standard industry terms (proxy, mux, TTL) 
 | **Host reachability** | Whether the configured destination answers (reachable / unreachable). Separate from checkout health. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Host-qualified selector** | Structured, caller-uninterpreted addressing token. Encoding `hm_<id>/ws_*` is normative. Not `host_id`, not a path, not a credential. Callers copy the list `selector` field; they must not parse or construct the token. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Mux** | A configured forwarder of already-chosen destinations, not a registry and not automatic owner discovery. [2_design.md §1](../2_design.md) |
+| **MCP role** | A named set of MCP toolsets that filters what the mux lists and dispatches without granting authority. The destination still checks caller authority and checkout capabilities [ORB-21263]. [specs/mcp-roles.md](../specs/mcp-roles.md) |
 | **Outcome unknown** | A routed `tools/call` whose request was written and whose answer never arrived. Reported as `outcome_unknown`, never `unreachable_destination`: the remote work may have committed, so a retry could duplicate it. Post-dispatch, and therefore outside the fail-closed precedence ladder. [2_design.md §6](../2_design.md) |
 | **Propagated authority** | The `--operator` a federated or remote-proxy client was started with, emitted into the argv of every SSH destination it opens. A statement, not a request: the destination serves it. A client running as an agent never propagates it. [4_decisions.md](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) |
 | **Remote-originated session** | A served session that carries a forwarded `--remote-caller-machine-id`. It marks the transport as `ssh-mcp` and names the calling machine for audit; it changes no authorization. [4_decisions.md](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) |
@@ -48,5 +49,6 @@ Vocabulary for the federated MCP mux. Standard industry terms (proxy, mux, TTL) 
 
 - [ORB-12564] — removed destination-side caller authorization: an SSH login is
   ownership, so retired terms stay retired
+- [ORB-21263] — introduced MCP roles as toolset selections over the federated surface
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
