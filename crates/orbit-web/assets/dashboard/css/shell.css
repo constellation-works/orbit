@@ -1181,7 +1181,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .host-detail[hidden] { display: none; }
-.host-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
+.host-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
 .host-detail-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); }
 .host-detail-pill {
   padding: 2px 8px;
@@ -1195,10 +1195,14 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
 .host-detail-pill.stale { border-style: dashed; color: var(--fg-mute); }
 .host-detail-age { margin-left: auto; color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums; }
-.host-detail-row { margin: 0 0 12px; }
+.host-detail-row { position: relative; margin: 0 0 12px; }
 .host-detail-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .host-detail-label { font-weight: 600; }
-.host-detail-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 12px; }
+.host-detail .info-hint { align-self: center; margin-left: 0; }
+/* The panel scrolls and sits on the viewport's bottom edge, so the last row's
+   bubble opens upward rather than overflowing it. */
+.host-detail-row:nth-last-child(2) .info-hint:hover > .info-hint-text,
+.host-detail-row:nth-last-child(2) .info-hint:focus > .info-hint-text { top: auto; bottom: calc(100% + 2px); }
 .host-detail-value { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
 .host-detail-row.elevated .host-detail-label,
 .host-detail-row.elevated .host-detail-value { color: var(--warn-fg); }
@@ -1212,7 +1216,6 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail-tick { position: absolute; top: -3px; width: 1px; height: 12px; background: var(--fg-mute); }
 .host-detail-tick.critical { background: var(--danger-fg); }
 .host-detail-tick.elevated { background: var(--warn-fg); }
-.host-detail-read { margin: 4px 0 0; color: var(--fg-dim); font-size: 12px; line-height: 1.4; }
 .host-detail-foot {
   display: flex;
   flex-wrap: wrap;

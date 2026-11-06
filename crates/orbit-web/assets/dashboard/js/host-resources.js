@@ -1,6 +1,6 @@
 // These live chips observe the selected host (the serving host unless the host
 // picker names another), independently of workspace scope.
-import { el, findRegisteredHost, getHost, getServingHost, hostDisplayName, isHostUnavailable } from './common.js';
+import { el, findRegisteredHost, getHost, getServingHost, hostDisplayName, infoHint, isHostUnavailable } from './common.js';
 import { renderProviderUsage } from './provider-usage.js';
 
 export { describeProviderReading, providerReadingAge, renderProviderUsage } from './provider-usage.js';
@@ -160,13 +160,6 @@ function worstAlarm(rows) {
   return best;
 }
 
-function sublabel(row) {
-  if (row.resource === 'cpu') return row.utilization ? 'busy time across cores' : '1-minute load ÷ online cores';
-  if (row.resource === 'memory') return 'used';
-  if (row.resource === 'disk') return row.path || 'used';
-  return 'time waiting on disk';
-}
-
 function setHidden(node, hidden) {
   if (!node) return;
   if (hidden) node.setAttribute('hidden', '');
@@ -254,7 +247,7 @@ export function renderHostResources(payload, host = document.getElementById('hos
     : tone === 'elevated' ? `${named.charAt(0).toUpperCase()}${named.slice(1)} near limit`
     : 'Throttle open';
   renderHostWarning(alarm, tone);
-  renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm);
+  renderHostDetail(payload, rows, verdict, tone, pill, alarm);
   bindHostDetail();
 }
 
@@ -274,20 +267,15 @@ function renderHostWarning(alarm, tone) {
   }
 }
 
-function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
+function renderHostDetail(payload, rows, verdict, tone, pill, alarm) {
   const panel = document.getElementById('host-detail');
   if (!panel) return;
   const name = hostDisplayName();
   const resource = alarm?.row.resource;
-  const limits = resource ? marks(payload, resource) : null;
-  const plain = verdict.verdictUnknown
-    ? (compact ? `Last sample ${compact} ago. ` : '')
-    : verdict.status === 'disabled' ? 'Throttle disabled — pressure is still reported but holds nothing. '
-    : verdict.status === 'held' ? (alarm && limits ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, limits.resume)}. ` : 'New tasks wait while sustained pressure holds. ')
-    : tone === 'critical' ? `Admission is still open; ${alarm.row.label} reads critical but no sustained pressure is holding work yet. `
-    : tone === 'ok' ? 'Nothing is held back on this host. '
-    : `Admission is still open; ${alarm.row.label} is between ${markText(payload, resource, limits.resume)} and its limit at ${markText(payload, resource, limits.high)}. `;
-  const foot = `${plain}Throttle verdict: ${verdict.status}. ${verdict.reason}`;
+  // The pill states the verdict; the foot adds only what ends a hold.
+  const heldUntil = verdict.status !== 'held' ? ''
+    : resource ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, marks(payload, resource).resume)}.`
+    : 'New tasks wait while sustained pressure holds.';
   const link = el('a', { class: 'host-detail-drain', text: 'Open Tasks dock' });
   link.setAttribute('href', '#tasks?dock=drain');
   panel.className = `host-detail ${tone}`;
@@ -298,14 +286,22 @@ function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
     el('div', { class: 'host-detail-head' }, [
       el('span', { class: 'host-detail-name', id: 'host-detail-name', text: name }),
       el('span', { class: `host-detail-pill ${tone}`, text: pill }),
+      infoHint(verdict.reason),
       el('span', { class: 'host-detail-age', text: verdict.age === 'age unknown' ? 'age unknown' : `sampled ${verdict.age}` }),
     ]),
     ...rows.map(row => detailRow(payload, row)),
     el('div', { class: 'host-detail-foot' }, [
-      el('span', { class: 'host-detail-foot-text', text: foot }),
+      ...(heldUntil ? [el('span', { class: 'host-detail-foot-text', text: heldUntil })] : []),
       link,
     ]),
   );
+}
+
+// The disk reading is the fullest of the host's watched paths, so its hint says
+// which path that is rather than leaving a bare path to explain itself.
+function detailHint(row) {
+  if (row.resource !== 'disk' || !row.path || row.value === '-') return row.detail;
+  return `Fullest watched path: ${row.path}\n${row.percent.toFixed(1)}% used (${row.severity})`;
 }
 
 function detailRow(payload, row) {
@@ -318,11 +314,10 @@ function detailRow(payload, row) {
   const node = el('div', { class: `host-detail-row ${row.severity}` }, [
     el('div', { class: 'host-detail-row-head' }, [
       el('span', { class: 'host-detail-label', text: row.utilization ? 'CPU utilization' : NAMES[row.resource] }),
-      el('span', { class: 'host-detail-sub', text: sublabel(row) }),
+      infoHint(detailHint(row)),
       el('span', { class: 'host-detail-value', text: row.shown }),
     ]),
     meter,
-    el('p', { class: 'host-detail-read', text: row.detail }),
   ]);
   node.dataset.resource = row.resource;
   return node;

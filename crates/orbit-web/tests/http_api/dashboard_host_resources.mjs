@@ -188,11 +188,9 @@ assert.match(host.getAttribute('aria-label'), /critical · admission open/);
 assert.doesNotMatch(host.getAttribute('aria-label'), /holding work/i);
 {
   const pillNode = descendants(panel).find(node => String(node.className).startsWith('host-detail-pill'));
-  const footNode = descendants(panel).find(node => node.className === 'host-detail-foot-text');
   assert.match(pillNode.textContent, /critical · admission open/i);
   assert.doesNotMatch(pillNode.textContent, /holding work/i);
-  assert.match(footNode.textContent, /^Admission is still open; .* reads critical but no sustained pressure is holding work yet\. Throttle verdict: open\./);
-  assert.doesNotMatch(footNode.textContent, /New tasks wait/);
+  assert.equal(descendants(panel).some(node => node.className === 'host-detail-foot-text'), false, 'nothing is held, so the foot says nothing');
 }
 
 renderHostResources({ ...payload, pressures: [{ resource: 'memory' }] });
@@ -277,16 +275,15 @@ assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', '
   const ticks = row => descendants(row).filter(node => String(node.className).startsWith('host-detail-tick')).map(node => node.title);
   const labelOf = (row, name) => rowText(row).find(([className]) => className === name)?.[1];
   assert.equal(labelOf(cpuRow(), 'host-detail-label'), 'CPU utilization');
-  assert.equal(labelOf(cpuRow(), 'host-detail-sub'), 'busy time across cores');
   assert.deepEqual(ticks(cpuRow()), ['Elevated at 80%', 'Critical at 90%'], 'utilization thresholds are percentages');
   const foot = descendants(byId('host-detail')).find(node => node.className === 'host-detail-foot-text').textContent;
-  assert.match(foot, /^New tasks wait until cpu drops below 80%\. /, `the verdict names utilization in its unit: ${foot}`);
+  assert.match(foot, /^New tasks wait until cpu drops below 80%\.$/, `the verdict names utilization in its unit: ${foot}`);
   // The same thresholds on a load host read in the load unit.
   renderHostResources({ ...busy, cpu: reading(193.7, 'critical'), thresholds: { ...busy.thresholds, cpu_source: 'load' } });
   assert.deepEqual(readings()[0], { k: 'load', v: '1.9×' });
   assert.equal(labelOf(cpuRow(), 'host-detail-label'), 'Load');
   assert.deepEqual(ticks(cpuRow()), ['Elevated at 0.8× cores', 'Critical at 0.9× cores'], 'load thresholds read as multiples of cores');
-  assert.match(descendants(byId('host-detail')).find(node => node.className === 'host-detail-foot-text').textContent, /^New tasks wait until load drops below 0\.8× cores\. /);
+  assert.match(descendants(byId('host-detail')).find(node => node.className === 'host-detail-foot-text').textContent, /^New tasks wait until load drops below 0\.8× cores\.$/);
   renderHostResources(recovered);
 }
 
