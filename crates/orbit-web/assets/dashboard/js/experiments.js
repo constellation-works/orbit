@@ -352,17 +352,16 @@ function detailView(experiment, view) {
   const primary = readout
     ? (readout.metrics || []).find((metric) => metric.metric === readout.experiment?.primary_metric) || null
     : null;
-  const notice = readout && view.error ? readoutNotice(view) : null;
   return el("div", { class: "ex-detail" }, [
     headerCard(experiment, view, primary),
     detailTabStrip(),
     detailTabPanel("result", readout ? [
-      notice,
+      readout && view.error ? readoutNotice(view) : null,
       armCards(experiment, readout, primary, color),
       forestCard(experiment, readout, color),
     ] : [readoutPlaceholder("Result", view)]),
     detailTabPanel("trust", readout ? [
-      notice,
+      readout && view.error ? readoutNotice(view) : null,
       healthCard(readout),
       el("div", { class: "mx-row" }, [
         armEvidenceCard(readout),
