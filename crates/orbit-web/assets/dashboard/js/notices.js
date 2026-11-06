@@ -7,7 +7,7 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 
-import { el, fetchJson, formatClock, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -186,6 +186,44 @@ function noticeRow(notice, canWrite, onClose) {
   return row;
 }
 
+const OPERATOR_REQUIRED = "An operator session is required to post or close notices.";
+const PAGE_HINT = "Open fleet notices in the shown workspaces; notices closed or expired in the last 24 hours follow. Posting and closing use the same notice operations as the CLI. "
+  + OPERATOR_REQUIRED;
+
+// Whether the Post form is open, and the payload last rendered so the Post
+// control can redraw without a read. A scope switch closes the form.
+let postOpen = false;
+let lastPayload = null;
+onWorkspaceChange(() => {
+  postOpen = false;
+  lastPayload = null;
+});
+
+// The heading's info hint and Post control are built once into the static
+// header; later renders only update the control's state.
+function syncHeadControls(canWrite) {
+  const hintSlot = $("notices-hint-slot");
+  if (hintSlot && !hintSlot.firstChild) hintSlot.append(infoHint(PAGE_HINT));
+  const slot = $("notices-post-slot");
+  if (!slot) return;
+  let button = $("notices-post-toggle");
+  if (!button) {
+    button = el("button", { class: "action primary notice-post-toggle", text: "Post", type: "button", id: "notices-post-toggle" });
+    button.setAttribute("aria-controls", "notices-post-form");
+    button.addEventListener("click", () => {
+      postOpen = !postOpen;
+      if (lastPayload) renderNotices(lastPayload);
+      if (postOpen) document.querySelector("#notices-post-form .notice-post-title")?.focus();
+    });
+    slot.append(button);
+  }
+  button.disabled = !canWrite;
+  button.setAttribute("aria-expanded", String(postOpen && canWrite));
+  const reason = slot.querySelector(".info-hint");
+  if (!canWrite && !reason) slot.append(infoHint(OPERATOR_REQUIRED));
+  if (canWrite && reason) reason.remove();
+}
+
 function postForm(canWrite, onPost) {
   const form = el("form", { class: "notice-post-form" });
   const title = el("input", { class: "notice-post-title" });
@@ -220,10 +258,9 @@ function postForm(canWrite, onPost) {
   const feedback = el("p", { class: "notice-feedback", role: "status" });
   if (!canWrite) {
     submit.disabled = true;
-    feedback.textContent = "An operator session is required to post or close notices.";
+    feedback.textContent = OPERATOR_REQUIRED;
   }
   form.append(
-    el("h3", { class: "notice-form-title", text: "Post a notice" }),
     title, body,
     el("div", { class: "notice-form-row" }, [kind, scope, linked, expires, submit]),
     feedback,
@@ -240,6 +277,7 @@ function postForm(canWrite, onPost) {
     };
     onPost(payload, feedback, form);
   });
+  form.id = "notices-post-form";
   form.dataset.key = "notice-post-form";
   form.dataset.hash = canWrite ? "write" : "read-only";
   return form;
@@ -259,12 +297,15 @@ export async function fetchAndRenderNotices({ shareRecent = false } = {}) {
 function renderNotices(payload) {
   const body = $("notices-body");
   if (!body) return;
+  lastPayload = payload;
   renderNoticeBanner(payload);
   const open = Array.isArray(payload?.open) ? payload.open : [];
   const recent = Array.isArray(payload?.recent) ? payload.recent : [];
   const canWrite = payload?.can_write === true && !isAggregateView();
   const count = $("notices-count");
   if (count) count.textContent = String(open.length);
+  if (!canWrite) postOpen = false;
+  syncHeadControls(canWrite);
   const feedbackFor = () => body.querySelector(".notice-feedback");
   const refresh = () => fetchAndRenderNotices().catch((error) => {
     const feedback = feedbackFor();
@@ -275,6 +316,7 @@ function renderNotices(payload) {
       await postJson("/api/notices", input);
       noticesRead = null;
       form.reset();
+      postOpen = false;
       await refresh();
     } catch (error) {
       feedback.textContent = String(error?.message || error);
@@ -293,25 +335,21 @@ function renderNotices(payload) {
       if (feedback) feedback.textContent = String(error?.message || error);
     }
   };
-  const nodes = [postForm(canWrite, onPost)];
-  nodes.push(el("h3", { class: "notice-section-title", text: "Open" }));
+  const nodes = [];
   if (!open.length) {
-    const note = el("div", { class: "panel-placeholder", text: "No open notices in the shown workspaces." });
+    const note = el("div", { class: "panel-placeholder", text: "No open notices." });
     note.dataset.key = "notices-open-empty";
     note.dataset.hash = "empty";
     nodes.push(note);
   } else {
     nodes.push(...open.map((notice) => noticeRow(notice, canWrite, onClose)));
   }
-  nodes.push(el("h3", { class: "notice-section-title", text: "Closed or expired in the last 24 hours" }));
-  if (!recent.length) {
-    const note = el("div", { class: "panel-placeholder", text: "No notice closed or expired in the last 24 hours." });
-    note.dataset.key = "notices-recent-empty";
-    note.dataset.hash = "empty";
-    nodes.push(note);
-  } else {
+  // Notices that ended in the last day follow; with none, the section is absent.
+  if (recent.length) {
+    nodes.push(el("h3", { class: "notice-section-title", text: "Closed or expired in the last 24 hours" }));
     nodes.push(...recent.map((notice) => noticeRow(notice, false, null)));
   }
+  if (postOpen && canWrite) nodes.unshift(postForm(canWrite, onPost));
   for (const node of nodes) {
     if (!node.dataset.key) {
       node.dataset.key = `notices-${nodes.indexOf(node)}`;
