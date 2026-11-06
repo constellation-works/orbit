@@ -427,6 +427,11 @@ fn layout_authority_standing(process: &Path, shared_root: &Path) -> Result<Stand
     let version = current_layout_version(shared_root)?;
     // Version 0 is pending too: every migration from the baseline applies.
     let pending = version < SUPPORTED_LAYOUT_VERSION;
+    // A concurrent first opener publishes its authority before stamping the
+    // layout. Observe the stamp first, then the record: reading them in the
+    // opposite order can combine an old absent record with a new stamp and
+    // incorrectly classify a fresh workspace as damaged legacy state.
+    let never_stamped = version == 0 && !layout_ever_stamped(shared_root);
     match read_authority_record(shared_root) {
         Ok(Some(_)) if !pending => Ok(Standing::Admitted { pending }),
         Ok(Some(recorded)) => {
@@ -445,7 +450,7 @@ fn layout_authority_standing(process: &Path, shared_root: &Path) -> Result<Stand
                 RECORDED_REMEDY,
             ))
         }
-        Ok(None) if version == 0 && !layout_ever_stamped(shared_root) => Ok(Standing::Create),
+        Ok(None) if never_stamped => Ok(Standing::Create),
         Ok(None) if !pending => Ok(Standing::Admitted { pending }),
         Ok(None) => Err(refused(
             shared_root,
