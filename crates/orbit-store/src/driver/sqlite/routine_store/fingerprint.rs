@@ -13,9 +13,13 @@ use crate::Store;
 const FINGERPRINT_ROW_WINDOW: i64 = 256;
 
 impl Store {
-    /// A token that changes whenever a routine fire, cursor or pause row, a
+    /// A token that changes when a routine fire, cursor or pause row, a
     /// job run (the fire record of state-, delivery- and condition-triggered
-    /// routines) or an automation consumer is added, removed or advanced.
+    /// routines) or an automation consumer is added or removed, or when a
+    /// sampled row advances. Fire and job-run in-place updates are sampled
+    /// only over the newest `FINGERPRINT_ROW_WINDOW` (256) rows named above,
+    /// so an older row rewritten in place leaves the token unchanged and the
+    /// change surfaces only when the caller's freshness bound expires.
     /// Unlike the database file's size or modification time it ignores the
     /// rest of the audit store, so unrelated audit traffic leaves it unchanged.
     pub fn routine_state_fingerprint(&self) -> Result<String, OrbitError> {

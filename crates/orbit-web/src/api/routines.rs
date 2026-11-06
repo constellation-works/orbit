@@ -32,14 +32,16 @@ use serde_json::{Value, json};
 use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
 
-/// Freshness bound of a served routine health body. Fires, pauses and
+/// Freshness bound of a served routine health body. Sampled fires, pauses and
 /// definition or config edits change the memo key and recompute at once; this
-/// bound covers what the key cannot see (the clock, due times, automation
-/// state).
+/// bound also covers what the key cannot see (the clock, due times, automation
+/// state) and in-place updates outside the newest-256 sampled fire/job-run rows.
 const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
 
-/// Age at which a hit starts a background recompute, leaving the rest of
-/// [`ROUTINE_HEALTH_TTL`] for it to land before the entry expires.
+/// Age at which a still-fresh hit starts a background recompute, leaving the
+/// rest of [`ROUTINE_HEALTH_TTL`] for it to land before the entry expires.
+/// A request past the bound, or whose refresh failed or lands late, waits for
+/// compute.
 const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
 
 /// Host-wide cache key: selection does not restrict the host's routine list.
