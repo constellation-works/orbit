@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.45.0 — 2026-11-06
+
+### Breaking Changes
+
+- **Implementer scorecard nulls**: A review term with no reviewed deliveries now reports `per_100` as null instead of a numeric zero, so an unmeasured term no longer reads as a clean score. ([ORB-21946])
+  numeric zero removed → read null with `reviewed_units` and `term_units`
+- **Visual contract schema**: Claimed-live visual contracts can now carry `resolution_schema`, which older strict readers refuse. ([ORB-21963])
+  old strict visual-contract compatibility removed → run matching owner and executor builds
+
+### Highlights
+
+- **Residents finish their own work**: A resident can raise decisions from inside its cycle sandbox, dispatch with its ship right and complete its own assignment lifecycle. ([ORB-21984])
+- **Fewer false run failures**: Upgrade-quiesce interruptions no longer count as run failures, recurring Orbit-origin worker SIGTERMs are fixed, and a landing stop after base-suspect CI cycles holds instead of failing. ([ORB-21876])
+- **CI sweeps survive claimed owners**: A matching compiler or repair owner under an execution claim no longer aborts the sweep. Its receipt lands when the claim settles, and independent failures still file. ([ORB-22211])
+- **Forecast calibration**: Calibration scores the baseline forecast while adjusted totals are withheld, keeping adjusted scoring separate and labeled. ([ORB-21950])
+- **Dashboard on phones and long settings**: The phone layout gives task content more room, and long Workflow settings gain section jumps, collapse controls and key search. ([ORB-21961])
+- **A CLI that explains itself**: Help is shorter with policy moved to installed references, and unknown config keys, malformed durations and not-found errors now say what to do next. ([ORB-21990])
+
 ## 0.44.1 — 2026-11-04
 
 ### Highlights
