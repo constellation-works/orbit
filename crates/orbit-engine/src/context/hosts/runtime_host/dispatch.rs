@@ -252,16 +252,12 @@ macro_rules! dispatch_methods {
         /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.
         /// When false (the default), an activity's `steering_instruction` is
         /// never appended, so rendered prompts stay byte-identical.
-        fn mid_run_steering_enabled(&self) -> bool {
-            false
-        }
+        fn mid_run_steering_enabled(&self) -> bool;
 
         /// Record that a resident cycle's provider conversation reference
         /// expired or could not be resumed, so this cycle fell back to
         /// rebuilding from the brief alone (`continuity: rebuilt`).
-        fn record_resident_continuity_rebuilt(&self, _run_id: &str) -> Result<(), OrbitError> {
-            Ok(())
-        }
+        fn record_resident_continuity_rebuilt(&self, _run_id: &str) -> Result<(), OrbitError>;
 
         /// Read mid-run steering's promotion gate for `task_id` of `run_id`,
         /// before the step the job's `steering_gate` guards

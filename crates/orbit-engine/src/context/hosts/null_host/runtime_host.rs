@@ -42,6 +42,39 @@ use super::super::{
 use super::NullRuntimeHost;
 
 impl<T: NullRuntimeHost> RuntimeHost for T {
+    fn validation_build_output_env(&self) -> Vec<String> {
+        NullRuntimeHost::validation_build_output_env(self)
+    }
+    fn mid_run_steering_enabled(&self) -> bool {
+        NullRuntimeHost::mid_run_steering_enabled(self)
+    }
+    fn record_resident_continuity_rebuilt(&self, run_id: &str) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_resident_continuity_rebuilt(self, run_id)
+    }
+    fn completion_deadline(
+        &self,
+        run_id: &str,
+        pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError> {
+        NullRuntimeHost::completion_deadline(self, run_id, pull_request, proposed)
+    }
+    fn completion_policy_digest(
+        &self,
+        run_id: &str,
+        task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError> {
+        NullRuntimeHost::completion_policy_digest(self, run_id, task_ids)
+    }
+    fn authenticate_completion_tail(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<bool, OrbitError> {
+        NullRuntimeHost::authenticate_completion_tail(self, run_id, task_id, step_id)
+    }
+
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,

@@ -2,7 +2,7 @@
 
 /// Whether a step-recovery hook may dispatch [ORB-11332].
 ///
-/// The `RuntimeHost` default answers `Allowed`. `Reserved` admits the attempt
+/// The test-only `NullRuntimeHost` default answers `Allowed`. `Reserved` admits the attempt
 /// under its `episode`, and `Denied` carries the reason recovery must not run.
 /// The original step error stays authoritative either way.
 #[derive(Debug, Clone, PartialEq, Eq)]

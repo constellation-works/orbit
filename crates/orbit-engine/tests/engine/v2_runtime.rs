@@ -1648,3 +1648,56 @@ runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_fro
 runtime_contracts!(runtime_contracts_3: incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint, the_shipped_review_step_retries_then_recovers_a_failing_reviewer, provider_unavailable_dispatch_errors_do_not_attempt_recovery, an_implementer_blocker_ends_implement_one_without_recovery);
 runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_claimed_artifacts_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
 runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation, fan_in_retains_position_aligned_errors_through_successful_join_and_resume, a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume, leaf_completion_records_file_and_store_waits_without_leaking_between_steps);
+
+#[test]
+fn null_runtime_host_forwards_capability_overrides() {
+    use orbit_engine::RuntimeHost;
+    struct OverrideHost;
+    impl orbit_engine::test_support::NullRuntimeHost for OverrideHost {
+        fn validation_build_output_env(&self) -> Vec<String> {
+            vec!["override".into()]
+        }
+        fn mid_run_steering_enabled(&self) -> bool {
+            true
+        }
+        fn record_resident_continuity_rebuilt(&self, _: &str) -> Result<(), OrbitError> {
+            Err(OrbitError::Execution("override".into()))
+        }
+        fn completion_deadline(&self, _: &str, _: &str, _: u64) -> Result<u64, OrbitError> {
+            Ok(42)
+        }
+        fn completion_policy_digest(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> Result<Option<String>, OrbitError> {
+            Ok(Some("override".into()))
+        }
+        fn authenticate_completion_tail(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<bool, OrbitError> {
+            Ok(true)
+        }
+    }
+    let host = OverrideHost;
+    assert_eq!(
+        RuntimeHost::validation_build_output_env(&host),
+        ["override"]
+    );
+    assert!(RuntimeHost::mid_run_steering_enabled(&host));
+    assert!(RuntimeHost::record_resident_continuity_rebuilt(&host, "run").is_err());
+    assert_eq!(
+        RuntimeHost::completion_deadline(&host, "run", "pr", 1).unwrap(),
+        42
+    );
+    assert_eq!(
+        RuntimeHost::completion_policy_digest(&host, "run", &[])
+            .unwrap()
+            .as_deref(),
+        Some("override")
+    );
+    assert!(RuntimeHost::authenticate_completion_tail(&host, "run", "task", "step").unwrap());
+}
