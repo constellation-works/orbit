@@ -6,6 +6,12 @@
   padding: 16px; background: var(--bg);
 }
 .ex-view, .ex-detail, .ex-tab-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* The view root is keyed for poll updates, so syncNodes flashes it with
+   `data-changed`/`data-new` on every readout change. That wash would paint
+   the 16px gaps around the tab strip and between cards green, reading as a
+   running/concluded status tone. Keep status colour on the badges that
+   report it; the gaps stay the page background. */
+.ex-view.data-changed, .ex-view.data-new { animation: none; }
 .ex-tab-panel[hidden] { display: none; }
 .ex-tab-panel .ex-empty { min-height: 72px; padding: 16px; }
 .ex-tab-panel > .mx-row > .mx-card { min-width: 0; }
