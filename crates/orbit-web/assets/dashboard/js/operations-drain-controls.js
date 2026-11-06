@@ -438,7 +438,8 @@ function autoDrainStopHeadline(outcome) {
 }
 
 export function autoDrainStopButton(payload) {
-  if (autoDrainStopMode(payload) === "none") return null;
+  const mode = autoDrainStopMode(payload);
+  if (mode === "none") return null;
   const key = "auto-drain:stop";
   const reasons = autoDrainReasons(payload);
   const live = autoDrainLiveWindow(payload);
@@ -490,14 +491,18 @@ export function autoDrainStopButton(payload) {
       if (operationsState.lastAutoDrain) drainControlCallbacks.render(operationsState.lastAutoDrain);
     }
   });
-  return button;
+  return mode === "stop"
+    ? el("div", { class: "drain-stop-control" }, [button, infoHint(copy.description)])
+    : button;
 }
 
-// Visible text (not only a tooltip, which keyboard and touch users never see)
-// says why the control is off, or what it does right now.
+// A refusal stays visible. Settle mode keeps its guidance; an available Stop
+// explains itself in the focusable hint beside the button.
 export function autoDrainStopNote(payload) {
-  if (autoDrainStopMode(payload) === "none") return null;
+  const mode = autoDrainStopMode(payload);
+  if (mode === "none") return null;
   const reasons = autoDrainReasons(payload);
+  if (mode === "stop" && !reasons.stop) return null;
   return el("div", {
     class: reasons.stop ? "operation-control-note drain-stop-note disabled-reason" : "operation-control-note drain-stop-note",
     text: reasons.stop || autoDrainStopCopy(payload).description,
