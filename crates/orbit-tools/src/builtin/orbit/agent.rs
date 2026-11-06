@@ -110,12 +110,15 @@ impl Tool for OrbitAgentInvokeTool {
                  beside the caller's sandbox, never inside it; when no explorer crew can run \
                  under an enforced read-only sandbox on this host the call is refused before \
                  any run exists, naming the setting to fix, so continue without delegating. \
-                 Every other agent is refused, and a refusal never stops the caller's run. Track it with \
-                 `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's \
-                 summary, findings, next_steps, any other result fields and its bounded final \
-                 message, and `agent_invocation.progress` its latest message and last activity \
-                 while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop \
-                 it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, \
+                 Every other agent is refused, and a refusal never stops the caller's run. An \
+                 operator can track it with `orbit.workflow.run.show`, which requires operator \
+                 capability and refuses agent sessions. A session with a shell on the owning host \
+                 can use `orbit run show <RUN_ID> --json`; its `run.agent_invocation` contains the \
+                 answer and progress. The answer carries the agent's summary, findings, next_steps, \
+                 any other result fields and its bounded final message; progress carries its latest \
+                 message and last activity while it runs. Agent sessions can wait for the answer \
+                 with `wait_seconds`. Read the complete output with `orbit run logs <RUN_ID>` and \
+                 stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, \
                  and dispatches nothing."
                     .to_string(),
             parameters,

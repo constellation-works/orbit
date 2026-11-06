@@ -663,6 +663,68 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
     }
 }
 
+fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
+    use orbit_common::OrbitError;
+    use orbit_types::workflow::ActivityV2Spec;
+
+    let fixture = fixture("[]");
+    for activity in [
+        "agent_implement",
+        "agent_review_repair",
+        "agent_explore",
+        "agent_invoke",
+        "task_pilot",
+        "resident_cycle",
+        "image_input_probe",
+        "review_reconciliation_review",
+        "triage_escalation",
+        "visual_verify",
+        "visual_review",
+        "verify_finding",
+    ] {
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+        )
+        .unwrap();
+        let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+        let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+            panic!("agent activity")
+        };
+        let denied = spec.tool_disallow_list.unwrap();
+        assert!(
+            denied.iter().any(|tool| tool == "orbit.workflow.run.show"),
+            "{activity} must withhold the operator-only run observer from its agent"
+        );
+        let resolved = fixture
+            .runtime
+            .resolve_activity_tool_denials(&[], activity, &denied)
+            .unwrap();
+        assert!(
+            !resolved
+                .effective_tools
+                .iter()
+                .any(|tool| tool == "orbit.workflow.run.show"),
+            "{activity} must not advertise the operator-only run observer"
+        );
+    }
+
+    let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
+    let error = fixture
+        .runtime
+        .execute_tool_command(
+            "orbit.workflow.run.show",
+            json!({"id": "jrun-missing"}),
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::CapabilityDenied(_)),
+        "run.show remains operator-only for agent sessions: {error}"
+    );
+}
+
 /// [ORB-15162] A task that requires `orbit.task.add` still gets a final-recovery
 /// invocation. The tool stays out of the callable set, and the same requirement
 /// under a covering deny list still fails the implementing activity.
@@ -784,6 +846,11 @@ fn shipped_disallow_list(activity: &str) -> Vec<String> {
 }
 
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    agent_loop_activity_tool_surface,
+    agent_loop_activities_withhold_run_show_and_keep_its_operator_gate
+);
+
 crate::scenario_table!(
     an_empty_crew_pool_skips_final_recovery_and_records_nothing_scenarios,
     an_empty_crew_pool_skips_final_recovery_and_records_nothing,

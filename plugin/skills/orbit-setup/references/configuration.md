@@ -1133,10 +1133,11 @@ override it as `<crew>@<effort>`: the reference wins over the crew's `effort`, i
 distinct pool member and scorecard row, shares the crew's account, and an effort the
 provider rejects is refused at load (never ignored). Crew names may not contain `@`.
 Each launch records the effective value after crew/inline precedence and
-admission, alongside its resolved crew and model. Run show (`--json` and
-`orbit.workflow.run.show`) exposes `agent_executions` on the run and displayed
-steps: `reasoning_effort: null` means provider default, while `"unknown"` means
-historical execution without a record. Editing a crew never rewrites history.
+admission, alongside its resolved crew and model. Run inspection with
+`orbit run show --json` or the operator-only `orbit.workflow.run.show` MCP tool
+exposes `agent_executions` on the run and displayed steps:
+`reasoning_effort: null` means provider default; `"unknown"` means historical
+execution without a record. Editing a crew never rewrites history.
 Scorecards, ladder reports, experiment arms and managed usage include effort
 breakdowns; inspect those populations when tuning a crew. Scorecard rankings
 retain their crew/model score, with effort shown as descriptive execution usage.
