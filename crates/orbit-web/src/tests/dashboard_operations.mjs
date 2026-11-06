@@ -389,7 +389,7 @@ assert(drainReadinessFor('ORB-14334').title.includes('ORB-14489') && !drainReadi
 const capacityBar = () => drainBody.querySelector('.drain-capacity-bar');
 assert(capacityBar().getAttribute('aria-label') === 'Workspace: 4 of 4 leaf slots in use' && capacityBar().querySelectorAll('.drain-capacity-seg.used').length === 4, `capacity shows workspace slot occupancy: ${capacityBar().getAttribute('aria-label')}`);
 assert(drainBody.querySelector('.drain-capacity-count').classList.contains('full') && drainBody.querySelector('.drain-capacity-count').textContent === '4/4 slots', 'no free slot is flagged beside the count');
-assert(drainBody.querySelector('.drain-slots').textContent.includes('1 occupied slot'), 'a saturated workspace says how many slots must clear');
+assert(drainBody.querySelector('.drain-slots').textContent.includes('Leaf limit: 1 slot must clear.'), 'a saturated workspace says how many slots must clear');
 assert(!drainBody.querySelector('.drain-stat, .drain-blocked, .drain-blocked-row'), 'the card lists no pool tiles or waiting tasks');
 for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot only']) {
   assert(!drainText().includes(gone), `the card no longer renders ${JSON.stringify(gone)}`);
@@ -689,22 +689,24 @@ drainTasksOverride = null;
 // ORB-14489: zero free slots alone does not imply that finishing a task can
 // unblock admission. Exercise the readiness-to-card boundary for each reason.
 for (const fixture of [
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } }, summary: /host resource throttle.*cpu/, cannotClearSlot: true },
-  { capacity: { active_leaf_runs: 12, max_active_leaf_runs: 12, free_slots: 0 }, summary: /workspace leaf limit.*1 occupied slot/ },
-  { capacity: { active_leaf_runs: 14, max_active_leaf_runs: 12, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 10, task_pr_pipeline: 4 } }, summary: /workspace leaf limit.*3 occupied slots/, pipelines: true },
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 6, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 4 } }, summary: /workspace leaf limit.*1 occupied slot/, otherSlots: true },
-  { capacity: { active_leaf_runs: null, max_active_leaf_runs: 12, free_slots: 0, occupancy: { active_leaf_runs: 12 } }, summary: /workspace leaf limit.*1 occupied slot/ },
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, admissions_stopped: true }, summary: /window has stopped/, cannotClearSlot: true },
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, host_shutdown: { kind: 'reboot' } }, summary: /host shutdown/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } }, summary: /Host throttle: no new starts\./, detail: /host resource throttle clears \(cpu\)/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 12, max_active_leaf_runs: 12, free_slots: 0 }, summary: /Leaf limit: 1 slot must clear\./ },
+  { capacity: { active_leaf_runs: 14, max_active_leaf_runs: 12, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 10, task_pr_pipeline: 4 } }, summary: /Leaf limit: 3 slots must clear\./, pipelines: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 6, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 4 } }, summary: /Leaf limit: 1 slot must clear\./, otherSlots: true },
+  { capacity: { active_leaf_runs: null, max_active_leaf_runs: 12, free_slots: 0, occupancy: { active_leaf_runs: 12 } }, summary: /Leaf limit: 1 slot must clear\./ },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, admissions_stopped: true }, summary: /Window admissions stopped\./, detail: /has stopped starting new tasks/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, host_shutdown: { kind: 'reboot' } }, summary: /Host shutdown holds new tasks\./, cannotClearSlot: true },
   { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0 }, summary: /No admissions.*snapshot/, cannotClearSlot: true },
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 6 }, tasks: [readinessTasks[2]], summary: /1 pool task.*locks or live claims/, cannotClearSlot: true },
-  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 2 }, tasks: [readinessTasks[0]], summary: /admits up to 1 task/ },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 6 }, tasks: [readinessTasks[2]], summary: /1 task waits on locks or claims\./, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 2 }, tasks: [readinessTasks[0]], summary: /up to 1 task\./ },
 ]) {
   drainCapacityOverride = fixture.capacity;
   drainTasksOverride = fixture.tasks || null;
   await fetchAndRenderAutoDrainPane();
   const summary = drainBody.querySelector('.drain-slots').textContent;
   assert(fixture.summary.test(summary), `readiness constraint is explained: ${JSON.stringify(fixture.capacity)} => ${summary}`);
+  // The one-line message leaves out detail such as the throttled resource names; the hover help keeps it (ORB-22321).
+  if (fixture.detail) assert(fixture.detail.test(drainBody.querySelector('.drain-capacity .info-hint-text')?.textContent || ''), `the hover help keeps the detail the one-line message drops: ${JSON.stringify(fixture.capacity)}`);
   if (fixture.cannotClearSlot) assert(!/finish|must clear/.test(summary), `ORB-14489: task completion must not be presented as clearing another constraint: ${summary}`);
   if (fixture.pipelines) {
     const pipelines = drainBody.querySelector('.drain-pipeline-occupancy').textContent;

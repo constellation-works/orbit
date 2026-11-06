@@ -64,7 +64,8 @@
 
 /* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
    then why nothing more starts beside the count, and a mix of pipelines. */
-.drain-capacity { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+/* position: the hover help under a message spans the whole card. */
+.drain-capacity { display: flex; flex-direction: column; gap: 7px; min-width: 0; position: relative; }
 .drain-capacity-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
 .drain-capacity-count { flex: 0 0 auto; color: var(--fg-dim); font-size: 11.5px; white-space: nowrap; }
 .drain-capacity-count.full { color: var(--warn-fg); }
@@ -75,7 +76,11 @@
 .drain-capacity-seg.over, .drain-capacity-over { background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); box-shadow: none; }
 .drain-capacity-used { background: var(--state-running); border-radius: 3px; }
 .drain-capacity-over { border-radius: 3px; }
-.drain-slots { margin: 0; min-width: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+/* The message stays on one line beside the count. Its wording is short enough
+   to fit (see autoDrainCapacity); the ellipsis only guards a narrower dock, and
+   the hover help beside it carries the full detail. */
+.drain-slots-row { display: flex; align-items: baseline; min-width: 0; }
+.drain-slots { margin: 0; min-width: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .drain-slots.held { color: var(--warn-fg); }
 .drain-pipeline-occupancy { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .drain-pipeline {

@@ -2,7 +2,7 @@ import { cpuReadingLabel, cpuReadingValue } from './host-resources.js';
 import { drainReason, drainReadinessView, DRAIN_LOCK_REASONS } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainNumber, $, operationsState, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
-import { el, isAggregateView } from './common.js';
+import { el, infoHint, isAggregateView } from './common.js';
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
 // <duration> [--complete]" from the dashboard). One workspace-scoped action,
@@ -135,34 +135,43 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   const free = autoDrainNumber(capacity.free_slots);
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
+  // Each message shares the card's line with the slot count, so it is short
+  // enough for three-digit counts at the 336px dock and the 375px phone dock.
+  // Detail the short wording drops is `detail`: it shows as focusable hover
+  // help beside the message, so it reads without a mouse.
   let summary;
+  let detail = "";
   if (capacity.host_shutdown && capacity.host_shutdown_holding !== false) {
-    summary = "New tasks cannot start while a host shutdown is scheduled.";
+    summary = "Host shutdown holds new tasks.";
   } else if (capacity.host_shutdown) {
     const mode = capacity.host_shutdown.mode || "shutdown";
     const at = capacity.host_shutdown.scheduled_at || "a later time";
-    summary = `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`;
+    summary = `Host ${mode}; holds later.`;
+    detail = `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`;
   } else if (capacity.resource_throttle) {
     const resources = Array.isArray(capacity.resource_throttle.resources)
       ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";
-    summary = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
+    summary = "Host throttle: no new starts.";
+    detail = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
   } else if (capacity.admissions_stopped === true) {
-    summary = "This window has stopped starting new tasks. Tasks already admitted keep running.";
+    summary = "Window admissions stopped.";
+    detail = "This window has stopped starting new tasks. Tasks already admitted keep running.";
   } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
     const toClear = busy - limit + 1;
-    summary = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
+    summary = `Leaf limit: ${autoDrainPlural(toClear, "slot")} must clear.`;
+    detail = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
   } else if (Number.isFinite(free) && free <= 0) {
-    summary = "No admissions are available in this readiness snapshot.";
+    summary = "No admissions in this snapshot.";
   } else if (counts.eligible === 0) {
     if (blocked > 0) {
-      summary = `No tasks are eligible yet; ${autoDrainPlural(blocked, "pool task")} ${blocked === 1 ? "waits" : "wait"} on task locks or live claims.`;
+      summary = `${autoDrainPlural(blocked, "task")} ${blocked === 1 ? "waits" : "wait"} on locks or claims.`;
     } else {
       summary = counts.waiting > 0
-      ? `Nothing is eligible yet; ${autoDrainPlural(counts.waiting, "task")} ${counts.waiting === 1 ? "waits" : "wait"} in the pool.`
-      : "Nothing is waiting in the backlog.";
+      ? `None eligible; ${autoDrainPlural(counts.waiting, "task")} waiting.`
+      : "Backlog is empty.";
     }
   } else {
-    summary = `A window started now admits up to ${autoDrainPlural(admits, "task")}.`;
+    summary = `Starting now: up to ${autoDrainPlural(admits, "task")}.`;
   }
   const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
   const full = Number.isFinite(free) && free <= 0;
@@ -202,10 +211,11 @@ export function autoDrainCapacity(capacity, counts, blocked) {
     text: known ? `${busy}/${limit} slots` : "capacity unknown",
     title: [label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"),
   });
+  const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
   const result = el("div", { class: "drain-capacity" }, [
     bar,
     el("div", { class: "drain-capacity-line" }, [
-      el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary }),
+      el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]),
       count,
     ]),
   ]);
