@@ -418,14 +418,6 @@ impl TaskRiskinessModel {
         }
     }
 
-    /// The fitted probability for a candidate measured at `lines` changed
-    /// on the `diff_lines` basis, or `None` when the window's diff history
-    /// cannot support a fit. Selective review uses only this basis: a
-    /// declared-file fallback is not an actual-diff estimate.
-    pub fn estimate_diff_lines(&self, lines: u64) -> Option<f64> {
-        self.diff.fit.map(|fit| fit.probability(lines))
-    }
-
     /// A stable identity of the fitted diff-lines model and its evidence
     /// window, for freezing into a selection receipt: estimator version,
     /// window, support, and the fit's observations and coefficients.

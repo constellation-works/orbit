@@ -60,19 +60,6 @@ impl OrbitRuntime {
         shadow::report(self, query)
     }
 
-    /// Scan, then report one row of a role with the tasks behind each term,
-    /// with a cache period of zero as on [`Self::agent_role_scorecard`].
-    /// Missing-row recovery names the canonical tool and input field.
-    pub fn agent_role_detail(
-        &self,
-        role: AgentRole,
-        query: &AgentQuery,
-        crew: &str,
-        model: Option<&str>,
-    ) -> Result<Value, OrbitError> {
-        self.agent_role_detail_for_surface(role, query, crew, model, AgentDetailSurface::ToolRun)
-    }
-
     pub(crate) fn agent_role_detail_for_surface(
         &self,
         role: AgentRole,
