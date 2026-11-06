@@ -478,8 +478,8 @@ bounded mechanical steps, then escalates or opens a decision card
 [distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 Its last template stays as retired provenance (`RETIRED_AUTO_TASK_FILES`), so
 `orbit workspace sync` retires a seeded copy, settings-only forks included,
-preserves an operator-edited one, and, when the copy was enabled, reports that
-the routine replaces it. Sync never enables the routine. The
+preserves an operator-edited one, and reports an enabled copy as superseded by
+final recovery. Sync does not enable a replacement routine. The
 `skip_unless_blocked_candidates` precondition stays available to
 workspace-authored definitions. The shipped `ci-failure-remediation` definition
 was removed earlier, with its asset and seeded copy ([ORB-11115]), and the
