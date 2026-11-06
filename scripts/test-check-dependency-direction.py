@@ -410,6 +410,34 @@ class RelativeImportTests(unittest.TestCase):
             "use std::collections::BTreeMap;\nuse orbit_common::model_defaults::{\n    A, B,\n};\n"
             "use orbit_types::identity::{Crew, CrewAssignment};\n")}, rejected=False)
 
+    def check_crate_edge(self, dependency, kind, target, rejected):
+        metadata = self.root / "metadata.json"
+        manifest = self.root / "crates/orbit-core/Cargo.toml"
+        metadata.write_text(json.dumps({
+            "workspace_members": ["orbit-core"],
+            "packages": [{"id": "orbit-core", "name": "orbit-core",
+                          "manifest_path": str(manifest),
+                          "dependencies": [{"name": dependency, "kind": kind,
+                                            "target": target}]}],
+        }))
+        result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.stderr, "", result.stderr)
+        self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
+
+    def test_core_policy_edge_is_dev_only(self):
+        # [ORB-22418] ARCHITECTURE.md records orbit-core -> orbit-policy as
+        # dev-only and crates/orbit-core/Cargo.toml declares it under
+        # [dev-dependencies]; the guard must reject a normal, build, or
+        # target-normal edge while keeping the dev-only edge legal.
+        # Production policy use stays with orbit-runtime and orbit-tools.
+        for kind, target in ((None, None), ("build", None), (None, "cfg(unix)")):
+            with self.subTest(kind=kind, target=target):
+                self.check_crate_edge("orbit-policy", kind, target, rejected=True)
+        for kind, target in (("dev", None), ("dev", "cfg(unix)")):
+            with self.subTest(kind=kind, target=target):
+                self.check_crate_edge("orbit-policy", kind, target, rejected=False)
+
 
 if __name__ == "__main__":
     unittest.main()
