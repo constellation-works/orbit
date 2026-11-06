@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Remote Access"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 tags: [remote-access]
 ---
 
@@ -14,7 +14,7 @@ Vocabulary specific to how Orbit is viewed across workspaces and machines. Stand
 | **Aggregate view** | The "All workspaces" task list backed by `GET /api/tasks/all`, tagging each task with its workspace. Per-machine, not cross-machine. See [2_design.md §2](../2_design.md). |
 | **connect** | `orbit web connect <ssh-host>`: the client-side command that tunnels a remote machine's loopback dashboard over SSH. See [2_design.md §3](../2_design.md). |
 | **Global mode** | `orbit web serve`'s only mode since [ORB-10029]: serves every workspace in the served registry (`~/.orbit/workspaces.json`, or `<root>/workspaces.json` under `--root`) regardless of cwd. Contrast single mode. See [2_design.md §2](../2_design.md). |
-| **Single mode** | Legacy default (pre-[ORB-10029]) of `orbit web serve` inside a workspace without `--global`: served exactly that workspace. No longer reachable from `orbit web serve`; `DashboardState::single` survives for embedding callers and handler tests. See [2_design.md §2](../2_design.md). |
+| **Single mode** | Legacy default (pre-[ORB-10029]) of `orbit web serve` inside a workspace without `--global`: served exactly that workspace. No longer reachable from `orbit web serve`; `orbit_web::serve` survives for embedding callers and wraps `DashboardState::single`, which handler tests use directly. See [2_design.md §2](../2_design.md). |
 | **`Ws` extractor** | The axum extractor that selects a request's runtime from `?workspace=<id>` (or the default), replacing the former single-runtime `State`. See [2_design.md §2](../2_design.md). |
 | **WsEntry** | One servable workspace in `DashboardState` (`id`, `name`, `repo_root`, `orbit_dir`, `binding`, `active`); inactive entries are listed but never built. See [2_design.md §2](../2_design.md). |
 | **Viewing-not-sync** | The load-bearing boundary: remote access shows existing state on a reachable machine and may carry authorized live mutations through that connection — for example forwarded `POST`/`PUT`/`PATCH`/`DELETE` requests gated by `host.forward` — but never replicates or synchronizes stores across machines. The remote machine remains authoritative for everything shown or mutated through the connection. See [Remote access is live access, not synchronization](../4_decisions.md#remote-access-is-live-access-not-synchronization). |
