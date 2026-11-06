@@ -87,17 +87,62 @@ class RelativeImportTests(unittest.TestCase):
             for path in paths:
                 path.unlink(missing_ok=True)
 
+    def check_rows(self, rows, rejected, shared=None, base=None):
+        """Run the guard once over independent `(relative, source)` rows.
+
+        The guard reads each source file on its own and reports every hit as
+        `<path>:<line>:`, so a rejected row must be named by its own path, which
+        the exit status alone could not show. Accepted rows pass together only
+        if each passes. Rows must reach one detector chain: the guard's `||`
+        chains stop at the first detector with a hit, and a row hidden that way
+        fails here by name. Each file keeps its row's directory depth, which is
+        what a `super::` chain resolves against. `shared` holds exact-path files
+        every row needs, such as a method's defining module. `base` is the source
+        directory rows are relative to, by default orbit-core's application.
+        """
+        base = base or self.app
+        paths = {}
+        for index, (relative, source) in enumerate(rows):
+            path = Path(os.path.normpath(base / relative))
+            if path.name != "mod.rs":
+                path = path.with_name(f"{path.stem}_row{index}.rs")
+            self.assertNotIn(path, paths, relative)
+            paths[path] = (relative, source)
+        written = [Path(os.path.normpath(base / relative)) for relative in shared or {}]
+        try:
+            for path, source in zip(written, (shared or {}).values()):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source)
+            for path, (_, source) in paths.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source)
+            result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.stderr, "", result.stderr)
+            for path, row in paths.items():
+                with self.subTest(row=row):
+                    if rejected:
+                        self.assertIn(f"{path}:", result.stdout)
+                    else:
+                        self.assertNotIn(f"{path}:", result.stdout)
+            self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
+        finally:
+            for path in [*written, *paths]:
+                path.unlink(missing_ok=True)
+
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
-        for owner in ("automation", "job", "review", "distributed", "pull_drain",
-                      "admission", "backlog_forecast", "sweep_filing", "workspace_auto"):
-            with self.subTest(owner=owner):
-                self.check_files({
-                    f"{owner}/state.rs":
-                        "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
-                    "task/worker.rs":
-                        "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-                        "        self.fresh_owner_method();\n    }\n}\n",
-                }, rejected=True)
+        # Each owner defines its own name, so a row's call is reported only when
+        # the guard derives that owner's inherent names.
+        owners = ("automation", "job", "review", "distributed", "pull_drain",
+                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto")
+        self.check_rows(
+            [("task/worker.rs",
+              "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+              f"        self.fresh_{owner}_method();\n    }}\n}}\n") for owner in owners],
+            rejected=True,
+            shared={f"{owner}/state.rs":
+                    f"impl OrbitRuntime {{\n    pub(crate) fn fresh_{owner}_method(&self) {{}}\n}}\n"
+                    for owner in owners})
 
     def test_inherent_calls_from_task_into_single_file_upper_module_rejected(self):
         # [ORB-22289] `tag_instructions` is one file, not a directory; its
@@ -111,22 +156,19 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=True)
 
     def test_lower_modules_cannot_reach_the_forecast(self):
-        forecast_method = {
-            "backlog_forecast/runtime.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_forecast_method(&self) {}\n}\n",
-        }
-        for lower in ("job", "automation", "review", "distributed", "pull_drain",
-                      "admission", "workspace_auto"):
-            with self.subTest(lower=lower, edge="call"):
-                self.check_files({
-                    **forecast_method,
-                    f"{lower}/probe.rs":
-                        "impl OrbitRuntime {\n    pub(crate) fn probe(&self) {\n"
-                        "        self.fresh_forecast_method();\n    }\n}\n",
-                }, rejected=True)
-            with self.subTest(lower=lower, edge="path"):
-                self.check_import(f"{lower}/probe.rs",
-                                  "use crate::application::backlog_forecast::Probe;", True)
+        lowers = ("job", "automation", "review", "distributed", "pull_drain",
+                  "admission", "workspace_auto")
+        self.check_rows(
+            [(f"{lower}/probe.rs",
+              "impl OrbitRuntime {\n    pub(crate) fn probe(&self) {\n"
+              "        self.fresh_forecast_method();\n    }\n}\n") for lower in lowers],
+            rejected=True,
+            shared={"backlog_forecast/runtime.rs":
+                    "impl OrbitRuntime {\n    pub(crate) fn fresh_forecast_method(&self) {}\n}\n"})
+        self.check_rows(
+            [(f"{lower}/probe.rs", "use crate::application::backlog_forecast::Probe;\n")
+             for lower in lowers],
+            rejected=True)
 
     def test_task_names_the_forecast_only_in_its_two_shim_lines(self):
         shim = ("pub use crate::application::backlog_forecast::BacklogForecastHistory;\n"
@@ -220,44 +262,39 @@ class RelativeImportTests(unittest.TestCase):
             ("job/state.rs", "task/worker.rs"),
             ("../adapter/state.rs", "task_quality/runtime.rs"),
         ):
-            for call in forms:
-                with self.subTest(owner=owner, call=call):
-                    self.check_files({
-                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
-                        caller: "impl OrbitRuntime {\n    pub(crate) fn drive(&self) {\n"
-                                f"        {call};\n    }}\n}}\n",
-                    }, rejected=True)
+            self.check_rows(
+                [(caller, "impl OrbitRuntime {\n    pub(crate) fn drive(&self) {\n"
+                          f"        {call};\n    }}\n}}\n") for call in forms],
+                rejected=True,
+                shared={owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n"})
 
     def test_bare_and_other_type_calls_to_inherent_names_accepted(self):
         for owner, caller in (
             ("job/state.rs", "task/worker.rs"),
             ("../adapter/state.rs", "task_quality/runtime.rs"),
         ):
-            for call in (
-                "fresh_owner_method(runtime)",
-                "<Other>::fresh_owner_method(runtime)",
-                "Vec::<OrbitRuntime>::fresh_owner_method(runtime)",
-            ):
-                with self.subTest(owner=owner, call=call):
-                    self.check_files({
-                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
-                        caller: "fn drive(runtime: &OrbitRuntime) {\n"
-                                f"    {call};\n}}\n",
-                    }, rejected=False)
+            self.check_rows(
+                [(caller, f"fn drive(runtime: &OrbitRuntime) {{\n    {call};\n}}\n") for call in (
+                    "fresh_owner_method(runtime)",
+                    "<Other>::fresh_owner_method(runtime)",
+                    "Vec::<OrbitRuntime>::fresh_owner_method(runtime)",
+                )],
+                rejected=False,
+                shared={owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n"})
 
     def test_paths_into_bootstrap_and_composition_rejected(self):
-        for layer, relative in (("application", "workspace/sync.rs"),
-                                ("adapter", "../adapter/tool_host/operation.rs")):
-            for module in ("bootstrap", "composition"):
-                for tree in (
-                    f"crate::{module}::Probe",
-                    f"crate::{{{module}::Probe}}",
-                    f"crate::{{runtime::{{Other}}, /* note */ {module}::Probe}}",
-                    f"super::super::super::{module}::Probe",
-                    f"super::super::super::{{{module}::Probe}}",
-                ):
-                    with self.subTest(layer=layer, tree=tree):
-                        self.check_import(relative, f"use {tree};", rejected=True)
+        self.check_rows([
+            (relative, f"use {tree};\n")
+            for relative in ("workspace/sync.rs", "../adapter/tool_host/operation.rs")
+            for module in ("bootstrap", "composition")
+            for tree in (
+                f"crate::{module}::Probe",
+                f"crate::{{{module}::Probe}}",
+                f"crate::{{runtime::{{Other}}, /* note */ {module}::Probe}}",
+                f"super::super::super::{module}::Probe",
+                f"super::super::super::{{{module}::Probe}}",
+            )
+        ], rejected=True)
 
     def test_inherent_calls_into_bootstrap_and_composition_rejected(self):
         for owner in ("../composition/runtime.rs", "../bootstrap/init.rs"):
@@ -300,15 +337,13 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_grouped_relative_imports_rejected(self):
         for module in ("distributed", "pull_drain"):
-            for relative, tree in (
+            self.check_rows([(relative, f"use {tree};\n") for relative, tree in (
                 ("job/worker.rs", f"super::super::{{{module}::Probe}}"),
                 ("job/worker.rs", f"super::super::{{\n    RunOwnerLiveness,\n    {module}::{{Probe}},\n}}"),
                 ("job/mod.rs", f"super::{{{module}::Probe}}"),
                 ("job/pr_repair/adoption.rs", f"super::super::super::{{{module}::Probe}}"),
                 ("job/worker.rs", f"super::{{super::{{{module}::Probe}}}}"),
-            ):
-                with self.subTest(module=module, relative=relative, tree=tree):
-                    self.check_import(relative, f"use {tree};", rejected=True)
+            )], rejected=True)
 
     def test_existing_direct_imports_rejected(self):
         for module in ("distributed", "pull_drain"):
@@ -322,23 +357,24 @@ class RelativeImportTests(unittest.TestCase):
             ("job", ("distributed", "pull_drain", "review")),
             ("task", ("job", "review", "distributed", "sweep_filing", "workspace_auto")),
         ):
-            for module in modules:
-                for comment in ("// note\n", "/* keep */", "/* outer /* nested */ keep */"):
-                    for tree in (
-                        f"super::super::{{{comment} {module}::Probe}}",
-                        f"super::super::{{RunOwnerLiveness, {comment} {module}::Probe}}",
-                        f"super::{comment} super::{{{module}::Probe}}",
-                        f"super::super::{comment} {{{module}::Probe}}",
-                        f"super::{{super::{{{comment} {module}::Probe}}}}",
-                    ):
-                        with self.subTest(owner=owner, module=module, tree=tree):
-                            self.check_import(f"{owner}/worker.rs", f"use {tree};",
-                                              rejected=True)
+            self.check_rows([
+                (f"{owner}/worker.rs", f"use {tree};\n")
+                for module in modules
+                for comment in ("// note\n", "/* keep */", "/* outer /* nested */ keep */")
+                for tree in (
+                    f"super::super::{{{comment} {module}::Probe}}",
+                    f"super::super::{{RunOwnerLiveness, {comment} {module}::Probe}}",
+                    f"super::{comment} super::{{{module}::Probe}}",
+                    f"super::super::{comment} {{{module}::Probe}}",
+                    f"super::{{super::{{{comment} {module}::Probe}}}}",
+                )
+            ], rejected=True)
 
     def test_quoted_grouped_paths_accepted(self):
+        rows = []
         for owner, module in (("job", "distributed"), ("task", "review")):
             tree = f"super::super::{{{module}::Probe}}"
-            for source in (
+            rows += [(f"{owner}/worker.rs", source + "\n") for source in (
                 f"// use {tree};",
                 f"/* use {tree}; */",
                 f'const NOTE: &str = "use {tree};";',
@@ -346,9 +382,8 @@ class RelativeImportTests(unittest.TestCase):
                 f'const NOTE: &str = r"use {tree};";',
                 f'const NOTE: &str = r##"\" # use {tree};"##;',
                 f'const NOTE: &[u8] = br#"use {tree};"#;',
-            ):
-                with self.subTest(owner=owner, source=source):
-                    self.check_import(f"{owner}/worker.rs", source, rejected=False)
+            )]
+        self.check_rows(rows, rejected=False)
 
     def test_within_job_imports_accepted(self):
         for relative, tree in (
@@ -384,7 +419,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_config_registry_cannot_name_resolved(self):
         snapshot = "registry/settings/snapshot.rs"
-        for source in (
+        self.check_rows([(snapshot, source + "\n") for source in (
             "use crate::resolved::default_crews;",
             "use crate::{resolved::default_crews, raw::Probe};",
             "use super::super::super::resolved::Probe;",
@@ -400,9 +435,7 @@ class RelativeImportTests(unittest.TestCase):
             "use crate::disabled_crew_message;",
             "fn probe() { crate::executor_host_os(); }",
             "fn probe() { crate::disabled_crew_message(); }",
-        ):
-            with self.subTest(source=source):
-                self.check_config({snapshot: source + "\n"}, rejected=True)
+        )], rejected=True, base=self.root / "crates/orbit-config/src")
         self.check_config(
             {snapshot: "use crate::crew_defaults::builtin_default_crews;\n"}, rejected=False)
 

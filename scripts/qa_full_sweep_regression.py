@@ -723,6 +723,31 @@ def injected_run(argv, **kwargs):
                 return real_run(argv, **kwargs)
     return real_run(argv, **kwargs)
 qa.run = injected_run
+if mode.startswith("builtin-wire-") and mode != "builtin-wire-valid":
+    # A wire row varies only `mcp serve` and `search reindex`, which keep the real
+    # supervisor and fixture process. The other fixture CLI commands answer in
+    # process; the parent compares their results with the fully supervised valid
+    # row's, so main, the validators and the finalizer still see the same inputs.
+    import contextlib, io
+    fixture_code = compile((repo / "bin/orbit").read_text(), "bin/orbit", "exec")
+    def answer_in_process(argv, *, cwd, env, timeout=180, input_text=None):
+        if (Path(argv[0]).name != "orbit" or "mcp" in argv
+                or ("search" in argv and "reindex" in argv)):
+            return injected_run(argv, cwd=cwd, env=env, timeout=timeout, input_text=input_text)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        exit_code = 0
+        with (mock.patch.dict("os.environ", env, clear=True), mock.patch("sys.argv", list(argv)),
+              contextlib.chdir(cwd), contextlib.redirect_stdout(stdout),
+              contextlib.redirect_stderr(stderr)):
+            try:
+                exec(fixture_code, {"__name__": "__main__"})
+            except SystemExit as stop:
+                exit_code = stop.code or 0
+        return {"command": argv, "exit_code": exit_code, "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(), "outcome": "FAIL", "output_truncated": False,
+                "cleanup_verified": True, "detached_workers": [], "open_descendants": 0,
+                "subreaper": False}
+    qa.run = answer_in_process
 """
         driver.write_text(DRIVER.replace("qa.main()", hook + "\nqa.main()", 1))
         cargo = repo / "bin/cargo"
@@ -862,6 +887,7 @@ print(json.dumps(body))
             "cross-success", "empty-reindex", "unrelated-reindex", "zero-reindex",
             "boolean-reindex", "string-reindex", "empty-stdout"]] if wire else
             ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"])
+        valid_unrelated = None
         for mode in (modes if cases is None else ["wire-" + case for case in cases]):
             (repo / "mode.json").write_text(json.dumps("builtin-" + mode))
             child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate"],
@@ -882,6 +908,11 @@ print(json.dumps(body))
                 assert (search["outcome"] == "PASS") != reindex_bad, (case, search)
                 assert bool(search["assertions"]) != reindex_bad, (case, search)
                 assert (report["decision"] == "PASS") == (case in {"valid", "cross-rpc-refusal"}), (case, report)
+                unrelated = [(item["scenario"], item["outcome"], item["exit_code"], item["assertions"],
+                              item.get("cleanup_verified")) for item in report["results"]
+                             if item["scenario"] != "mcp-wire-boundary" and "reindex" not in item.get("command", [])]
+                valid_unrelated = valid_unrelated or unrelated
+                assert unrelated == valid_unrelated, (case, unrelated, valid_unrelated)
                 print("builtin-wire: " + case + " passed", flush=True)
                 continue
             refusals = [item for item in report["results"] if "fixture refusal" in item.get("stderr", "")
