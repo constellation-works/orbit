@@ -411,14 +411,17 @@ PY
 
 # Config path primitives are below aliases and operation, which must not
 # depend on layered admission. The leaf may only use TOML and std.
+# Skip absent paths so the self-test's isolated fixture (which stubs only
+# orbit-core) runs without ripgrep IO errors; production checkouts always
+# carry these files.
 config_src="$repo_root/crates/orbit-config/src"
 for module in aliases.rs operation; do
-  if ! super_chains_into "$config_src" "$module" layering crate-root; then
+  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" layering crate-root; then
     echo "orbit-config ${module} must not name layering"
     fail=1
   fi
 done
-if rg -n '\b(crate|super|self)::|^[[:space:]]*(use|extern crate)[[:space:]]' "$config_src/config_document.rs"; then
+if [ -f "$config_src/config_document.rs" ] && rg -n '\b(crate|super|self)::|^[[:space:]]*(use|extern crate)[[:space:]]' "$config_src/config_document.rs"; then
   echo "orbit-config config_document must remain a TOML/std leaf"
   fail=1
 fi
