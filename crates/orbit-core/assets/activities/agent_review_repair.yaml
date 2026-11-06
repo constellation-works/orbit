@@ -530,6 +530,7 @@ spec:
     - orbit.command.exec
     - orbit.pipeline.invoke
     - orbit.workflow.run.resume
+    - orbit.workflow.run.show
     - orbit.workflow.land
     - orbit.workflow.ship
   proc_disallowed_programs:

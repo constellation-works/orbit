@@ -21,6 +21,7 @@ spec:
     - orbit.command.exec
     - orbit.friction.update
     - orbit.routine.control
+    - orbit.workflow.run.show
     - orbit.task.review_reset
   proc_disallowed_programs:
     - sudo
