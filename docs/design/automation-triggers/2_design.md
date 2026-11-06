@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
@@ -867,5 +867,9 @@ to change; implementation scope and defaults still require approval.
   current head and recomputes freshness. An unavailable source comparison can
   still follow ordinary-failure handling.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
+- [ORB-11314] — designed the operation-mode presets for automated preparation and delivery; the mode concept was later removed.
+- [ORB-11316] — extended the operation-mode design with review timing and repair policy; the mode concept was later removed.
+- [ORB-21238] — let an operator skip a stale pilot with the `no-pilot` tag, which admission honors even when a receipt exists.
+- [ORB-22153] — kept an assessed complexity tier when a later pilot cannot establish the footprint, recording a `footprint_unresolved` hold.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

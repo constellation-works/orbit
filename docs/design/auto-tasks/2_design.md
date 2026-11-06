@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-05
 last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
@@ -856,8 +856,6 @@ accurate.
 
 ## Task References
 
-- [ORB-18557] — Adds design-sync with bounded reconciliation, intent safeguards and a cumulative ledger.
-
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 - [ORB-11330] — implements delivery-trigger consumers on the sweep clock with
   durable batches and coverage checkpoints.
@@ -882,5 +880,14 @@ accurate.
 - ORB-19112 — `orbit.auto_task.list` reports each definition's last fire.
 - ORB-19122 — delivery auto-tasks report their actual last fire.
 - ORB-19131 — keeps the delivery `last_fire` visible while a retry backs off.
+- [ORB-11730] — made auto-task slot minting concurrency-safe and preserved
+  corrupt cursor evidence.
+- [ORB-12665] — made writable auto-task CRUD in a managed worktree write
+  definition YAML to the worktree's local root.
+- [ORB-12698] — skipped minting the periodic code-review and qa-sweep tasks
+  when nothing changed since the last completed sweep.
+- [ORB-15327] — shipped the generic `qa-full-sweep` default auto-task.
+- [ORB-20704] — demoted eight unproven defaults and made proven yield the
+  condition for shipping a default.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

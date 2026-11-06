@@ -89,8 +89,9 @@ becomes true for a subject (`condition`); see
   for up to `timeout_minutes`.
 - **Seeded mostly disabled.** `orbit workspace init` writes task pilot, task
   publication, worktree and store GC, CI and dependency-alert sweeps, the
-  daily UX-rules routine, and the finding-verification and pilot-warning
-  triage routines, all with `enabled: false`. The hourly crew-performance
+  daily UX-rules routine, the finding-verification and pilot-warning
+  triage routines, and the resident-cycle and weekly evolution-pass
+  routines, all with `enabled: false`. The hourly crew-performance
   refresh routine and the `host-health` auto-task are seeded enabled. While
   crew performance is off, the refresh skips the scan and writes no snapshot.
 
@@ -108,18 +109,19 @@ that fires once per subject; see
 Each clock tick files a task from every enabled definition
 that is due. A new chore is a new definition, never new code.
 
-- **A filed task is an ordinary task.** It enters `backlog` by default, or
-  `proposed` if you want to approve each one, and carries an
-  `auto-task:<name>` tag.
+- **A filed task is an ordinary task.** A task the clock files enters
+  `proposed`, so the task pilot assesses it before dispatch, unless its
+  template sets another status or it carries `no-diff-expected`, which keeps
+  its template status. It carries an `auto-task:<name>` tag.
 - **No pile-up.** By default a fire is skipped while the previous task is
   still open.
 - **Mint now to try one.** `orbit auto-task mint`, or **Mint now** in the
   dashboard, files a task immediately and leaves the schedule untouched.
-- **Seeded disabled.** The built-in catalog covers QA sweeps, code and
-  security reviews, friction curation, backlog hygiene, doc duties,
-  run-failure patterns, and maintenance sweeps for code health, architecture,
-  structure, dependency freshness, flaky tests and CI budgets, all off until
-  you enable them.
+- **Seeded mostly disabled.** The built-in catalog of 19 covers QA sweeps,
+  code and security reviews, friction curation, doc duties, run-failure
+  patterns, and maintenance sweeps for code health, architecture and
+  dependency freshness, all off until you enable them. The `host-health`
+  auto-task is the exception: it ships enabled.
 
 ## Scheduled tasks
 

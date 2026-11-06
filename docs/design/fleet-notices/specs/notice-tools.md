@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: orbit.notice.post, close, list and show; the CLI; and the opt-in notice MCP toolset with machine.mcp.toolsets"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Notice tools and the notice toolset
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, mcp]
 related_features: [fleet-notices, operations-as-data, federated-mcp]
 related_artifacts: [ORB-21207]
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 ---
 
 # Spec: Notice tools and the notice toolset
@@ -138,12 +138,13 @@ stands alone: no source paths and no internal task ids.
 
 ## Errors and audit
 
-Refusal codes are listed in [notice-authority](./notice-authority.md#refusals). Every write (and
-every refused write) is an audit row with target `notice` and the notice id. A posted write's row
-also carries the resolved poster class and the request fingerprint, for inspection only: the repeat
-check reads the fingerprint from the notice's latest post event, not from the audit row
-([notice-record](./notice-record.md#retries)). A repeat moves no stored field and writes no row.
-Reads write nothing.
+Refusal codes are listed in [notice-authority](./notice-authority.md#refusals). A post or close
+write or core-use-case refusal records a system audit row with target type `notice`; `target_id` is
+populated when the operation resolves or creates a notice. Operation parsing and argument conversion
+can refuse a request before that audit runs. An unchanged post retry and a close of an already-inactive
+notice write no row. A posted write's audit row carries the resolved poster class and request fingerprint
+for inspection; the retry check reads the fingerprint from the notice's latest post event, not the
+system audit row ([notice-record](./notice-record.md#retries)). Reads write nothing.
 
 ## Agent Signature
 

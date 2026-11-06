@@ -1,9 +1,9 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 last_validated: 2026-10-29
-status: Accepted
+status: Implemented
 stage: shipped
 next: "—"
 feature: auto-tasks
@@ -143,10 +143,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
   applicable application code, dependencies, secret handling, and configuration;
   each actionable finding is filed as a durable Orbit task, and a clean review
   is a successful no-op (ORB-10950).
-- `code-review` — disabled-by-default six-hourly review of commits merged
-  since the previous sweep's recorded cursor. Its cursor selector requires the
-  `auto-task:code-review` provenance tag, so only a minted sweep can be the
-  cursor task.
+- `code-review` — disabled-by-default six-hourly review of the tracked tree in
+  a two-module rotation, choosing the least recently reviewed modules. For each
+  behavior change, it uses tracked files to locate the repository's
+  documentation, website, and shipped-skill directories and searches them for
+  the old claim. Its cursor selector requires the `auto-task:code-review`
+  provenance tag, so only a minted sweep can be the cursor task [ORB-13636].
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
   commit and counts only source in programming or scripting languages, tests,
@@ -264,12 +266,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
   pilot or operator) establishes the selected `file:` selectors before it
   reaches `backlog` — never a selector-free whole-tree holder in a drain
   (design §4e).
-- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan of the
+- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan [ORB-18556] of the
   workspace's own pipeline failures. It always analyses the 7 days before scan
   start (the prior cursor only splits out new-since-cursor occurrences) and
   also computes 30-day rates, storing per-job raw and folded failure rates with
   deltas in `run-failure-report.json` (schema version 2). On an owner it also
-  reads the failure and release settlements followers' claimed leaves sent,
+  reads the failure and release settlements followers' claimed leaves sent [ORB-14439],
   through `orbit run settlements --no-reconcile`, since those leaves never
   enter the owner's run history, and counts one as a failure only when its
   typed `accounting.counts_as_failure` is true; designed holds, and runs or leaves an
@@ -303,7 +305,8 @@ re-init does not overwrite a workspace-authored definition of the same name.
   without filing or attaching a cursor. The scan never mutates run state —
   its run and settlement reads pass `--no-reconcile`, so an orphaned run it
   lists is not finalized — and a pass with nothing new is a successful no-op
-  that still stores the report and cursor.
+  that still stores the report and cursor. File-wide fixes use `file:` context
+  selectors, with exclusions coming from the workspace's own agent guidance.
 - `pilot-block-patterns` — disabled-by-default daily upstream counterpart of
   `run-failure-patterns`. A first pass, with no prior cursor, uses the 3 days
   before scan start; a later pass uses the 14 days before scan start, unless the
@@ -323,10 +326,15 @@ re-init does not overwrite a workspace-authored definition of the same name.
   is open) or host setup. It dedupes against open and 30-day-closed work, files
   at most 5 `proposed` fixes per pass, compares groups with the prior pass's
   `pilot-block-report.json`, and files a regression when a done fix did not
-  reduce its group. It never acts on an individual blocked or held task, and
+  reduce its group. When the workspace maps a tracked corpus index and provides
+  the corpus script, it proposes every observed group in the corpus and
+  regenerates its index; otherwise it records the missing prerequisite and
+  leaves a clean worktree. It never acts on an individual blocked or held task, and
   runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
-  deliveries. Its `enabled` flag is the after-landing review switch
+  deliveries. For behavior changes, its instructions locate documentation,
+  website, and shipped-skill directories from tracked files and search them for
+  stale claims. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
   as `effective_enabled`. The dashboard groups and toggles by that effective
@@ -440,7 +448,7 @@ re-init does not overwrite a workspace-authored definition of the same name.
   `no-diff-expected` and does not edit the repository. A workspace-authored
   `skill-validation` definition is left in place.
 
-- `auto-task-yield-review` — disabled-by-default monthly review of whether
+- `auto-task-yield-review` — disabled-by-default monthly review [ORB-18135] of whether
   this workspace's enabled auto-task definitions pay for themselves. For
   each enabled definition over the last 30 days it reports minted chores
   by final status and no-op successes, cost per run from run evidence
@@ -459,8 +467,11 @@ re-init does not overwrite a workspace-authored definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
-The former `blocked-task-triage` default (an hourly reader of escalated blocks)
-is retired and is not seeded. Final recovery decides blocked tasks now: it runs
+The former `blocked-task-triage` default (an hourly reader of escalated blocks,
+shipped by [ORB-17245]) is retired and is not seeded. [ORB-17744] had moved it
+to an event trigger on the escalation job, and [ORB-20629] made final recovery
+the single decider for blocked tasks, so it no longer has a routine. Final
+recovery decides blocked tasks now: it runs
 bounded mechanical steps, then escalates or opens a decision card
 ([automation triggers §6.2](../automation-triggers/2_design.md#62-retired-escalated-blocks-block_escalated),
 [distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
@@ -469,7 +480,10 @@ Its last template stays as retired provenance (`RETIRED_AUTO_TASK_FILES`), so
 preserves an operator-edited one, and, when the copy was enabled, reports that
 the routine replaces it. Sync never enables the routine. The
 `skip_unless_blocked_candidates` precondition stays available to
-workspace-authored definitions.
+workspace-authored definitions. The shipped `ci-failure-remediation` definition
+was removed earlier, with its asset and seeded copy ([ORB-11115]), and the
+runner-local CI reporter was reconciled with host-owned failure filing
+([ORB-11383]).
 
 ## Promotion to the shipped defaults
 
@@ -520,8 +534,8 @@ nor runs it.
 
 A demoted default had not proven its yield and nothing replaced it.
 ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
-`design-sync`, `flaky-test-hunt`, `structure-sweep`, `suppression-ratchet`
-and `workflow-health-audit`. Their names are listed in
+`design-sync` (shipped by [ORB-18557]), `flaky-test-hunt`, `structure-sweep`,
+`suppression-ratchet` and `workflow-health-audit`. Their names are listed in
 `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
 admission still accepts, and their templates are no longer embedded.
 
@@ -661,5 +675,23 @@ encode this repository's branches and gates. Re-init preserves them:
   diverged from what the docs stated.
 - ORB-19455 — corrected the follower-settlement dedupe rule to the three-part
   machine, run and task match.
+- [ORB-10318] — added the recurring learning-deprecation review, which reports
+  stale candidates through `execution_summary`.
+- [ORB-10348] — generalized the learning-deprecation review into
+  artifact-deprecation-review, which sweeps codebase comments for stale
+  artifact references.
+- [ORB-10446] — renamed `orbit auto-task generate` to `orbit auto-task mint`.
+- [ORB-20516] — shipped `pilot-block-patterns`, which identifies recurring
+  task-pilot warnings and post-recovery blocks and routes fixes to their source.
+- [ORB-20705] — cut `full-code-review`'s 56% rejected-filing rate, including the
+  re-search before a retried filing.
+- [ORB-20991] — ran the auto-task yield review whose 30-day
+  `auto-task-yield.json` is host-health's yield evidence.
+- [ORB-21401] — recorded Daniel's direction to make host-health a default
+  auto-task (on-call, 2026-11-02).
+- [ORB-21596] — shipped host-health enabled by default, through
+  `ENABLED_BY_DEFAULT_AUTO_TASKS`.
+- [ORB-21840] — separated follower review-decision holds from failure
+  accounting, with a separate `held_7d` counter.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

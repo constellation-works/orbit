@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 ---
 # Crate-Boundary Error Translation
 

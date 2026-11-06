@@ -17,6 +17,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Requeue or resume refused for the published candidate](issues/candidate-adoption-refused.md) | issue | active | final_recovery |
 | [Open PR carries a head this run did not publish](issues/candidate-ownership-diverged.md) | issue | active | final_recovery |
 | [CI hangs in the Bubblewrap probe step](issues/ci-bubblewrap-probe-hang.md) | issue | resolved | final_recovery |
+| [Cited commit missing from the owner repository](issues/cited-commit-missing-from-owner-repo.md) | issue | draft | final_recovery, triage_escalation |
 | [PR completion cannot observe GitHub, then source repair is refused](issues/completion-observation-unavailable.md) | issue | resolved | final_recovery |
 | [Crew credential variable missing from the launch environment](issues/crew-credential-env-unset.md) | issue | active | final_recovery |
 | [Acceptance criterion contradicts the code or a documented contract](issues/criteria-contradict-code-or-contract.md) | issue | active | agent_implement |
@@ -29,7 +30,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Two tasks own the same friction](issues/duplicate-friction-ownership.md) | issue | active | final_recovery |
 | [Executor returns an incomplete envelope early with no timeout](issues/executor-declares-incomplete.md) | issue | resolved | agent_implement, final_recovery |
 | [Experiment overlay overrides the explicit crew on a retry](issues/experiment-overlay-overrides-explicit-crew.md) | issue | resolved | agent_implement, final_recovery |
-| [Final recovery crew pool cannot be resolved](issues/final-recovery-crew-unresolvable.md) | issue | active | final_recovery |
+| [Final recovery crew pool cannot be resolved](issues/final-recovery-crew-unresolvable.md) | issue | resolved | final_recovery |
 | [Final recovery decision rejected for an unknown field](issues/final-recovery-decision-unknown-field.md) | issue | active | final_recovery |
 | [Final recovery has no checkout to work in](issues/final-recovery-no-checkout.md) | issue | active | final_recovery |
 | [Final recovery returns no decision while required checks are unconcluded](issues/final-recovery-no-decision-checks-unconcluded.md) | issue | active | final_recovery |
@@ -37,6 +38,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Host or workspace config makes every Orbit tool call fail](issues/host-config-rejects-orbit-calls.md) | issue | active | agent_implement, final_recovery |
 | [Criterion needs a host tool or funded policy the host lacks](issues/host-prerequisite-missing.md) | issue | active | final_recovery |
 | [Implementer declares regression evidence incomplete](issues/implementer-regression-evidence-incomplete.md) | issue | active | agent_implement |
+| [Isolated fixture cannot be opened through an authorized route](issues/isolated-fixture-cannot-be-opened.md) | issue | draft | agent_implement, final_recovery |
 | [Landing review verdict wrong or incomplete](issues/landing-review-verdict-wrong-or-incomplete.md) | issue | active | final_recovery |
 | [Legacy owner eligibility requires an explicit policy](issues/legacy-owner-policy-ambiguity.md) | issue | draft | agent_implement, final_recovery |
 | [Listing profile table omits existing surface differences](issues/listing-profile-table-incomplete.md) | issue | draft | agent_implement, final_recovery, task_pilot |
@@ -59,6 +61,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Nested sandbox profile cannot be applied in the worker](issues/sandbox-profile-cannot-apply.md) | issue | active | final_recovery |
 | [Implementer stops for scope reassessment with no candidate](issues/scope-reassessment-no-candidate.md) | issue | active | agent_implement, final_recovery |
 | [Minted sweep contract cannot be satisfied in one leaf](issues/stale-minted-sweep-contract.md) | issue | active | agent_implement, final_recovery |
+| [Store upgrade pending at admission](issues/store-upgrade-pending-at-admission.md) | issue | draft | final_recovery |
 | [Sweep run hits its per-pass filing cap](issues/sweep-filing-cap-exhausted.md) | issue | active | agent_implement, final_recovery |
 | [Final recovery refused because the task changed after the failure](issues/task-changed-after-failure-refused.md) | issue | active | final_recovery |
 | [Triage decision options disagree with the advertised schema](issues/triage-decision-options-schema.md) | issue | resolved | triage_escalation |
@@ -76,6 +79,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18164", "ORB-19689", "ORB-20625", "ORB-17437", "ORB-16193"], "path": "issues/candidate-adoption-refused.md", "status": "active", "title": "Requeue or resume refused for the published candidate", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18340"], "path": "issues/candidate-ownership-diverged.md", "status": "active", "title": "Open PR carries a head this run did not publish", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20643", "ORB-20615"], "path": "issues/ci-bubblewrap-probe-hang.md", "status": "resolved", "title": "CI hangs in the Bubblewrap probe step", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["final_recovery", "triage_escalation"], "links": ["ORB-19242"], "path": "issues/cited-commit-missing-from-owner-repo.md", "status": "draft", "title": "Cited commit missing from the owner repository", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20628", "ORB-16209", "ORB-19689", "ORB-19721", "ORB-19845", "ORB-19981"], "path": "issues/completion-observation-unavailable.md", "status": "resolved", "title": "PR completion cannot observe GitHub, then source repair is refused", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20368", "ORB-19773", "ORB-19781", "ORB-20547", "ORB-20409"], "path": "issues/crew-credential-env-unset.md", "status": "active", "title": "Crew credential variable missing from the launch environment", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement"], "links": ["ORB-19533", "ORB-19553", "ORB-19680", "ORB-19863", "ORB-21875", "ORB-20702", "ORB-21012"], "path": "issues/criteria-contradict-code-or-contract.md", "status": "active", "title": "Acceptance criterion contradicts the code or a documented contract", "type": "issue"} -->
@@ -88,7 +92,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-19781", "ORB-19785", "ORB-19786"], "path": "issues/duplicate-friction-ownership.md", "status": "active", "title": "Two tasks own the same friction", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20625", "ORB-19962", "ORB-20129", "ORB-20137", "ORB-20455"], "path": "issues/executor-declares-incomplete.md", "status": "resolved", "title": "Executor returns an incomplete envelope early with no timeout", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-21875", "ORB-21111", "ORB-21202"], "path": "issues/experiment-overlay-overrides-explicit-crew.md", "status": "resolved", "title": "Experiment overlay overrides the explicit crew on a retry", "type": "issue"} -->
-<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-13958", "ORB-13960", "ORB-13970", "ORB-13964"], "path": "issues/final-recovery-crew-unresolvable.md", "status": "active", "title": "Final recovery crew pool cannot be resolved", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-13958", "ORB-13960", "ORB-13970", "ORB-13964"], "path": "issues/final-recovery-crew-unresolvable.md", "status": "resolved", "title": "Final recovery crew pool cannot be resolved", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20833"], "path": "issues/final-recovery-decision-unknown-field.md", "status": "active", "title": "Final recovery decision rejected for an unknown field", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18124", "ORB-18270", "ORB-18271"], "path": "issues/final-recovery-no-checkout.md", "status": "active", "title": "Final recovery has no checkout to work in", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18096", "ORB-18124", "ORB-18542", "ORB-18816"], "path": "issues/final-recovery-no-decision-checks-unconcluded.md", "status": "active", "title": "Final recovery returns no decision while required checks are unconcluded", "type": "issue"} -->
@@ -96,6 +100,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20352", "ORB-20357", "ORB-20359", "ORB-17664", "ORB-20650", "ORB-20736", "ORB-20766", "ORB-21875"], "path": "issues/host-config-rejects-orbit-calls.md", "status": "active", "title": "Host or workspace config makes every Orbit tool call fail", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18438", "ORB-20007"], "path": "issues/host-prerequisite-missing.md", "status": "active", "title": "Criterion needs a host tool or funded policy the host lacks", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement"], "links": ["ORB-20625"], "path": "issues/implementer-regression-evidence-incomplete.md", "status": "active", "title": "Implementer declares regression evidence incomplete", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20160"], "path": "issues/isolated-fixture-cannot-be-opened.md", "status": "draft", "title": "Isolated fixture cannot be opened through an authorized route", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-16359", "ORB-18103", "ORB-18135", "ORB-18547", "ORB-19818"], "path": "issues/landing-review-verdict-wrong-or-incomplete.md", "status": "active", "title": "Landing review verdict wrong or incomplete", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-21875", "ORB-21111"], "path": "issues/legacy-owner-policy-ambiguity.md", "status": "draft", "title": "Legacy owner eligibility requires an explicit policy", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery", "task_pilot"], "links": ["ORB-21875", "ORB-21174"], "path": "issues/listing-profile-table-incomplete.md", "status": "draft", "title": "Listing profile table omits existing surface differences", "type": "issue"} -->
@@ -118,6 +123,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18099", "ORB-19265", "ORB-20040"], "path": "issues/sandbox-profile-cannot-apply.md", "status": "active", "title": "Nested sandbox profile cannot be applied in the worker", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-19066", "ORB-20598", "ORB-20646", "ORB-21875"], "path": "issues/scope-reassessment-no-candidate.md", "status": "active", "title": "Implementer stops for scope reassessment with no candidate", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20125", "ORB-19588", "ORB-20132"], "path": "issues/stale-minted-sweep-contract.md", "status": "active", "title": "Minted sweep contract cannot be satisfied in one leaf", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20339"], "path": "issues/store-upgrade-pending-at-admission.md", "status": "draft", "title": "Store upgrade pending at admission", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20310", "ORB-20312", "ORB-20623"], "path": "issues/sweep-filing-cap-exhausted.md", "status": "active", "title": "Sweep run hits its per-pass filing cap", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-16063", "ORB-16616", "ORB-17520", "ORB-18052", "ORB-15206", "ORB-21875", "ORB-21229"], "path": "issues/task-changed-after-failure-refused.md", "status": "active", "title": "Final recovery refused because the task changed after the failure", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["triage_escalation"], "links": ["ORB-21875", "ORB-21286", "ORB-21414"], "path": "issues/triage-decision-options-schema.md", "status": "resolved", "title": "Triage decision options disagree with the advertised schema", "type": "issue"} -->

@@ -36,3 +36,14 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-27 05:23 | ORB-18555 | jrun-20261027-0405-c25 | lease_listener_notices UnexpectedMessage | system moved to done at 2026-10-27T06:08Z |
 | 2026-10-27 05:26 | ORB-18969 | jrun-20261027-0421-c3 | lease_listener_notices UnexpectedMessage | merged outside Orbit at 2026-10-27T09:09Z, settled done |
 | 2026-10-28 03:58 | ORB-19289 | jrun-20261028-0302-c4 | web_serve_shutdown second-shutdown flake | merged outside Orbit at 2026-10-28T05:03Z, settled done |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 2 source occurrence(s) on 2 task(s); route `run_failure`, disposition `counted`. Change vs prior pass (ORB-22099): `shrank` (prior 6). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-28T04:02:16.509311355Z | ORB-19289 | jrun-20261028-0302-c4 | required CI fails on a test outside the candidate diff; source ORB-19289 history:blocked_triage@2026-10-28T04:02:16.509311355Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-29T07:41:07.183821412Z | ORB-19721 | jrun-20261029-0558-c19 | required CI fails on a test outside the candidate diff; source ORB-19721 history:final_recovery@2026-10-29T07:41:07.183821412Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |

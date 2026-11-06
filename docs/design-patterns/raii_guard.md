@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 ---
 # RAII Guard Pattern
 

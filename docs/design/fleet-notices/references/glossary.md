@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: fleet notices"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 ---
 
 # Glossary: Fleet Notices

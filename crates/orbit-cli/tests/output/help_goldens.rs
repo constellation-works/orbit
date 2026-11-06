@@ -324,7 +324,7 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
         .success();
 
     let run_pty_help = |width: u16, flag: &str| {
-        let requested = libc::winsize {
+        let mut requested = libc::winsize {
             ws_row: 40,
             ws_col: width,
             ws_xpixel: 0,
@@ -334,13 +334,16 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
         let mut slave_fd = -1;
         // SAFETY: openpty initializes these two valid out-pointers and copies
         // the supplied window size into the newly opened pseudo-terminal.
+        // macOS declares the winsize parameter as *mut, Linux as *const. A raw *mut
+        // satisfies both (coercing to *const on Linux) and avoids
+        // clippy::unnecessary_mut_passed, which fires on `&mut` where *const suffices.
         let opened = unsafe {
             libc::openpty(
                 &mut master_fd,
                 &mut slave_fd,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &requested,
+                std::ptr::addr_of_mut!(requested),
             )
         };
         assert_eq!(opened, 0, "open PTY: {}", std::io::Error::last_os_error());

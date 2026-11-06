@@ -3,7 +3,7 @@ summary: "Agent Families — Design"
 type: design
 title: "Agent Families — Design"
 owner: human
-last_updated: 2026-10-27
+last_updated: 2026-11-05
 last_validated: 2026-10-29
 status: Draft
 feature: agent-families
@@ -17,7 +17,7 @@ This document describes the current implementation of Orbit agent families and c
 
 ## 1. Family Registry
 
-The family registry spans `crates/orbit-types/src/identity/actor.rs` and `crates/orbit-types/src/identity/agent_pair.rs`. `all_agent_families()` returns the supported family identifiers; `agent_from_model()` and `provider_from_model()` infer family and provider from model strings in `actor.rs`; and `infer_agent_family_from_model()` in `agent_pair.rs` remains the conservative recovery helper for older persisted artifacts.
+The family registry spans `crates/orbit-types/src/identity/actor.rs` and `crates/orbit-types/src/identity/agent_pair.rs`. `all_agent_families()` returns the supported family identifiers ([ORB-00042] onboarded Grok as one); `agent_from_model()` and `provider_from_model()` infer family and provider from model strings in `actor.rs`; and `infer_agent_family_from_model()` in `agent_pair.rs` remains the conservative recovery helper for older persisted artifacts.
 
 Adding a family is still a cross-cutting change: executor assets, sandbox behavior, provider inference, review automation, and scoreboard code all need review. The fixed registry forces that audit instead of silently accepting unknown families.
 
@@ -26,9 +26,9 @@ Adding a family is still a cross-cutting change: executor assets, sandbox behavi
 
 Workspace config defines one concrete agent assignment under each agent `[crews.<name>]`: flat `model` and `provider` fields, with optional `effort`. A table with `kind = "human"` instead names an operator and accepts only `description` and `tags` alongside `kind`; agent dispatch refuses a human crew. A rendered activity input may select a named agent `crew`; without one, dispatch uses the run's resolved crew. Activity and job schemas reject the retired `role` key.
 
-`crates/orbit-config/src/raw.rs` owns the TOML shape, and `crates/orbit-config/src/resolved/crew.rs` materializes it into `Crew` values from `orbit-types`. Runtime loading rejects incomplete crews, retired `planner`/`implementer`/`reviewer` role sub-tables with guidance to write flat `model` and `provider` fields, and `[workflow].default_crew` values that do not name a defined crew. A retired `backend` key is accepted only as inert `cli` or rejected with migration guidance.
+`crates/orbit-config/src/raw.rs` owns the TOML shape, and `crates/orbit-config/src/resolved/crew.rs` materializes it into `Crew` values from `orbit-types`. Runtime loading rejects incomplete crews, retired `planner`/`implementer`/`reviewer` role sub-tables ([ORB-10620]) with guidance to write flat `model` and `provider` fields, and `[workflow].default_crew` values that do not name a defined crew. A retired `backend` key is accepted only as inert `cli` or rejected with migration guidance.
 
-The built-in crew registry includes model-named crews for Claude (`opus`, `sonnet`, `haiku`, and `fable`) and Codex (`astra`, `sol`, `terra`, and `luna`), plus Antigravity (`gemini-flash` and `argon`), Grok (`grok`), Copilot (`copilot`), and Muse (`muse-spark`, `muse-wonder`, and `muse-wonder-full`). The legacy Gemini CLI remains a recognized executor family but has no built-in crew; an operator must define a crew for it manually. Fresh `orbit init` config writes every built-in crew, sets `enabled = true` on crews whose provider CLI it detected and `enabled = false` on the rest, and chooses the first enabled crew as `[workflow].default_crew` (`opus`, `astra`, `gemini-flash`, `grok`, `copilot`, or `muse-spark`); interactive init lets the operator pick any enabled seeded crew by name instead, and never writes a `custom` crew.
+The built-in crew registry includes model-named crews for Claude (`opus`, `sonnet`, `haiku`, and `fable`) and Codex (`astra`, `sol`, `terra`, and `luna`), plus Antigravity (`gemini-flash` and `argon`), Grok (`grok`), Copilot (`copilot`), and Muse (`muse-spark`, `muse-wonder`, and `muse-wonder-full`). The legacy Gemini CLI remains a recognized executor family but has no built-in crew; an operator must define a crew for it manually. Fresh `orbit init` config writes every built-in crew (seeding began as detected-provider-only in [ORB-10315]), sets `enabled = true` on crews whose provider CLI it detected and `enabled = false` on the rest, and chooses the first enabled crew as `[workflow].default_crew` (`opus`, `astra`, `gemini-flash`, `grok`, `copilot`, or `muse-spark`); interactive init lets the operator pick any enabled seeded crew by name instead, and never writes a `custom` crew.
 
 There is no system crew lane [ORB-15663]. System work draws from `[workflow].purpose_crews.<purpose>` pools; `orbit init` writes each purpose pool explicitly (`task_pilot` and `auto_fix` copy `low`, `failure_recovery` and `review` copy `medium`), so editing complexity pools later does not move them. When an earlier or unseeded route applies without an explicit purpose pool, Orbit's own work draws from the four `[workflow].*_complexity_crews` pools: auto-task templates by their complexity, the task pilot from `low`, and step-failure and PR conflict recovery from `medium`, falling back to `default_crew` when the pool is empty. The registry defines no built-in `system` crew and aliases nothing onto that name; `workflow.system_crew` loads for one release as an ignored, deprecated key, and a template or job still naming `crew: system` resolves through the pools with a warning. A user-authored `[crews.system]` table is an ordinary crew. Init seeds those pools from the detected families (see `docs/CONFIG.md`, "What `orbit init` seeds"); families with no pool rule leave them empty. It does not seed `qa`; the legacy `qa` name remains loadable for existing user-authored configuration. With no supported provider CLI, initialization writes every crew disabled and no default crew, so dispatch refuses until an operator enables one.
 
@@ -38,7 +38,7 @@ A crew's `enabled` flag (default `true`, so configs without it resolve unchanged
 
 ## 3. Task and Tool Surface
 
-`Task` has an optional `crew` field. `orbit.task.add` and `orbit.task.update` validate authored crew names against the current workspace registry, and an `orbit.task.update` transition to `in_progress` accepts a one-run `crew` override. The runtime re-validates at start time because the config registry can change between task creation and execution.
+`Task` has an optional `crew` field, introduced by [ORB-00058]. `orbit.task.add` and `orbit.task.update` validate authored crew names against the current workspace registry, and an `orbit.task.update` transition to `in_progress` accepts a one-run `crew` override. The runtime re-validates at start time because the config registry can change between task creation and execution.
 
 The precedence chain is:
 
@@ -46,7 +46,7 @@ The precedence chain is:
 2. `Task.crew`
 3. `[workflow].default_crew`
 
-This chain resolves the run crew. At activity dispatch there is one additional, explicit authoring choice: a rendered `crew` input selects a different named crew for that activity. With no such input, the run crew is the fallback. No role-keyed lookup participates in either selection.
+This chain resolves the run crew. At activity dispatch there is one additional, explicit authoring choice: a rendered `crew` input selects a different named crew for that activity. With no such input, the run crew is the fallback. No role-keyed lookup participates in either selection ([ORB-10622] removed activity roles).
 
 `orbit.task.show` surfaces the stored task crew and a crew projection when one is available. For a local task run, its persisted `resolved_crew` and `crew_model` pair takes precedence; otherwise the current registry resolves `task.crew` or the workspace default. If there is no persisted local run pair and the current registry cannot resolve that crew selection, the readout preserves any stored `crew`, omits `resolved_crew` and `crew_model`, and includes `crew_unresolved` as a non-fatal warning [ORB-10968]. Listing, the global id lookup and the dashboard's task detail follow the same contract, because `orbit task show --json`, `orbit.task.show` and `GET /api/tasks/:id` serve one shared show record (`task_show_json`: `task_record_json` plus `next_step` and `final_recovery` when they apply, over the base `task_base_json`); dashboard list rows are the one named exception, resolving crew from the registry alone (a crew the registry no longer configures shows the default there, and `crew_unresolved` is never reported); `orbit.task.update` transitions to `in_progress` and dispatch still resolve strictly and fail with the crew-validation error.
 
@@ -73,5 +73,9 @@ An activity-specific crew is carried in rendered input rather than persisted as 
 - ORB-10315: Seed model-specific crews only for providers available during initialization.
 - ORB-10620: Reject retired crew role sub-tables during config load.
 - ORB-10622: Remove activity roles and make the run crew the activity fallback.
+- ORB-10968: Keep task.show readable when a stored crew is unavailable.
+- ORB-11299: Replace the default Gemini CLI executor with Antigravity CLI and migrate legacy configurations.
+- ORB-13016: Stop deterministic job runs from recording a resolved crew or model.
+- ORB-15663: Retire workflow.system_crew and route system work through the complexity pools.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -609,6 +609,10 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                     // Merged is what the provider reports, not what we asked for.
                     ReviewedMergeOutcome::Accepted { .. } => continue,
                     ReviewedMergeOutcome::BaseModified { diagnostic: text } => text,
+                    // This caller does not opt into completion's reconciliation.
+                    ReviewedMergeOutcome::Ambiguous { diagnostic } => {
+                        return Err(OrbitError::Execution(diagnostic));
+                    }
                 };
                 base_modified_refusals += 1;
                 tracing::warn!(

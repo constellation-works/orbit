@@ -308,6 +308,89 @@ Rejected by measurement: moving all-targets Clippy out of the folded build saves
 
 Applying the replay's ratios to the cohort's logs projects p90 522 s, median 347 s, max 528 s and 4 over 400 s. That is a projection, not a measurement, and **it does not restore the budget**: the core and full runs (27% of the cohort) still take about 520 s, because their build is CPU-saturated on crates they really test. Closing that needs a decision outside this pass, such as a larger runner for `Test build`. The hosted per-unit timings were not read (`test-build-timings` needs an authenticated download), so the same selection's list-build ranging from 174 to 256 s on one image remains unexplained; `Report build inputs` now logs the CPU model to test runner variance. The hosted after column is the operator's `scripts/ci-p90.py` run once the latest 20 completed PR runs all carry this workflow.
 
+A fourteenth pass (ORB-22218) follows the 2026-11-05 watch: the latest 20
+completed PR workflows had 12 executed Checks, 7 skipped and 1 cancelled,
+nearest-rank p90 482 s, median 449.5 s and max 496 s. Two early failures
+(42 and 155 s) are elapsed observations, not fast successful gates. Slow
+successful samples spent 226–263 s in list-build, then 109–176 s in their
+last partition's nextest. Check's own phases finished earlier. Archive
+transfer on those slow samples was truncated, so no transfer cause is established.
+
+The controlled fixture used this base's full workspace selection, Rust
+1.98.1, nextest 0.9.136, four Cargo jobs and six nextest slots pinned to
+CPUs 0–3 on a shared 32-logical-CPU Ryzen AI MAX+ 395 Linux host. CI's
+incremental-off, debug-off and symbol-strip settings were retained. Dependency
+sources and compiled dependencies were warm; workspace members were cleaned
+between build trials, the compiler-object cache was off and OS caches were
+not flushed. Baseline list-build took 124.1/122.7 s, rebuilding the same 87
+workspace units with all 385 dependency units fresh. The core library
+(37.6 s) then its unit harness (49.5 s) bound the first build. An uncontaminated
+archive reused those objects in 2.68 s; extraction took 2.99 s. No hosted
+transfer, runner setup or queue saving is inferred from these local timings.
+
+The eight baseline partition walls were 63.97, 49.71, 59.78, 48.04, 52.53,
+52.27, 37.52 and 45.85 s, run sequentially on the same four CPUs. The
+slowest partition's JUnit timestamps showed two late carriers:
+`backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals`
+started at 51.86 s and finished last at 63.80 s;
+`workflows::replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker`
+started at 56.17 s and finished at 62.43 s. Prioritizing the forecast alone
+left the worker observation deadline at the tail and measured 65.74 s.
+
+The CI priority list now starts **both** carriers early. Reusing the exact
+same archived binaries and partition, both started at zero. Partition wall
+fell to 59.89/59.90 s; a subsequent baseline control took 63.54 s (initial
+baseline 63.97 s). The repeated-control difference is about 3.85 s, or 6%
+of this partition, with natural shared-host timing noise. The remaining
+seven partitions' priorities are unchanged and were not replayed for the
+candidate; the baseline's next-slowest partition was 59.78 s. This is a
+measured partition improvement, not a complete candidate hosted gate or a
+claim that its p90 meets 400 s. The build remains unchanged and binding
+before archive publication; other partitions can now set the tail.
+A final root-profile validation took 95.04 s: the separate
+`distributed_drain::claimed_host_evidence::sandbox::seatbelt_probe_outcomes_scenarios`
+carrier took 60.93 s in one passing probe-denial scenario. Its cause is
+unconfirmed; the same 497 passes and four scratch-path failures remained.
+This outlier is retained separately and prevents treating the controlled
+scheduling gain as a complete candidate-gate runtime guarantee.
+
+All 3,839 test identities retain their applicability (3,773 selected and 66
+ignored), and the eight-way exact-once proof passes. Each critical-partition
+arm ran the same 501 tests: 497 passed and the same four scratch-path cases
+failed (config path display and Unix socket length limits). Other baseline
+partitions also had scratch-environment failures. These are diagnostic
+scheduling measurements, not full-suite passes; logs retain all successful
+output and capability notices. No test, assertion, deliberate observation
+deadline, partition, group cap, retry policy, always-run selection, required
+check identity or full integration-push coverage changes. Local default
+nextest ordering is unchanged because the addition is confined to `profile.ci`.
+
+A plain-rustc build experiment measured 116.8/119.9 s, about 5.1 s below the
+folded build's median, but required a separate all-targets Clippy phase,
+cache migration and old-head compatibility handling. That experiment is not
+landed; the final change only refreshes scheduling. The task's
+`ci-budget/report.md` artifact retains commands, conditions, JUnit evidence,
+rejected trials and validation outcomes. Two initial archive timings were
+excluded after source edits/Python bytecode writes under the build script's
+watched `scripts/` directory invalidated reuse.
+
+Operator handoff: after merge, collect the latest **20 completed
+`pull_request` workflows for `ci.yml`** once those runs carry this revision.
+Run `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` and retain
+run IDs, full head SHAs and raw job/step timestamps. Report executed,
+skipped, cancelled and missing Check counts (classify `other_gaps`), failures
+separately from successful completions, ascending executed durations,
+nearest-rank rank `ceil(0.9 * n)`, p90, median and maximum. Do not count gaps
+as zero-duration successes. Report Check's pre-start queue wait separately
+from its elapsed wall time, and the awaited jobs' queue wait occurring after
+Check starts separately again; obtain job creation/start timestamps from
+the Actions jobs API and retain `ci-await:` start/completion lines. If a
+queue timestamp or transfer step is unavailable, report the gap rather than
+infer zero. Compare selections, cache hits, runner image/CPU and phase times
+before attributing a cohort change. This measurement is operator work after
+merge, not a requirement for this implementation leaf or a claim that the
+400-second budget has been restored.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ### Build-runner partition delay (2026-10-31)

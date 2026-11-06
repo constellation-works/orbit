@@ -50,3 +50,15 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-11-01T04:49:08.125638774Z | ORB-20736 | jrun-20261101-0435-c1 | human_only: repair owner host config then inspect foreign run; load task tool requirements; host plugin_enablement table rejected; Host table rejected; triage could not read blocking run on mac-mini-1. This pass also received job_run_not_found locally; diagnosis derives from durable task records.; source ORB-20736 history:blocked_task_triaged@2026-11-01T04:49:08.125638774Z | status_changed done at 2026-11-01T05:44:09.708706225Z |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 3 source occurrence(s) on 3 task(s); route `setup`, disposition `counted`. Change vs prior pass (ORB-22099): `grew` (prior 1). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T02:38:36.188748749Z | ORB-20359 | jrun-20261031-0235-c3 | host/workspace config makes every Orbit tool call fail; source ORB-20359 history:final_recovery@2026-10-31T02:38:36.188748749Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-31T02:39:59.121320014Z | ORB-20357 | jrun-20261031-0226-c4 | host/workspace config makes every Orbit tool call fail; source ORB-20357 history:final_recovery@2026-10-31T02:39:59.121320014Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-31T02:47:25.209323899Z | ORB-20352 | jrun-20261031-0229-c6 | host/workspace config makes every Orbit tool call fail; source ORB-20352 history:final_recovery@2026-10-31T02:47:25.209323899Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |

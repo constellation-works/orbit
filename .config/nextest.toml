@@ -95,6 +95,15 @@ filter = '''
 '''
 priority = 100
 
+# The 2026-11-05 replay found these carriers at the end of the slowest
+# partition. Starting them early overlaps their work and the detached-worker
+# observation deadline with the ordinary queue. Test bodies, count partitions,
+# applicability and group limits stay unchanged. See test_strategy.md for
+# measurements and the operator's hosted remeasurement handoff.
+[[profile.ci.overrides]]
+filter = "package(orbit-web) & binary(http_api) & (test(=backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals) | test(=workflows::replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker))"
+priority = 100
+
 # Per-test durations for the slowest-test table in
 # docs/design-patterns/test_strategy.md. Each CI shard uploads its report.
 [profile.ci.junit]

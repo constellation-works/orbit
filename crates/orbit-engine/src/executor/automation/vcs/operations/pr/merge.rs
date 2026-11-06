@@ -48,6 +48,10 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
             strategy,
             reviewed_head,
             report_base_modified,
+            input
+                .get("report_ambiguous")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         );
     }
     let mut args = vec![
@@ -80,13 +84,16 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
 /// [ORB-14205] With `report_base_modified`, the provider's base-modification
 /// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
 /// raw output, so the caller can decide whether to ask again. Every other
-/// failure, and that one without the opt-in, stays an error.
+/// failure, and that one without the opt-in, stays an error unless
+/// `report_ambiguous` opts into reporting an uncertain server response. That
+/// outcome permits the completion caller one read, never a second mutation.
 fn pr_merge_reviewed(
     selector: &str,
     workspace_path: &str,
     strategy: &str,
     reviewed_head: &str,
     report_base_modified: bool,
+    report_ambiguous: bool,
 ) -> Result<Value, OrbitError> {
     // Managed completion supplies a number in the current repository. Refuse
     // other selectors here rather than resolving a URL into a different repo.
@@ -123,7 +130,16 @@ fn pr_merge_reviewed(
             "stderr": result.stderr,
         }));
     }
-    let result = succeeded(result, "reviewed PR merge")?;
+    let ambiguous = report_ambiguous && is_ambiguous_merge_server_failure(&result);
+    let result = match succeeded(result, "reviewed PR merge") {
+        Err(error) if ambiguous => {
+            return Ok(json!({
+                "merged": false,
+                "ambiguous_merge": error.to_string(),
+            }));
+        }
+        result => result?,
+    };
     let response: Value = serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!("reviewed PR merge returned invalid JSON: {error}"))
     })?;
@@ -163,4 +179,39 @@ fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
         && body
             .get("status")
             .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))
+}
+
+/// Only completed synchronous server errors with an exact provider diagnostic
+/// qualify for read-only reconciliation. Mixed policy/auth output, timeouts,
+/// malformed bodies and successful but invalid responses retain their errors.
+fn is_ambiguous_merge_server_failure(result: &orbit_exec::ExecutionResult) -> bool {
+    if result.success || result.timed_out || result.exit_code.is_none() {
+        return false;
+    }
+    for (status, reason) in [
+        (500, "Internal Server Error"),
+        (502, "Server Error"),
+        (502, "Bad Gateway"),
+        (503, "Service Unavailable"),
+        (504, "Gateway Timeout"),
+    ] {
+        if result.stderr.trim() != format!("gh: {reason} (HTTP {status})") {
+            continue;
+        }
+        if result.stdout.trim().is_empty() {
+            return true;
+        }
+        let Ok(Value::Object(body)) = serde_json::from_str::<Value>(&result.stdout) else {
+            return false;
+        };
+        return body
+            .keys()
+            .all(|key| matches!(key.as_str(), "message" | "status" | "documentation_url"))
+            && body.get("message").and_then(Value::as_str) == Some(reason)
+            && body.get("status").is_none_or(|value| {
+                value.as_u64() == Some(status)
+                    || value.as_str() == Some(status.to_string().as_str())
+            });
+    }
+    false
 }

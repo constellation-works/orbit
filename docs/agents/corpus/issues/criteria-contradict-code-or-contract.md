@@ -65,3 +65,22 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-11-01T03:28:12.452926675Z | ORB-20702 | jrun-20261101-0321-c1 | human_only: obtain reviewer sign-off before historical pricing edit; utility_warnings / adr_conflicts; backdating contradicts preserved rows; Two holding findings: historical repricing contradicts preserved July rows; reviewer cutoff/cache-rate sign-off absent. Later delivered.; source ORB-20702 history:pilot_warning_triaged@2026-11-01T03:28:12.452926675Z | status_changed done at 2026-11-01T03:57:17.908439234Z |
+
+### ORB-22246 owner scan, 2026-11-05
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-27T19:41:06.034010443+00:00`. This slice counts 10 source occurrence(s) on 9 task(s); route `authoring`, disposition `counted`. Change vs prior pass (ORB-22099): `grew` (prior 6). Rows below confirm existing episodes where already backfilled; they are not additional incidents beyond this slice count.
+
+Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-28T08:17:11.751121819Z | ORB-19437 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19437 history:pilot_triage@2026-10-28T08:17:11.751121819Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-28T08:20:32.919099906Z | ORB-19440 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19440 history:pilot_triage@2026-10-28T08:20:32.919099906Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-28T08:23:02.841651006Z | ORB-19437 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19437 history:pilot_triage@2026-10-28T08:23:02.841651006Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-28T13:03:52.390811191Z | ORB-19529 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19529 history:pilot_triage@2026-10-28T13:03:52.390811191Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-28T13:31:22.703661713Z | ORB-19533 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19533 history:pilot_triage@2026-10-28T13:31:22.703661713Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-29T04:07:41.711389825Z | ORB-19680 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19680 history:pilot_triage@2026-10-29T04:07:41.711389825Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-29T08:45:14.271904534Z | ORB-19773 | jrun-20261029-0834-c1 | acceptance criterion contradicts code or documented contract; source ORB-19773 history:final_recovery@2026-10-29T08:45:14.271904534Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+| 2026-10-29T16:33:52.313789243Z | ORB-19863 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19863 history:pilot_triage@2026-10-29T16:33:52.313789243Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-31T05:00:06.800819110Z | ORB-20391 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-20391 history:pilot_triage@2026-10-31T05:00:06.800819110Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+| 2026-10-31T05:27:50.200262888Z | ORB-20400 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-20400 history:pilot_triage@2026-10-31T05:27:50.200262888Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |

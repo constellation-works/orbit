@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-05
 last_validated: 2026-11-03
 status: Draft
 feature: agent-scorecards
@@ -117,7 +117,7 @@ A row is a **crew and model**: for implementers, the `resolved_crew` and `crew_m
 
 - An implementation run with no `crew_model` is ranked as `model unknown` under its crew. It is never assigned a model guessed from the crew's configuration, because configuration changes over time and a guess would quietly merge different models into one row. The payload reports, per row, how many of its runs had no model.
 - An attempt that no local job run records, such as one another machine pulled, is charged to the crew and model on the settlement record of the claim its `pulled_by` entry names (`claim_id`). The follower reports the leaf run's `resolved_crew` and `crew_model` with every settlement, handoff, failure or release, and the owner keeps them on that record. Without a record, or for a field it lacks, the crew falls back to the one task history had assigned when the attempt started, and the model is `model unknown`. The run is the one the `pulled_by` entry names. An attempt with neither a run, a recorded crew nor an assignment is `crew unknown`.
-- **Orchestrators are the exception.** Orchestrator sessions are not job runs, so their row is keyed by the task's `orchestrator` attribution and its `orchestrator_model`. That model is recorded once, when the task is created with an orchestrator: an explicit `orchestrator_model` input, else the orchestrator crew's configured model snapshotted at that moment (`orchestrator_model_source` is `explicit` or `crew_config`). It is never read from configuration at scan time, so a later crew-config change does not move old tasks between rows. A task without one, including every task filed before the field existed, ranks under `model unknown` (§5.1).
+- **Orchestrators are the exception.** Orchestrator sessions are not job runs, so their row is keyed by the task's `orchestrator` attribution and its `orchestrator_model`. That model is recorded once, when the task is created with an orchestrator [ORB-17291]: an explicit `orchestrator_model` input, else the orchestrator crew's configured model snapshotted at that moment (`orchestrator_model_source` is `explicit` or `crew_config`). It is never read from configuration at scan time, so a later crew-config change does not move old tasks between rows. A task without one, including every task filed before the field existed, ranks under `model unknown` (§5.1).
 
 ## 3. Attribution: Each Problem Has One Owner
 
@@ -219,14 +219,14 @@ A role's **unit** decides window membership (§5). Problems count whenever they 
 
 ### 4.5 Cost is shown, never scored
 
-Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision, so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored). An unavailable implementer cost still reports its counted-attempt coverage there (§5.2), so a null is never read as zero spend or as mostly priced work.
+Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision [ORB-17736], so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored). An unavailable implementer cost still reports its counted-attempt coverage there (§5.2), so a null is never read as zero spend or as mostly priced work.
 
 Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
 
 ### 4.5a Proposed delivery-quality profile (not a score term)
 
 The [decision-assistance grader proposal](../decision-assistance/specs/delivery-quality.md)
-would add an independently calibrated advisory profile of delivered code:
+would add an independently calibrated advisory profile of delivered code [ORB-20000]:
 scope fit, robustness, structure, standards, verification and maintainability.
 It is design-only, with no grader consumer or dashboard surface implemented.
 It leaves this document's current terms, rates, weights, attribution and
@@ -299,7 +299,7 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
 | Escaped regressions | −0.5 | `regression_from` links with escape `no_test` against the row's landed tasks (§3.1), mostly delivery-review findings, each at its severity weight (§4.6), so a `medium` one costs as much as a review reject. Expected counts are size-adjusted (below). A link whose defect site a pre-landing review already charged is not counted again [ORB-21789]. |
 
-Every scored term uses a fleet expectation for the row's **same task mix**. First-pass accepts, review rejects and reviewer repairs use only **reviewed deliveries** for both the row and fleet populations. Escaped regressions refine their implemented-task reference to the same tier and expected change size (below):
+Every scored term uses a fleet expectation for the row's **same task mix** [ORB-17779]. First-pass accepts, review rejects and reviewer repairs use only **reviewed deliveries** for both the row and fleet populations. Escaped regressions refine their implemented-task reference to the same tier and expected change size (below):
 
 ```
 term_units = reviewed tasks for the three review terms, implemented tasks otherwise
@@ -716,6 +716,8 @@ A ── B ── C ─┬─ D
 
 The tracks run in the order B → C → {D, E, F, G}. C waits for B because the dashboard cannot ship against routes that do not exist. D, E, F and G wait for C, because C removes the old orchestrator routes and view and supplies the shell their panels plug into. They then run in parallel: each adds its own files, and none edits the registry, because B registers all four roles. C renders `not_computed` roles as an empty state, so the destination ships before D–F.
 
+Task records: track B is [ORB-16952], C [ORB-16953], D [ORB-16954] (its cost and tier panel removed by [ORB-17736]), E [ORB-16955], F [ORB-16956] and G [ORB-16957]. All six are landed; track A is this design itself.
+
 Each track updates the docs its change makes stale in the same PR. That includes this design (moving the sections it implements from target to current), [user-interface 2_design.md](../user-interface/2_design.md) and the dashboard how-to page.
 
 ## 11. Concerns & Honest Limitations
@@ -753,5 +755,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-21789 — escaped regressions scored against a size-adjusted expectation, counted once when a pre-landing review already charged the defect.
 - ORB-19644 — the strip ownership clarification that unscored `no_test` context still counts toward Implementers ownership.
 - ORB-19633 — scoring an unverified review-job finding by its task's outcome (landed holds, open unjudged, drops neutral).
+- ORB-20391 — derived managed versus interactive execution per task, so token metrics count managed runs only.
+- ORB-20629 — made final recovery the single decider for blocked tasks and retired blocked-task triage, the only writer of the block-triage markers.
+- ORB-21124 — split pilot modes into full assessments and targeted re-checks, reported under `pilot_modes`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

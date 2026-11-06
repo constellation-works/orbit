@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Decisions
 owner: claude
-last_updated: 2026-11-02
+last_updated: 2026-11-05
 last_validated: 2026-11-02
 status: Draft
 feature: automation-triggers
@@ -39,3 +39,9 @@ The dashboard Readiness card shows "Skip pilot" only while the drain holds a bac
 - The stale-hold detail, `orbit run readiness` and the Readiness card name both remedies: `orbit task repilot <id>` and the `no-pilot` skip.
 - A proposed task held on pilot warnings is approved as before; once it is in the backlog, admission does not hold it on those warnings.
 - Cost: a skipped task can dispatch on requirements no pilot has read, including ones an earlier assessment flagged as duplicate or landed. The `pilot_skipped` entry is the only record of what was dispatched unassessed, so audits read history, not the receipt.
+
+## Task References
+
+- [ORB-21238] — made the `no-pilot` tag an operator skip of stale pilot holds, with a Readiness "Skip pilot" button.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

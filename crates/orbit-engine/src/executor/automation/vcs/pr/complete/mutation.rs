@@ -197,6 +197,7 @@ pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
             "auto": auto,
             "reviewed_head_sha": reviewed_head_sha,
             "report_base_modified": reviewed_head_sha.is_some(),
+            "report_ambiguous": reviewed_head_sha.is_some(),
             "workspace_path": workspace_path,
         }),
     )?;
