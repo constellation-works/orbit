@@ -97,6 +97,17 @@ class RelativeImportTests(unittest.TestCase):
                         "        self.fresh_owner_method();\n    }\n}\n",
                 }, rejected=True)
 
+    def test_inherent_calls_from_task_into_single_file_upper_module_rejected(self):
+        # [ORB-22289] `tag_instructions` is one file, not a directory; its
+        # inherent names were never derived, so task could call them unseen.
+        self.check_files({
+            "tag_instructions.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n",
+            "task/worker.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.fresh_owner_method();\n    }\n}\n",
+        }, rejected=True)
+
     def test_qualified_self_inherent_calls_rejected(self):
         # [ORB-22159] `<OrbitRuntime>::name(` names the same inherent method as
         # `OrbitRuntime::name(`, but the guard's previous-token filter skipped

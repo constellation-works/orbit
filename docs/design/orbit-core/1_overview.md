@@ -118,6 +118,7 @@ source scan, enforces the runtime direction.
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned port to the precedent consumer | `crates/orbit-core/src/application/task/precedent_decision_port.rs`, implemented in `precedent_decision/task_port.rs`; its records are in `contracts/precedent_assist.rs` | [ORB-22313] |
+| Task-owned commit-pinned readers, executor `host_os` limits and mock admission | `crates/orbit-core/src/application/task/{base_revision,executor_host_os,mock_admission}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
@@ -209,7 +210,9 @@ and job edges that had regrown past the fixed-name guard (all but
   identity desktop review checks, purpose-pool members, the final-recovery
   resume, a claimed leaf's captured explore brief and crew candidates, the
   live pilot run, the exact batched run-state read and a row's delivery
-  attention; the brief's pilot-policy read reuses `observed_job_run`),
+  attention; the brief's pilot-policy read reuses `observed_job_run`;
+  since [ORB-22289] also a task's host-OS wait over the draw's candidates
+  and the live delivery runs carrying a task, for mock admission),
   `task::TaskReviewPort` (the review projection, the evidence
   hold resume and the merged-head reconciliation refusal),
   `task::TaskDistributedPort` (the crew a pilot run drew, and since
@@ -313,6 +316,23 @@ task → admission and task → workspace_auto edges are the known exception.
 applies task answers. Its pure enablement records are in `contracts`, and its
 host-only store and grant-dependent helpers stay with it.
 
+`tag_instructions` sits outside the order but above `task` [ORB-22289]. Task
+reads commit-pinned repository files through its own `task::base_revision`
+(`run_base_revision`, which reads the recorded worktree base through
+`TaskJobPort::stored_run_state`, `workspace_base_revision`, `commit_at`,
+`list_blob_paths_at` and `read_blob_at`), and the guard's `task` upper-module
+list names `tag_instructions`; its single-file module's inherent names are
+derived like a directory module's. `tag_instructions` re-exports `commit_at`
+and `read_blob_at` as a compatibility shim for visual delivery, experiment
+overlays and the agent corpus; re-pointing them and retiring the shim is a
+follow-up. Executor `host_os` limits (`task::executor_host_os`) and
+`verify-mock-ui` admission (`task::mock_admission`) are task modules; the
+host-OS wait that resolves the draw's candidates is
+`job::crew_pools::host_os_wait`. Their back-edges with other unordered
+modules (`precedent_decision`, `resident`, `experiment`, `visual_delivery`,
+`codebase`) still keep the core strongly connected component and await a
+later audit.
+
 ## Task References
 
 - [ORB-10012] — introduced the versioned workspace-layout migration pre-flight the runtime open runs.
@@ -333,6 +353,7 @@ host-only store and grant-dependent helpers stay with it.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 - [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
 - [ORB-22159] — closed the derived-name guard's UFCS gap so `<OrbitRuntime>::name` and the qualified-self forms are checked as up-calls.
+- [ORB-22289] — moved executor `host_os` limits, mock admission and the commit-pinned readers into `task`, put the host-OS wait in `job::crew_pools` and the wait and live-delivery-run reads behind `TaskJobPort`, and added `tag_instructions` to the guarded `task` upper modules.
 - [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

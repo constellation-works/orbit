@@ -385,7 +385,7 @@ impl OrbitRuntime {
             if task.status != orbit_types::task::TaskStatus::Backlog {
                 continue;
             }
-            let wait = self.task_host_os_wait(&task, &pools, &limits);
+            let wait = self.host_os_wait_for_task(&task, &pools, &limits);
             if let Some(wait) = wait {
                 waits.push(format!("{} {wait}", task.id));
             }
@@ -434,7 +434,7 @@ impl OrbitRuntime {
         let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         Ok(candidates
             .into_iter()
-            .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
+            .filter(|task| self.host_os_wait_for_task(task, &pools, &limits).is_none())
             .map(|task| task.id)
             .collect())
     }

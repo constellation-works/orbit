@@ -11,8 +11,8 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::mock_admission::MockDigestFreezeMode;
 use crate::application::tag_instructions::read_blob_at;
+use crate::application::task::MockDigestFreezeMode;
 
 /// Where a contract's mock digests come from.
 #[derive(Clone, Copy, PartialEq, Eq)]

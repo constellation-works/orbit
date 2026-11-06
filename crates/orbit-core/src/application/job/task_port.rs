@@ -1,11 +1,11 @@
 //! Job dispatch's side of the task-owned job port [ORB-17936].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::Crew;
-use orbit_types::task::{DecisionRequest, Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
     ShipMode, SourceRepairBinding,
@@ -21,6 +21,7 @@ use crate::application::contracts::{
     CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
 };
 use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
+use crate::runtime::run_input::recorded_task_ids;
 
 impl TaskJobPort for OrbitRuntime {
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
@@ -327,5 +328,34 @@ impl TaskJobPort for OrbitRuntime {
 
     fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError> {
         self.delivery_attention(row)
+    }
+
+    fn host_os_wait_for_task(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+    ) -> Option<String> {
+        self.task_host_os_wait(task, pools, limits)
+    }
+
+    fn live_delivery_runs_carrying_task(&self, task_id: &str) -> Result<Vec<JobRun>, OrbitError> {
+        let delivery_jobs = self.task_delivery_job_ids()?;
+        let runs = self.list_job_runs(super::JobRunListParams {
+            limit: Some(200),
+            ..Default::default()
+        })?;
+        Ok(runs
+            .into_iter()
+            .filter(|run| !run.state.is_terminal() && delivery_jobs.contains(&run.job_id))
+            .filter(|run| {
+                run.input
+                    .as_ref()
+                    .map(recorded_task_ids)
+                    .into_iter()
+                    .flatten()
+                    .any(|candidate| candidate == task_id)
+            })
+            .collect())
     }
 }

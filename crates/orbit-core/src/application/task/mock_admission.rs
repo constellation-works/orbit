@@ -1,6 +1,9 @@
 //! `verify-mock-ui` admission: validate a task's mocks against the view
 //! manifests at the workspace's current base revision, and freeze mock
 //! digests when a delivery is admitted (visual-review §2.3, §2.4).
+//!
+//! Which delivery runs are live for a task is `job`'s to answer; this module
+//! asks through [`TaskJobPort::live_delivery_runs_carrying_task`].
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -8,8 +11,6 @@ use orbit_types::task::{
     ViewManifestSet, has_verify_mock_ui_tag, mock_refusals_detail,
     record_mock_digests_for_admission, validate_task_mocks,
 };
-
-use crate::runtime::run_input::recorded_task_ids;
 
 /// Whether a freeze may replace an existing [`MOCK_DIGESTS_ARTIFACT`]
 /// baseline.
@@ -24,9 +25,9 @@ pub(crate) enum MockDigestFreezeMode {
     KeepExisting,
 }
 
-use super::tag_instructions::read_blob_at;
+use super::base_revision::read_blob_at;
+use super::{TaskJobPort, TaskUpdateParams};
 use crate::OrbitRuntime;
-use crate::application::task::TaskUpdateParams;
 
 impl OrbitRuntime {
     /// The workspace's current base commit: base branch as last fetched,
@@ -286,35 +287,9 @@ impl OrbitRuntime {
             .map(|run_id| format!("run:{run_id}"))
     }
 
-    /// Non-terminal delivery runs carrying `task_id`, newest first as
-    /// `list_job_runs` returns them (the same holders the ship in-flight
-    /// guard keys on).
-    fn live_delivery_runs_for_task(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<orbit_types::workflow::JobRun>, OrbitError> {
-        let delivery_jobs = self.task_delivery_job_ids()?;
-        let runs = self.list_job_runs(crate::application::job::JobRunListParams {
-            limit: Some(200),
-            ..Default::default()
-        })?;
-        Ok(runs
-            .into_iter()
-            .filter(|run| !run.state.is_terminal() && delivery_jobs.contains(&run.job_id))
-            .filter(|run| {
-                run.input
-                    .as_ref()
-                    .map(recorded_task_ids)
-                    .into_iter()
-                    .flatten()
-                    .any(|candidate| candidate == task_id)
-            })
-            .collect())
-    }
-
     fn live_delivery_run_ids_for_task(&self, task_id: &str) -> Result<Vec<String>, OrbitError> {
         Ok(self
-            .live_delivery_runs_for_task(task_id)?
+            .live_delivery_runs_carrying_task(task_id)?
             .into_iter()
             .map(|run| run.run_id)
             .collect())
@@ -329,7 +304,7 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> Result<Vec<String>, OrbitError> {
         Ok(self
-            .live_delivery_runs_for_task(task_id)?
+            .live_delivery_runs_carrying_task(task_id)?
             .iter()
             .filter_map(|run| run.input.as_ref())
             .filter_map(|input| input.get("__mock_admissions"))
