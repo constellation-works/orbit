@@ -790,6 +790,39 @@ for (const overlap of [false, true]) {
   });
 }
 
+// A route-missing read after a good one keeps the loaded figures: its note
+// already says they are stale, so an emptied body would contradict it.
+await test('a route-missing poll or Refresh keeps a loaded forecast beside its stale-data note', async () => {
+  common.setWorkspace('ws-route-missing-loaded');
+  const stored = { ...payload(), served_from: 'stored', generated_at: '2026-10-28T20:00:00Z' };
+  await render(stored);
+  assert.match(text(), /6\.5h/);
+  for (const refresh of [false, true]) {
+    const label = refresh ? 'Refresh' : 'poll';
+    const failed = forecast.fetchAndRenderForecast({ refresh });
+    pending.at(-1).resolve(response({ error: '' }, 404));
+    await assert.rejects(failed, error => error.routeMissing === true);
+    await settle();
+    assert.match(text(), /Refresh failed; showing stale data/, `a route-missing ${label} keeps the stale-data note`);
+    assert.match(text(), /6\.5h/, `a route-missing ${label} keeps the figures its note describes`);
+  }
+  await render(stored);
+  assert.doesNotMatch(text(), /Refresh failed/, 'a successful read clears the stale-data note');
+  assert.match(text(), /6\.5h/);
+});
+
+await test('a cold route-missing read keeps only the upgrade note, with no controls', async () => {
+  common.setWorkspace('ws-route-missing-cold');
+  const cold = forecast.fetchAndRenderForecast();
+  pending.at(-1).resolve(response({ error: '' }, 404));
+  await assert.rejects(cold, error => error.routeMissing === true);
+  await settle();
+  assert.match(text(), /Unable to load/);
+  assert.match(text(), /does not offer this view/, 'the upgrade message names the missing view');
+  assert.equal(body().querySelector('select'), null, 'the history control is withheld');
+  assert.equal(body().querySelectorAll('button').length, 0, 'no recovery control is offered');
+});
+
 await test('stored calibration history pages every forecast with its column context', async () => {
   const forecasts = Array.from({ length: 61 }, (_, index) => ({
     forecast_at: new Date(Date.UTC(2026, 9, 28, 20, index)).toISOString(),
