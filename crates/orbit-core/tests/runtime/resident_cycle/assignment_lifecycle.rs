@@ -40,6 +40,7 @@ fn attaching_a_valid_mandate_activates_a_proposed_assignment() {
             .add_task(TaskAddParams {
                 title: "[resident]: scribe - sol".into(),
                 tags: vec!["resident".into()],
+                crew: Some("other".into()),
                 ..Default::default()
             })
             .unwrap()
@@ -63,6 +64,17 @@ fn attaching_a_valid_mandate_activates_a_proposed_assignment() {
     });
     let written = attach(&valid, &body.to_string());
     assert_eq!(status(&fx, &valid), TaskStatus::InProgress, "{written}");
+    assert_eq!(
+        fx.runtime.get_task(&valid).unwrap().crew.as_deref(),
+        Some("sol")
+    );
+    let mut edited = body.clone();
+    edited["crew"] = json!("other");
+    attach(&valid, &edited.to_string());
+    assert_eq!(
+        fx.runtime.get_task(&valid).unwrap().crew.as_deref(),
+        Some("other")
+    );
 }
 
 #[test]
