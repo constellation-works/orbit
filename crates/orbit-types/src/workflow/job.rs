@@ -671,4 +671,12 @@ impl JobRun {
     pub fn is_owned_by(&self, pid: u32, pid_start_time: Option<&str>) -> bool {
         self.pid == Some(pid) && self.pid_start_time.as_deref() == pid_start_time
     }
+
+    /// When this run last moved: its finish, else its start, else its row's
+    /// creation. The Rust counterpart of the store's recency order.
+    pub fn recency_at(&self) -> DateTime<Utc> {
+        self.finished_at
+            .or(self.started_at)
+            .unwrap_or(self.created_at)
+    }
 }

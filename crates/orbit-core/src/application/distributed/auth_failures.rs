@@ -151,7 +151,7 @@ impl OrbitRuntime {
                 }) {
                     continue;
                 }
-                let at = run_at(run);
+                let at = run.recency_at();
                 let key = (host_of(run, &fallback_host), provider, account);
                 if cleared_at.get(&key).is_some_and(|cleared| *cleared > at) {
                     continue;
@@ -324,11 +324,6 @@ pub(crate) fn bounded_query(
         include_steps,
         ..JobRunQuery::default()
     }
-}
-
-/// When a run ended: its finish, else its start, else its row's creation.
-pub(crate) fn run_at(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 /// When a success shows that the provider works. A run that started before a

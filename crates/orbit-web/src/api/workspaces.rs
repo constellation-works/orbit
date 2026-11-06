@@ -11,7 +11,6 @@ use std::path::Path;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Utc};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
@@ -364,7 +363,7 @@ impl AllJobRunsState {
 /// for a one-item page.
 ///
 /// Each per-workspace query already asks the store to order and truncate by
-/// [`JobRunOrder::Recency`] — the same `run_timestamp` this handler later
+/// [`JobRunOrder::Recency`] — the same [`JobRun::recency_at`] this handler later
 /// merge-sorts by — so an old, long-running run that only just finished
 /// cannot be dropped by a workspace's `limit` before its recency ever gets
 /// compared (ORB-11251). An index over that recency expression bounds each
@@ -470,8 +469,9 @@ pub(super) fn all_job_runs_json(
     }
 
     candidates.sort_by(|(left, left_index), (right, right_index)| {
-        run_timestamp(right)
-            .cmp(&run_timestamp(left))
+        right
+            .recency_at()
+            .cmp(&left.recency_at())
             .then_with(|| entries[*left_index].id.cmp(&entries[*right_index].id))
             .then_with(|| left.run_id.cmp(&right.run_id))
     });
@@ -586,10 +586,6 @@ fn workspace_job_run_params(
         order_by: JobRunOrder::Recency,
         ..Default::default()
     }
-}
-
-fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 fn all_tasks_json(

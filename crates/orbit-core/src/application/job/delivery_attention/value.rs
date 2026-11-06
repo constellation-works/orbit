@@ -38,7 +38,7 @@ pub fn delivery_attention_value(
     {
         let ledger_at = history::latest_push_at(history, pr_number.as_deref())
             .map_or(*admitted_at, |pushed_at| pushed_at.max(*admitted_at));
-        if history::run_at(run) > ledger_at {
+        if run.recency_at() > ledger_at {
             return None;
         }
     }
@@ -52,9 +52,7 @@ pub fn delivery_attention_value(
         ),
         None => (None, None, None, None, None),
     };
-    let observed_at = observed_at.or_else(|| {
-        newest_run.and_then(|run| run.finished_at.or(run.started_at).or(Some(run.created_at)))
-    });
+    let observed_at = observed_at.or_else(|| newest_run.map(|run| run.recency_at()));
     Some(json!({
         "run_id": newest_run.map(|run| run.run_id.clone()),
         "run_state": run_failed.then(|| newest_run.map(|run| run.state.to_string())).flatten(),
