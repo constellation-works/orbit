@@ -876,7 +876,15 @@ reported with its exit: `orbit task update <task-id> --status backlog
 accept `discard_candidate`. That command records the discard, returns the task
 to `backlog` and closes the task's undelivered Orbit-authored pull requests. It
 is the equivalent route to a requeue's discard, without a recorded requeue
-decision. The next run implements fresh. A closure the forge refuses is
+decision. A blocked task's requeue carries the same discard (the dashboard's
+requeue, or `orbit task requeue <task-id> --discard-candidate`), so an
+operator without the CLI update route has one too. Answering a block-triage
+decision option whose rewrite changes the description or acceptance criteria
+of a task that holds a published or kept candidate discards that candidate with
+the answer: it applies the rewrite, records the discard in the task history,
+closes the task's undelivered Orbit pull requests and says so in the answer's
+comment. An option that leaves the specification alone keeps the candidate
+resumable. The next run implements fresh. A closure the forge refuses is
 reported in the answer
 (`discard_closure: incomplete`), and the requeue stands. With
 `pr.close_on_terminal = false` nothing is closed (`discard_closure:

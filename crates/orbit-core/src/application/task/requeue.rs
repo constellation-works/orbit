@@ -51,6 +51,10 @@
 //! CLI-only: `orbit.task.update` does not accept `discard_candidate`. That
 //! command records the discard, returns the task to the backlog so the next
 //! run implements fresh, and closes the task's undelivered Orbit pull requests.
+//! A blocked task's requeue carries the same discard (the dashboard and
+//! `orbit task requeue <id> --discard-candidate`), and a block-triage decision
+//! answer whose rewrite changes the specification discards the candidate with
+//! it, so the answer is not refused.
 //!
 //! The decision and preservation records are written by `system`, since the
 //! published-owner resume trusts only Orbit's own records; the operator's
@@ -77,13 +81,16 @@ use orbit_types::workflow::SourceRepairBinding;
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
 
 /// How a refused requeue offers to start over instead: the supported operator
-/// CLI discard route. `orbit.task.update` MCP does not accept
-/// `discard_candidate`, which is CLI-only.
+/// CLI discard route, or the discard option of a blocked task's requeue, which
+/// the dashboard and the CLI's `orbit task requeue` carry. `orbit.task.update`
+/// MCP does not accept `discard_candidate`, which is CLI-only.
 fn operator_discard_hint(id: &str) -> String {
     format!(
         "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
-         on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`) to \
-         close it and let the next run implement fresh"
+         on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`), or \
+         requeue the blocked task with the discard option (the dashboard's requeue, or \
+         `orbit task requeue {id} --discard-candidate`), to close it and let the next run \
+         implement fresh"
     )
 }
 
@@ -669,6 +676,42 @@ impl OrbitRuntime {
             .job_run_machine
             .as_ref()
             .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
+    }
+
+    /// Whether rewriting the specification of blocked `task` to `description`
+    /// and `acceptance_criteria` (either may be `None`: unchanged) is what
+    /// strands a candidate the task's failed run published or kept: the
+    /// unchanged task still returns to backlog onto that candidate, the
+    /// rewritten one is refused as no longer implemented by it. A decision
+    /// answer that rewrites then discards the candidate with the rewrite
+    /// instead of being refused. A candidate that was already unresumable, or
+    /// that the rewrite leaves implementing the task, is not reported.
+    pub(crate) fn rewrite_strands_candidate(
+        &self,
+        task: &Task,
+        description: Option<&str>,
+        acceptance_criteria: Option<&[String]>,
+    ) -> Result<bool, OrbitError> {
+        let mut rewritten = task.clone();
+        if let Some(description) = description {
+            rewritten.description = description.to_string();
+        }
+        if let Some(criteria) = acceptance_criteria {
+            rewritten.acceptance_criteria = criteria.to_vec();
+        }
+        if rewritten.spec_digest() == task.spec_digest() {
+            return Ok(false);
+        }
+        match self.authenticate_published_backlog_return(task) {
+            Ok(_) => {}
+            Err(OrbitError::InvalidInput(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        match self.authenticate_published_backlog_return(&rewritten) {
+            Ok(_) => Ok(false),
+            Err(OrbitError::InvalidInput(_)) => Ok(true),
+            Err(error) => Err(error),
+        }
     }
 
     /// Authenticate a plain blocked/review-to-backlog status update without a
