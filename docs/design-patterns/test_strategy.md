@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-02
+last_validated: 2026-11-06
 ---
 # Boundary-First Testing
 
@@ -390,6 +390,83 @@ infer zero. Compare selections, cache hits, runner image/CPU and phase times
 before attributing a cohort change. This measurement is operator work after
 merge, not a requirement for this implementation leaf or a claim that the
 400-second budget has been restored.
+
+A fifteenth pass (ORB-22450) follows the 2026-11-06 watch: 16 executed PR Check
+jobs in the latest 20 completed PR runs (four skipped, none cancelled or
+missing), nearest-rank p90 542 s (rank 15/16), median 476.5 s, maximum 551 s.
+Two slow extremes ended on CI guardrails, whose two longest members overlapped
+(`test-check-dependency-direction.py` 362.5 s and 386.3 s, `test-qa-full-sweep.py`
+363.4 s and 335.1 s). It reduces the work inside those two self-tests. No check,
+job identity, runner, guard or production harness behavior changes.
+
+Conditions for every local figure: base `7d98fa450`, one checkout path, a shared
+32-logical-CPU Linux host pinned with `taskset -c 0-3` (pool width 4), Rust 1.98.1,
+Python 3.14.4, bash 5.3.9, ripgrep 14.1.1, runs in sequence with no synthetic
+load. The lane ran `CI_SELF_TESTS=all scripts/ci-guardrails.sh --guards`, the
+selection a PR gets when it touches a self-test input. This host is not a hosted
+4-vCPU runner, and setup and transfer are not measured.
+
+- **Dependency self-test.** It ran the whole guard once per row, about 0.68 s each
+  (39 Python and 48 ripgrep processes per run), and one comment matrix was 120 of
+  the 266 runs. Nine large tables now share one guard run per batch, for **266 → 63
+  guard runs**, a deterministic reduction. `check_rows` gives each row its own file
+  at the same directory depth and requires the guard to report that row's own path,
+  a stronger assertion than the former exit status. The guard is unchanged.
+- **QA self-test.** `builtin_refusal_self_test(wire=True)` took 70.3 s of the
+  sweep's 117.9–131.9 s self-test, because each of its 25 modes ran every built-in
+  command through the supervisor although only `mcp serve` and `search reindex`
+  vary. The other 24 modes now answer the unrelated fixture commands in process:
+  14.2 s, and **2901 → 645 successful `execve` calls** in one traced run of each
+  arm. The varying commands keep the real supervisor and fixture process.
+  The `valid` row and the five `builtin_refusal` modes stay fully supervised, and
+  every row's unrelated results must equal the `valid` row's.
+
+| Sequential lane run | 1 | 2 | 3 | Median | Spread |
+|---|---:|---:|---:|---:|---:|
+| Baseline lane wall (s) | 238.21 | 213.47 | 210.73 | 213.47 | 27.48 |
+| Candidate lane wall (s) | 104.57 | 102.67 | 105.96 | 104.57 | 3.29 |
+| Baseline dependency self-test (s) | 211.135 | 188.386 | 183.757 | 188.386 | 27.378 |
+| Candidate dependency self-test (s) | 50.807 | 48.119 | 48.508 | 48.508 | 2.688 |
+| Baseline QA sweep (s) | 148.643 | 143.541 | 132.778 | 143.541 | 15.865 |
+| Candidate QA sweep (s) | 93.422 | 91.723 | 94.001 | 93.422 | 2.278 |
+
+The slowest candidate lane beat the fastest baseline lane by 104.77 s, 3.8 times
+the baseline spread. The lane's next members are `test-qa-full-sweep.py` (about
+93 s), `test-ci-download-verified.py` (about 84 s, mostly fixed waits) and
+`test-pr-state-workflows.py` (about 59 s). A PR that touches no self-test input
+already skips the dependency self-test and runs the QA check with `--static`, so
+this pass does not shorten it.
+
+Eight guard mutations (nested comments, qualified self, dropped modules and names,
+raw strings, crate-root paths, a dropped lower-module loop) failed both the old and
+new self-test, on the same test. Two QA validator mutations failed both wire arms on
+the same row (`boolean-reindex`, `cross-success`). Two mutations of `finalize_result`
+(accepting a nonzero exit, accepting unverified cleanup) pass the whole QA self-test
+in both arms. That gap exists at the base and this pass neither causes nor closes it.
+
+The build and test path was profiled and left unchanged. Slow run 42194401872
+selected ten crates (`orbit-auth`, `orbit-cli`, `orbit-cmd`, `orbit-core`,
+`orbit-engine`, `orbit-exec`, `orbit-policy`, `orbit-runtime`, `orbit-store`,
+`orbit-web`), with a hosted cache hit, list-build 273 s and a 379-test partition 6
+nextest of 162.6 s. The same selection locally, under the CI build flags with
+dependencies warm and workspace members cold, took 127 s and 127 s for the list build
+and 3–4 s for the archive. Partition 6 took 51.55 s and 51.57 s for 382 tests, all
+passing (membership differs from the hosted 379 tests at this base). Its
+longest row, `events::change_stream_notices_other_process_writes_and_resumes_after_reconnect`,
+took 50.6–50.7 s, but no retained hosted excerpt shows that row, so it stays a lead.
+Hosted busy time was 88.7% and no cause beyond breadth was confirmed, so no build or
+partition change has evidence behind it yet.
+
+Operator handoff: after merge, once runs carry this revision, follow the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) for the latest
+20 completed `pull_request` `ci.yml` runs with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Retain full SHAs, run
+IDs and raw job and step timestamps; report executed, skipped, cancelled and missing
+Check counts and failures separately; report median, nearest-rank p90 and maximum;
+report pre-Check queue and awaited-job queue within elapsed separately; and keep gaps
+as uncertainty, never zero. Note which runs executed the self-tests. This measurement
+and any live infrastructure or cost decision are operator-owned, not requirements of
+this leaf, and no local figure above claims the 400-second budget is restored.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
