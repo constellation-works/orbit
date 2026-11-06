@@ -594,6 +594,14 @@ for layer in application adapter; do
   fi
 done
 
+# Runtime is the lowest core layer. Composition supplies its application port;
+# runtime must not name higher layers or call their inherent runtime methods.
+if ! super_chains_into "$core_src/runtime" "" 'application|adapter|bootstrap|composition' crate-root ||
+  ! inherent_calls_into "$core_src/runtime" "" 'application|adapter' '' '' "$core_src"; then
+  echo "orbit-core runtime must not name higher layers or call application or adapter inherent OrbitRuntime methods"
+  fail=1
+fi
+
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and
 # `task::SourceGit`, with no allowlist. A call to an inherent `OrbitRuntime`

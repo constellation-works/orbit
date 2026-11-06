@@ -64,7 +64,7 @@ source scan, enforces the runtime direction.
   actor context, root paths and cost types live there too.
 - **Application port** — `orbit_runtime::ApplicationPort`, the operations
   the kernel calls back into (task reads, automation updates, audit records,
-  run reconciliation, crew redraws). `orbit-core`'s `runtime` module
+  run reconciliation, crew redraws). `orbit-core`'s `composition` module
   implements it on `CoreApplicationPort`, which hands each call the
   `OrbitRuntime` that owns the kernel.
 - **Application operations** — use-case DTOs and coordinated task, job,
@@ -111,7 +111,8 @@ source scan, enforces the runtime direction.
 | Concern | File | Task |
 |---|---|---|
 | Runtime mechanisms | `crates/orbit-runtime/src/` | [ORB-10886], [ORB-17906] |
-| Kernel re-export, `OrbitRuntime` wrapper and application port | `crates/orbit-core/src/runtime/` | [ORB-17906] |
+| Kernel re-export and `OrbitRuntime` wrapper | `crates/orbit-core/src/runtime/` | [ORB-17906] |
+| Kernel application port implementation | `crates/orbit-core/src/composition/application_port.rs` | — |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
@@ -284,7 +285,9 @@ and job edges that had regrown past the fixed-name guard (all but
   method that an `impl OrbitRuntime` block in `composition.rs` or under
   `bootstrap/` defines with a visibility that reaches it. Same-named lines (the
   lexical index store's `reindex_tasks` and the `#[cfg(test)]` fixture's
-  `OrbitRuntime::from_roots`) are exact-line allowances.
+  `OrbitRuntime::from_roots`) are exact-line allowances. Runtime may not name
+  application, adapter, bootstrap or composition, or call inherent methods
+  defined by application or adapter; the guard checks those edges too.
 
 The application layering, lowest first, is `contracts < task < job <
 automation < review < distributed < pull_drain < admission < workspace_auto <
