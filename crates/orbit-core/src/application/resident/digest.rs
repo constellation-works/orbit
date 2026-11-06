@@ -105,7 +105,7 @@ impl OrbitRuntime {
             );
             resident["open_request_count"] = json!(open.len());
             resident["open_requests"] = json!(open);
-            let stalled = self.resident_stall_of(&view, now)?.is_some();
+            let stalled = self.resident_stall_of(&view, now, None)?.is_some();
             resident["stalled"] = json!(stalled);
             // An ended mandate is no longer a resident and cannot take a veto.
             // Its open escalations above stay: a person may still answer them.

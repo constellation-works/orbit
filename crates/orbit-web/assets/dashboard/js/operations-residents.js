@@ -322,6 +322,7 @@ async function startResident(form, controls, status) {
     granted = `it may ${rights.join(", ")}`;
   }
 
+  let routineTurnedOn = Boolean(routine?.enabled);
   if (routine && !routine.enabled) {
     status.textContent = "Turning on the cycle routine…";
     const index = steps.length - 1;
@@ -331,6 +332,13 @@ async function startResident(form, controls, status) {
       await finish("error", refused(index, toggled.message, `${id} exists and ${granted}, but the cycle routine is still off, so it won't wake. Turn it on above.`));
       return;
     }
+    routineTurnedOn = true;
+  }
+  // The server reports a disabled cycle routine on creation; when this
+  // page had no routine row to turn on, that report is the notice.
+  if (created.result?.cycle_routine_disabled && !routineTurnedOn) {
+    await finish("error", `Started ${id}: ${granted}; ${created.result.warning || "the cycle routine is disabled, so it won't wake until it is enabled"}.`);
+    return;
   }
   const wakes = routine ? "the cycle routine is on" : "no cycle routine is loaded here, so it won't wake until one is";
   await finish(routine ? "success" : "error", `Started ${id}: ${granted}; ${wakes}.`);
@@ -641,6 +649,7 @@ function mandateDetail(payload, mandate) {
   const warnings = [
     mandate.mandate_error,
     mandate.authority_error,
+    mandate.cycle_routine_disabled ? `Cycle routine off: ${mandate.cycle_routine_name || "the resident cycle routine"} is disabled, so no cycle will fire until it is enabled.` : null,
     mandate.stalled ? `Stalled: ${mandate.stalled_reason || "no checkpoint within the heartbeat"}` : null,
   ].filter(Boolean);
   const facts = [

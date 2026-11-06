@@ -34,7 +34,9 @@ pub struct ResidentMandateCreateParams {
 impl OrbitRuntime {
     /// Create a mandate's assignment and attach its artifact. A draft the
     /// mandate rules refuse fails with their message and writes nothing.
-    /// Returns `{task_id, status, mandate}`.
+    /// Returns `{task_id, status, mandate, cycle_routine_disabled,
+    /// cycle_routine_name}`, plus a `warning` naming the disabled cycle
+    /// routine when this workspace's routine is disabled.
     pub fn create_resident_mandate(
         &self,
         params: ResidentMandateCreateParams,
@@ -83,6 +85,17 @@ impl OrbitRuntime {
         let status = self
             .activate_resident_assignment(&task.id)
             .map_or(task.status, |activated| activated.status);
-        Ok(json!({"task_id": task.id, "status": status, "mandate": mandate}))
+        let cycle_routine_disabled = self.resident_cycle_routine_disabled();
+        let mut result = json!({"task_id": task.id, "status": status, "mandate": mandate});
+        result["cycle_routine_disabled"] = json!(cycle_routine_disabled.is_some());
+        result["cycle_routine_name"] = json!(cycle_routine_disabled);
+        if let Some(routine_name) = &cycle_routine_disabled {
+            result["warning"] = json!(format!(
+                "Created mandate {}, but {}. Enable the routine to let it act.",
+                task.id,
+                super::resident_cycle_routine_disabled_reason(routine_name)
+            ));
+        }
+        Ok(result)
     }
 }

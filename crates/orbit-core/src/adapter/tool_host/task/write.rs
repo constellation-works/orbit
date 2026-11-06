@@ -466,7 +466,44 @@ pub(super) fn artifact_put(
     if attaches_mandate && let Some(task) = runtime.activate_resident_assignment(&written.task.id) {
         written.task = task;
     }
-    screened_write_response(runtime, written, None)
+    let cycle_routine_disabled = if attaches_mandate {
+        runtime.resident_cycle_routine_disabled()
+    } else {
+        None
+    };
+    if let Some(routine_name) = &cycle_routine_disabled {
+        written.warnings.push(format!(
+            "Mandate {} stored, but {}. Enable the routine to let it act.",
+            written.task.id,
+            crate::application::resident::resident_cycle_routine_disabled_reason(routine_name)
+        ));
+    }
+    let mut output = screened_write_response(runtime, written, None)?;
+    if attaches_mandate && let Some(object) = output.response.as_object_mut() {
+        object.insert(
+            "cycle_routine_disabled".to_string(),
+            Value::Bool(cycle_routine_disabled.is_some()),
+        );
+        object.insert(
+            "cycle_routine_name".to_string(),
+            cycle_routine_disabled
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        );
+        if let Some(routine_name) = &cycle_routine_disabled {
+            object.insert(
+                "warning".to_string(),
+                Value::String(format!(
+                    "Mandate stored, but {}. Enable the routine to let it act.",
+                    crate::application::resident::resident_cycle_routine_disabled_reason(
+                        routine_name,
+                    )
+                )),
+            );
+        }
+    }
+    Ok(output)
 }
 
 // Keep the assignment's crew in the same screened write as a valid mandate.

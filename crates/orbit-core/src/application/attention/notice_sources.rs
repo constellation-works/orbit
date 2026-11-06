@@ -231,6 +231,7 @@ pub(super) fn resident_stalled_items(
     now: DateTime<Utc>,
     settings: &AttentionSettings,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
+    let cycle_routine_disabled = runtime.resident_cycle_routine_disabled();
     let mut items = Vec::new();
     for metadata in runtime.observe_task_metadata()? {
         if metadata.status.is_terminal()
@@ -244,7 +245,9 @@ pub(super) fn resident_stalled_items(
         let task = runtime.get_task(&metadata.id)?;
         let history = runtime.get_task_history(&task.id)?;
         let view = runtime.resident_view(task.clone(), &history)?;
-        let Some(stall) = runtime.resident_stall_of(&view, now)? else {
+        let Some(stall) =
+            runtime.resident_stall_of(&view, now, cycle_routine_disabled.as_deref())?
+        else {
             continue;
         };
         let subject = Subject {
@@ -254,44 +257,63 @@ pub(super) fn resident_stalled_items(
             host,
             now,
         };
-        let mut next = subject.tool_next(
-            "orbit.resident.control",
-            "Ask the resident for a status checkpoint",
-        );
-        next.input = Some(json!({
-            "task_id": task.id,
-            "workspace": workspace.id,
-            "action": "wake",
-            "status_request": true,
-        }));
-        next.needs = vec!["reason".into()];
-        next.command = format!(
-            "orbit --workspace '{}' resident control {} wake --status-request --reason '<reason>'",
-            workspace.id, task.id
-        );
         let mut show = subject.tool_next("orbit.resident.show", "Inspect the resident");
         show.input = Some(json!({"task_id": task.id, "workspace": workspace.id}));
+        // With the cycle routine disabled, `wake` cannot work: no cycle
+        // follows it. The next step that can work is enabling the routine.
+        let mut next = if let Some(routine_name) = &cycle_routine_disabled {
+            let mut enable =
+                subject.tool_next("orbit.routine.control", "Enable the resident cycle routine");
+            enable.input = Some(json!({
+                "workspace": workspace.id,
+                "action": "toggle",
+                "name": routine_name,
+                "expected_enabled": false,
+                "enabled": true,
+                "target": crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
+            }));
+            enable.needs = Vec::new();
+            enable.command = format!(
+                "orbit tool run orbit.routine.control --input '{{\"workspace\":\"{}\",\"action\":\"toggle\",\"name\":\"{}\",\"expected_enabled\":false,\"enabled\":true,\"target\":\"{}\"}}'",
+                workspace.id,
+                routine_name,
+                crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
+            );
+            enable
+        } else {
+            let mut wake = subject.tool_next(
+                "orbit.resident.control",
+                "Ask the resident for a status checkpoint",
+            );
+            wake.input = Some(json!({
+                "task_id": task.id,
+                "workspace": workspace.id,
+                "action": "wake",
+                "status_request": true,
+            }));
+            wake.needs = vec!["reason".into()];
+            wake.command = format!(
+                "orbit --workspace '{}' resident control {} wake --status-request --reason '<reason>'",
+                workspace.id, task.id
+            );
+            wake
+        };
         next.also = vec![show];
+        let detail = json!({
+            "stall": stall.reason,
+            "last_checkpoint_at": stall.last_checkpoint_at,
+            "cycle_routine_disabled": cycle_routine_disabled.is_some(),
+            "cycle_routine_name": cycle_routine_disabled,
+        });
         let item = subject.item(
             AttentionKind::ResidentStalled,
             stall.since,
             &format!("Resident stalled: {}", stall.reason),
-            json!({
-                "stall": stall.reason,
-                "last_checkpoint_at": stall.last_checkpoint_at,
-            }),
+            detail.clone(),
             next,
         );
         items.push(finalize_attention_item(
-            item,
-            json!({
-                "stall": stall.reason,
-                "last_checkpoint_at": stall.last_checkpoint_at,
-            }),
-            None,
-            &subject,
-            settings,
-            false,
+            item, detail, None, &subject, settings, false,
         ));
     }
     Ok(items)
