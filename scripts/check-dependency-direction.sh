@@ -461,13 +461,13 @@ fi
 # admits the default crews without naming resolved config (the crate-root
 # re-exports of resolved config count as the same edge). The leaf itself uses
 # only std, orbit-common and orbit-types: no sibling module.
-config_resolved_names='resolved|ResolvedConfig|PrSettings|CodexExecutionPolicy|ExecutionEnvPolicy'
+config_resolved_names='resolved|ResolvedConfig|PrSettings|CodexExecutionPolicy|ExecutionEnvPolicy|CompatibilityConfigKey|CompatibilityConfigKeyDisposition|RETIRED_SYSTEM_CREW|RETIRED_SYSTEM_CREW_WARNING|compatibility_config_keys_at|compatibility_config_keys_present|disabled_crew_message|executor_host_os|names_retired_system_crew'
 if [ -e "$config_src/registry" ] && ! super_chains_into "$config_src" registry "$config_resolved_names" crate-root; then
   echo "orbit-config registry must not name resolved config; read crew defaults through crew_defaults"
   fail=1
 fi
 if [ -f "$config_src/crew_defaults.rs" ]; then
-  if rg -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/crew_defaults.rs"; then
+  if rg -n '\b(crate|super|self|toml|toml_edit|serde|serde_json|jsonschema|tracing)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/crew_defaults.rs"; then
     echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
     fail=1
   fi
