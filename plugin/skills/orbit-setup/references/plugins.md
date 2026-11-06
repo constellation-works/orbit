@@ -168,9 +168,9 @@ from the top level of the schema and nowhere deeper:
 | `string` | `--kebab-case <VALUE>`; a schema `enum` is offered as the allowed values |
 | `integer` / `number` | `--kebab-case <N>` |
 | `boolean` | `--kebab-case`, or `--kebab-case=false` to set it explicitly |
-| `array` of scalars | `--kebab-case <VALUE>`, repeated |
-| `object` or an array of objects | `--kebab-case-json '<JSON>'` |
-| named in the manifest's `cli.positional` | a positional argument, in that order, alongside its ordinary `--kebab-case` flag |
+| `array` of `string`, `integer` or `number` | `--kebab-case <VALUE>`, repeated |
+| `object`, any other `array` (objects, booleans, untyped items), or untyped | `--kebab-case-json '<JSON>'` (so `flags: {type: array, items: {type: boolean}}` uses `--flags-json '[true,false]'`) |
+| named in the manifest's `cli.positional` | a positional argument, in that order, alongside its ordinary `--kebab-case` flag; a JSON-shaped property keeps only its `--<name>-json` flag and has no positional form |
 
 `--input '<json>'`, `--input-file` and `--dry-run` are always accepted, and `--input`
 overrides every flag — that is the escape hatch for a shape no flag expresses. A property
