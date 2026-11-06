@@ -597,7 +597,9 @@ impl TaskV2Store {
             && fields.status_event.is_none()
             && fields.status_note.is_none()
             && fields.append_history.is_empty()
-            && fields.expected_status.is_none();
+            && fields.expected_status.is_none()
+            && fields.planned_by.is_none()
+            && fields.implemented_by.is_none();
         let write = |claimed: bool| {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
@@ -632,6 +634,44 @@ impl TaskV2Store {
             }
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));
+            if fields.planned_by.is_some() || fields.implemented_by.is_some() {
+                let previous = bundle.envelope.clone();
+                if let Some(value) = &fields.planned_by {
+                    bundle.envelope.planned_by = value.clone();
+                }
+                if let Some(value) = &fields.implemented_by {
+                    bundle.envelope.implemented_by = value.clone();
+                }
+                if bundle.envelope != previous {
+                    let event = TaskEventRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        event_id: next_event_id(&bundle.events),
+                        at: now,
+                        by: fields.actor.clone(),
+                        event_type: TASK_FIELDS_UPDATED_EVENT.to_string(),
+                        note: Some(task_fields_updated_note(&[])),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    };
+                    self.bundle_store.append_event(id, &event)?;
+                    bundle.events.push(event);
+                }
+                // The document write this replaces sealed any due grant here,
+                // ahead of the status event; keep that history order.
+                if !claimed {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &self.bundle_store,
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        now,
+                    )?;
+                }
+            }
             let mut next_event = next_sequence(&bundle.events, "EV-");
             let mut next_comment = next_sequence(&bundle.comments, "C-");
 

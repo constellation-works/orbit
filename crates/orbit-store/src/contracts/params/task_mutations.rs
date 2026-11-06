@@ -149,6 +149,11 @@ pub struct TaskHistoryUpdateParams {
     /// admits such a write only when its sole effect is appending exactly one
     /// comment; every other unscoped write stays refused [ORB-16723].
     pub operator_comment: bool,
+    /// Attribution published in this write's own commit, so a transition that
+    /// also records who did the work costs one durable commit, not two.
+    pub planned_by: Option<Option<String>>,
+    /// See [`Self::planned_by`].
+    pub implemented_by: Option<Option<String>>,
 }
 
 /// One task-bundle mutation whose freshness guard, durable receipt, history

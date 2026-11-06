@@ -126,7 +126,8 @@ impl TaskRecordService<'_> {
             )?;
         }
 
-        if params.has_document_changes() {
+        let attribution_in_history = params.attribution_joins_history_commit();
+        if params.has_document_changes() && !attribution_in_history {
             self.document.update_task_document(
                 id,
                 TaskDocumentUpdateParams {
@@ -175,6 +176,11 @@ impl TaskRecordService<'_> {
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),
                     operator_comment: params.operator_comment,
+                    planned_by: params.planned_by.clone().filter(|_| attribution_in_history),
+                    implemented_by: params
+                        .implemented_by
+                        .clone()
+                        .filter(|_| attribution_in_history),
                 },
             )?;
         }

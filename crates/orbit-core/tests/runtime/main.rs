@@ -102,6 +102,7 @@ mod origin_fetch_hold;
 mod pilot_warning_cards;
 mod precedent_assist;
 mod precedent_history;
+mod promotion_commit;
 mod rebase_recovery_attempts;
 mod recovery_fixture;
 mod relation_auto_close;
