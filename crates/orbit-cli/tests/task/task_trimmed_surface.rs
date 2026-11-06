@@ -392,12 +392,49 @@ fn lint_sweep_reports_the_surface_a_restoration_leaves(workspace: &TestWorkspace
         json!(["file:pruned.rs"])
     );
 
+    // A zero-restorable dry run has no action to recommend, while its JSON
+    // report and the apply-mode result keep their existing shape and counts.
+    let zero_restorable = workspace.task_json(&["task", "lint", "--json"]);
+    assert_eq!(zero_restorable["total_restorable"], json!(0));
+    assert_eq!(zero_restorable["tasks_written"], json!(0));
+    assert_eq!(
+        sweep_entry(&zero_restorable, empty_id)["restorable"],
+        json!([])
+    );
+    let zero_restorable_text = String::from_utf8_lossy(
+        &workspace
+            .run(&["task", "lint"], "zero-restorable dry run")
+            .stdout,
+    )
+    .into_owned();
+    assert!(
+        !zero_restorable_text.contains("Re-run with --restore-pruned to apply."),
+        "a dry run with no restorable entries must not recommend a no-op: {zero_restorable_text}"
+    );
+
     // Repeating the repair finds nothing left to write.
     let repeat = workspace.task_json(&["task", "lint", "--restore-pruned", "--json"]);
+    assert_eq!(repeat["total_restorable"], json!(0));
     assert_eq!(repeat["tasks_written"], json!(0));
     assert!(sweep_entry(&repeat, proposed_id).is_null());
     assert!(sweep_entry(&repeat, backlog_id).is_null());
     assert_eq!(sweep_entry(&repeat, empty_id)["empty_surface"], json!(true));
+    let repeat_task_count = repeat["tasks"].as_array().expect("sweep tasks").len();
+    let repeat_text = String::from_utf8_lossy(
+        &workspace
+            .run(
+                &["task", "lint", "--restore-pruned"],
+                "zero-restorable apply",
+            )
+            .stdout,
+    )
+    .into_owned();
+    let expected_repeat_summary =
+        format!("restored 0 recorded entries across {repeat_task_count} task(s).");
+    assert!(
+        repeat_text.contains(&expected_repeat_summary),
+        "apply-mode output should keep its existing zero-restoration summary: {repeat_text}"
+    );
     assert_eq!(restores_recorded(proposed_id), 1);
     assert_eq!(restores_recorded(backlog_id), 1);
 }
