@@ -81,9 +81,11 @@ async function write(path, body, success, controls = [], applied = null) {
 
 async function refreshAfterWrite(visit) {
   try {
-    await fetchAndRenderResidents();
+    await fetchAndRenderResidents({ deliberate: true });
   } catch (error) {
     if (visit.isCurrent()) {
+      // The write already changed page state; do not leave a finished form up.
+      rerender();
       document.getElementById(FEEDBACK)?.appendChild(el("span", {
         text: `\nRefresh failed: ${error.message || error}. The change was applied; refresh before acting again.`,
       }));
@@ -127,8 +129,10 @@ function rightBoxes(prefix, legend, checked = []) {
 
 const checkedRights = (form, prefix) => RIGHTS.filter(right => form.elements[`${prefix}-${right}`]?.checked);
 
+// A render the operator's own action asked for: it replaces a focused form,
+// which only a background refresh may not.
 function rerender() {
-  if (ui.payload) renderResidents(ui.payload);
+  if (ui.payload) renderResidents(ui.payload, true);
 }
 
 // --- routine -----------------------------------------------------------------
@@ -596,7 +600,7 @@ function composer(payload, mandate, action) {
   const cancel = button("Cancel", `Cancel ${spec.label.toLowerCase()}`);
   confirm.disabled = !text.value.trim();
   text.addEventListener("input", () => {
-    ui.pending.text = text.value;
+    if (ui.pending) ui.pending.text = text.value;
     confirm.disabled = !text.value.trim();
   });
   const form = node("form", { class: "resident-composer", "aria-label": `${spec.label} ${mandate.task_id}` }, [
@@ -716,7 +720,7 @@ function mandateList(payload, mandates) {
   return items;
 }
 
-function renderResidents(payload) {
+function renderResidents(payload, deliberate = false) {
   const body = document.getElementById("residents-body");
   const count = document.getElementById("residents-count");
   if (!body) return;
@@ -730,7 +734,8 @@ function renderResidents(payload) {
   setRailSubtabCount("rail-count-ops-residents", attention ? String(attention) : "");
   // A form the operator is typing in survives a background refresh; the
   // start flow also keeps its own node, so its values survive every render.
-  if (body.querySelector("form :focus")) return;
+  // A deliberate render (Cancel, a submitted write) must not be dropped.
+  if (!deliberate && body.querySelector("form :focus")) return;
   if (ui.selected && !mandates.some(mandate => mandate.task_id === ui.selected)) ui.selected = null;
   const empty = !mandates.length && !ui.startForm;
   const toolbar = el("div", { class: "resident-toolbar" }, [
@@ -755,6 +760,6 @@ function renderResidents(payload) {
   body.replaceChildren(...parts);
 }
 
-export async function fetchAndRenderResidents() {
-  await requestPanel("residents-body", "residents", () => fetchJson("/api/residents?all=true"), renderResidents, "residents-count");
+export async function fetchAndRenderResidents({ deliberate = false } = {}) {
+  await requestPanel("residents-body", "residents", () => fetchJson("/api/residents?all=true"), payload => renderResidents(payload, deliberate), "residents-count");
 }
