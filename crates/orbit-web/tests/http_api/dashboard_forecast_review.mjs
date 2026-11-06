@@ -678,6 +678,56 @@ function clickForecastControl(label) {
   return button;
 }
 
+await test('default read failures retain usable recovery controls', async () => {
+  common.setWorkspace('ws-default-recovery');
+  const failDefault = async (request) => {
+    assert.equal(request.url.searchParams.get('arrivals'), null);
+    assert.equal(request.url.searchParams.get('history_tasks'), null);
+    request.resolve(response({ error: 'default forecast unavailable' }, 500));
+    await settle();
+    assert.match(text(), /default forecast unavailable/);
+    assert.ok(body().querySelector('select'), 'History remains available beside the error');
+    assert.ok([...body().querySelectorAll('button')].some(button => button.textContent === 'Refresh'));
+    assert.ok([...body().querySelectorAll('button')].some(button => button.textContent === 'With new arrivals'));
+  };
+  const cold = forecast.fetchAndRenderForecast();
+  const rejected = assert.rejects(cold, /default forecast unavailable/);
+  await failDefault(pending.at(-1));
+  await rejected;
+
+  clickForecastControl('Refresh');
+  assert.equal(pending.at(-1).url.searchParams.get('refresh'), '1');
+  pending.at(-1).resolve(response(payload()));
+  await settle();
+  assert.match(text(), /6\.5h/, 'Refresh recovers the cold failure');
+
+  clickForecastControl('With new arrivals');
+  assert.equal(pending.at(-1).url.searchParams.get('arrivals'), 'on');
+  pending.at(-1).resolve(response(payload()));
+  await settle();
+  clickForecastControl('Current backlog');
+  await failDefault(pending.at(-1));
+
+  const history = body().querySelector('select');
+  history.value = 'tasks:200';
+  for (const listener of history.listeners.change || []) listener();
+  assert.equal(pending.at(-1).url.searchParams.get('history_tasks'), '200');
+  pending.at(-1).resolve(response(payload()));
+  await settle();
+  const selectedHistory = body().querySelector('select');
+  selectedHistory.value = 'default';
+  for (const listener of selectedHistory.listeners.change || []) listener();
+  await failDefault(pending.at(-1));
+  clickForecastControl('With new arrivals');
+  assert.equal(pending.at(-1).url.searchParams.get('arrivals'), 'on');
+  pending.at(-1).resolve(response(payload()));
+  await settle();
+  assert.match(text(), /6\.5h/, 'scenario selection recovers the failed default');
+  clickForecastControl('Current backlog');
+  pending.at(-1).resolve(response(payload()));
+  await settle();
+});
+
 for (const overlap of [false, true]) {
   await test(overlap ? 'a poll cannot supersede a pending Refresh' : 'Live Refresh survives two dashboard poll ticks', async () => {
     common.setWorkspace(`ws-refresh-${overlap}`);

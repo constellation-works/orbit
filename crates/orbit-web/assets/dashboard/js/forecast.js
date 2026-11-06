@@ -147,8 +147,8 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
     view.payload = payload;
     renderForecast();
   }, COUNT);
-  // A view the operator picked can load slowly or fail, so its controls stay.
-  if (viewChanged && path !== ENDPOINT) renderViewControls();
+  // Any view can load slowly or fail, so keep its recovery controls available.
+  if (viewChanged) renderViewControls();
   if (!refresh) return pending;
   const retained = pending.catch((error) => {
     if (liveRefresh === retained) liveRefresh = null;
