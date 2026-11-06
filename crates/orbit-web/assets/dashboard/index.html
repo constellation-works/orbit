@@ -851,13 +851,13 @@
       <main class="notices-layout">
         <section class="panel" id="notices-panel">
           <header>
-            <span>Notices</span>
-            <span class="count" id="notices-count">-</span>
+            <span class="notices-head-title">
+              <span>Notices</span>
+              <span class="count" id="notices-count">-</span>
+              <span id="notices-hint-slot"></span>
+            </span>
+            <span class="notices-head-actions" id="notices-post-slot"></span>
           </header>
-          <p class="leases-explainer">
-            Open fleet notices in the shown workspaces, then notices that closed or expired in the last 24 hours.
-            Posting and closing use the same notice operations as the CLI; an operator session is required to write.
-          </p>
           <div class="body" id="notices-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>

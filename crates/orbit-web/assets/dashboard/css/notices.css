@@ -29,11 +29,17 @@
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
 .notices-layout { grid-template-columns: minmax(0, 1fr); }
+/* Heading row: title, open count and the page hint on the left, the Post
+   control on the right. The hint bubble spans the header. */
+#notices-panel > header { position: relative; }
+.notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
+.notice-post-toggle { min-height: 32px; }
 /* One inset for the whole Notices column: the body takes the panel's 16px
-   horizontal inset (the same as the panel header and the explainer above it),
-   so section titles, the post form's and cards' borders and the empty-state
-   text all start on that edge; content inside a bordered form or card sits
-   one card padding (12px) further in. */
+   horizontal inset (the same as the panel header), so section titles, the post
+   form's and cards' borders and the empty-state text all start on that edge;
+   content inside a bordered form or card sits one card padding (12px) further
+   in. */
 #notices-body { padding-inline: 16px; }
 #notices-body > .panel-placeholder { padding-inline: 0; }
 .notice-row {
@@ -47,8 +53,8 @@
 .notice-title { font-weight: 600; overflow-wrap: anywhere; }
 .notice-meta { color: var(--fg-mute); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .notice-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
-.notice-section-title, .notice-form-title { margin: 14px 0 8px; font-size: 13px; }
-.notice-post-form { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.notice-section-title { margin: 14px 0 8px; font-size: 13px; }
+.notice-post-form { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; }
 .notice-post-form input, .notice-post-form textarea, .notice-post-form select,
 .notice-close-reason {
   background: var(--bg-control);
