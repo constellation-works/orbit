@@ -1105,7 +1105,10 @@ the completion frame, and the raw provider capture stays retained.
 `agent_implement` keeps the best-effort response default. At the implement step
 boundary, a claimed provider invocation that leaves its pinned base unchanged must return
 a non-empty `no_diff_artifacts` array, unless the authoritative task is terminal
-or tagged `no-diff-expected`. Missing references fail that step with
+or tagged `no-diff-expected`, or it returns admitted `already_resolved` selectors
+[ORB-22407]. Selectors satisfy the check without a report: the commit step settles
+them as `verified_already_resolved` when neither clean-tree report artifact exists,
+and `claim_validate` replays them. A summary alone does not satisfy it. Missing references fail that step with
 `response_envelope_error`, before `git_commit` can run. Owner invocations attach
 their evidence directly to durable task state, and edited or already-committed
 candidates do not need these response fields. The check only requires the
