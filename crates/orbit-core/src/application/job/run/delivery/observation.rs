@@ -494,7 +494,7 @@ impl OrbitRuntime {
             }
         }
         Err(OrbitError::InvalidInput(format!(
-            "no task delivery run in this workspace was submitted with task '{task_id}'"
+            "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — call orbit.task.show without field \"delivery\" instead"
         )))
     }
 }
