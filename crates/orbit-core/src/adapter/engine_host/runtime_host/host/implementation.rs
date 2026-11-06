@@ -44,7 +44,7 @@ use crate::OrbitRuntime;
 use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
 use crate::runtime::engine::paths::current_repo_root;
 
-use super::{
+use super::super::{
     activity_tools, agent, auto_task, checkpoints, claims, crew, executors, host_metadata,
     invocation, recovery, task_automation, validation,
 };
@@ -372,7 +372,7 @@ impl RuntimeHost for OrbitRuntime {
         workspace: &std::path::Path,
         evidence: &Value,
     ) -> Result<(), OrbitError> {
-        super::recovery_evidence::persist_final_recovery_evidence(
+        super::super::recovery_evidence::persist_final_recovery_evidence(
             self, run_id, task_id, workspace, evidence,
         )
     }
