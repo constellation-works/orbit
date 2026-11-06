@@ -1183,9 +1183,16 @@ in `task_pr_pipeline`:
   invocation's trace is persisted. A correction repeats a whole invocation, and only
   its prompt asks it to change nothing but the reply, so asset load
   (`validate_response_correction_activity`) admits the policy only with
-  `require_response_envelope`, `fsProfile: reviewer` and no grant of a task, delivery
-  or dispatch tool, and never with `incomplete_continuation` or
-  `trustedHostExecution`.
+  `require_response_envelope`, `fsProfile: reviewer` and no grant of a built-in
+  Orbit mutation tool from its admission table, in either allowlist or deny-list
+  mode. This includes task/artifact/triage writes, decisions, drain claims,
+  leases (including the show/list operations that reconcile lease state), fleet
+  notices, evolutions, resident control/grants/checkpoints/relays, experiments,
+  automation/dispatch and visual capture. Both shipped correction activities deny
+  these tools. Keep the admission table and those disallow lists in sync with
+  registered built-in Orbit writes; file and process access remains separately
+  confined by the filesystem profile. Admission never permits
+  `incomplete_continuation` or `trustedHostExecution` with correction.
 - **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
   whose `recovery_activity` resolves dispatches it for a `success: false`
   outcome exactly as it does for an `Err` — once retries are exhausted, if the

@@ -1,8 +1,9 @@
 //! Which activities may declare `response_correction` [ORB-22426].
 //!
 //! A correction is one more invocation of the whole activity. Only the prompt
-//! asks it to change nothing but its reply, so the guarantee that it cannot
-//! repeat a mutation has to come from what the activity is allowed to do.
+//! asks it to change nothing but its reply. Admission therefore requires the
+//! read-only filesystem profile and denies the built-in Orbit mutation tools
+//! below, including coordination writes outside the worktree.
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 use super::tool_allowlist::tool_allowed;
@@ -10,19 +11,52 @@ use super::tool_allowlist::tool_allowed;
 /// The filesystem profile that denies writes to the agent's worktree.
 const READ_ONLY_FS_PROFILE: &str = "reviewer";
 
-/// Tools that change a task, its delivery or a run, or that start other work.
+/// Registered built-in Orbit tools classified as mutating, including writes
+/// to coordination state outside the worktree. Keep this table and the shipped
+/// correction activities' disallow lists in sync with the tool registry.
+/// File and process access is separately confined by the filesystem profile.
 const MUTATING_TOOLS: &[&str] = &[
     "orbit.agent.invoke",
     "orbit.auto_task.add",
     "orbit.auto_task.mint",
     "orbit.auto_task.update",
     "orbit.command.exec",
+    "orbit.decision.digest",
+    "orbit.decision.raise",
+    "orbit.decision.submit",
+    "orbit.drain.claim.bind",
+    "orbit.drain.claim.settle",
+    "orbit.evolution.add",
+    "orbit.experiment.abandon",
+    "orbit.experiment.assign",
+    "orbit.experiment.clone",
+    "orbit.experiment.conclude",
+    "orbit.experiment.create",
+    "orbit.experiment.pause",
+    "orbit.experiment.resume",
+    "orbit.experiment.reweight",
+    "orbit.experiment.start",
+    "orbit.experiment.update",
     "orbit.friction.add",
     "orbit.friction.update",
+    "orbit.lease.expand",
+    "orbit.lease.list",
+    "orbit.lease.release",
+    "orbit.lease.renew",
+    "orbit.lease.request",
+    "orbit.lease.show",
+    "orbit.notice.close",
+    "orbit.notice.post",
     "orbit.pipeline.invoke",
+    "orbit.pipeline.wait",
+    "orbit.resident.checkpoint",
+    "orbit.resident.control",
+    "orbit.resident.grant",
+    "orbit.resident.relay",
     "orbit.routine.control",
     "orbit.task.add",
     "orbit.task.artifact.put",
+    "orbit.task.block_triage",
     "orbit.task.pull",
     "orbit.task.reconcile_review",
     "orbit.task.recover_claim",
@@ -32,6 +66,7 @@ const MUTATING_TOOLS: &[&str] = &[
     "orbit.task.review_reset",
     "orbit.task.revoke_handoff",
     "orbit.task.update",
+    "orbit.visual.capture",
     "orbit.workflow.auto",
     "orbit.workflow.land",
     "orbit.workflow.run.resume",
@@ -53,7 +88,7 @@ pub enum ResponseCorrectionActivityError {
     /// The unsandboxed mode has no read-only guarantee.
     #[error("it cannot be combined with `trustedHostExecution`")]
     TrustedHost,
-    /// A task or delivery change could be repeated.
+    /// An Orbit state change or dispatched operation could be repeated.
     #[error("the activity must not be granted the mutating tool `{tool}`")]
     MutatingTool {
         /// The granted tool.
@@ -61,8 +96,8 @@ pub enum ResponseCorrectionActivityError {
     },
 }
 
-/// Refuse `response_correction` on an activity a repeated invocation could
-/// change anything through. Called from asset load.
+/// Refuse `response_correction` unless workspace writes and the built-in
+/// Orbit mutations above are denied. Called from asset load in either grant mode.
 pub fn validate_response_correction_activity(
     activity: &ActivityV2,
 ) -> Result<(), ResponseCorrectionActivityError> {
