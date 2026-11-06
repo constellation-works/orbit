@@ -26,8 +26,10 @@ use crate::activity_job::{
     ResolvedShellExecutor,
 };
 
-use super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
-use super::super::{
+use super::errors::{unsupported_dispatch_capability, unsupported_runtime_capability};
+
+use super::super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
+use super::super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
     HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
@@ -39,7 +41,7 @@ use super::super::{
     TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
-/// A [`RuntimeHost`](super::super::RuntimeHost) base for test doubles.
+/// A [`RuntimeHost`](super::super::super::RuntimeHost) base for test doubles.
 ///
 /// `RuntimeHost` declares no defaults, so the production host must name every
 /// capability. A test double implements this trait instead, overriding only
@@ -1100,16 +1102,4 @@ pub trait NullRuntimeHost: Send + Sync {
         }
         Ok(None)
     }
-}
-
-fn unsupported_runtime_capability(capability: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "runtime host capability '{capability}' is unavailable"
-    ))
-}
-
-fn unsupported_dispatch_capability(capability: &str) -> DispatchError {
-    DispatchError::JobExecution(format!(
-        "runtime host capability '{capability}' is unavailable"
-    ))
 }
