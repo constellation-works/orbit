@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.45.1 — 2026-11-06
+
+### Highlights
+
+- **Dashboard pages built around the job**: Automation > Residents, Notices, Health > Doctor and Analytics > Agents now open on what needs you, with fewer words: a supervised resident list, one-line notices, a Doctor work queue beside its fix pane, and the crew ranking first. ([ORB-22357])
+- **Experiment details that load**: The page leads with the verdict and shows the experiment immediately, while the readout loads beside it with its own Retry. Readouts that outlasted the dashboard's request limit and failed the page now finish far sooner. ([ORB-22359])
+- **Forecast in three tabs**: Analytics > Forecast splits into Forecast, Accuracy and Data gaps, with one scenario switch for the current backlog, proposed tasks or new arrivals, and a one-line-per-task table in dispatch order. ([ORB-22329])
+- **Residents say why they stalled**: `orbit routine enable` and `orbit routine disable` control the cycle routine from the CLI, and a resident stalled by a disabled routine now names it. Invalid mandates refuse every control action except stop. ([ORB-22379])
+- **Fewer deliveries stopped by transient states**: Landing rechecks a PR that reads blocked just after its checks pass, GitHub's internal push rejections retry, and a claimed implementer that finds the defect already fixed settles instead of blocking. ([ORB-22350])
+- **Malformed agent replies get a second chance**: Read-only activities such as the task pilot now get one bounded correction round when a reply contradicts itself or ends without its completion envelope, rather than failing the run. ([ORB-22426])
+
 ## 0.45.0 — 2026-11-06
 
 ### Breaking Changes
