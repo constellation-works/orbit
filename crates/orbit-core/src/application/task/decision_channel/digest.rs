@@ -6,7 +6,7 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
-use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
+use crate::application::task::{TaskPrecedentDecisionPort, TaskRecordUpdateParams, TaskRecords};
 
 use super::model::{DecisionDigest, DecisionSubmitCaller};
 
@@ -112,7 +112,7 @@ impl OrbitRuntime {
             raised,
             expiring,
             model_answered,
-            assist_demoted: self.precedent_assist_demotions(),
+            assist_demoted: self.demoted_precedent_categories(),
             warnings,
         })
     }
@@ -193,7 +193,7 @@ impl OrbitRuntime {
         if let Some((request, true)) = &outcome
             && request.state == DecisionRequestState::Open
         {
-            self.note_open_precedent_decision(request);
+            self.enqueue_open_decision_for_precedent(request);
         }
         Ok(outcome)
     }

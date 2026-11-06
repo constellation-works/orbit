@@ -51,6 +51,7 @@ mod paths;
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
+mod precedent_decision_port;
 pub mod precedent_provider;
 mod pull_request_links;
 mod query;
@@ -163,6 +164,7 @@ pub(crate) use pilot::{
 };
 pub(crate) use post_deploy::owed_criteria_json;
 pub use post_deploy::{PostDeployOperatorRecord, PostDeployRecordRefusal};
+pub(in crate::application) use precedent_decision_port::TaskPrecedentDecisionPort;
 pub use provider_limit::{
     CrewProviderLimit, CrewUsagePressure, PressureWindow, ProviderLimitReading,
     ProviderLimitThreshold, ProviderLimitsView, ProviderUsageStatus, UngatedLaneLimit,

@@ -19,7 +19,7 @@ use orbit_types::task::{
 
 use super::super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 /// Most open agent-raised decision requests one workspace holds.
 const MAX_OPEN_AGENT_DECISIONS_PER_WORKSPACE: usize = 20;
@@ -292,7 +292,7 @@ impl OrbitRuntime {
             ))
         })?;
         if !raised.deduplicated && raised.request.state == DecisionRequestState::Open {
-            self.note_open_precedent_decision(&raised.request);
+            self.enqueue_open_decision_for_precedent(&raised.request);
         }
         Ok(raised)
     }

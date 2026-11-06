@@ -418,6 +418,13 @@ these concrete choices:
 - **Digest.** `orbit.decision.digest` returns `assist_demoted`: every demoted
   category of the workspace with its evidence, until the operator re-enables
   or disables it.
+- **Ownership.** `application::precedent_decision` sits above `task`: it reads
+  task requests and applies task answers. Task decision operations reach it only
+  through `task::TaskPrecedentDecisionPort` (enqueue, review feedback and
+  demotion reads). The pure enablement records are in
+  `application::contracts`, still re-exported from `precedent_decision`; the
+  host-only store, ledger and grant-dependent helpers stay with the consumer
+  ([ORB-22313]).
 
 ## Recording, veto and feedback
 
@@ -584,6 +591,7 @@ task and depends only on slice 3's contract.
 
 ## Task References
 
+- [ORB-22313] — routes task's calls through a task-owned port and moves the pure enablement records to `contracts`.
 - [ORB-21097] — implements category enablement, self-answer, holdback and demotion.
 - [ORB-21096] — implements the `decision-assistance-eval/4` evaluator contract.
 - [ORB-21095] — implements the shadow precedent-decision consumer.

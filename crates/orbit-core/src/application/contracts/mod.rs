@@ -4,7 +4,8 @@
 //! `workspace_auto`, `pull_drain` and `sweep_filing` each name these, so
 //! none of them owns them: a module that defined one would pull every other
 //! user into a dependency on itself. This module sits below all nine and
-//! imports none of them [ORB-17924]. Only pure values belong here: no
+//! imports none of them [ORB-17924], nor `precedent_decision` or `assistance`
+//! [ORB-22313]. Only pure values belong here: no
 //! runtime access and no behaviour beyond formatting the value itself. The one
 //! exception is a port trait that a layer above application implements, such as
 //! `ToolInvocationPort` for the adapter [ORB-22004] and
@@ -18,6 +19,7 @@ mod filing_tags;
 mod host_provider_hold;
 mod jobs;
 mod pilot;
+mod precedent_assist;
 mod published_delivery;
 mod pull_settlement;
 mod retry_key;
@@ -43,6 +45,10 @@ pub(crate) use jobs::LOCAL_ROUTE_JOB;
 pub use jobs::{ESCALATION_TRIAGE_JOB, FINDING_VERIFICATION_JOB, PULL_DRAIN_JOB};
 pub(crate) use pilot::PilotFingerprints;
 pub(in crate::application) use pilot::SUPERSEDED_BY_SOURCE;
+pub use precedent_assist::{
+    PrecedentAssistDemotion, PrecedentAssistEnablement, PrecedentAssistEnd, PrecedentAssistOutcome,
+    PrecedentAssistOutcomeSource, PrecedentAssistState,
+};
 pub(crate) use published_delivery::PublishedDelivery;
 pub(in crate::application) use pull_settlement::SETTLEMENT_REFUSAL_REMEDY;
 pub use pull_settlement::{PullSettlementEntry, PullSettlementOutcome};

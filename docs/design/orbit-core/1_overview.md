@@ -117,6 +117,7 @@ source scan, enforces the runtime direction.
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
+| Task-owned port to the precedent consumer | `crates/orbit-core/src/application/task/precedent_decision_port.rs`, implemented in `precedent_decision/task_port.rs`; its records are in `contracts/precedent_assist.rs` | [ORB-22313] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
@@ -216,6 +217,9 @@ and job edges that had regrown past the fixed-name guard (all but
   observation records),
   `task::TaskSweepFilingPort` (CI-sweep admission) and
   `task::TaskWorkspaceAutoPort` (the tasks live `run auto` leaves carry).
+  [ORB-22313] added `task::TaskPrecedentDecisionPort` (the open-request
+  enqueue, a model answer's review outcome and the digest's demoted
+  categories), which `precedent_decision` implements.
   [ORB-17937] added two job-owned ports in `job/drain_port.rs`:
   `job::JobDrainPort` (the explicit drain entry decision, the Git protection
   preflight, the admission resource throttle, host provider holds, a pull
@@ -266,6 +270,8 @@ and job edges that had regrown past the fixed-name guard (all but
   module above it in the order below by path, grouped tree or `super::`
   chain, or calls the inherent methods and functions the [ORB-17939] ports
   and reused reads wrap, when `contracts` imports any of the nine modules,
+  `precedent_decision` or `assistance`, when `task` names `precedent_decision`
+  or calls its inherent methods, `task/backlog_forecast/` included [ORB-22313],
   or when a shared contract is defined or imported anywhere but
   `application::contracts`. [ORB-22004] The same derivation covers the adapter:
   `application` may not import `crate::adapter`, and no application file may call
@@ -302,6 +308,11 @@ and since [ORB-17943] no task → automation edge remains, making `task` the
 lowest of the nine modules above `contracts`. The forecast's task → job,
 task → admission and task → workspace_auto edges are the known exception.
 
+`task < precedent_decision` is a pairwise direction beside that order
+[ORB-22313]. The consumer stays above `task` because it reads task requests and
+applies task answers. Its pure enablement records are in `contracts`, and its
+host-only store and grant-dependent helpers stay with it.
+
 ## Task References
 
 - [ORB-10012] — introduced the versioned workspace-layout migration pre-flight the runtime open runs.
@@ -322,5 +333,6 @@ task → admission and task → workspace_auto edges are the known exception.
 - [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 - [ORB-22035] — made the guard refuse `task` calls into `automation`'s inherent `OrbitRuntime` methods, which the derived-name check skipped because `automation` was not in its upper list; the `task/backlog_forecast/` exemption does not cover them.
 - [ORB-22159] — closed the derived-name guard's UFCS gap so `<OrbitRuntime>::name` and the qualified-self forms are checked as up-calls.
+- [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

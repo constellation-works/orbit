@@ -82,7 +82,7 @@ pub struct DecisionDigest {
     /// This workspace's precedent-decision categories the rolling window
     /// demoted to shadow, with the evidence, until the operator re-enables
     /// or disables them.
-    pub assist_demoted: Vec<crate::application::precedent_decision::PrecedentAssistEnablement>,
+    pub assist_demoted: Vec<crate::application::contracts::PrecedentAssistEnablement>,
     /// Corrupt task bundles omitted from the digest.
     pub warnings: Vec<String>,
 }

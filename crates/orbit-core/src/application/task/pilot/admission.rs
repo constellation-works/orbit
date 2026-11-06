@@ -19,7 +19,7 @@ use super::super::positive_validation_tools;
 use super::super::helpers::is_automation_actor;
 use super::super::legacy_decisions;
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
@@ -607,7 +607,7 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         if let Some(request) = raised {
-            self.note_open_precedent_decision(&request);
+            self.enqueue_open_decision_for_precedent(&request);
         }
         Ok(())
     }

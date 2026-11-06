@@ -30,7 +30,7 @@ use super::rules::{
 };
 use crate::OrbitRuntime;
 use crate::application::tag_instructions::{list_blob_paths_at, read_blob_at};
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 const CORPUS_REL: &str = "docs/agents/corpus";
 
@@ -199,7 +199,7 @@ impl OrbitRuntime {
             .as_ref()
             .is_some_and(|resolution| resolution.model.is_some())
         {
-            self.note_precedent_assist_review(&located, true);
+            self.record_model_answer_review_outcome(&located, true);
         }
         Ok(reopened)
     }
