@@ -99,6 +99,7 @@ pub mod test_support {
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
     /// Stop a worker's startup observer just after it reaps the worker.
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
+    pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     pub use crate::application::notice::test_support::with_notice_close_snapshot_hook;

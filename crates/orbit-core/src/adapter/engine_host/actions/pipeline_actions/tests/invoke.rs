@@ -335,6 +335,28 @@ fn an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate() {
         "task_pr_pipeline",
         Some(json!({"task_ids": [task]})),
     );
+    // Candidate handoff requires proof that the worker stopped. Give the
+    // child an owned, verifiable worker rather than this test process.
+    #[cfg(unix)]
+    let owner = orbit_common::test_env::spawn_unrelated_process();
+    let mut child_run = runtime.get_job_run_backend(&child).unwrap().unwrap();
+    #[cfg(unix)]
+    {
+        child_run.pid = Some(owner.pid());
+        child_run.pid_start_time =
+            orbit_common::process::identity::process_start_identity_token(owner.pid());
+        assert!(child_run.pid_start_time.is_some());
+    }
+    #[cfg(not(unix))]
+    {
+        child_run.pid = None;
+        child_run.pid_start_time = None;
+    }
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &child_run, None)
+        .unwrap();
     runtime
         .apply_task_automation_update(
             &task,
@@ -386,6 +408,10 @@ fn an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate() {
         "a cancelled child is not live: {summary}"
     );
     assert_eq!(run_state(&runtime, &child), JobRunState::Cancelled);
+    #[cfg(unix)]
+    assert!(!orbit_common::process::identity::process_is_alive(
+        owner.pid()
+    ));
     assert_eq!(
         dispatch_record(&runtime, &parent, &child),
         (ChildDispatchPhase::Terminal, Some("timeout".to_string()))

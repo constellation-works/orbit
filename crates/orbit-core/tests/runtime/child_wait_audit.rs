@@ -42,6 +42,22 @@ use super::dispatch_admission::isolated;
 const PARENT: &str = "child_wait_parent";
 const CHILD: &str = "child_wait_child";
 
+thread_local! {
+    // The first public wait poll joins fixture preparation before observing
+    // its deadline. This controls ordering without a setup-speed assumption.
+    static CHILD_PREPARED: std::cell::RefCell<Option<std::sync::mpsc::Receiver<()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+fn prepared_poll_wait(duration: Duration) {
+    let ready = CHILD_PREPARED.with(|slot| slot.borrow_mut().take());
+    if let Some(ready) = ready {
+        ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    }
+    std::thread::sleep(duration.min(Duration::from_millis(10)));
+}
+
 struct Fixture {
     global: PathBuf,
     repo: PathBuf,
@@ -167,7 +183,19 @@ impl Fixture {
         timeout_seconds: u64,
         settle: impl FnOnce(&OrbitRuntime, &str) + Send,
     ) -> (String, AuditEvent, Value) {
+        self.observe_configured(results, timeout_seconds, None, settle)
+    }
+
+    fn observe_configured(
+        &self,
+        results: Value,
+        timeout_seconds: u64,
+        on_timeout: Option<&str>,
+        settle: impl FnOnce(&OrbitRuntime, &str) + Send,
+    ) -> (String, AuditEvent, Value) {
         let before = self.child_runs();
+        let (prepared, ready) = std::sync::mpsc::channel();
+        CHILD_PREPARED.with(|slot| slot.replace(Some(ready)));
         let (child, output) = std::thread::scope(|scope| {
             let settler = scope.spawn(|| {
                 let child = self.await_new_child(&before);
@@ -179,9 +207,10 @@ impl Fixture {
                     .unwrap()
                     .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
                 settle(&runtime, &child);
+                prepared.send(()).unwrap();
                 child
             });
-            let output = crate::scenarios::with_prompt_pipeline_polls(|| {
+            let observe = || {
                 self.runtime
                     .run_deterministic(
                         "invoke_and_wait",
@@ -192,6 +221,7 @@ impl Fixture {
                             "run_id": self.parent,
                             "step_id": "deliver",
                             "timeout_seconds": timeout_seconds,
+                            "on_timeout": on_timeout,
                             "poll_interval_seconds": 1,
                         }),
                         // The engine dispatches a gate's child with operator authority.
@@ -204,9 +234,15 @@ impl Fixture {
                         },
                     )
                     .expect("the wait returns the child's settlement as data")
-            });
+            };
+            let output = if on_timeout.is_some() {
+                orbit_core::test_support::with_pipeline_poll_wait(prepared_poll_wait, observe)
+            } else {
+                crate::scenarios::with_prompt_pipeline_polls(observe)
+            };
             (settler.join().unwrap(), output)
         });
+        CHILD_PREPARED.with(|slot| slot.borrow_mut().take());
         std::fs::write(self.root.path().join(format!("ran-{child}")), "").unwrap();
         let row = self
             .runtime
@@ -749,3 +785,6 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         }
     }
 }
+
+#[cfg(unix)]
+mod stop;

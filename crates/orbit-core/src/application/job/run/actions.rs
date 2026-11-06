@@ -27,9 +27,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::job::{JobPullSettlementPort, log_best_effort};
 
-use super::owner::signal_run_owner_process;
 #[cfg(unix)]
 use super::owner::{ProviderStop, stop_provider_process};
+use super::owner::{signal_run_owner_confirmed, signal_run_owner_process};
 use super::types::{JobRunCancelOutcome, JobRunCancelResult};
 
 /// `source` recorded on a cancellation a parent propagated to its child.
@@ -802,7 +802,7 @@ impl OrbitRuntime {
                 block_task: request.block_task,
                 keep_candidate: request.keep_candidate,
             },
-            signal_run_owner_process,
+            signal_run_owner_confirmed,
             depth + 1,
         ) {
             Ok(result) if result.outcome == JobRunCancelOutcome::AlreadyTerminal => (

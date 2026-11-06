@@ -508,9 +508,102 @@ fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
     }
 }
 
+// The control transaction lands after the old root-cause reader took its
+// snapshot, or just before the transactional writer acquires its snapshot.
+fn root_cause_preserves_interleaved_control_and_backlog_policy() {
+    use orbit_store::contracts::TaskReservationReleaseReason;
+    use orbit_tools::ToolContext;
+    use orbit_types::workflow::{ChildDispatch, TaskCancellationPolicy};
+
+    let fixture = Fixture::new();
+    let task = fixture.task();
+    let leaf = fixture.failed_leaf(&task, Some("validation_failed"), "validation failed");
+    let parent = fixture.queued(json!({"task_ids": [task]}));
+    fixture.couple(&task, &parent);
+    let jobs = fixture.jobs.clone();
+    let controlled_parent = parent.clone();
+    let result = orbit_core::test_support::with_run_root_cause_write_hook(
+        move || {
+            jobs.update_run_state(&controlled_parent, &mut |_, state| {
+                state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                    block: false,
+                    note: "operator returned the task to backlog".into(),
+                    provenance: None,
+                });
+                state.record_pipeline_output("control_checkpoint", json!({"saved": true}));
+                state.record_child_dispatch(ChildDispatch::submitted(
+                    "control-child".into(),
+                    "child".into(),
+                    "invoke_detached".into(),
+                    false,
+                    false,
+                    Utc::now(),
+                ));
+                Ok(())
+            })
+            .unwrap();
+        },
+        || {
+            fixture.runtime.run_deterministic(
+            "pipeline_success_guard", &json!({}),
+            &json!({"run_id": parent, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+            ToolContext::default(),
+        )
+        },
+    );
+    assert!(result.is_err(), "the child failure remains authoritative");
+    let state = fixture.state(&parent);
+    assert_eq!(state.root_cause.as_ref().unwrap().leaf_run_id, leaf.run_id);
+    assert_eq!(state.pipeline["control_checkpoint"]["saved"], true);
+    assert_eq!(state.child_dispatches.len(), 1);
+    assert!(!state.task_cancellation_policy.as_ref().unwrap().block);
+
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &parent,
+            JobRunState::Cancelled,
+            Utc::now(),
+            None,
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // Missing parent state must not replace the child's failure with a
+    // persistence error: root-cause propagation is deliberately best effort.
+    let result = fixture.runtime.run_deterministic(
+        "pipeline_success_guard", &json!({}),
+        &json!({"run_id": "missing-parent", "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+        ToolContext::default(),
+    );
+    assert!(result.unwrap_err().to_string().contains(&leaf.run_id));
+
+    let corrupt = fixture.queued(json!({}));
+    let conn = rusqlite::Connection::open(fixture.runtime.global_root().join("orbit.db")).unwrap();
+    conn.execute(
+        "UPDATE job_run_states SET pipeline_state_json = 'invalid-json' WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![fixture.runtime.workspace_id().unwrap(), corrupt],
+    ).unwrap();
+    let result = fixture.runtime.run_deterministic(
+        "pipeline_success_guard",
+        &json!({}),
+        &json!({"run_id": corrupt, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+        ToolContext::default(),
+    );
+    assert!(
+        result.unwrap_err().to_string().contains(&leaf.run_id),
+        "a refused root-cause write must not replace the child failure"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail_scenarios,
+    root_cause_preserves_interleaved_control_and_backlog_policy,
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail,
     a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog,
     a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it,
