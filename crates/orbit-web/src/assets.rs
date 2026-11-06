@@ -297,6 +297,26 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/forecast.js"),
     ),
     (
+        "/static/js/forecast-shared.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-shared.js"),
+    ),
+    (
+        "/static/js/forecast-summary.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-summary.js"),
+    ),
+    (
+        "/static/js/forecast-accuracy.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-accuracy.js"),
+    ),
+    (
+        "/static/js/forecast-gaps.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-gaps.js"),
+    ),
+    (
         "/static/js/experiments.js",
         JS,
         include_bytes!("../assets/dashboard/js/experiments.js"),

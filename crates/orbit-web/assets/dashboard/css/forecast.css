@@ -1,6 +1,6 @@
-/* Analytics › Forecast: the answer first, then tasks, data gaps and
-   calibration, with the rest in collapsed sections. Built from the Metrics
-   card, series-card and table classes in health.css. */
+/* Analytics › Forecast: Forecast, Accuracy and Data gaps tabs under one panel,
+   with the long explanations behind info icons and in collapsed sections.
+   Built from the Metrics card, series-card and table classes in health.css. */
 .panel > .body.forecast-body {
   display: flex; flex-direction: column; gap: 16px;
   padding: 16px; background: var(--bg);
@@ -8,62 +8,114 @@
 .fc-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .fc-view .mx-card { min-width: 0; }
 .fc-line { margin: 0; color: var(--fg-dim); font: 13px/1.5 var(--font-sans); }
+/* A tabbed node sets its own display, so `hidden` has to win here. */
+.fc-tabbed[hidden] { display: none; }
+.fc-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
 /* Header: what was forecast and when, beside its controls. */
-.fc-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.fc-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 44px; }
 .fc-meta { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
 .fc-source { white-space: nowrap; }
 .fc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .fc-history { display: inline-flex; align-items: center; gap: 8px; }
+.fc-history .mx-select { min-height: 44px; }
 .fc-control-label { color: var(--fg-dim); font: 13px var(--font-sans); }
+.fc-refresh {
+  display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px;
+  border: 1px solid var(--border); border-radius: 6px; background: transparent;
+  color: var(--fg-dim); cursor: pointer;
+}
+.fc-refresh::before { content: "↻"; font: 18px/1 var(--font-sans); }
+.fc-refresh:hover { color: var(--fg); }
+.fc-refresh:disabled { opacity: 0.5; cursor: default; }
+.fc-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* Answer: three headline figures, p50 large with p90 beside it. Read-outs,
-   not series toggles. */
-.fc-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-.fc-minor-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
-.mx-sc.fc-fig { cursor: default; }
+/* Tabs: an underline strip, wider targets than the Cost band tabs need. */
+.band-tabs.fc-tabs { margin: 0; padding: 0; gap: 4px; }
+.fc-tabs .band-tab {
+  min-height: 44px; padding: 0 14px; margin: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  color: var(--fg-dim); font: 500 14px var(--font-sans);
+}
+.fc-tabs .band-tab.active { background: transparent; border-bottom: 2px solid var(--accent); box-shadow: none; color: var(--fg); }
+.fc-tab-count {
+  padding: 1px 7px; border-radius: 10px; background: var(--warn-wash); color: var(--warn-fg); font-size: 12px;
+}
+
+/* Info icons: a 44px target around the 14px circle, and a bubble fixed to the
+   viewport by forecastHint, so no scroll box clips it. */
+.info-hint.fc-info {
+  box-sizing: border-box; width: 44px; height: 44px; margin: -15px -15px -15px -9px; vertical-align: middle;
+  border: 0; border-radius: 6px; background: none; flex: none;
+}
+.info-hint.fc-info::before {
+  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border: 1px solid currentColor; border-radius: 50%;
+}
+.info-hint.fc-info:hover > .info-hint-text,
+.info-hint.fc-info:focus > .info-hint-text {
+  position: fixed; left: var(--fc-tip-left, 12px); right: auto; top: var(--fc-tip-top, 0);
+  width: var(--fc-tip-width, 280px); z-index: 30;
+}
+
+/* Scenario switch, with the arrival rates behind its icon. */
+.fc-scenario-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.fc-scenario .mx-seg-btn { min-height: 44px; padding: 0 14px; }
+.fc-scenario .mx-seg-btn:disabled { color: var(--fg-mute); cursor: not-allowed; }
+
+/* Totals: three p50 – p90 ranges. Read-outs, not series toggles. */
+.fc-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.mx-sc.fc-fig { cursor: default; padding: 16px 18px; }
 .mx-sc.fc-fig:hover { border-color: var(--hair); }
-.fc-kpi-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
-.fc-q { display: inline-flex; align-items: baseline; gap: 6px; }
-.fc-figures .mx-sc-value { font-size: 32px; }
-.fc-minor .mx-sc-value { font-size: 18px; }
-.fc-p90-value { color: var(--fg-dim); font: 500 15px var(--font-mono); font-variant-numeric: tabular-nums; }
-.fc-warning {
-  margin: 0; padding: 10px 12px; border: 1px solid var(--warn-line); border-radius: 8px;
-  background: var(--warn-wash); color: var(--warn-fg); font: 13px/1.5 var(--font-sans);
+.fc-total-value { color: var(--fg); font: 500 26px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.fc-total-value.fc-total-unknown { color: var(--fg-dim); }
+/* One status line, amber, with its reason a tab away. */
+.fc-warning { margin: 0; color: var(--warn-fg); font: 13px/1.5 var(--font-sans); }
+.fc-warning::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px;
+  border-radius: 50%; background: var(--warn-fg); vertical-align: 1px;
 }
 .fc-link {
-  padding: 0; border: 0; background: none; color: var(--accent);
+  display: inline-block; padding: 0; border: 0; background: none; color: var(--accent);
   font: inherit; text-decoration: underline; cursor: pointer;
 }
 .fc-link:hover { color: var(--accent-hover); }
 .fc-subset strong { color: var(--fg); font-weight: 500; }
 
-/* Tasks: one table, with a muted second line under a cell. Wide tables
-   scroll in their own box. */
-.fc-table th, .fc-table td { vertical-align: top; }
+/* Tasks: one line per task; the evidence is behind each row's icon. Wide
+   tables scroll in their own box. */
 .fc-table td.fc-state { white-space: nowrap; }
 .fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
-.fc-tasks .fc-table { min-width: 680px; }
-.fc-tasks .fc-table tbody th { min-width: 220px; white-space: normal; }
-.fc-sub { display: block; margin-top: 2px; color: var(--fg-mute); font: 12px var(--font-sans); white-space: nowrap; }
-.fc-sub.fc-thin { color: var(--warn-fg); }
+.fc-table td.fc-miss { color: var(--warn-fg); }
+.fc-calibration .fc-table { min-width: 0; }
+.fc-tasks .fc-table { min-width: 780px; }
+.fc-tasks .fc-table td { white-space: nowrap; vertical-align: middle; }
+.fc-tasks .fc-table tbody th { width: 46%; max-width: 0; min-width: 240px; vertical-align: middle; }
+.fc-task-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fc-task { min-width: 0; overflow: hidden; color: var(--fg); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.fc-task:hover { color: var(--accent-hover); text-decoration: underline; }
+.fc-thin { margin-left: 8px; color: var(--warn-fg); font: 11.5px var(--font-sans); }
+.fc-finish-short { color: var(--warn-fg); }
 .fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
 .fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }
 
-/* Data gaps: one label/count tile per non-zero check. */
-.fc-gaps-card:focus { outline: none; }
-.fc-gaps-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.fc-gaps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+/* Wait breakdown: every gate as a label and its range. */
+.fc-waits { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 28px; margin: 0; font: 13px var(--font-sans); }
+.fc-wait { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.fc-wait dt { color: var(--fg-dim); }
+.fc-wait-value { margin: 0; color: var(--fg); font: 12.5px var(--font-mono); white-space: nowrap; }
+
+/* Data gaps: one sentence, then the non-zero counts in two groups. */
+.fc-gaps-sentence { margin: 0; color: var(--fg); font: 15px/1.5 var(--font-sans); }
+.fc-gap-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px; align-items: start; }
+.fc-gaps { display: flex; flex-direction: column; margin: 0; }
 .fc-gap {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-sunk);
-  font: 13px var(--font-sans); color: var(--fg);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  min-height: 40px; border-top: 1px solid var(--hair); font: 13px var(--font-sans);
 }
-.fc-gap-count { color: var(--fg-dim); font: 600 13px var(--font-mono); font-variant-numeric: tabular-nums; }
-.fc-gap.fc-gap-key { border-color: var(--warn-line); background: var(--warn-wash); }
-.fc-gap.fc-gap-key .fc-gap-count { color: var(--warn-fg); }
+.fc-gap dt { color: var(--fg-dim); }
+.fc-gap-count { margin: 0; color: var(--fg); font: 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-gap.fc-gap-key dt, .fc-gap.fc-gap-key .fc-gap-count { color: var(--warn-fg); }
 
 /* Calibration: a bar per percentile with its target marked. */
 .fc-cals { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px 24px; }
@@ -93,15 +145,6 @@
 .fc-more-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 4px 4px 20px; }
 .fc-more-body .mx-blurb { margin: 0; line-height: 1.5; }
 .fc-sub-title { margin: 8px 0 0; color: var(--fg); font: 600 13px var(--font-sans); }
-/* Split wait reasons only when each table can keep its labels and ranges legible. */
-.fc-waits { display: flex; flex-direction: column; gap: 8px; min-width: 0; container: fc-waits / inline-size; }
-.fc-waits-caption { margin: 0; }
-.fc-waits-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
-.fc-waits-grid > .mx-table-wrap { min-width: 0; }
-.fc-waits-grid .fc-table { min-width: 0; }
-@container fc-waits (min-width: 1080px) {
-  .fc-waits-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 /* The full coverage checklist: count, label and definition per check. */
 .fc-coverage {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 0;
@@ -119,6 +162,7 @@
 .fc-cov dd.fc-cov-def { color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 
 /* Residual time series: signed bars around a zero (p50) line. */
+.fc-residuals > .mx-seg { align-self: flex-start; }
 .fc-ress { display: flex; flex-direction: column; gap: 16px; }
 .fc-res { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .fc-res-head { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); font: 13px var(--font-sans); }

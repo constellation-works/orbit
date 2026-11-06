@@ -15,7 +15,7 @@ import { initLogTail, fitLogPanelToViewport, setDockMode, setDockRouteShown } fr
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
-import { fetchAndRenderForecast, placeholdForecastAggregate } from './js/forecast.js';
+import { fetchAndRenderForecast, forecastTabRoute, onForecastTabPick, placeholdForecastAggregate, setForecastTab } from './js/forecast.js';
 import {
   fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute,
 } from './js/experiments.js';
@@ -358,6 +358,9 @@ function routerContext() {
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
     fetchForecast: () => fetchAndRenderForecast().catch((e) => console.error("Failed to fetch the backlog forecast", e)),
+    forecastTabRoute,
+    setForecastTab,
+    onForecastTabPick,
     // The experiment on screen is owned by experiments.js, which renders it.
     fetchExperiments: () => fetchAndRenderExperiments().catch((e) => console.error("Failed to fetch experiments", e)),
     setExperimentId,
