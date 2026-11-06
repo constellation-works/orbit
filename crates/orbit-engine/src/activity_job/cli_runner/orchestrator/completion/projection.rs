@@ -15,13 +15,16 @@ use super::super::limit::{record_limit, record_usage_windows, structured_provide
 use super::ProviderExit;
 use super::failure;
 use super::frames::{
-    provider_reported_failure, structured_provider_auth_error, structured_provider_refusal,
+    provider_reported, provider_reported_failure, structured_provider_auth_error,
+    structured_provider_refusal,
 };
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
 use orbit_agent::{
-    ParsedStdout, assign_recorded_tool_calls, is_success_carrying_error_violation,
+    ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
+    assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
     muse_terminal_failure_diagnostic, normalize_cli_stdout, project_cli_response,
-    provider_long_prompt_requests,
+    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
+    provider_long_prompt_requests, provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
 use serde_json::Value;
@@ -35,6 +38,36 @@ pub(in super::super) fn print_budget_exhausted(
     elapsed: Duration,
 ) -> bool {
     exit_success && envelope_missing && budget.is_some_and(|budget| elapsed >= budget)
+}
+
+/// Did the provider say why an exit 0 ended without an envelope, in text no
+/// failure frame carries [ORB-22427]? A corrected reply cannot change any of
+/// these, so they keep their own failure.
+fn provider_reported_ending(
+    provider: &str,
+    stdout: &[u8],
+    stderr: &str,
+    duration: Duration,
+) -> bool {
+    let terminal_error = antigravity_terminal_error_diagnostic(provider, stdout);
+    terminal_error.is_some()
+        || antigravity_background_task_diagnostic(provider, stdout, duration, str::to_string)
+            .is_some()
+        || [
+            provider_authentication_failure as fn(&str) -> bool,
+            provider_usage_limit,
+            provider_capacity_exhausted,
+            provider_content_refusal,
+        ]
+        .into_iter()
+        .any(|matches| provider_reported(provider, stdout, stderr, None, matches).is_some())
+}
+
+/// Is `message` a provider's own frame rather than anything the agent wrote?
+/// The assistant-message reader falls back to the whole document when a wrapper
+/// holds no answer [ORB-22427].
+fn is_provider_frame(message: &str) -> bool {
+    serde_json::from_str::<Value>(message).is_ok_and(|value| value.get("type").is_some())
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -218,40 +251,77 @@ pub(in super::super) fn project_completion(
         })
         .flatten();
 
-    // [ORB-22426] The reply the parser rejected for saying `success` and
-    // carrying `error`, read only when that rejection is the step's sole
-    // failure. `parsed_result` exists only for a clean exit. Any failure frame
-    // the provider wrote, even one no reader above recognizes, rules it out:
-    // the turn may have ended for that reason rather than for its formatting.
-    // The correction loop in the dispatch entry decides admission.
-    let response_correction_request = (spec.response_correction.is_some()
+    // [ORB-22426] [ORB-22427] The reply the parser rejected, read only when that
+    // rejection is the step's sole failure. `parsed_result` exists only for a
+    // clean exit. Any failure frame the provider wrote, even one no reader above
+    // recognizes, rules it out: the turn may have ended for that reason rather
+    // than for its formatting. The correction loop in the dispatch entry decides
+    // admission.
+    let parse_rejection = (spec.response_correction.is_some()
         && spec.require_response_envelope
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
         && muse_terminal_failure.is_none()
-        && !completion_protocol_violation
         && !print_timeout_reached
         && !completion_status_failure
-        && !provider_reported_failure(&provider, stdout.protocol_bytes())
-        && matches!(
-            parsed_result.as_ref(),
-            Some(Err(error)) if is_success_carrying_error_violation(error)
-        ))
-    .then(|| answer_parsed.peek_response_envelope())
-    .flatten()
-    .map(|reply| {
-        let reply = bounded_redacted_text(
-            &reply.to_string(),
-            redaction,
-            false,
-            FINAL_MESSAGE_LIMIT_BYTES,
-        );
-        serde_json::json!({
-            "rejected_reply": reply.text,
-            "rejected_reply_truncated": reply.truncated,
+        && !provider_reported_failure(&provider, stdout.protocol_bytes()))
+    .then(|| {
+        parsed_result
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+    })
+    .flatten();
+    let response_correction_request = parse_rejection
+        .and_then(|error| {
+            if is_success_carrying_error_violation(error) {
+                if completion_protocol_violation {
+                    return None;
+                }
+                let reply = answer_parsed.peek_response_envelope()?.to_string();
+                let reply =
+                    bounded_redacted_text(&reply, redaction, false, FINAL_MESSAGE_LIMIT_BYTES);
+                return Some((
+                    super::super::response_correction::CONTRADICTORY_REPLY,
+                    reply.text,
+                    reply.truncated,
+                ));
+            }
+            // The generic refusal alone is not enough: the reply below must be what
+            // ended the turn, not what a lost capture, a denied write or a provider
+            // failure left behind.
+            let clean_omission = is_missing_envelope_violation(error)
+                && !stdout.truncated()
+                && sandbox_write_diagnostic.is_none()
+                && !provider_reported_ending(
+                    &provider,
+                    stdout.protocol_bytes(),
+                    &String::from_utf8_lossy(stderr.protocol_bytes()),
+                    duration,
+                );
+            if !clean_omission {
+                return None;
+            }
+            let reply = bounded_assistant_message(
+                &provider,
+                stdout.protocol_bytes(),
+                redaction,
+                FINAL_MESSAGE_LIMIT_BYTES,
+            )
+            .filter(|reply| !is_provider_frame(&reply.text))?;
+            Some((
+                super::super::response_correction::MISSING_ENVELOPE,
+                reply.text,
+                reply.truncated,
+            ))
         })
-    });
+        .map(|(rejection, reply, truncated)| {
+            serde_json::json!({
+                "rejection": rejection,
+                "rejected_reply": reply,
+                "rejected_reply_truncated": truncated,
+            })
+        });
 
     // A conflict-recovery provider repairs files only. Once its process has
     // satisfied the activity completion contract, the host-side boundary

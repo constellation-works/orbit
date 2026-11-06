@@ -64,8 +64,9 @@ The common `agent_loop` fields are:
   see §7.6a; only `agent_implement` declares it)
 - optional `response_correction` (`{max_rounds, min_remaining_seconds}`; bounds
   the fresh invocations a read-only activity may get to replace a reply that
-  says `success` and carries `error`, inside its own wall-clock budget — see
-  §7.6a; `agent_explore` and `task_pilot` declare it)
+  says `success` and carries `error`, or a clean prose ending with no envelope,
+  inside its own wall-clock budget — see §7.6a; `agent_explore` and `task_pilot`
+  declare it)
 - optional `regression_risk_instruction` (declaring it asks the host, through
   `RuntimeHost::regression_risk_for_agent_input`, for the task's
   regression-risk marks; the engine adds them to the envelope's task snapshot
@@ -1158,15 +1159,21 @@ in `task_pr_pipeline`:
 - **A contradictory reply can be corrected inside the budget.** A reply that says
   `status: "success"` and carries an `error` object stays a parser refusal: neither
   the parser nor the provider schema changes, and the error is never dropped.
-  An activity that declares `response_correction` may replace that reply. The
+  An activity that declares `response_correction` may replace that reply, or a
+  clean turn that ended in prose with no envelope; that prose never supplies a
+  result. The
   projection records the request only when that exact refusal is the invocation's
   sole failure (clean exit, no failure frame from the provider, recognized or not,
   and no print-budget failure), so explicit `failed`/`timeout` replies and other malformed
-  replies never start one. The step entry
+  replies never start one. A missing envelope also needs a non-empty assistant
+  message, and starts nothing when the parser named an abnormal wrapper ending, the
+  capture was truncated, a sandbox write was denied, or the provider's stderr or
+  terminal reports authentication, a usage limit, capacity, a refusal or a background
+  task still running. The step entry
   (`cli_runner/orchestrator/response_correction.rs`) then starts a fresh invocation
   through the ordinary per-invocation dispatch (same crew, tool grant and sandbox),
   with `input.response_correction` carrying the round, the remaining budget, the
-  parser error and the redacted reply, bounded to 64 KiB. It refuses once
+  parser error, the `rejection` kind and the redacted reply, bounded to 64 KiB. It refuses once
   `max_rounds` corrections have run or when less than `min_remaining_seconds` of the
   original wall-clock budget is unspent; each correction's timeout is that remainder.
   Only a reply that itself parses succeeds. Otherwise the step returns the latest

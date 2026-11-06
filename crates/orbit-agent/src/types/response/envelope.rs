@@ -34,6 +34,16 @@ pub fn is_success_carrying_error_violation(parse_error: &str) -> bool {
             .to_string()
 }
 
+/// Is `parse_error` exactly the parser's generic refusal of a capture with no
+/// envelope [ORB-22427]?
+///
+/// Exact equality: a refusal that names an abnormal provider ending, or quotes
+/// agent text, is not this one.
+pub fn is_missing_envelope_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(MISSING_ENVELOPE_MESSAGE.to_string()).to_string()
+}
+
 /// Most `result.remaining_work` entries a continuation request may carry.
 const MAX_REMAINING_WORK_ITEMS: usize = 32;
 /// Longest `result.remaining_work` entry, in bytes.

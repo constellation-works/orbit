@@ -1,5 +1,6 @@
-//! Bounded correction of a reply the response parser rejected for saying
-//! `success` and carrying an `error` object [ORB-22426].
+//! Bounded correction of a reply the response parser rejected, either for
+//! saying `success` and carrying an `error` object [ORB-22426] or for ending a
+//! clean turn in prose with no envelope [ORB-22427].
 //!
 //! The parser stays the authority: a correction hands the rejected reply back
 //! to a fresh invocation, and the step succeeds only if that invocation's own
@@ -23,6 +24,11 @@ pub(super) const REQUEST_OUTPUT_KEY: &str = "response_correction_request";
 const OUTCOME_OUTPUT_KEY: &str = "response_correction";
 /// Input key a correction invocation receives.
 const CORRECTION_INPUT_KEY: &str = "response_correction";
+
+/// `rejection` of a reply that says `success` and carries `error`.
+pub(super) const CONTRADICTORY_REPLY: &str = "contradictory_reply";
+/// `rejection` of a clean turn that ended without an envelope.
+pub(super) const MISSING_ENVELOPE: &str = "missing_envelope";
 
 /// Why a requested correction did not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +65,9 @@ pub(super) struct ResponseCorrectionRun<'a> {
 }
 
 impl ResponseCorrectionRun<'_> {
-    /// Correct `first` while its reply is the recognized contradiction and the
-    /// bounds admit another invocation; any other outcome is returned as is.
+    /// Correct `first` while the projection recognized its reply as correctable
+    /// and the bounds admit another invocation; any other outcome is returned
+    /// as is.
     pub(super) fn correct_rejected_replies(
         &self,
         first: DispatchOutcome,
@@ -165,6 +172,7 @@ impl ResponseCorrectionRun<'_> {
                     "round": round,
                     "max_rounds": self.policy.max_rounds,
                     "remaining_budget_seconds": remaining.as_secs(),
+                    "rejection": request.get("rejection"),
                     "rejected_reply": request.get("rejected_reply"),
                     "rejected_reply_truncated": request.get("rejected_reply_truncated"),
                     "parser_error": original_message,

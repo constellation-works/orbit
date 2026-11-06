@@ -12,7 +12,9 @@ use std::sync::Arc;
 use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{
+    ActivityV2Spec, AgentLoopSpec, OnDenial, Provider, ResponseCorrectionPolicy,
+};
 use orbit_types::workflow::{ClaimFailureClass, ExecutorDef, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "agy-tenant-42-authorization-bearer-zzz";
@@ -557,6 +559,26 @@ fn exit_zero_with_a_running_background_task_names_the_task_and_last_message() {
         outcome.output["completion_envelope_satisfied"],
         serde_json::Value::Bool(false)
     );
+}
+
+/// [ORB-22427] A corrected reply cannot finish the work the turn left running,
+/// so that ending keeps its own failure instead of a response correction.
+#[test]
+fn a_running_background_task_is_not_a_correctable_envelope_omission() {
+    let tail = r#"printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Waiting for the nextest run to finish.","usage":{"total_tokens":17}}}'"#;
+    let body = background_task_body("task-34 running: cargo nextest run", tail);
+    let mut corrected = spec(60);
+    corrected.response_correction = Some(ResponseCorrectionPolicy {
+        max_rounds: 3,
+        min_remaining_seconds: 1,
+    });
+    let outcome = dispatch(&Harness::new(&body), corrected);
+
+    assert!(!outcome.success);
+    assert!(outcome.output.get("response_correction").is_none());
+    let message = outcome.message.unwrap_or_default();
+    assert!(message.contains("task-34"), "{message}");
+    assert!(!message.contains("correction"), "{message}");
 }
 
 /// The incident shape with no terminal wrapper at all: still named, with no
