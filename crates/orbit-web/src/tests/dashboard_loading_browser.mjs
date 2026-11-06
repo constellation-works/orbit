@@ -7,7 +7,7 @@ import { assertDashboardNavigationRepairs } from './dashboard_navigation_repairs
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
-import { assertNoticeBannerRefresh, assertNoticeBannerRevision, assertNoticeBannerScope } from './dashboard_notice_banner_browser.mjs';
+import { assertNoticeBannerRefresh, assertNoticeBannerRevision, assertNoticeBannerScope, assertNoticesList } from './dashboard_notice_banner_browser.mjs';
 import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear, assertFixPrReadinessRefresh, assertPinnedFixPr } from './dashboard_run_tasks_browser.mjs';
 import { assertPilotAdmission } from './dashboard_pilot_admission_browser.mjs';
 import { assertSkipPilot } from './dashboard_skip_pilot_browser.mjs';
@@ -1666,6 +1666,7 @@ try {
   browser = await chromium.launch({ headless: true });
   if (noticeRefreshOnly) {
     await assertNoticeBannerRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+    await assertNoticesList(browser, `http://127.0.0.1:${server.address().port}`, evidence);
     console.log('Explicit notice refresh and scheduled-poll sharing browser checks passed.');
   } else if (elapsedOnly) {
     await assertElapsedTaskClock(browser, `http://127.0.0.1:${server.address().port}`, evidence);
@@ -1691,6 +1692,7 @@ try {
   if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertNoticeBannerRevision(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertNoticesList(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertTaskLinkScopeHistory(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const failures = [];

@@ -3,7 +3,7 @@ summary: "User Interface — Design"
 type: design
 title: "User Interface — Design"
 owner: gemini
-last_updated: 2026-11-05
+last_updated: 2026-11-06
 last_validated: 2026-11-03
 status: Draft
 feature: user-interface
@@ -467,6 +467,17 @@ Panels are the one place plugin-authored data is drawn, and one generic renderer
 
 WORK › **Leases** (`#leases`) is the read-only view of the workspace's path leases ([path-leases design §6](../path-leases/2_design.md)) [ORB-18555]. Its first panel reads `GET /api/leases` and groups the active and queued leases by selector: who holds each path (principal, class, mode, priority and expiry) and who waits for it (a queued request or a granted lease's pending expansion), oldest queue entry first. A path under a held `dir:` selector also lists that holder with `via <selector>`, so a file inside a leased directory never reads as free. Its second panel, Recent landings, pages `GET /api/leases/notices` forward from a cursor kept per workspace visit and shows the newest 20 `overlap_landed` notices: the commit, the base branch, the delivering task, the lease and the changed paths. A long notice history catches up over several refreshes and says so meanwhile. Both reads go through Orbit Web without an operator session or a lease token; requesting, renewing and releasing stay on `orbit lease` and the lease tools. A refused read (leases disabled, or a replica checkout for notices) shows the server's message in that panel only.
 
+## 9c. Notices
+
+WORK › **Notices** (`#notices`) is built around reading a notice first and acting on it on demand [ORB-22369]. It reads `GET /api/notices`, the same payload as the banner over every view, and adds no fields.
+
+- **One list.** Open and Recently closed (closed or expired in the last 24 hours) are one tab switch with their counts. An empty list is one line.
+- **One row per notice.** Severity leads, then title, scope and one time: when the notice lapses if that is within a day, otherwise its age, or for an ended notice when it ended. Incidents sort first in either list, then maintenance, then info, keeping the server's order within a severity. A title that does not fit is cut on the row and shown whole once open; at phone width the row is two lines and the title wraps.
+- **Open on demand.** The row opens the body, when it opened and who posted it, its expiry, more than one report, the linked task and how an ended notice ended.
+- **Close asks only when chosen.** Close is a row action; choosing it opens the row with one reason input and moves focus there. Escape or Cancel steps back. A refused close stays on the row with the server's words and the typed reason, and a refresh keeps a half-typed reason.
+- **Posting is a dialog.** Title, severity and body come first. Severity defaults to info, the kind that raises no banner, so an accidental post disturbs nobody. Scope, linked task and expiry fold under Options, whose summary states the defaults; left alone they are this workspace, no task and the server's default expiry for the severity. Escape keeps the draft and Cancel discards it; a refused post stays open with its reason.
+- **Writes.** Post and Close appear only with an operator session on a single workspace. Otherwise the rows still open, Close is absent and Post is disabled with its reason; the routes refuse the write regardless.
+
 ## 10. Concerns & Honest Limitations
 
 Targeted axe scans cover contrast and scroll-region focus on the affected routes; a broader WCAG audit remains to be done; responsive behavior remains optimized for wide desktop viewports; raw HTML, CSS variables, and dashboard JavaScript keep the runtime simple but leave duplication across project surfaces.
@@ -503,6 +514,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 - [ORB-16953] added Observe › Agents (`#agents/<role>`) on the `/api/agents` routes and retired Analytics › Orchestrators and `/api/orchestrators/*`; `#analytics/orchestrators` opened `#agents/orchestrators`. Agents later moved under Analytics as `#analytics/agents/<role>`; old `#agents/<role>` and `#analytics/orchestrators` links normalize there in place.
 - [ORB-15923] split Observe into Health (Incidents with Incidents | Events | Errors, Doctor) and Analytics (Metrics, Reliability with Pipeline | Tools, Codebase, Cost), removed the Audit tab, moved the denial badge to Health, and deleted the old `#audit…` and moved Health hashes without aliases.
 
+- [ORB-22369] redesigned the Notices view around reading and acting on a notice: one list with an Open and Recently closed switch, one severity-led row per notice, a close reason asked only once Close is chosen, and a post dialog.
 - [ORB-18555] added the read-only Leases view: active and queued path leases by path with their holders, and recent `overlap_landed` notices.
 - [ORB-12738] added the read-only Plugins tab: installed-plugin state, the generic `kv`/`table`/`markdown`/`json` panel renderer, and link tiles.
 - [ORB-16517] cleared operation success messages across the dashboard after 60 seconds while preserving submission warning lines until subsequent operator actions.

@@ -400,3 +400,134 @@ export async function assertNoticeBannerRevision(browser, origin, evidence) {
     await context.close();
   }
 }
+
+// The Notices list: a mixed-severity list scans as one row per notice with
+// incidents first, a reason is asked only once Close is chosen, one switch
+// shows the two lists, and a refused post or close keeps the operator's words.
+// `/api/notices` answers from this test's own list, so no clock or server order
+// decides the result.
+export async function assertNoticesList(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const notice = (id, kind, title, extra = {}) => ({
+    id, kind, title, scope: 'workspace', status: 'open', revision: 1, body: `${title} body`,
+    opened_at: '2026-11-02T10:00:00Z', expires_at: '2099-01-01T00:00:00Z', reports: { count: 1 },
+    author: { class: 'operator' }, ...extra,
+  });
+  const state = {
+    can_write: true,
+    open: [
+      notice('N-INFO', 'info', 'Info first in the reply'),
+      notice('N-MAINT', 'maintenance', 'Maintenance second in the reply'),
+      notice('N-INC', 'incident', 'Incident last in the reply', { reports: { count: 3 }, linked_task: { id: 'TASK-1' } }),
+    ],
+    recent: [],
+  };
+  const writes = [];
+  let refuseWrites = false;
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const reply = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    if (request.method() === 'POST' && url.pathname.startsWith('/api/notices')) {
+      if (refuseWrites) return reply({ error: 'an operator session is required to write notices', code: 'authorization_denied' }, 403);
+      writes.push({ path: url.pathname, body: request.postDataJSON() });
+      if (url.pathname === '/api/notices') state.open.push(notice('N-NEW', request.postDataJSON().kind, request.postDataJSON().title));
+      else {
+        const closed = state.open.find(row => url.pathname.includes(row.id));
+        state.open = state.open.filter(row => row !== closed);
+        state.recent = [{ ...closed, status: 'closed', ended_at: '2026-11-03T10:00:00Z', ended_label: 'closed by operator: done' }];
+      }
+      return reply({ notice: {} });
+    }
+    if (url.pathname === '/api/notices') return reply({ ...state, banner: [] });
+    if (url.pathname === '/api/workspaces') return reply([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
+    if (url.pathname === '/api/crews') return reply({ default_crew: null, crews: [] });
+    if (url.pathname === '/api/routines') return reply({ routines: [], clock: {} });
+    return reply({ items: [], total: 0, limit: 50 });
+  });
+  const titles = () => page.locator('#notices-body .notice-title').allTextContents();
+  const row = id => page.locator(`#notices-body [data-key="notice-${id}"]`);
+  try {
+    await page.goto(`${origin}/?workspace=one#notices`);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      await import('/app.js');
+    });
+    await page.waitForSelector('#notices-body .notice-row');
+    check((await titles()).join() === 'Incident last in the reply,Maintenance second in the reply,Info first in the reply',
+      `incidents must sort first, got ${await titles()}`);
+    const heights = await page.locator('#notices-body .notice-row').evaluateAll(rows => rows.map(node => node.getBoundingClientRect().height));
+    check(heights.every(height => height <= 46), `each notice must be one row at 1440, got ${heights}`);
+    check(await page.locator('.notice-close-reason').count() === 0, 'no reason input before Close is chosen');
+    check(await page.locator('#notices-count').textContent() === '3' && await page.locator('#notices-recent-count').textContent() === '0', 'the switch must show both counts');
+
+    await row('N-INC').locator('.notice-row-toggle').click();
+    check((await row('N-INC').locator('.notice-detail').textContent()).includes('3 reports'), 'the open notice must show its reports');
+    check(await row('N-INC').locator('.notice-facts a').getAttribute('href') !== null, 'the open notice must link its task');
+    check(await page.locator('.notice-close-reason').count() === 0, 'opening a notice must not ask for a reason');
+
+    // A refused close keeps the row, its reason and the server's words.
+    refuseWrites = true;
+    await row('N-MAINT').locator('.notice-close-open').click();
+    await row('N-MAINT').locator('.notice-close-reason').fill('over');
+    await row('N-MAINT').locator('.notice-close-submit').click();
+    await row('N-MAINT').locator('.notice-feedback').waitFor();
+    check((await row('N-MAINT').locator('.notice-feedback').textContent()).includes('operator session'), 'a refused close must say why');
+    check(await row('N-MAINT').locator('.notice-close-reason').inputValue() === 'over', 'a refused close must keep its reason');
+
+    // A refused post keeps the dialog and its draft.
+    await page.locator('#notices-post-toggle').click();
+    await page.locator('#notices-post-title').fill('Posted title');
+    await page.locator('input[name="notices-post-kind"][value="incident"]').check();
+    await page.locator('#notices-post-body').fill('Posted body');
+    await page.locator('#notices-post-submit').click();
+    await page.locator('#notices-post-feedback:not(:empty)').waitFor();
+    check(await page.locator('#notices-post-title').inputValue() === 'Posted title', 'a refused post must keep its draft');
+    refuseWrites = false;
+    await page.locator('#notices-post-submit').click();
+    await page.waitForFunction(() => !document.getElementById('notices-post-dialog').open);
+    await page.waitForFunction(() => document.getElementById('notices-count').textContent === '4');
+    const posted = writes.find(write => write.path === '/api/notices');
+    check(posted?.body.title === 'Posted title' && posted.body.kind === 'incident' && posted.body.body === 'Posted body' && posted.body.scope === 'workspace'
+      && posted.body.linked_task === undefined && posted.body.expires_in_hours === undefined, `title, severity and body must be enough to post: ${JSON.stringify(posted)}`);
+
+    await row('N-MAINT').locator('.notice-close-submit').click();
+    await page.waitForFunction(() => document.getElementById('notices-recent-count').textContent === '1');
+    check(writes.some(write => write.path === '/api/notices/N-MAINT/close' && write.body.reason === 'over'), 'close must send its reason');
+    await page.locator('#notices-tab-recent').click();
+    check((await titles()).join() === 'Maintenance second in the reply', `the switch must show one list, got ${await titles()}`);
+    check(await page.locator('.notice-close-open').count() === 0, 'an ended notice offers no Close');
+    state.recent = [];
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => document.querySelector('#notices-body .panel-placeholder:not([data-panel-status])'));
+    const note = await page.locator('#notices-body .panel-placeholder:not([data-panel-status])').boundingBox();
+    check(note.height <= 40, `the empty view must take one line, got ${note.height}`);
+    await page.locator('#notices-tab-open').click();
+
+    // No page scroll at phone width, reading or posting.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await row('N-INC').locator('.notice-close-open').click();
+    const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+      && document.querySelector('.tab-pane[data-tab="notices"]').scrollWidth <= document.querySelector('.tab-pane[data-tab="notices"]').clientWidth);
+    check(await fits(), 'asking a reason must not scroll the page sideways at 375');
+    await page.locator('#notices-post-toggle').click();
+    check(await fits(), 'the post dialog must not scroll the page sideways at 375');
+    await page.locator('#notices-post-cancel').click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Without an operator session the page reads but offers no write.
+    state.can_write = false;
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => document.getElementById('notices-post-toggle').disabled);
+    check(await page.locator('.notice-close-open').count() === 0 && await page.locator('.notice-close-reason').count() === 0, 'a read-only session offers no Close');
+    check((await page.locator('#notices-post-slot .info-hint').textContent()).includes('operator session'), 'a read-only session says why Post is off');
+    check(errors.length === 0, `Notices list checks raised page errors: ${errors.join('\n')}`);
+    fs.writeFileSync(path.join(evidence, 'notices-list-result.json'), JSON.stringify({ passed: true }, null, 2));
+  } finally {
+    await page.close();
+  }
+}
