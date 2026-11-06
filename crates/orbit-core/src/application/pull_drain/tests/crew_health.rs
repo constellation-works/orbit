@@ -7,7 +7,7 @@ use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, CrewPoolExclusion, PipelineState};
 use serde_json::json;
 
-use super::super::crew_health::record_pool_crew_health;
+use super::super::crew_health::{file_hook, record_pool_crew_health};
 use crate::application::test_support::runtime_with_workspace_layout;
 
 const CREW: &str = "test-crew";
@@ -161,5 +161,52 @@ fn same_crew_same_cause_across_drains_keeps_one_open_friction() {
             .iter()
             .any(|row| row.record.body.contains(CAUSE)),
         "ORB-22362: the refiled friction carries the same cause"
+    );
+}
+
+#[test]
+fn concurrent_drains_with_same_crew_and_cause_file_one_friction() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &concurrent_drains_with_same_crew_and_cause_file_one_friction,
+    )) {
+        return;
+    }
+    const DRAINS: usize = 2;
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let input = input();
+    let run_ids: Vec<String> = (0..DRAINS)
+        .map(|_| {
+            let run = jobs
+                .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+                .expect("insert run");
+            seed_run(jobs, &run.run_id, CAUSE);
+            run.run_id
+        })
+        .collect();
+
+    // Hold both drains at the filing step so each reaches it before either
+    // has written; the dedupe must then hold under the store's write lock.
+    let rendezvous = std::sync::Arc::new(std::sync::Barrier::new(DRAINS));
+    file_hook::install({
+        let rendezvous = rendezvous.clone();
+        move || {
+            rendezvous.wait();
+        }
+    });
+    std::thread::scope(|scope| {
+        for run_id in &run_ids {
+            let (runtime, input) = (&runtime, &input);
+            scope.spawn(move || {
+                record_pool_crew_health(runtime, run_id, input, None, &exclusion(CAUSE));
+            });
+        }
+    });
+    file_hook::clear();
+
+    assert_eq!(
+        open_pool_crew_frictions(&runtime, CREW).len(),
+        1,
+        "ORB-22391: drains racing on the same crew and cause must leave exactly one open friction"
     );
 }

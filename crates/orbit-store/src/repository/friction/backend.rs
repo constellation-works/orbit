@@ -24,6 +24,15 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
         Self::add_or_reuse(self, dedupe_key, params)
     }
 
+    fn add_unless_duplicate(
+        &self,
+        filter: &FrictionListFilter,
+        is_duplicate: &dyn Fn(&StoredFrictionRecord) -> bool,
+        params: FrictionAddParams,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+        Self::add_unless_duplicate(self, filter, is_duplicate, params)
+    }
+
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError> {
         Self::list(self, filter)
     }
