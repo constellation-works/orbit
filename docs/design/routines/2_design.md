@@ -62,13 +62,18 @@ memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace
 registry, global and workspace config, routine and target definitions, and the
 task registry database plus its WAL, and reads a change token over the routine
-fire, cursor, pause, job-run and automation-consumer rows of the shared audit database; changes invalidate
-the next read, including definition toggles, pauses and recorded runs. The
+fire, cursor, pause, job-run and automation-consumer rows of the shared audit database; sampled changes invalidate
+the next read, including definition toggles, pauses and recorded runs. Fire and
+job-run in-place updates are sampled only over the newest 256 rows: an older row
+rewritten in place leaves the token unchanged, so that change surfaces only when
+the five-second freshness bound expires. The
 audit database's own file stamp is not part of the key: unrelated audit rows
-share that file and would otherwise force a full recompute on every poll. A hit
+share that file and would otherwise force a full recompute on every poll. A still-fresh hit
 three seconds old or more starts one background recompute while the entry is
-still served, so steady polling meets a replacement before the five-second bound
-and never waits out the compute; the bound itself is unchanged. Status opens existing
+still served, so steady polling whose refresh completes in time meets a replacement
+before the five-second bound instead of waiting out the compute; a request past the
+bound computes synchronously and waits, as does one whose refresh failed or had not
+landed before expiry. The bound itself is unchanged. Status opens existing
 stores observationally, without migrations or run reconciliation. Branch
 inspection reads local Git objects, config and refs in process, sharing heads
 across routines within a request; a repository libgit2 cannot open (a partial

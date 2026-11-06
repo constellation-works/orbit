@@ -138,12 +138,15 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 
     /// Host-wide projection, independent of the workspace selected by a tab.
     /// Returns a payload computed for the same key within `ttl`, or runs
-    /// `compute` once while concurrent callers wait. A hit at least
-    /// `refresh_after` old also starts one background recompute, so a client
-    /// polling steadily meets a replacement before `ttl` ends instead of
-    /// waiting out the compute. The hit is still served within `ttl`: the
-    /// freshness bound does not move, and a failed refresh keeps the entry
-    /// until it expires.
+    /// `compute` once while concurrent callers wait. A still-fresh hit aged
+    /// at least `refresh_after` also starts one background recompute; a
+    /// client polling steadily whose refresh completes before `ttl` ends
+    /// then meets a replacement instead of waiting out the compute.
+    /// Refresh-ahead is best-effort: a request past `ttl` runs `compute`
+    /// synchronously and waits, as does one whose refresh failed or had not
+    /// landed before the entry expired. The hit is still served within
+    /// `ttl`: the freshness bound does not move, and a failed refresh keeps
+    /// the entry until it expires.
     pub(crate) async fn get_or_compute_for_host_ahead<F>(
         &self,
         key: K,
