@@ -366,6 +366,50 @@ class RelativeImportTests(unittest.TestCase):
                                   "use super::super::{distributed::Probe, pull_drain::Other};",
                                   rejected=False)
 
+    def check_config(self, files, rejected):
+        src = self.root / "crates/orbit-config/src"
+        paths = [src / relative for relative in files]
+        try:
+            for path, source in zip(paths, files.values()):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source)
+            result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.stderr, "", result.stderr)
+            self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            shutil.rmtree(src.parent, ignore_errors=True)
+
+    def test_config_registry_cannot_name_resolved(self):
+        snapshot = "registry/settings/snapshot.rs"
+        for source in (
+            "use crate::resolved::default_crews;",
+            "use crate::{resolved::default_crews, raw::Probe};",
+            "use super::super::super::resolved::Probe;",
+            "use crate::ResolvedConfig;",
+            "fn probe() { crate::resolved::default_crews(); }",
+        ):
+            with self.subTest(source=source):
+                self.check_config({snapshot: source + "\n"}, rejected=True)
+        self.check_config(
+            {snapshot: "use crate::crew_defaults::builtin_default_crews;\n"}, rejected=False)
+
+    def test_config_crew_defaults_leaf_reaches_nothing_higher(self):
+        leaf = "crew_defaults.rs"
+        for source in (
+            "use crate::resolved::Probe;",
+            "use super::registry::Probe;",
+            "use crate::raw::Probe;",
+            "use toml::Value;",
+        ):
+            with self.subTest(source=source):
+                self.check_config({leaf: source + "\n"}, rejected=True)
+        self.check_config({leaf: (
+            "use std::collections::BTreeMap;\nuse orbit_common::model_defaults::{\n    A, B,\n};\n"
+            "use orbit_types::identity::{Crew, CrewAssignment};\n")}, rejected=False)
+
 
 if __name__ == "__main__":
     unittest.main()

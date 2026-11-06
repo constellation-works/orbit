@@ -87,7 +87,7 @@ pub fn human_crew_seed_collides(
     name: &str,
     fresh: bool,
 ) -> Result<bool, OrbitError> {
-    let builtin = crate::resolved::default_crews();
+    let builtin = crate::crew_defaults::builtin_default_crews();
     if fresh || !config_path.exists() {
         return Ok(builtin.contains_key(name));
     }

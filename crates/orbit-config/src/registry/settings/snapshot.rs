@@ -490,7 +490,7 @@ impl Default for ConfigSnapshot {
 /// The built-in crew registry a config without `[crews]` resolves to, so the
 /// built-in snapshot admits the same defaults such a config does.
 fn default_admission_crews() -> BTreeMap<String, Crew> {
-    crate::resolved::default_crews()
+    crate::crew_defaults::builtin_default_crews()
 }
 
 /// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value

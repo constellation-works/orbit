@@ -4,12 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::model_defaults::{
-    ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
-    CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
-    CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL,
-    MUSE_WONDER_FULL_MODEL, MUSE_WONDER_MODEL,
-};
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
     AGENT_CREW_KIND, Crew, CrewAssignment, CrewEnvVar, HUMAN_CREW_KIND, HumanCrew, ReasoningEffort,
@@ -20,6 +14,7 @@ use orbit_types::workflow::activity_job::Provider;
 
 use super::compatibility::{reject_retired_crew_backend, reject_retired_crew_provider};
 use super::config::ResolvedConfig;
+use crate::crew_defaults::builtin_default_crews;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
 
@@ -153,41 +148,6 @@ impl ResolvedConfig {
     }
 }
 
-pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
-    let mut crews = BTreeMap::new();
-    for (name, model, provider) in [
-        ("opus", CLAUDE_DEFAULT_STRONG, "claude"),
-        ("sonnet", CLAUDE_DEFAULT_WEAK, "claude"),
-        ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
-        ("fable", CLAUDE_FABLE_MODEL, "claude"),
-        ("sol", CODEX_SOL_MODEL, "codex"),
-        ("terra", CODEX_TERRA_MODEL, "codex"),
-        ("luna", CODEX_LUNA_MODEL, "codex"),
-        ("astra", CODEX_ASTRA_MODEL, "codex"),
-        ("gemini-flash", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
-        ("argon", ANTIGRAVITY_ARGON_MODEL, "antigravity"),
-        ("grok", GROK_DEFAULT_MODEL, "grok"),
-        ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
-        ("muse-spark", MUSE_DEFAULT_MODEL, "muse"),
-        ("muse-wonder", MUSE_WONDER_MODEL, "muse"),
-        ("muse-wonder-full", MUSE_WONDER_FULL_MODEL, "muse"),
-    ] {
-        crews.insert(
-            name.to_string(),
-            Crew {
-                name: name.to_string(),
-                assignment: crew_assignment(model, provider),
-                description: None,
-                tags: Vec::new(),
-                enabled: true,
-                env: Vec::new(),
-                vision: true,
-            },
-        );
-    }
-    crews
-}
-
 /// Host operating systems `provider`'s executor declares, when it declares any.
 ///
 /// `declared` holds only executors that set `host_os`. The provider is
@@ -210,13 +170,6 @@ pub fn executor_host_os<'a>(
         .map(|(_, hosts)| hosts)
 }
 
-fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
-    CrewAssignment {
-        model: model.to_string(),
-        provider: provider.to_string(),
-        effort: None,
-    }
-}
 /// `crew_field_path` names the file that supplied `[crews.<name>].<field>`,
 /// which a layered load can only know per field after the merge.
 pub(crate) fn crews_from_raw(
@@ -225,7 +178,7 @@ pub(crate) fn crews_from_raw(
     crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
 ) -> Result<(BTreeMap<String, Crew>, Vec<IgnoredCrewProperty>), OrbitError> {
     let Some(raw_crews) = raw else {
-        return Ok((default_crews(), Vec::new()));
+        return Ok((builtin_default_crews(), Vec::new()));
     };
     let mut crews = BTreeMap::new();
     let mut ignored = Vec::new();
@@ -255,7 +208,7 @@ pub(crate) fn crews_from_raw(
     // human crews keeps the built-in agent crews, as an absent table does, so
     // `orbit init` seeding the operator's crew never empties the registry.
     if crews.is_empty() && human_tables > 0 {
-        return Ok((default_crews(), ignored));
+        return Ok((builtin_default_crews(), ignored));
     }
     Ok((crews, ignored))
 }

@@ -88,6 +88,7 @@ pub mod assistance;
 mod config_document;
 mod config_io;
 mod crew;
+mod crew_defaults;
 mod experiment_keys;
 mod human_crew_seed;
 mod layering;

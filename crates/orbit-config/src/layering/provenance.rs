@@ -6,8 +6,9 @@ use std::path::Path;
 use orbit_types::identity::Crew;
 
 use crate::config_document;
+use crate::crew_defaults::builtin_default_crews;
 use crate::registry::ConfigSnapshot;
-use crate::resolved::{ResolvedConfig, crews_from_raw, default_crews};
+use crate::resolved::{ResolvedConfig, crews_from_raw};
 
 use super::document::{crew_entry, empty_document, merge_tables};
 use super::load::ConfigDocument;
@@ -190,7 +191,7 @@ impl BelowFiles {
             .and_then(|snapshot| snapshot.value_for(DEFAULT_CREW_KEY));
         Self {
             shipped: ConfigSnapshot::default(),
-            shipped_crews: default_crews(),
+            shipped_crews: builtin_default_crews(),
             configured: admit(None),
             environment_default_crew,
         }
