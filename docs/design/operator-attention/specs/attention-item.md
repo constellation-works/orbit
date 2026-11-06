@@ -152,13 +152,15 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `friction_untriaged` | `orbit.friction.update` with `status: triaged` (the operator edits tags or body first when needed) |
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
-| `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`); `also`: `orbit.resident.show` |
+| `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`) when the resident cycle routine is enabled; `orbit.routine.control` with `action: toggle`, `expected_enabled: false`, `enabled: true` and the observed routine `name` and `target` (no `needs`) when it is disabled — routine enablement requires trusted operator authority and an explicit workspace; `also`: `orbit.resident.show` |
 
 For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
 `detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
 `request_key`, a reason and target `status` (`blocked` or `backlog`). Runtime items carry exact
 run ids; resume uses `orbit job resume`, inspection `orbit run show`, and logs `orbit run logs`.
 Read-only derivation never invokes resume, cancel or claim recovery, including during validation.
+
+For `resident_stalled`, a disabled resident cycle routine changes `next`: `wake` cannot fire a cycle while the routine is off, so the item instead suggests `orbit.routine.control` toggling the observed routine to enabled, with an empty `needs` list. The stall reason names the disabled routine as the cause, and `detail` carries `cycle_routine_disabled` and `cycle_routine_name` alongside `stall` and `last_checkpoint_at`.
 
 `run_failed` fingerprints run id and state. `run_stuck` fingerprints run id and cause
 (`dead_owner` or `wall_clock_bound`, with dead owner taking precedence). `claim_stale`
@@ -194,7 +196,7 @@ and are not waiting on a single task.
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
-| `resident_stalled` | medium | high | none; fingerprint state is the stall reason and `last_checkpoint_at` |
+| `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
 | `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds and `run_window_hours`, `run_stuck_after_minutes`, `ci_cache_seconds`, `source_timeout_seconds`
