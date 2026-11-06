@@ -10,7 +10,7 @@
 //! The provider is a scripted `claude` that numbers its invocations and saves
 //! each prompt and argv.
 
-use std::sync::Mutex;
+use std::{cell::Cell, sync::Mutex};
 
 use orbit_types::workflow::activity_job::ResponseCorrectionPolicy;
 use serde_json::json;
@@ -107,6 +107,10 @@ impl Fixture {
             .unwrap_or(0)
     }
 
+    fn first_reply_ready(&self) -> bool {
+        self.temp.path().join("first-reply-ready").exists()
+    }
+
     fn envelope(&self, invocation: usize) -> Value {
         let prompt =
             fs::read_to_string(self.temp.path().join(format!("prompt-{invocation}"))).unwrap();
@@ -150,6 +154,32 @@ impl Fixture {
             outcome,
             sandbox_requests: host.sandbox_requests.into_inner().unwrap(),
         }
+    }
+
+    /// Hold the supervision clock at the activity deadline's start until the
+    /// scripted provider has written its first reply, then move past that
+    /// deadline. This keeps process startup out of the timeout assertion.
+    fn dispatch_after_first_reply(
+        &self,
+        policy: Option<ResponseCorrectionPolicy>,
+        wall_clock_timeout_seconds: u64,
+    ) -> Dispatched {
+        let origin = Instant::now();
+        let first_clock_read = Cell::new(true);
+        let ready = self.temp.path().join("first-reply-ready");
+        let startup_limit = origin + Duration::from_secs(30);
+        orbit_engine::test_support::with_cli_supervision_clock(
+            move || {
+                if first_clock_read.replace(false) {
+                    origin
+                } else if ready.exists() || Instant::now() >= startup_limit {
+                    origin + Duration::from_secs(wall_clock_timeout_seconds + 1)
+                } else {
+                    origin
+                }
+            },
+            || self.dispatch(policy, wall_clock_timeout_seconds),
+        )
     }
 }
 
@@ -335,13 +365,20 @@ fn a_correction_is_killed_at_the_end_of_the_original_budget() {
 #[test]
 fn an_activity_timeout_is_not_a_correction_request() {
     let fixture = Fixture::new(
-        &format!("{}; exec sleep 60", reply(CONTRADICTORY)),
+        &format!(
+            "{}; touch \"$state/first-reply-ready\"; exec sleep 60",
+            reply(CONTRADICTORY)
+        ),
         &reply(VALID),
     );
-    let outcome = fixture.dispatch(admitted(1), 1).outcome;
+    let outcome = fixture.dispatch_after_first_reply(admitted(1), 1).outcome;
 
     assert!(!outcome.success);
-    assert_eq!(fixture.invocations(), 1);
+    assert!(
+        fixture.first_reply_ready(),
+        "the invocation count is meaningful only after the provider wrote its first reply"
+    );
+    assert_eq!(fixture.invocations(), 1, "one started provider invocation");
     assert_eq!(outcome.output["timed_out"], true);
     assert!(outcome.output.get("response_correction").is_none());
 }
@@ -609,11 +646,18 @@ fn a_turn_the_provider_ended_for_its_own_reason_is_not_a_correctable_omission() 
 
 #[test]
 fn a_prose_ending_that_outlives_the_budget_stays_a_timeout() {
-    let fixture = Fixture::new(&format!("echo '{PROSE}'; exec sleep 60"), &reply(VALID));
-    let outcome = fixture.dispatch(admitted(1), 1).outcome;
+    let fixture = Fixture::new(
+        &format!("echo '{PROSE}'; touch \"$state/first-reply-ready\"; exec sleep 60"),
+        &reply(VALID),
+    );
+    let outcome = fixture.dispatch_after_first_reply(admitted(1), 1).outcome;
 
     assert!(!outcome.success);
-    assert_eq!(fixture.invocations(), 1);
+    assert!(
+        fixture.first_reply_ready(),
+        "the invocation count is meaningful only after the provider wrote its first reply"
+    );
+    assert_eq!(fixture.invocations(), 1, "one started provider invocation");
     assert_eq!(outcome.output["timed_out"], true);
     assert!(
         outcome
