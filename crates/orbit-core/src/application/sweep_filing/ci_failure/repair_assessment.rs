@@ -3,11 +3,13 @@
 //! No command from an artifact or a CI log is executed here.
 
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskArtifact, TaskStatus};
+use orbit_store::contracts::BranchObservationOutcome;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+use super::branch_observation::{claimed_entry, retain_owner_receipt};
 use super::cluster::FailureCluster;
 use super::evidence::selected_diagnostic;
 use super::fields::value_string;
@@ -16,7 +18,6 @@ use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::full_revision;
-use crate::application::task::TaskUpdateParams;
 
 const MAX_OWNERS: usize = 8;
 const MAX_ASSESSMENTS: usize = 32;
@@ -476,25 +477,30 @@ fn validate_results(
 
 /// A deterministic per-observation receipt makes retries and reversed snapshots
 /// converge without appending comments or rewriting the owner's task meaning.
+/// Returns one `deferred_attribution` entry per run while a claim holds it.
 pub(super) fn retain(
     runtime: &OrbitRuntime,
     owner: &str,
+    cluster: &FailureCluster,
     evidence: &Value,
-) -> Result<(), orbit_common::OrbitError> {
+) -> Result<Vec<Value>, orbit_common::OrbitError> {
     let content = serde_json::to_string(evidence)
         .map_err(|error| orbit_common::OrbitError::InvalidInput(error.to_string()))?;
     let path = format!(
         "ci-repair-observations/{}.json",
         sha256_hex(content.as_bytes())
     );
-    if runtime.get_task_artifact(owner, &path)?.is_none() {
-        runtime.update_task(
-            owner,
-            TaskUpdateParams {
-                upsert_artifacts: vec![TaskArtifact::from_text(path, content)],
-                ..Default::default()
-            },
-        )?;
+    if runtime.get_task_artifact(owner, &path)?.is_some() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let first_run = cluster.runs.first().unwrap_or(&Value::Null);
+    let outcome = retain_owner_receipt(runtime, owner, first_run, path.clone(), content, None)?;
+    Ok(match outcome {
+        BranchObservationOutcome::Retained => Vec::new(),
+        BranchObservationOutcome::Deferred { .. } => cluster
+            .runs
+            .iter()
+            .map(|run| claimed_entry(owner, run, &path))
+            .collect(),
+    })
 }

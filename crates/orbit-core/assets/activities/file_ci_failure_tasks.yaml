@@ -13,9 +13,11 @@ spec:
     in attributed, without changing its status or producing pilot candidates.
     An owner under an active execution claim is not written: the receipt is
     queued and listed in deferred_attribution with reason claimed, and the
-    artifact is written when that claim settles. One observation that cannot
-    be retained is recorded on the audit and does not stop filing of the
-    snapshot's other failures.
+    artifact is written when that claim settles. The same holds for the
+    compiler and completed-repair receipts retained on a matching owner; a
+    compiler observation's comment lands with its receipt. One branch
+    observation that cannot be retained is recorded on the audit and does not
+    stop filing of the snapshot's other failures.
     A missing owner stays retryable; other non-landing failures are reported in
     excluded_branch_failures. The guard also applies to older snapshots that
     included task PR failures in current_failures.
@@ -266,10 +268,11 @@ spec:
       deferred_attribution:
         type: array
         description: >
-          Task-branch failures whose owner had an active execution claim, so
+          Task-branch failures, and compiler or completed-repair observations
+          of a matching owner, whose owner had an active execution claim, so
           the sweep did not write the task. Each entry carries task_id, the
-          CI run_id, and reason claimed. The artifact is written when that
-          claim settles.
+          CI run_id, the receipt's artifact path, and reason claimed. The
+          artifact, with any comment, is written when that claim settles.
         items:
           type: object
           required: [task_id, run_id, reason]
@@ -277,6 +280,8 @@ spec:
             task_id:
               type: string
             run_id: {}
+            artifact:
+              type: string
             reason:
               type: string
       excluded_branch_failures:

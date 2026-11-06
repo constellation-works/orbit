@@ -5,7 +5,9 @@
 //! receipt and reports it as deferred; settlement writes the artifact. The
 //! store makes that decision against the current claim inside its boundary.
 
+use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_store::contracts::{BranchObservationOutcome, DeferredBranchObservation};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -73,28 +75,12 @@ pub(super) fn retain_branch_observations(
                 continue;
             }
         }
-        let outcome = runtime.record_deferred_branch_observation(
-            &orbit_store::contracts::DeferredBranchObservation {
-                schema_version: 1,
-                task_id: owner.to_string(),
-                run_id: failure.get("run_id").cloned().unwrap_or(Value::Null),
-                job_id: failure.get("job_id").cloned().unwrap_or(Value::Null),
-                artifact_path: path.clone(),
-                content,
-                claiming_run_id: None,
-                applied: false,
-            },
-        );
-        match outcome {
-            Ok(orbit_store::contracts::BranchObservationOutcome::Retained) => {
+        match retain_owner_receipt(runtime, owner, failure, path.clone(), content, None) {
+            Ok(BranchObservationOutcome::Retained) => {
                 attributed.push(attributed_entry(owner, failure, &path));
             }
-            Ok(orbit_store::contracts::BranchObservationOutcome::Deferred { .. }) => {
-                deferred_attribution.push(json!({
-                    "task_id": owner,
-                    "run_id": failure.get("run_id").cloned().unwrap_or(Value::Null),
-                    "reason": "claimed",
-                }));
+            Ok(BranchObservationOutcome::Deferred { .. }) => {
+                deferred_attribution.push(claimed_entry(owner, failure, &path));
             }
             Err(error) => {
                 observation_errors.push(observation_error(owner, failure, &error.to_string()));
@@ -106,6 +92,40 @@ pub(super) fn retain_branch_observations(
         deferred_attribution,
         observation_errors,
     }
+}
+
+/// Retain one receipt for a failing `run` on `owner`, or queue it for settlement
+/// when a claim protects the owner. The store decides under the claim boundary,
+/// so an unscoped write can neither race a new claim nor pass the fence.
+pub(super) fn retain_owner_receipt(
+    runtime: &OrbitRuntime,
+    owner: &str,
+    run: &Value,
+    artifact_path: String,
+    content: String,
+    comment: Option<String>,
+) -> Result<BranchObservationOutcome, OrbitError> {
+    runtime.record_deferred_branch_observation(&DeferredBranchObservation {
+        schema_version: 1,
+        task_id: owner.to_string(),
+        run_id: run.get("run_id").cloned().unwrap_or(Value::Null),
+        job_id: run.get("job_id").cloned().unwrap_or(Value::Null),
+        artifact_path,
+        content,
+        claiming_run_id: None,
+        comment,
+        applied: false,
+    })
+}
+
+/// The `deferred_attribution` entry for a receipt a claim is holding.
+pub(super) fn claimed_entry(owner: &str, run: &Value, path: &str) -> Value {
+    json!({
+        "task_id": owner,
+        "run_id": run.get("run_id").cloned().unwrap_or(Value::Null),
+        "artifact": path,
+        "reason": "claimed",
+    })
 }
 
 fn observation_content(failure: &Value) -> Option<String> {
