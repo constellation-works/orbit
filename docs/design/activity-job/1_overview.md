@@ -114,7 +114,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/1_scope.md) | [ORB-19983], [ORB-19985] |
 | Readiness adapters / history / composition (someday) | [Auto-task step specification](./specs/auto-task-step.md) | [ORB-20165], [ORB-20397], [ORB-20166] |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog.rs` | [T20260418-2019] |
-| v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs` | [T20260418-2143], [T20260418-2210] |
+| v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host/implementation.rs` | [T20260418-2143], [T20260418-2210] |
 | Retired-declaration rejection | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs`, `crates/orbit-types/src/workflow/activity_job/retired.rs` | [ORB-10801] |
 | v2 DAG executor | `crates/orbit-engine/src/activity_job/job_executor/` | [T20260418-2018], [T20260509-2] |
 | V2 audit envelope and disk sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002] |
