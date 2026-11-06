@@ -799,6 +799,24 @@ guard_upper_layer admission 'workspace_auto|backlog_forecast|sweep_filing' 'read
 guard_upper_layer workspace_auto 'backlog_forecast|sweep_filing' ''
 guard_upper_layer backlog_forecast 'sweep_filing' ''
 
+# [ORB-22416] `experiment` sits outside the order, above `distributed`: its
+# readout reads the claim receipt `distributed` owns, so the owner's capture of a
+# claimed task's experiments reaches `distributed` only through
+# `distributed::DistributedExperimentPort`, which `experiment` implements on
+# `OrbitRuntime`. A path, a grouped tree, a `super::` chain into `experiment`,
+# or a call to an inherent method it defines (names derived, so the port method
+# keeps a distinct name) is a reintroduced edge. The reverse edge, `experiment`
+# reading the claim receipt, stays legal.
+if rg -n 'crate::application::experiment\b' \
+  "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U 'crate::application::\{[^}]*\bexperiment\b' \
+    "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" distributed experiment '' '' ||
+  ! super_chains_into "$app_src" distributed experiment; then
+  echo "orbit-core distributed must reach experiment through distributed::DistributedExperimentPort and must not call its inherent methods"
+  fail=1
+fi
+
 # [ORB-22287] The forecast has no ports, so nothing below it may call its
 # inherent methods (names derived); `task` and `job` are covered above, through
 # their upper-module lists.
