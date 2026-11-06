@@ -529,23 +529,33 @@ fn is_transient_push_failure(message: &str) -> bool {
     {
         return false;
     }
+    // GitHub's internal ref-update failures use `(failure)`, which is too
+    // generic to retry without the accompanying remote fatal diagnostic.
+    // The fatal line is separate from the ref rejection in Git's output.
+    let internal_commit_refs_failure = text.lines().any(|line| {
+        matches!(
+            line.trim(),
+            "remote: fatal error in commit_refs" | "remote: fatal error in commit_refs_rules"
+        )
+    });
     // GitHub names a server-side fault in the rejection's reason, as in
     // `! [remote rejected] head -> head (Internal Server Error)` [ORB-14617].
     text.lines().any(|line| {
         let line = line.trim_end();
         line.contains("[remote rejected]")
-            && [
-                "(failed)",
-                "(internal server error)",
-                "(service unavailable)",
-                "(bad gateway)",
-                "(gateway timeout)",
-                // A thin pack whose delta bases the server no longer has.
-                // The retry sends `--no-thin` [ORB-16529].
-                "(missing necessary objects)",
-            ]
-            .iter()
-            .any(|reason| line.ends_with(reason))
+            && ((internal_commit_refs_failure && line.ends_with("(failure)"))
+                || [
+                    "(failed)",
+                    "(internal server error)",
+                    "(service unavailable)",
+                    "(bad gateway)",
+                    "(gateway timeout)",
+                    // A thin pack whose delta bases the server no longer has.
+                    // The retry sends `--no-thin` [ORB-16529].
+                    "(missing necessary objects)",
+                ]
+                .iter()
+                .any(|reason| line.ends_with(reason)))
     }) || text
         .lines()
         .any(|line| line.trim() == "remote: internal server error")
