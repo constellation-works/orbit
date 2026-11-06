@@ -1,6 +1,5 @@
-//! Composition root joining resolved configuration, the runtime kernel, and adapters.
-
-mod application_port;
+//! Runtime composition: root resolution, runtime construction and configuration
+//! initialization for [`OrbitRuntime`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,20 +10,18 @@ use orbit_common::fs::generation::{
 };
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::Store;
-pub use orbit_store::compose::compiled_compatibility;
+use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
-use self::application_port::APPLICATION_PORT;
+use super::application_port::APPLICATION_PORT;
 use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
 use crate::application::workspace_product_profile::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::task_migration::apply_configured_id_start;
-use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
-pub use crate::bootstrap::workspace_authority::{
-    AuthorityAdoptionEvidence, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority,
-    layout_migration_fenced_authorities, verify_workspace_layout_authority,
+use crate::bootstrap::workspace_authority::{
+    admit_workspace_layout_authority, verify_workspace_layout_authority,
 };
 #[cfg(target_os = "macos")]
 use crate::runtime::run_input::managed_dispatch_context_from_env;
@@ -514,55 +511,4 @@ fn has_explicit_root_override(root_override: Option<&Path>) -> bool {
         return false;
     }
     env_override
-}
-
-/// Compose a serving-host resource monitor from global configuration only,
-/// without opening or repairing a workspace runtime.
-pub fn host_resource_monitor(
-    global_root: &Path,
-) -> Result<crate::runtime::host_resource::HostResourceMonitor, OrbitError> {
-    let snapshot = orbit_config::ConfigStore::open(
-        orbit_config::ConfigScope::Global,
-        global_root.join("config.toml"),
-    )?
-    .snapshot()?;
-    Ok(crate::runtime::host_resource::HostResourceMonitor::new(
-        crate::runtime::host_resource::default_host_resource_probe(),
-        snapshot.resource_throttle(),
-    )
-    .with_shared_history(global_root))
-}
-
-/// Compose optional assistance from host-only settings and the host store.
-/// No worker or consumer is automatically started. The loader reopens global
-/// configuration at each boundary so an operator's off switch takes effect.
-pub fn host_assistance_service(
-    global_root: &Path,
-    store: Arc<dyn orbit_store::contracts::assistance::AssistanceStoreBackend>,
-) -> crate::application::assistance::AssistanceService {
-    let root = global_root.to_path_buf();
-    crate::application::assistance::AssistanceService::new(
-        store,
-        Arc::new(crate::adapter::decisions::OpenAiDecisionsAdapter::default()),
-        Arc::new(move || {
-            Ok(orbit_config::ConfigStore::open(
-                orbit_config::ConfigScope::Global,
-                root.join("config.toml"),
-            )?
-            .snapshot()?
-            .assistance_settings)
-        }),
-    )
-}
-
-impl crate::application::assistance::AssistanceServicePort for OrbitRuntime {
-    /// Join an assistance consumer to host-only policy, the adapter and the ledger.
-    fn assistance_service(
-        &self,
-    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
-        Ok(host_assistance_service(
-            &self.global_root(),
-            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
-        ))
-    }
 }

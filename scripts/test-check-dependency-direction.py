@@ -154,7 +154,7 @@ class RelativeImportTests(unittest.TestCase):
                         self.check_import(relative, f"use {tree};", rejected=True)
 
     def test_inherent_calls_into_bootstrap_and_composition_rejected(self):
-        for owner in ("../composition.rs", "../bootstrap/init.rs"):
+        for owner in ("../composition/runtime.rs", "../bootstrap/init.rs"):
             for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
                 with self.subTest(owner=owner, caller=caller):
                     self.check_files({
@@ -167,7 +167,7 @@ class RelativeImportTests(unittest.TestCase):
         for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
             with self.subTest(caller=caller):
                 self.check_files({
-                    "../composition.rs":
+                    "../composition/runtime.rs":
                         "impl OrbitRuntime {\n    fn private_joiner(&self) {}\n"
                         "    pub(in crate::bootstrap) fn narrow_joiner(&self) {}\n}\n"
                         "impl AssistanceServicePort for OrbitRuntime {\n"

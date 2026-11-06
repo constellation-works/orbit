@@ -123,11 +123,11 @@ source scan, enforces the runtime direction.
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
-| Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
+| Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition/services.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
-| Config loading and runtime assembly | `crates/orbit-core/src/composition.rs` | [ORB-10886] |
+| Config loading and runtime assembly | `crates/orbit-core/src/composition/runtime.rs` | [ORB-10886] |
 | Context assembly | `crates/orbit-runtime/src/context/state.rs` | — |
 | Resolved-config consumption | `crates/orbit-runtime/src/builder.rs` | [ORB-10885], [ORB-10886] |
 | Config layering (owning crate) | `crates/orbit-config/src/` | [ORB-10885] |
@@ -288,7 +288,7 @@ and job edges that had regrown past the fixed-name guard (all but
   `list_plugins`) are exact-line allowances. [ORB-22005] It also fails when
   `application` or `adapter` names `crate::bootstrap` or `crate::composition` by
   path, grouped tree or `super::` chain, or calls an inherent `OrbitRuntime`
-  method that an `impl OrbitRuntime` block in `composition.rs` or under
+  method that an `impl OrbitRuntime` block under `composition/` or
   `bootstrap/` defines with a visibility that reaches it. Same-named lines (the
   lexical index store's `reindex_tasks` and the `#[cfg(test)]` fixture's
   `OrbitRuntime::from_roots`) are exact-line allowances. Runtime may not name
