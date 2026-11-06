@@ -583,14 +583,14 @@ fi
 # neither application nor the adapter may name bootstrap or composition or call
 # an inherent `OrbitRuntime` method either defines. They reach them only through
 # `assistance::AssistanceServicePort` and `contracts::TaskBundleMaintenancePort`.
-# The names are derived from the `impl OrbitRuntime` blocks in `composition.rs`
+# The names are derived from the `impl OrbitRuntime` blocks under `composition/`
 # and under `bootstrap/`. Exact lines allowed: the lexical index store's own
 # `reindex_tasks`, and the `#[cfg(test)]` fixture that opens a runtime.
 core_src="$repo_root/crates/orbit-core/src"
 joiner_upcall_allowed='^search/runtime\.rs:[0-9]+:.*lexical_index\(\)\.store\(\)\?\.reindex_tasks\(|^test_support\.rs:[0-9]+:.*OrbitRuntime::from_roots\('
 for layer in application adapter; do
   if ! super_chains_into "$core_src/$layer" "" 'bootstrap|composition' crate-root ||
-    ! inherent_calls_into "$core_src/$layer" "" 'composition.rs|bootstrap' \
+    ! inherent_calls_into "$core_src/$layer" "" 'composition|bootstrap' \
       "$joiner_upcall_allowed" '' "$core_src"; then
     echo "orbit-core ${layer} must not name bootstrap or composition or call their inherent OrbitRuntime methods; reach them through an application-owned port [ORB-22005]"
     fail=1
