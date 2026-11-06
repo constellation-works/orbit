@@ -1193,6 +1193,7 @@ try {
     const card = document.getElementById('auto-drain-panel');
     return {
       summary: card.querySelector('.drain-slots').textContent,
+      hover: card.querySelector('.drain-capacity .info-hint-text')?.textContent || '',
       workspace: card.querySelector('.drain-capacity-bar').getAttribute('aria-label'),
       admitted: card.querySelector('[data-stat="admitted"] dd')?.textContent,
       running: card.querySelector('[data-stat="running"] dd')?.textContent,
@@ -1201,7 +1202,8 @@ try {
       stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
     };
   });
-  if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
+  if (!/Host throttle/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
+  if (!/\(cpu\)/.test(drainEvidence.hover)) throw new Error(`The throttled resource is missing from the hover help: ${drainEvidence.hover}`);
   if (drainEvidence.workspace !== 'Workspace: 6 of 12 leaf slots in use' || drainEvidence.admitted !== '3' || drainEvidence.running !== '1') throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
   if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
