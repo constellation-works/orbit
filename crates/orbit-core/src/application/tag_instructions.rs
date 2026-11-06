@@ -7,8 +7,6 @@
 //! change the instructions it runs under, and nothing on the task (its
 //! description, comments or tags) supplies text. A tag only selects.
 
-use std::path::Path;
-
 use orbit_common::OrbitError;
 use orbit_config::TagInstructionSetting;
 use orbit_store::contracts::AdmissionShipContract;
@@ -20,6 +18,11 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+// Compatibility shim: the commit-pinned readers moved to
+// `task::base_revision` so task code no longer routes through this module.
+// Retire it by re-pointing the remaining importers (visual delivery,
+// experiment overlays, the agent corpus) at the new home in a follow-up.
+pub(crate) use crate::application::task::base_revision::{commit_at, read_blob_at};
 use crate::runtime::assets::DEFAULT_TAG_INSTRUCTIONS;
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -211,42 +214,6 @@ impl OrbitRuntime {
         }
     }
 
-    /// The commit the run's worktree was cut from, as its `worktree` step
-    /// recorded it, or else this checkout's `HEAD` commit.
-    pub(crate) fn run_base_revision(&self, run_id: &str) -> Result<String, String> {
-        let recorded = self
-            .read_run_state(run_id)
-            .ok()
-            .flatten()
-            .and_then(|state| {
-                state
-                    .pipeline
-                    .get("worktree")
-                    .and_then(|worktree| worktree.get("base_sha"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
-        match recorded {
-            Some(sha) => commit_at(&self.paths().repo_root, &sha),
-            None => commit_at(&self.paths().repo_root, "HEAD"),
-        }
-    }
-
-    /// The workspace's current base revision: its base branch as last
-    /// fetched from `origin`, else the local branch, else this checkout's
-    /// `HEAD`. This is the pinned integration revision corpus injection
-    /// resolves through a run's recorded base; a caller with no run (such
-    /// as precedent auto-answer) pins to the same base this way, never to
-    /// the live working tree.
-    pub(crate) fn workspace_base_revision(&self) -> Result<String, String> {
-        let root = &self.paths().repo_root;
-        let branch = self.workspace_base_branch();
-        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
-        commit_at(root, &format!("refs/remotes/origin/{branch}"))
-            .or_else(|_| commit_at(root, &format!("refs/heads/{branch}")))
-            .or_else(|_| commit_at(root, "HEAD"))
-    }
-
     /// Match delivery worktree base spelling and mode without fetching during
     /// admission. An unavailable authoritative ref is a refusal, never another
     /// branch or this checkout's unrelated HEAD.
@@ -330,70 +297,4 @@ impl<'a> LazyRevision<'a> {
     fn resolved(&self) -> Option<String> {
         self.value.clone().and_then(Result::ok)
     }
-}
-
-/// The full commit id `revision` names in the repository at `root`.
-pub(crate) fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
-    let repo = git2::Repository::open(root)
-        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
-    repo.revparse_single(revision)
-        .and_then(|object| object.peel_to_commit())
-        .map(|commit| commit.id().to_string())
-        .map_err(|error| {
-            format!(
-                "revision {revision} cannot be resolved: {}",
-                error.message()
-            )
-        })
-}
-
-/// The sorted repository-relative paths of the files directly under `dir`
-/// in the tree of commit `revision`.
-pub(crate) fn list_blob_paths_at(
-    root: &Path,
-    revision: &str,
-    dir: &str,
-) -> Result<Vec<String>, String> {
-    let repo = git2::Repository::open(root)
-        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
-    let tree = repo
-        .revparse_single(revision)
-        .and_then(|object| object.peel_to_tree())
-        .map_err(|error| format!("revision cannot be read: {}", error.message()))?;
-    let entry = tree
-        .get_path(Path::new(dir))
-        .map_err(|_| "the directory is not in that commit".to_string())?;
-    let subtree = entry
-        .to_object(&repo)
-        .and_then(|object| object.peel_to_tree())
-        .map_err(|_| "the path is not a directory".to_string())?;
-    let mut paths = Vec::new();
-    for entry in subtree.iter() {
-        if entry.kind() == Some(git2::ObjectType::Blob)
-            && let Ok(name) = std::str::from_utf8(entry.name_bytes())
-        {
-            paths.push(format!("{dir}/{name}"));
-        }
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-/// The bytes of `path` in the tree of commit `revision`. The admission, not
-/// this read, enforces the size cap, so an oversized file is refused by name.
-pub(crate) fn read_blob_at(root: &Path, revision: &str, path: &str) -> Result<Vec<u8>, String> {
-    let repo = git2::Repository::open(root)
-        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
-    let tree = repo
-        .revparse_single(revision)
-        .and_then(|object| object.peel_to_tree())
-        .map_err(|error| format!("revision cannot be read: {}", error.message()))?;
-    let entry = tree
-        .get_path(Path::new(path))
-        .map_err(|_| "the file is not in that commit".to_string())?;
-    let blob = entry
-        .to_object(&repo)
-        .and_then(|object| object.peel_to_blob())
-        .map_err(|_| "the path is not a file".to_string())?;
-    Ok(blob.content().to_vec())
 }

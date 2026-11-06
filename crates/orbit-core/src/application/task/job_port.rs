@@ -7,18 +7,20 @@
 //! find a forge, light delivery reads the candidate's validation gates, the
 //! baseline-hold refresh and the blocked-task backstop submit their routine
 //! runs, completion and requeue ask whether a run's owner is still
-//! executing, and requeue asks whether an owner publication is unbound. `job` owns all of that, and it also drives task
+//! executing, requeue asks whether an owner publication is unbound, backlog
+//! reads ask for a task's host-OS wait, and mock admission asks which
+//! delivery runs are live. `job` owns all of that, and it also drives task
 //! writes, so a direct call from here would close a cycle. This port is the
 //! way in: `job` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
 //! composing the runtime binds it. The values both sides name live in
 //! [`contracts`](crate::application::contracts).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::Crew;
-use orbit_types::task::{DecisionRequest, Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
     ShipMode, SourceRepairBinding,
@@ -308,4 +310,18 @@ pub(in crate::application) trait TaskJobPort {
 
     /// The delivery attention marker for one task row, if any.
     fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError>;
+
+    /// The host-OS wait `task` meets on this host under `limits`, judged
+    /// over the same candidates `pools` give the draw; `None` when it can
+    /// start here.
+    fn host_os_wait_for_task(
+        &self,
+        task: &Task,
+        pools: &Self::CrewPools,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+    ) -> Option<String>;
+
+    /// Non-terminal delivery runs carrying `task_id`, newest first (the
+    /// same holders the ship in-flight guard keys on).
+    fn live_delivery_runs_carrying_task(&self, task_id: &str) -> Result<Vec<JobRun>, OrbitError>;
 }

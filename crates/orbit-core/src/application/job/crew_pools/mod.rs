@@ -33,6 +33,7 @@ mod candidate_assignment;
 mod candidates;
 mod claims;
 mod draw;
+mod host_os_wait;
 mod purpose;
 #[cfg(feature = "test-support")]
 mod selection_checkpoint;

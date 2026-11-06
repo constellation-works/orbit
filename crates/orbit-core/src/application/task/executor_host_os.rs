@@ -1,7 +1,9 @@
 //! Crew executor `host_os` limits shared by assignment, draws and admission.
 //!
 //! An omitted declaration is unrestricted. A declared set is ordinary executor
-//! data: no provider is special-cased here.
+//! data: no provider is special-cased here. The wait a task meets over the
+//! draw's crew candidates is `job`'s (`job/crew_pools/host_os_wait.rs`),
+//! which task code reads through `TaskJobPort::host_os_wait_for_task`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,7 +13,6 @@ use orbit_types::identity::Crew;
 use orbit_types::task::{ExecutorOsLimit, HostOs, Task, TaskOsRequirement};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::CapturedCrewPools;
 
 impl OrbitRuntime {
     /// Executors that declare `host_os`, keyed by executor name.
@@ -83,54 +84,6 @@ impl OrbitRuntime {
         match executor_host_os(&crew.assignment.provider, declared) {
             None => true,
             Some(allowed) => hosts.iter().any(|host| allowed.contains(host)),
-        }
-    }
-
-    /// The OS wait for an assigned task, or for the default its automatic
-    /// route actually reaches. Inspect the same candidates as the draw so a
-    /// supported purpose/complexity pool can still run under an unsupported
-    /// default. Non-OS resolution failures retain their existing handling.
-    pub(crate) fn task_host_os_wait(
-        &self,
-        task: &Task,
-        pools: &CapturedCrewPools,
-        limits: &BTreeMap<String, ExecutorOsLimit>,
-    ) -> Option<String> {
-        self.task_host_os_wait_with_admitted_crew(task, pools, limits, None)
-    }
-
-    /// A frozen run selection replaces the automatic fallback, while the
-    /// task's stored crew and OS tags remain constraints on discovery.
-    pub(crate) fn task_host_os_wait_with_admitted_crew(
-        &self,
-        task: &Task,
-        pools: &CapturedCrewPools,
-        limits: &BTreeMap<String, ExecutorOsLimit>,
-        admitted_crew: Option<&str>,
-    ) -> Option<String> {
-        match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
-            Ok(requirement) => {
-                if let Some(wait) = requirement.unsatisfied_reason(self.host_os()) {
-                    return Some(wait);
-                }
-            }
-            Err(reason) => return Some(reason),
-        }
-        if let Some(crew) = admitted_crew {
-            return match TaskOsRequirement::for_crew(&task.tags, Some(crew), limits) {
-                Ok(requirement) => requirement.unsatisfied_reason(self.host_os()),
-                Err(reason) => Some(reason),
-            };
-        }
-        if limits.is_empty() {
-            return None;
-        }
-        // Candidate resolution's only policy refusal is the default executor
-        // OS check. Disabled/missing crews use InvalidInput instead, and are
-        // still diagnosed by the dispatch/allowlist gates that own them.
-        match self.unheld_task_crew_candidates(task, pools) {
-            Err(OrbitError::PolicyDenied(wait)) => Some(wait),
-            _ => None,
         }
     }
 

@@ -532,7 +532,11 @@ def visibility(toks, i, parts):
 lower_path = [app.name, *([module] if module else [])]
 names = set()
 for top in upper:
-    for path, rel in production(defs_root / top, defs_root):
+    # A module is a directory or, like `tag_instructions`, a single file.
+    top_root = defs_root / top
+    if not top_root.exists() and (defs_root / f"{top}.rs").is_file():
+        top_root = defs_root / f"{top}.rs"
+    for path, rel in production(top_root, defs_root):
         parts = [*def_prefix, *rel.with_suffix("").parts]
         if parts[-1] == "mod":
             parts.pop()
@@ -676,8 +680,10 @@ fi
 # climbs out of `task` into one of them, or a call to an inherent method they
 # define is a reintroduced edge [ORB-17972], [ORB-22003]. The names are
 # derived from their `impl OrbitRuntime` blocks, so port methods use distinct
-# names.
-task_upper_modules='job|review|distributed|pull_drain|admission|sweep_filing|workspace_auto'
+# names. `tag_instructions` sits outside the module order but above `task`
+# [ORB-22289]: task reads commit-pinned files through its own
+# `task::base_revision`, never through it.
+task_upper_modules='job|review|distributed|pull_drain|admission|sweep_filing|workspace_auto|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -693,7 +699,7 @@ if rg -n "crate::application::(${task_upper_modules})\\b" \
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" "$task_upper_exempt" ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not route through tag_instructions"
   fail=1
 fi
 

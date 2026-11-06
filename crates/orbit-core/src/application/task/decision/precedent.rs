@@ -29,7 +29,7 @@ use super::rules::{
     match_auto_decision_rule, parse_decision_rules, set_rule_auto_in_markdown,
 };
 use crate::OrbitRuntime;
-use crate::application::tag_instructions::{list_blob_paths_at, read_blob_at};
+use crate::application::task::base_revision::{list_blob_paths_at, read_blob_at};
 use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 const CORPUS_REL: &str = "docs/agents/corpus";
