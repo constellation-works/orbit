@@ -15,6 +15,7 @@ const mandate = {
   mandate: { goal: 'Keep the release green', crew: 'sol', cadence: { floor_minutes: 15, heartbeat_minutes: 60 }, exit_criteria: ['Release is green'] },
   authority: { revision: 1, granted: [], narrowed: [] }, open_requests: [],
 };
+const otherState = (task_id, state) => ({ ...mandate, task_id, state });
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
   const api = url.pathname;
@@ -29,7 +30,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
   if (api === '/api/residents') return json({
-    mandates: [mandate], count: 1, crews: ['sol'], default_crew: 'sol',
+    mandates: [mandate, otherState('RESIDENT-2', 'handed_off'), otherState('RESIDENT-3', 'invalid'), otherState('RESIDENT-4', 'ended')], count: 4, crews: ['sol'], default_crew: 'sol',
     routine: { name: 'resident-cycle', source: 'one', target: 'job:resident_cycle_pipeline', machine_name: 'owner', enabled: false },
     capabilities: { resident_write: { authorized: true }, routine_toggle: { authorized: true } },
   });
@@ -162,6 +163,31 @@ export async function checkResidentForms(browser, evidence, { feedbackOnly = fal
       await page.keyboard.type('more');
       assert.deepEqual(errors, [], 'No page error after an Enter-submitted composer');
     }
+    // Relay is offered to handed-off and invalid mandates, which the server
+    // still accepts (a handed-off veto is a relay). An ended mandate offers none.
+    for (const [id, label] of [['RESIDENT-2', 'handed-off'], ['RESIDENT-3', 'invalid']]) {
+      await page.locator(`.resident-row[data-task="${id}"]`).click();
+      const detail = page.locator(`#resident-detail-${id}`);
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+        await detail.screenshot({ path: path.join(evidence, `resident-${label}-detail-dark-${width}.png`) });
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      assert.equal(await page.getByRole('button', { name: `Choose Relay ${id}`, exact: true }).count(), 1, `${label} ${id} offers Relay`);
+      const from = await page.evaluate(() => residentFixture.writes.length);
+      await page.getByRole('button', { name: `Choose Relay ${id}`, exact: true }).click();
+      const relay = page.getByRole('form', { name: `Relay ${id}`, exact: true });
+      await relay.locator('[name="relay"]').fill('Hold the release');
+      await relay.getByRole('button', { name: `Relay ${id}`, exact: true }).click();
+      await page.waitForFunction(from => residentFixture.writes.length > from, from);
+      assert.deepEqual(await page.evaluate(from => residentFixture.writes[from], from), { path: `/api/residents/${id}/relay`, body: { quote: 'Hold the release' } }, `${label} ${id} relays to its relay route`);
+      await page.waitForFunction(() => !document.querySelector('.resident-composer'));
+    }
+    await page.locator('.resident-ended').evaluate(node => { node.open = true; });
+    await page.locator('.resident-row[data-task="RESIDENT-4"]').click();
+    assert.equal(await page.locator('#resident-detail-RESIDENT-4').count(), 1, 'The ended mandate detail renders');
+    assert.equal(await page.locator('#resident-detail-RESIDENT-4').getByRole('button', { name: /Relay/ }).count(), 0, 'An ended mandate offers no Relay');
+    await page.locator('.resident-row[data-task="RESIDENT-1"]').click();
     const authority = page.getByRole('form', { name: 'Authority for RESIDENT-1', exact: true });
     await page.locator('.resident-authority > summary').click();
     for (const outcome of ['unchanged', 'granted', 'granted_and_narrowed', 'unchanged_and_narrowed', 'granted_narrowing_refused', 'unchanged_narrowing_refused']) {

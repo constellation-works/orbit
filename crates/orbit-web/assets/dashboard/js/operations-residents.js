@@ -565,6 +565,8 @@ const CONTROL_ACTIONS = {
   active: ["wake", "pause", "takeover", "relay", "stop"],
   paused: ["resume", "takeover", "relay", "stop"],
   taken_over: ["release", "relay", "stop"],
+  handed_off: ["relay"],
+  invalid: ["relay"],
   ended: [],
 };
 const ACTION = {
