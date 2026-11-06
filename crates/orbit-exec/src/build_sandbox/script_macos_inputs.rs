@@ -1,21 +1,32 @@
 //! Bounded, pre-spawn input preparation for Seatbelt, which cannot bind inputs.
+// Keep this file as an unconditional module for Linux CodeQL extraction; the
+// implementation is only part of the macOS build.
 
+#[cfg(target_os = "macos")]
 use std::fs::{File, OpenOptions};
+#[cfg(target_os = "macos")]
 use std::io::{self, Read, Write};
+#[cfg(target_os = "macos")]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+#[cfg(target_os = "macos")]
 use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
 use orbit_common::OrbitError;
 
+#[cfg(target_os = "macos")]
 use super::script::ScriptSandboxRequest;
 
+#[cfg(target_os = "macos")]
 struct InputCopyBudget {
     remaining: u64,
     started: Instant,
     timeout: Duration,
 }
 
+#[cfg(target_os = "macos")]
 impl InputCopyBudget {
     fn check_deadline(&self) -> io::Result<()> {
         if self.started.elapsed() >= self.timeout {
@@ -43,6 +54,7 @@ impl InputCopyBudget {
 /// Preparation gets its own `request.timeout`, checked per entry and chunk.
 /// This is cooperative cancellation between filesystem calls, not interruption
 /// of a kernel filesystem call already in progress. No copy worker is detached.
+#[cfg(target_os = "macos")]
 pub(super) fn copy_script_inputs(request: &ScriptSandboxRequest<'_>) -> Result<(), OrbitError> {
     let spec = &request.sandbox;
     let prepare = || -> io::Result<()> {
@@ -90,10 +102,12 @@ pub(super) fn copy_script_inputs(request: &ScriptSandboxRequest<'_>) -> Result<(
         .map_err(|error| OrbitError::InvalidInput(format!("cannot prepare script inputs: {error}")))
 }
 
+#[cfg(target_os = "macos")]
 fn input_preparation_error(source: &Path, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", source.display()))
 }
 
+#[cfg(target_os = "macos")]
 fn charge_tree_size(source: &Path, budget: &mut InputCopyBudget) -> io::Result<()> {
     budget.check_deadline()?;
     let metadata = std::fs::symlink_metadata(source)?;
@@ -113,6 +127,7 @@ fn charge_tree_size(source: &Path, budget: &mut InputCopyBudget) -> io::Result<(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn copy_input_tree(
     source: &Path,
     destination: &Path,
@@ -143,6 +158,7 @@ fn copy_input_tree(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn copy_input_file(
     source: &Path,
     destination: &Path,
@@ -191,6 +207,7 @@ fn copy_input_file(
 
 // A one-shot, thread-local fixture grows an already-open regular file at
 // an exact chunk boundary. It is absent from shipped builds.
+#[cfg(target_os = "macos")]
 #[cfg(test)]
 thread_local! {
     pub(super) static AFTER_INPUT_COPY_CHUNK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };

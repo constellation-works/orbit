@@ -25,7 +25,6 @@ mod linux;
 mod macos;
 mod script;
 mod script_macos;
-#[cfg(target_os = "macos")]
 mod script_macos_inputs;
 mod script_roots;
 mod supervise;
