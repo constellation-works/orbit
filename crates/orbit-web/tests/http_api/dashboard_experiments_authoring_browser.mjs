@@ -575,11 +575,12 @@ export async function checkExperimentAuthoringBrowser(readout) {
       assert.equal(editPatch.body.arms[1].weight, 2, 'the patch carries the confirmed weight');
       await edited.locator('.ex-status-running').waitFor();
 
-      // A started experiment's detail says why there is no Edit.
+      // A started experiment's Setup tab says why there is no Edit.
       await page.evaluate(async () => {
         window.experiments.setExperimentId('exp-1');
         await window.experiments.fetchAndRenderExperiments();
       });
+      await page.locator('#ex-tab-setup').click();
       await page.locator('.exf-locked').waitFor();
       assert.match(await page.locator('.exf-locked').textContent(), /running, so its definition can no longer be edited/);
       steps.push({ width, requests: requests.map(({ method, path: route }) => `${method} ${route}`),

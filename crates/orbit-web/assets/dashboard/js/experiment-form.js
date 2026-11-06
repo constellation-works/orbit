@@ -17,7 +17,7 @@
 // Draft actions keep their state per experiment id across polls, too.
 // Every node is built with DOM calls, never markup strings.
 
-import { el, captureFocus, captureWorkspaceVisit, onWorkspaceChange, requestJson } from './common.js';
+import { el, captureFocus, captureWorkspaceVisit, pinnedInfoHint, onWorkspaceChange, requestJson } from './common.js';
 
 const ENDPOINT = "/api/diagnostics/experiments";
 const HOST = "experiments-form";
@@ -589,10 +589,10 @@ function startConfirmation(experiment, state, paint) {
 /// no Edit.
 export function lockedNote(experiment, payloadAuthoring) {
   if (experiment.status === "draft" || !payloadAuthoring?.update?.authorized) return null;
-  return el("p", {
-    class: "exf-note exf-locked",
-    text: `This experiment is ${experiment.status}, so its definition can no longer be edited; only a draft is editable.`,
-  });
+  return el("p", { class: "exf-note exf-locked" }, [
+    "Definition locked",
+    pinnedInfoHint(`This experiment is ${experiment.status}, so its definition can no longer be edited; only a draft is editable.`),
+  ]);
 }
 
 // ---- rendering --------------------------------------------------------------------------

@@ -17,7 +17,7 @@ import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.j
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
 import { fetchAndRenderForecast, forecastTabRoute, onForecastTabPick, placeholdForecastAggregate, setForecastTab } from './js/forecast.js';
 import {
-  fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute,
+  fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute, onExperimentTabPick,
 } from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
@@ -365,6 +365,7 @@ function routerContext() {
     fetchExperiments: () => fetchAndRenderExperiments().catch((e) => console.error("Failed to fetch experiments", e)),
     setExperimentId,
     experimentsRoute: () => experimentsRoute(),
+    onExperimentTabPick,
     fetchAgents: () => fetchAndRenderAgents().catch((e) => console.error("Failed to fetch the agent scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),

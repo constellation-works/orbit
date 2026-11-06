@@ -681,16 +681,16 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       adoptHashedWindow();
     }
     if (sub === "experiments" && segments[1] && ctx.setExperimentId) {
-      // `#analytics/experiments[/<id>]`: the segment names one experiment; a
-      // malformed escape opens the list. A bare `#analytics` keeps the
-      // remembered view.
+      // `#analytics/experiments[/<id>[/trust|/setup]]`: the segments name
+      // one experiment and its tab; a malformed escape opens the list. A bare
+      // `#analytics` keeps the remembered view.
       let id = null;
       try {
         id = segments[2] ? decodeURIComponent(segments[2]) : null;
       } catch {
         id = null;
       }
-      ctx.setExperimentId(id);
+      ctx.setExperimentId(id, segments[3]);
     }
     // `#analytics/forecast[/accuracy|/data-gaps]`: the segment names the tab; a
     // bare `#analytics` keeps the remembered one.
@@ -868,8 +868,10 @@ function initTabsImpl(ctx) {
     );
   }
   wireCostTabs(ctx);
-  // A Forecast tab switch is a view change too: it rewrites the hash in place.
+  // A Forecast or experiment tab switch is a view change too: it rewrites the
+  // hash in place.
   ctx.onForecastTabPick?.(() => rewriteAnalyticsHash(ctx));
+  ctx.onExperimentTabPick?.(() => rewriteAnalyticsHash(ctx));
   for (const btn of document.querySelectorAll("#agents-roles .subtab")) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `analytics/agents/${btn.dataset.view}`, { refresh: false }),

@@ -294,6 +294,7 @@ const load = name => new vm.SourceTextModule(
 );
 const common = load('common.js');
 const sparkline = load('sparkline.js');
+const experimentReadout = load('experiment-readout.js');
 const experimentForm = load('experiment-form.js');
 const experiments = load('experiments.js');
 const router = new vm.SyntheticModule(['setActiveTab'], function exportRouter() {
@@ -303,13 +304,18 @@ const router = new vm.SyntheticModule(['setActiveTab'], function exportRouter() 
 await common.link(() => { throw new Error('unexpected common dependency'); });
 await sparkline.link(() => { throw new Error('unexpected sparkline dependency'); });
 await router.link(() => { throw new Error('unexpected router dependency'); });
+await experimentReadout.link(specifier => {
+  if (specifier === './common.js') return common;
+  if (specifier === './sparkline.js') return sparkline;
+  throw new Error(`unexpected experiment-readout dependency ${specifier}`);
+});
 await experimentForm.link(specifier => {
   if (specifier === './common.js') return common;
   throw new Error(`unexpected experiment-form dependency ${specifier}`);
 });
 await experiments.link(specifier => {
   if (specifier === './common.js') return common;
-  if (specifier === './sparkline.js') return sparkline;
+  if (specifier === './experiment-readout.js') return experimentReadout;
   if (specifier === './router.js') return router;
   if (specifier === './experiment-form.js') return experimentForm;
   throw new Error(`unexpected experiments dependency ${specifier}`);
@@ -317,6 +323,7 @@ await experiments.link(specifier => {
 await common.evaluate();
 await sparkline.evaluate();
 await router.evaluate();
+await experimentReadout.evaluate();
 await experimentForm.evaluate();
 await experiments.evaluate();
 
@@ -345,9 +352,33 @@ setExperimentId('exp-intraday');
 await fetchAndRenderExperiments();
 assert.equal(getClockZone(), 'utc', 'the chart opens on the UTC dashboard clock');
 assert.deepEqual(experimentsBody.querySelectorAll('.ex-arm-cost').map(node => node.textContent), [
-  'Cost: 2 reported · 3 estimated · 1 unmeasured',
-  'Cost: 4 reported · 0 estimated · 2 unmeasured',
-], 'cost coverage stays visible when cost is not the primary metric');
+  '2 reported · 3 estimated · 1 unmeasured',
+  '4 reported · 0 estimated · 2 unmeasured',
+], 'cost coverage stays on the page when cost is not the primary metric');
+
+// A tab is part of the address, an unknown one is Result, and every tab stays
+// rendered so that a switch needs no refetch.
+const tabPanels = () => Object.fromEntries(experimentsBody.querySelectorAll('.ex-tab-panel').map(panel => [panel.dataset.exTab, !panel.hidden]));
+assert.deepEqual(tabPanels(), { result: true, trust: false, setup: false });
+assert.equal(experiments.namespace.experimentsRoute(), 'analytics/experiments/exp-intraday');
+let tabPicks = 0;
+experiments.namespace.onExperimentTabPick(() => { tabPicks += 1; });
+experimentsBody.querySelector('#ex-tab-trust').dispatch('click');
+assert.equal(tabPicks, 1, 'a picked tab asks the router to rewrite the hash');
+assert.deepEqual(tabPanels(), { result: false, trust: true, setup: false });
+assert.equal(experiments.namespace.experimentsRoute(), 'analytics/experiments/exp-intraday/trust');
+setExperimentId('exp-intraday', 'setup');
+assert.deepEqual(tabPanels(), { result: false, trust: false, setup: true });
+assert.equal(experiments.namespace.experimentsRoute('exp-other'), 'analytics/experiments/exp-other', 'a link to another experiment opens its Result');
+setExperimentId('exp-intraday', 'no-such-tab');
+assert.deepEqual(tabPanels(), { result: true, trust: false, setup: false });
+assert.equal(experiments.namespace.experimentsRoute(), 'analytics/experiments/exp-intraday');
+// The header's health summary is the way to the tab that explains it.
+experimentsBody.querySelector('.ex-health-link').dispatch('click');
+assert.equal(tabPicks, 2, 'the health summary picks a tab like the strip does');
+assert.deepEqual(tabPanels(), { result: false, trust: true, setup: false });
+setExperimentId('exp-intraday');
+experiments.namespace.onExperimentTabPick(null);
 
 const winner = experimentsBody.querySelector('select.ex-conclude-control');
 const reason = experimentsBody.querySelector('textarea.ex-conclude-control');
@@ -583,15 +614,20 @@ async function checkCumulativeTooltipBounds() {
         if (scenario === 'short') {
           if (!suffix) {
             assert.deepEqual(await page.locator('.ex-arm-cost').allTextContents(), [
-              'Cost: 2 reported · 3 estimated · 1 unmeasured',
-              'Cost: 4 reported · 0 estimated · 2 unmeasured',
+              '2 reported · 3 estimated · 1 unmeasured',
+              '4 reported · 0 estimated · 2 unmeasured',
             ], 'the readout distinguishes reported, estimated and unmeasured cost');
           }
-          await page.locator('.ex-arms').locator('..').screenshot({ path: path.join(evidence, `cost-coverage-dark-${width}${suffix}.png`) });
-          const forest = page.locator('.ex-forest');
+          await page.locator('#ex-tab-trust').click();
+          await page.locator('.ex-arm-cost').first().waitFor();
+          await page.locator('.ex-arm-cost').first().locator('xpath=ancestor::section[1]').screenshot({ path: path.join(evidence, `cost-coverage-dark-${width}${suffix}.png`) });
+          await page.locator('#ex-tab-result').click();
+          const forest = page.locator('.ex-forest-others');
+          await forest.locator('summary').click();
           assert.match(await forest.textContent(), /exploratory/);
           await forest.scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(evidence, `exploratory-readout-dark-${width}.png`) });
+          await page.locator('.ex-conclude-open').click();
           const winner = page.locator('select.ex-conclude-control');
           const reason = page.locator('textarea.ex-conclude-control');
           await winner.selectOption('candidate');
@@ -604,6 +640,7 @@ async function checkCumulativeTooltipBounds() {
           assert.equal(await reason.evaluate(node => document.activeElement === node), true, 'poll restores conclusion focus');
           await reason.scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(evidence, `conclusion-dark-${width}.png`) });
+          await page.locator('.ex-conclude-open').click();
         }
 
         if (scenario === 'wider') {
@@ -611,6 +648,7 @@ async function checkCumulativeTooltipBounds() {
           // current 244px desktop / 200px phone defaults.
           await page.locator('.ex-cum-tip').evaluate(node => { node.style.width = '280px'; });
         }
+        await page.locator('#ex-tab-trust').click();
         await page.locator('.ex-cum-frame').scrollIntoViewIfNeeded();
         const overflow = () => page.evaluate(() => {
           const pane = document.querySelector('.tab-pane[data-tab=analytics]');
