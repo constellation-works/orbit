@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the resident.checkpoint, resident.request and resident.answer comment shapes, the stale-cycle rule, the synthesized incomplete checkpoint, and brief reconstruction on resume"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Checkpoint and resume contract
 owner: claude
 status: Draft

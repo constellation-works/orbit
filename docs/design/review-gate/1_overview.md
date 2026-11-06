@@ -2,7 +2,7 @@
 title: Review Gate — Overview
 owner: codex
 last_updated: 2026-11-01
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 status: Implemented
 stage: shipped
 next: "Operator chooses observe or enforce; symbol triggers stay deferred"
@@ -29,7 +29,8 @@ reruns on the reviewer commit before the PR opens, and the PR body gains a
 preserved; there is no second review round), or `incomplete` (the review
 could not finish or required evidence is unavailable). An evidence-only gap
 can hold the candidate for the owner to supply the named checks. Passed
-certificates exclude exactly reproduced landings from redundant after-landing
+certificates cover landings that reproduce the reviewed tree, plus clean rebases when a
+reviewed head merges onto a moved base; that coverage excludes them from redundant after-landing
 review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
@@ -74,8 +75,9 @@ given that evidence and is accountable for a verdict — before the PR exists,
 where a defect is still cheap, or after landing, where debt can be batched.
 
 The second motivation is not paying for the same review twice. A landing that
-reproduces an already-reviewed tree exactly is covered by that certificate;
-anything else stays an ordinary review obligation.
+reproduces an already-reviewed tree is covered by that certificate, as is a
+reviewed head that merges cleanly onto a moved base (`rebased_clean` coverage);
+other landings stay ordinary review obligations.
 
 ## 2. Core Concepts
 

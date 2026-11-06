@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the resident mandate artifact, the operator-only authority record, grant requests through a resident_authority decision, and free narrowing"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Mandate and authority
 owner: claude
 status: Draft
@@ -66,10 +66,11 @@ is not refused at the artifact write (slice 1): the **effective authority** is t
 rights over the workspaces both records cover, so the dropped workspace leaves the effective scope
 at once, and `orbit resident show` reports both records beside the effective one.
 
-A mandate is not due (`orbit resident show` state `invalid`, with the reason) when the task is not
-tagged `resident`, the artifact is missing or fails validation, or its `crew` is not a configured
-crew. Its other states are `active`, `handed_off` (the assignment is in `review`) and `ended` (done,
-archived or rejected). An ended or invalid mandate's effective authority is empty.
+A non-ended mandate is not due (`orbit resident show` state `invalid`, with the reason) when the
+task is not tagged `resident`, the artifact is missing or fails validation, its `crew` is not a
+configured crew, or its control history is unreadable. Its other states are `active`, `paused`, `taken_over`,
+`handed_off` (the assignment is in `review`) and `ended` (the assignment is done, archived or
+rejected, or the mandate was stopped). An ended or invalid mandate's effective authority is empty.
 
 ## Authority record
 

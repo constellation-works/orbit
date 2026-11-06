@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how a manager delegates, relays, asks for status and controls residents — orbit.resident.grant, relay, control, show/list, the opt-in resident toolset, and the attention kind residents report through"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Spec — Manager channel
 owner: claude
 status: Draft
@@ -15,11 +15,11 @@ last_updated: 2026-11-02
 # Spec: Manager channel
 
 The manager reaches residents only through Orbit records. It composes existing tools (task writes,
-`orbit.decision.*`, `orbit.notice.*`, `orbit attention`) and adds four resident tools:
-`orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control` and the read pair
-`orbit.resident.show` / `orbit.resident.list`. They are advertised on MCP only with the opt-in
-`--toolset resident`. Residents answer through checkpoints, decision requests and attention items;
-there is no mailbox in either direction.
+`orbit.decision.*`, `orbit.notice.*`, `orbit attention`) with resident operations for granting
+authority, relaying words, controlling cycles, inspecting mandates (`show`, `list`, `digest`,
+`metrics`) and writing checkpoints. They are advertised on MCP only with the opt-in
+`--toolset resident`. Residents answer through checkpoints and decision requests, with attention
+items surfacing open work; there is no mailbox in either direction.
 
 ## Why This Exists
 
@@ -110,19 +110,21 @@ Each action is a history entry with the caller and reason.
 
 ## `orbit.resident.show` / `orbit.resident.list`
 
-`show {task}` → mandate, effective authority with grant history, state, live cycle (if any), latest
-checkpoint parsed, open requests, next due estimate, and the last five outcomes.
-`list {workspace?, state?}` → one row per mandate: task, goal, state, last checkpoint time and
-outcome, open requests, stalled flag. Both are read-only and federated like other reads.
+`show {task_id}` reports the mandate artifact (or why it is missing or invalid), effective authority
+and its grant/narrowing history, control and state, open grant requests, live cycle, latest parsed
+checkpoint and stalled status. `list {include_ended?}` returns `{count, mandates}` with each row's
+task, title, status, state and reason, goal/deadline, effective rights/workspaces, authority revision,
+open request count and stalled flag. Both are read-only and scoped to the bound workspace.
 
-[ORB-21245] adds `control` (state and last action) and `stalled` with `stalled_reason` to `show`,
-and `stalled` to each `list` row. Slice 1 ([ORB-21242]) shipped: `show {task_id}` returns the task, `state`
-(`active`, `handed_off`, `ended`, `invalid` with `state_reason`), the parsed mandate (or
+[ORB-21245] adds `control` (state and last action), the `paused` and `taken_over` mandate states,
+and `stalled` with `stalled_reason` to `show`; it adds `stalled` to each `list` row. Slice 1
+([ORB-21242]) shipped: `show {task_id}` returns the task, `state` (`active`, `handed_off`, `ended` or
+`invalid` with `state_reason`), the parsed mandate (or
 `mandate_error`), the effective authority, the folded authority record with `granted[]` and
 `narrowed[]` (or `authority_error`), and open grant requests. `list {include_ended?}` returns
 `{count, mandates}` rows with state, goal, deadline, effective rights and workspaces, authority
-revision and open request count. Checkpoint, cycle, due and stalled fields arrive with their
-slices.
+revision and open request count. Later slices added the latest checkpoint and live cycle to `show`,
+plus stalled status to `show` and `list`; those current fields are summarized above.
 
 ## The `resident` toolset
 

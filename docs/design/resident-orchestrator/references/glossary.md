@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary of resident-orchestrator terms: manager, mandate, authority, resident, fire, cycle, checkpoint, wake digest, cost event, evolution record"
-last_validated: 2026-11-02
+last_validated: 2026-11-05
 title: Resident Orchestrator — Glossary
 owner: claude
 status: Draft
