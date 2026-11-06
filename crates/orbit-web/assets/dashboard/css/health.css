@@ -478,63 +478,112 @@ td .rel-rate { font-size: 12px; }
 .diag-table td.c-target { overflow-wrap: anywhere; }
 .diag-table td.c-recovered { color: var(--state-success); white-space: normal; }
 
-/* Health › Doctor [ORB-14830]: one row per `orbit doctor` check. Problems
-   lead with their full message and remediation; passing and skipped checks
-   fold into a disclosure below them. Status words are spelled out, so the
-   colour only reinforces what the text says. */
+/* Health › Doctor [ORB-14830]: a work queue beside a fix pane. Problems are
+   one-line rows grouped by severity, with passing checks folded below them; the
+   selected check's fix and full message fill the pane, which on a narrow screen
+   opens under its row. Status words are spelled out, so the colour only
+   reinforces what the text says. */
 .doctor-body { overflow-y: auto; background: var(--bg); }
 .doctor-meta { overflow-wrap: anywhere; }
+/* Sticky binds to the nearest scroll container, as in Incidents: with the queue
+   shown the panel and its body clip, and the pane sticks to the tab pane. */
+#doctor-panel:has(> #doctor-body > .doctor-triage) { overflow: clip; }
+#doctor-body:has(> .doctor-triage) { overflow: clip; }
+.doctor-triage { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.doctor-triage.has-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.doctor-queue { min-width: 0; }
+.doctor-group-title {
+  display: flex; gap: 8px; margin: 0; padding: 10px 14px 6px;
+  color: var(--fg-dim); font: 600 11px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.doctor-group-title.error { color: var(--state-error); }
+.doctor-group-title.warning { color: var(--state-pending); }
+.doctor-group-title.ok { color: var(--state-success); }
+.doctor-group-title.info { color: var(--accent); }
+.doctor-group-count { color: var(--fg-dim); font-weight: 400; }
 .doctor-list { display: flex; flex-direction: column; }
 .doctor-row {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  border-left: 2px solid var(--fg-dim);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline;
+  width: 100%; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--fg-dim); background: none; color: inherit; text-align: left; cursor: pointer;
 }
 .doctor-row.error { border-left-color: var(--state-error); }
 .doctor-row.warning { border-left-color: var(--state-pending); }
 .doctor-row.ok { border-left-color: var(--state-success); }
 .doctor-row.skipped { border-left-color: var(--state-disabled); }
 .doctor-row.info { border-left-color: var(--accent); }
-.doctor-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.doctor-row:hover { background: var(--bg-sunk); }
+.doctor-row[aria-expanded="true"] { background: var(--accent-wash); }
+.doctor-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.doctor-check { min-width: 0; color: var(--fg); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
+.doctor-fix-flag {
+  color: var(--accent); font: 600 11px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.doctor-preview {
+  grid-column: 1 / -1; min-width: 0; overflow: hidden; color: var(--fg-soft);
+  font: 12.5px/1.5 var(--font-sans); white-space: nowrap; text-overflow: ellipsis;
+}
+.doctor-detail {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: 12px 16px 16px; border-left: 1px solid var(--border);
+}
+.doctor-detail[hidden] { display: none; }
+.doctor-triage.has-detail > .doctor-detail {
+  position: sticky; top: 12px; max-height: calc(100vh - 120px); overflow-y: auto;
+}
+.doctor-detail:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.doctor-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.doctor-detail-check { margin: 0; color: var(--fg); font: 600 14px var(--font-mono); overflow-wrap: anywhere; }
 .doctor-status {
-  min-width: 7ch; font: 600 10px var(--font-mono);
+  font: 600 11px var(--font-mono);
   text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim);
 }
 .doctor-status.error { color: var(--state-error); }
 .doctor-status.warning { color: var(--state-pending); }
 .doctor-status.ok { color: var(--state-success); }
 .doctor-status.info { color: var(--accent); }
-.doctor-check { color: var(--fg); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
-.doctor-duration { margin-left: auto; color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
+.doctor-duration { margin-left: auto; color: var(--fg-dim); font: 11px var(--font-mono); white-space: nowrap; }
 .doctor-message {
-  margin: 0; color: var(--fg); font: 12.5px/1.5 var(--font-sans);
+  margin: 0; color: var(--fg-soft); font: 12.5px/1.5 var(--font-sans);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .doctor-remediation {
   display: flex; gap: 10px; align-items: baseline;
-  padding: 6px 10px; border-radius: 4px; background: var(--bg-sunk);
-  color: var(--fg-dim); font: 12px/1.6 var(--font-sans);
+  padding: 8px 10px; border-radius: 4px; background: var(--bg-sunk);
+  color: var(--fg); font: 12.5px/1.6 var(--font-sans);
 }
 .doctor-remediation-label {
-  flex: 0 0 auto; font: 600 10px var(--font-mono);
-  text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-mute);
+  flex: 0 0 auto; font: 600 11px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent);
 }
 .doctor-remediation-text { min-width: 0; overflow-wrap: anywhere; }
-.doctor-command { display: inline-flex; align-items: baseline; gap: 4px; margin: 0 2px; }
+.doctor-command { display: inline-flex; align-items: baseline; gap: 4px; margin: 0 2px; max-width: 100%; }
 .doctor-command code {
-  padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
+  min-width: 0; padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
   background: var(--bg-elev); color: var(--fg); font: 11.5px var(--font-mono);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 /* 12px matches the remediation text; 24px is the minimum touch target at phone widths. */
 .doctor-copy {
-  min-width: 24px; min-height: 24px; padding: 0 6px; border: 0; background: none; cursor: copy;
+  flex: none; min-width: 24px; min-height: 24px; padding: 0 6px; border: 0; background: none; cursor: copy;
   color: var(--accent); font: 12px var(--font-sans); white-space: nowrap;
 }
 .doctor-copy:hover { text-decoration: underline; }
 .doctor-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
-.doctor-passing summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
-.doctor-passing .doctor-message { color: var(--fg-dim); }
+.doctor-passing > summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
+.doctor-passing .doctor-check,
+.doctor-passing .doctor-preview { color: var(--fg-dim); }
+/* No room for a pane: the fix opens under its row, which reads as a disclosure. */
+@media (max-width: 900px) {
+  .doctor-detail { padding: 10px 14px 14px; border-left: 2px solid var(--accent); border-bottom: 1px solid var(--border); }
+  .doctor-check::before { content: "▸ "; color: var(--fg-dim); }
+  .doctor-row[aria-expanded="true"] .doctor-check::before { content: "▾ "; }
+  .doctor-row[aria-expanded="true"] .doctor-preview { display: none; }
+  /* The row directly above already names the check. */
+  .doctor-detail-check { display: none; }
+}
 
 /* ORB-15746 — Analytics › Metrics: implement_one duration and task completion
    trends. One colour per complexity series, shared by lines, dots, stacked

@@ -11,10 +11,17 @@
 // server runs only when it has none; Refresh asks for a new run; and the poll
 // asks only for whatever the server has cached, to keep the Health rail count
 // and the report's age current.
+//
+// The page is a work queue: the operator reads what is wrong, runs the fix and
+// refreshes. Problems are one-line rows grouped by severity; the selected
+// check's fix and full message sit in a pane beside them, with the first problem
+// selected on open. A narrow screen has no room for a pane, so the same node
+// opens under the row the operator taps.
 
 import {
   captureWorkspaceVisit,
   copyWithFeedback,
+  detailsPanel,
   el,
   formatAge,
   formatDateTime,
@@ -23,6 +30,7 @@ import {
   renderPanelPlaceholder,
   syncNodes,
 } from './common.js';
+import { forecastHint } from './forecast-shared.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -36,20 +44,30 @@ const DOCTOR_TIMEOUT_MS = 75_000;
 const STATUS_ORDER = ["error", "warning", "ok", "info", "skipped"];
 const QUIET_STATUSES = new Set(["ok", "info", "skipped"]);
 
+// Matches the `.doctor-triage` breakpoint in health.css.
+const NARROW_LAYOUT = window.matchMedia("(max-width: 900px)");
+
+const PANEL_HINT = "Read-only: repairs run with the CLI. Refresh runs doctor again; otherwise this is the cached result.";
+
 // The report shown, for the host and workspace visit it was read in, with the
 // request that read it (see `supersedes`).
 let current = null;
 // The unavailable or failed state of the last request, for the same visit.
 let failure = null;
 let running = null;
-let detailsOpen = false;
 // How many doctor requests this tab has sent: each request's sequence number.
 let issued = 0;
+// The check the operator picked, or null for the default: the first problem,
+// or on a narrow screen nothing.
+let selectedKey = null;
+// The rows of the rendered report by selection key.
+let rowsByKey = new Map();
 
 onWorkspaceChange(() => {
   current = null;
   failure = null;
   running = null;
+  selectedKey = null;
   setHealthRailCount(null);
 });
 
@@ -268,8 +286,8 @@ function renderMeta() {
   const body = current.body;
   const ran = ranAt(current);
   const age = formatAge(ran);
-  meta.textContent = `Ran ${age} ago · took ${durationText(body.duration_ms)} · read-only; repairs run with the CLI${busy ? " · running again…" : ""}`;
-  meta.title = `Ran at ${formatDateTime(ran, { seconds: true })}. Refresh runs doctor again; otherwise this is the cached result.`;
+  meta.textContent = `Ran ${age} ago · took ${durationText(body.duration_ms)}${busy ? " · running again…" : ""}`;
+  meta.title = `Ran at ${formatDateTime(ran, { seconds: true })}`;
   const checks = Array.isArray(body.checks) ? body.checks : [];
   countNode.textContent = `${plural(count(body.failures), "failure")} · ${plural(count(body.warnings), "warning")} · ${plural(checks.length, "check")}`;
 }
@@ -298,25 +316,122 @@ function remediationChildren(text) {
   return children;
 }
 
-function rowNode(row, index) {
-  const status = STATUS_ORDER.includes(row.status) ? row.status : "unknown";
-  const article = el("article", { class: `doctor-row ${status}` }, [
-    el("div", { class: "doctor-row-head" }, [
-      el("span", { class: `doctor-status ${status}`, text: status }),
-      el("span", { class: "doctor-check", text: row.check || "-" }),
+function statusClass(row) {
+  return STATUS_ORDER.includes(row.status) ? row.status : "unknown";
+}
+
+/// One queue row: the check and one clipped line of its message. It stays the
+/// same node as the selection moves, so a poll never takes focus from it.
+function queueRowNode({ row, key }) {
+  const button = el("button", { class: `doctor-row ${statusClass(row)}`, type: "button" }, [
+    el("span", { class: "doctor-check", text: row.check || "-" }),
+    row.remediation ? el("span", { class: "doctor-fix-flag", text: "Fix" }) : null,
+    el("span", { class: "doctor-preview", text: row.message || "" }),
+  ]);
+  button.dataset.check = key;
+  button.setAttribute("aria-controls", "doctor-detail");
+  button.addEventListener("click", (event) => selectCheck(key, event.detail === 0));
+  return button;
+}
+
+/// Rows of one status under a heading that names it. A heading replaces the
+/// status word each row would otherwise repeat.
+function statusGroupNode(status, entries) {
+  const group = el("div", { class: "doctor-group", role: "group", "aria-label": status }, [
+    el("h3", { class: `doctor-group-title ${statusClass({ status })}` }, [
+      el("span", { text: status }),
+      el("span", { class: "doctor-group-count", text: String(entries.length) }),
+    ]),
+    el("div", { class: "doctor-list" }, entries.map(queueRowNode)),
+  ]);
+  return group;
+}
+
+/// Each status in `entries`, in report order of severity, as its own group.
+function statusGroups(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const status = entry.row.status || "unknown";
+    if (!groups.has(status)) groups.set(status, []);
+    groups.get(status).push(entry);
+  }
+  return [...groups].map(([status, rows]) => statusGroupNode(status, rows));
+}
+
+/// What the pane shows for one check. The row already says what is wrong, so
+/// the fix leads; a long message cannot push it off the screen.
+function detailChildren(row) {
+  return [
+    el("div", { class: "doctor-detail-head" }, [
+      el("h3", { class: "doctor-detail-check", text: row.check || "-" }),
+      el("span", { class: `doctor-status ${statusClass(row)}`, text: row.status || "unknown" }),
       el("span", { class: "doctor-duration", text: durationText(row.duration_ms), title: "How long this check took" }),
     ]),
-    el("p", { class: "doctor-message", text: row.message || "" }),
     row.remediation
       ? el("div", { class: "doctor-remediation" }, [
         el("span", { class: "doctor-remediation-label", text: "Fix" }),
         el("span", { class: "doctor-remediation-text" }, remediationChildren(row.remediation)),
       ])
       : null,
-  ]);
-  article.dataset.key = `doctor-${index}-${row.check}`;
-  article.dataset.hash = JSON.stringify(row);
-  return article;
+    el("p", { class: "doctor-message", text: row.message || "" }),
+  ];
+}
+
+function triageNode() {
+  const body = $("doctor-body");
+  return body ? body.querySelector(":scope > .doctor-triage") : null;
+}
+
+/// Show the selection: mark its row and put the pane beside the queue, or on a
+/// narrow screen directly under the row. A selected passing row behind a closed
+/// fold no longer counts: a check that a fix just turned passing hands over to
+/// the next problem.
+function applySelection() {
+  const triage = triageNode();
+  if (!triage) return;
+  const detail = triage.querySelector(".doctor-detail");
+  const fold = triage.querySelector(".doctor-passing");
+  const rows = [...triage.querySelectorAll(".doctor-row")];
+  const showing = (row) => !(fold && fold.contains(row)) || fold.open;
+  let chosen = rows.find((row) => row.dataset.check === selectedKey && showing(row));
+  if (!chosen) {
+    selectedKey = null;
+    chosen = NARROW_LAYOUT.matches ? undefined : rows.find((row) => !(fold && fold.contains(row)));
+  }
+  for (const row of rows) row.setAttribute("aria-expanded", String(row === chosen));
+  const pane = Boolean(chosen) && !NARROW_LAYOUT.matches;
+  triage.classList.toggle("has-detail", pane);
+  detail.hidden = !chosen;
+  // The pane scrolls by itself, so the keyboard must be able to reach it.
+  detail.tabIndex = pane ? 0 : -1;
+  if (!chosen) {
+    detail.dataset.shown = "";
+    detail.replaceChildren();
+    if (detail.parentNode !== triage) triage.append(detail);
+    return;
+  }
+  if (detail.dataset.shown !== chosen.dataset.check) {
+    detail.dataset.shown = chosen.dataset.check;
+    detail.replaceChildren(...detailChildren(rowsByKey.get(chosen.dataset.check)).filter(Boolean));
+    detail.scrollTop = 0;
+  }
+  if (pane) {
+    if (detail.parentNode !== triage) triage.append(detail);
+  } else if (chosen.nextElementSibling !== detail) {
+    chosen.after(detail);
+  }
+}
+
+/// A row was activated. In the pane layout the keyboard follows into the pane,
+/// which would otherwise be every later row away; Escape returns. A narrow
+/// layout's row is a plain disclosure, so activating it again closes it.
+function selectCheck(key, fromKeyboard) {
+  const triage = triageNode();
+  if (!triage) return;
+  const open = triage.querySelector('.doctor-row[aria-expanded="true"]');
+  selectedKey = NARROW_LAYOUT.matches && open && open.dataset.check === key ? null : key;
+  applySelection();
+  if (fromKeyboard && !NARROW_LAYOUT.matches) triage.querySelector(".doctor-detail").focus();
 }
 
 function stateNode(key, text, className = "empty-state") {
@@ -350,43 +465,51 @@ function renderBody() {
     return;
   }
   const checks = Array.isArray(current.body.checks) ? current.body.checks : [];
-  const ordered = checks
-    .map((row, index) => ({ row, index }))
-    .sort((a, b) => {
-      const rank = (row) => {
-        const at = STATUS_ORDER.indexOf(row.status);
-        return at < 0 ? 0 : at;
-      };
-      return rank(a.row) - rank(b.row) || a.index - b.index;
-    });
+  // A check's name can repeat in a report, and each row must stay selectable.
+  const seen = new Map();
+  const keyed = checks.map((row, index) => {
+    const occurrence = seen.get(row.check) || 0;
+    seen.set(row.check, occurrence + 1);
+    return { row, index, key: `${row.check}#${occurrence}` };
+  });
+  rowsByKey = new Map(keyed.map(({ row, key }) => [key, row]));
+  const ordered = [...keyed].sort((a, b) => {
+    const rank = (row) => {
+      const at = STATUS_ORDER.indexOf(row.status);
+      return at < 0 ? 0 : at;
+    };
+    return rank(a.row) - rank(b.row) || a.index - b.index;
+  });
   const problems = ordered.filter(({ row }) => !QUIET_STATUSES.has(row.status));
   const quiet = ordered.filter(({ row }) => QUIET_STATUSES.has(row.status));
+  const queue = el("div", { class: "doctor-queue" });
   if (problems.length) {
-    const list = el("div", { class: "doctor-list" }, problems.map(({ row, index }) => rowNode(row, index)));
-    list.dataset.key = "doctor-problems";
-    list.dataset.hash = JSON.stringify(problems);
-    nodes.push(list);
+    queue.append(...statusGroups(problems));
   } else {
-    nodes.push(stateNode("doctor-healthy", `All ${plural(checks.length, "check")} passed or were skipped.`));
+    queue.append(stateNode("doctor-healthy", `All ${plural(checks.length, "check")} passed or were skipped.`));
   }
   if (quiet.length) {
-    const details = el("details", { class: "doctor-passing" });
-    details.open = detailsOpen;
-    details.addEventListener("toggle", () => {
-      if (details.isConnected) detailsOpen = details.open;
-    });
+    const details = detailsPanel("doctor:passing", { class: "doctor-passing" });
     const ok = quiet.filter(({ row }) => row.status === "ok").length;
     const info = quiet.filter(({ row }) => row.status === "info").length;
     const summary = [plural(ok, "passing check"), info ? `${info} info` : null, `${quiet.length - ok - info} skipped`];
-    details.append(
-      el("summary", { text: summary.filter(Boolean).join(" · ") }),
-      el("div", { class: "doctor-list" }, quiet.map(({ row, index }) => rowNode(row, index))),
-    );
-    details.dataset.key = "doctor-passing";
-    details.dataset.hash = JSON.stringify([quiet, detailsOpen]);
-    nodes.push(details);
+    details.append(el("summary", { text: summary.filter(Boolean).join(" · ") }), ...statusGroups(quiet));
+    details.addEventListener("toggle", applySelection);
+    queue.append(details);
   }
+  const detail = el("aside", { class: "doctor-detail", id: "doctor-detail", "aria-label": "Selected check" });
+  detail.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const triage = triageNode();
+    const open = triage && triage.querySelector('.doctor-row[aria-expanded="true"]');
+    if (open) open.focus();
+  });
+  const triage = el("div", { class: "doctor-triage" }, [queue, detail]);
+  triage.dataset.key = "doctor-triage";
+  triage.dataset.hash = JSON.stringify(checks);
+  nodes.push(triage);
   syncNodes(body, nodes);
+  applySelection();
 }
 
 export function renderDoctor() {
@@ -398,4 +521,7 @@ export function renderDoctor() {
 export function wireDoctorPanel() {
   const button = $("doctor-refresh");
   if (button) button.addEventListener("click", () => { void refreshDoctor(); });
+  const meta = $("doctor-meta");
+  if (meta) meta.after(forecastHint(PANEL_HINT));
+  NARROW_LAYOUT.addEventListener("change", applySelection);
 }

@@ -3,8 +3,11 @@
 // Health › Doctor in Chromium. The shipped app runs against a disposable
 // fixture server that answers `/api/doctor` for the serving host and, through
 // `/api/on/<host>/…`, for a current remote and for an older remote whose
-// dashboard has no such route. It checks the rows (full message, remediation
-// with copyable commands), the cached report's age, that Refresh runs doctor
+// dashboard has no such route. It checks the work queue (problems above the
+// passing fold, one line each, with the first problem's fix on screen at desktop
+// width), selection by pointer and keyboard showing the full message and a
+// remediation with copyable commands, the handover when a fix turns the selected
+// check passing, the panel note's info hint, the cached report's age, that Refresh runs doctor
 // again while the dashboard's own poll never does, the busy state of a first
 // run and of a refresh while the server holds its response (and the controls
 // restored after a success or a failure), the Health rail count, that a
@@ -54,7 +57,7 @@ const WORKSPACES = {
 const LONG_MESSAGE = '2 lock file(s) with dead holder records: '
   + '/srv/orbit/repo/.orbit/state/.task-store-write.lock (dead pid 48213, op: task store write, since 2026-10-08T04:11:52Z); '
   + '/srv/orbit/repo/.orbit/state/.dispatch-admission.lock (dead pid 48219, op: dispatch admission, since 2026-10-08T04:12:03Z)';
-const ROWS = (host) => [
+const ROWS = (host, fixed) => [
   { check: 'config', duration_ms: 3, status: 'ok', message: `valid (/home/fixture/.orbit/config.toml)`, remediation: null },
   { check: 'database', duration_ms: 1, status: 'ok', message: 'database readable (integrity scan: orbit doctor --deep); schema version 41 matches this binary', remediation: null },
   { check: 'stale-locks', duration_ms: 2, status: 'warning', message: LONG_MESSAGE, remediation: 'Run `orbit doctor --fix-stale-locks`.' },
@@ -63,7 +66,7 @@ const ROWS = (host) => [
   { check: 'provider:system', duration_ms: 4, status: 'error', message: "crew 'system' uses provider 'claude'; CLI 'claude' was not found", remediation: "Install the 'claude' CLI or change crew 'system' to an available provider." },
   { check: 'mcp-registration', duration_ms: 1, status: 'ok', message: 'Orbit MCP server registered for this workspace in: claude (workspace)', remediation: null },
   { check: 'hosts', duration_ms: 0, status: 'ok', message: `3 hosts registered; ${host} answers`, remediation: null },
-];
+].map((row) => (row.check === fixed ? { ...row, status: 'ok', remediation: null } : row));
 // The same checks once every problem is repaired.
 const HEALTHY_ROWS = (host) => ROWS(host).map((row) => (
   row.status === 'skipped' ? row : { ...row, status: 'ok', remediation: null }
@@ -88,7 +91,7 @@ function doctorBody(host, state) {
   if (state.finished == null) {
     return { ran_at: null, age_ms: null, duration_ms: null, failures: null, warnings: null, checks: null };
   }
-  const checks = state.healthy ? HEALTHY_ROWS(host) : ROWS(host);
+  const checks = state.healthy ? HEALTHY_ROWS(host) : ROWS(host, state.fixed);
   return {
     ran_at: new Date(state.finished - 6100).toISOString(),
     age_ms: Date.now() - state.finished,
@@ -248,7 +251,7 @@ const evidenceLog = {};
 const capture = async (name) => {
   for (const width of [1440, 768, 375]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(500);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert(overflow <= 1, `${name} must not overflow at ${width}px (by ${overflow}px)`);
     await page.screenshot({ path: path.join(evidence, `doctor-${name}-${width}.png`), fullPage: true });
@@ -279,6 +282,54 @@ const railCount = () => page.locator('#rail-count-diagnostics').evaluate((node) 
   lines: node.getClientRects().length && Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)),
   clipped: node.getBoundingClientRect().right > node.closest('.tab').getBoundingClientRect().right,
 }));
+
+// Where the problem rows and the passing fold sit, how many lines each row's
+// clipped message takes, and what the selected check shows.
+const rowLayout = () => page.evaluate(() => {
+  const fold = document.querySelector('#doctor-body details.doctor-passing').getBoundingClientRect();
+  const detail = document.querySelector('#doctor-detail');
+  const problems = [...document.querySelectorAll('#doctor-body .doctor-queue > .doctor-group .doctor-row')].map((row) => {
+    const preview = document.createRange();
+    preview.selectNodeContents(row.querySelector('.doctor-preview'));
+    return {
+      check: row.querySelector('.doctor-check').textContent,
+      selected: row.getAttribute('aria-expanded') === 'true',
+      bottom: row.getBoundingClientRect().bottom,
+      previewLines: new Set([...preview.getClientRects()].map((box) => Math.round(box.top))).size,
+    };
+  });
+  const box = detail.getBoundingClientRect();
+  return {
+    foldTop: fold.top,
+    foldBottom: fold.bottom,
+    problems,
+    detail: detail.hidden ? null : {
+      check: detail.querySelector('.doctor-detail-check').textContent,
+      besideQueue: box.left >= document.querySelector('.doctor-queue').getBoundingClientRect().right - 1,
+      fixOnScreen: detail.querySelector('.doctor-remediation')?.getBoundingClientRect().bottom <= window.innerHeight,
+    },
+  };
+});
+const detailText = () => page.evaluate(() => {
+  const detail = document.querySelector('#doctor-detail');
+  return {
+    status: detail.querySelector('.doctor-status').textContent,
+    check: detail.querySelector('.doctor-detail-check').textContent,
+    message: detail.querySelector('.doctor-message').textContent,
+    remediation: detail.querySelector('.doctor-remediation-text')?.textContent,
+    commands: [...detail.querySelectorAll('.doctor-command code')].map((code) => code.textContent),
+  };
+});
+const queueRow = (check) => page.locator('#doctor-body .doctor-row', { hasText: check });
+const hintBubble = () => page.evaluate(() => {
+  const bubble = document.querySelector('#doctor-controls .info-hint .info-hint-text');
+  const box = bubble.getBoundingClientRect();
+  return {
+    text: bubble.textContent,
+    tall: box.height > 20,
+    inViewport: box.left >= 0 && box.right <= window.innerWidth && box.top >= 0 && box.bottom <= window.innerHeight,
+  };
+});
 
 // ui.undersized-text (scripts/ux-rules/ui/undersized-text.mjs), measured over
 // the whole document as the rule does: content tags under the 11px floor,
@@ -366,7 +417,7 @@ try {
   await page.locator('#doctor-body .doctor-row').first().waitFor({ state: 'visible' });
   assert(doctorState(SERVING).runs === 0, 'opening the panel reuses a recent cached report');
   const cachedMeta = await meta();
-  assert(/^Ran 4m ago · took 6\.10 s/.test(cachedMeta), `the cached report shows its age and duration: ${cachedMeta}`);
+  assert(/^Ran 4m ago · took 6\.10 s$/.test(cachedMeta), `the meta line is only the report's age and duration: ${cachedMeta}`);
   const count = await page.locator('#doctor-count').textContent();
   assert(count === '1 failure · 2 warnings · 8 checks', `the panel counts the report: ${count}`);
   const rail = await railCount();
@@ -432,26 +483,83 @@ try {
   `both Health counts stay alongside the label on the phone rail: ${JSON.stringify(phoneRailLayout)}`);
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // Problems first, each with its full message and remediation.
-  const problems = await page.locator('#doctor-body > .doctor-list .doctor-row').evaluateAll((rows) => rows.map((row) => ({
-    status: row.querySelector('.doctor-status').textContent,
-    check: row.querySelector('.doctor-check').textContent,
-    message: row.querySelector('.doctor-message').textContent,
-    messageClipped: row.querySelector('.doctor-message').scrollWidth > row.querySelector('.doctor-message').clientWidth + 1,
-    remediation: row.querySelector('.doctor-remediation-text')?.textContent,
-    commands: [...row.querySelectorAll('.doctor-command code')].map((code) => code.textContent),
-  })));
+  // Problems first, each one line until it is opened, with the panel's note
+  // behind its hint.
+  await capture('cached');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(100);
+    const layout = await rowLayout();
+    evidenceLog[`rowLayout${width}`] = layout;
+    assert(layout.foldTop >= layout.problems[layout.problems.length - 1].bottom, `every problem is above the passing fold at ${width}px: ${JSON.stringify(layout)}`);
+    assert(layout.foldBottom <= 900, `the problems and the fold fit one screen at ${width}px: ${JSON.stringify(layout)}`);
+    for (const row of layout.problems) {
+      assert(row.previewLines === 1, `${row.check} shows one line of message at ${width}px: ${JSON.stringify(row)}`);
+    }
+    if (width === 1440) {
+      assert(layout.problems[0].selected && layout.detail?.check === 'provider:system' && layout.detail.besideQueue && layout.detail.fixOnScreen,
+        `opening the page shows the first problem's fix beside the queue: ${JSON.stringify(layout)}`);
+    } else {
+      assert(!layout.detail && layout.problems.every((row) => !row.selected), `a phone opens with every row closed: ${JSON.stringify(layout)}`);
+    }
+    const hint = page.locator('#doctor-controls .info-hint');
+    await hint.focus();
+    const bubble = await hintBubble();
+    evidenceLog[`hintFocus${width}`] = bubble;
+    assert(bubble.text && bubble.inViewport && bubble.tall, `the panel note opens from the keyboard inside the viewport at ${width}px: ${JSON.stringify(bubble)}`);
+    await hint.blur();
+    await hint.hover();
+    const hovered = await hintBubble();
+    assert(hovered.inViewport && hovered.tall, `the panel note opens on hover at ${width}px: ${JSON.stringify(hovered)}`);
+    await page.mouse.move(0, 0);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // Selecting a check shows its full message and remediation: the keyboard
+  // follows into the pane and reaches its copy control, Escape returns to the
+  // row, and the pointer leaves focus on the row.
+  await queueRow('stale-locks').focus();
+  await page.keyboard.press('Enter');
+  const opened = await page.evaluate(() => {
+    const detail = document.querySelector('#doctor-detail');
+    const message = detail.querySelector('.doctor-message');
+    return {
+      paneFocused: document.activeElement === detail,
+      messageVisible: message.checkVisibility(),
+      messageClipped: message.scrollWidth > message.clientWidth + 1,
+      remediationVisible: detail.querySelector('.doctor-remediation').checkVisibility(),
+    };
+  });
+  evidenceLog.openedByKeyboard = opened;
+  assert(opened.paneFocused && opened.messageVisible && !opened.messageClipped && opened.remediationVisible,
+    `Enter shows the full message and remediation and moves focus to them: ${JSON.stringify(opened)}`);
+  await page.keyboard.press('Tab');
+  const copyFocused = await page.evaluate(() => document.activeElement.title);
+  assert(copyFocused === 'Copy: orbit doctor --fix-stale-locks', `Tab moves from the pane to its copy control: ${copyFocused}`);
+  await page.keyboard.press('Escape');
+  assert(await queueRow('stale-locks').evaluate((row) => row === document.activeElement), 'Escape returns focus to the selected row');
+
+  const problems = [];
+  for (const check of ['provider:system', 'state-directory-permissions', 'stale-locks']) {
+    await queueRow(check).click();
+    problems.push(await detailText());
+  }
   evidenceLog.problems = problems;
-  assert(problems.map((row) => row.status).join(',') === 'error,warning,warning', `errors lead, then warnings: ${JSON.stringify(problems)}`);
+  const queueOrder = await page.locator('#doctor-body .doctor-queue > .doctor-group').evaluateAll((groups) => groups.map((group) => [
+    group.querySelector('.doctor-group-title span').textContent,
+    [...group.querySelectorAll('.doctor-check')].map((node) => node.textContent).join(','),
+  ].join(':')));
+  assert(queueOrder.join('|') === 'error:provider:system|warning:stale-locks,state-directory-permissions', `errors lead, then warnings: ${JSON.stringify(queueOrder)}`);
+  assert(problems.map((row) => row.status).join(',') === 'error,warning,warning', `the pane names each status: ${JSON.stringify(problems)}`);
   const stale = problems.find((row) => row.check === 'stale-locks');
-  assert(stale.message === LONG_MESSAGE && !stale.messageClipped, 'the full message is shown, unclipped');
+  assert(stale.message === LONG_MESSAGE, 'the pane holds the full message');
   assert(stale.commands.join() === 'orbit doctor --fix-stale-locks', `the remediation command is code: ${JSON.stringify(stale)}`);
   const perms = problems.find((row) => row.check === 'state-directory-permissions');
   assert(perms.commands.join('|') === 'chmod go-w <directory>|orbit doctor', `every command in a remediation is copyable: ${JSON.stringify(perms)}`);
-  await page.locator('.doctor-row.warning .doctor-copy').first().click();
+  await page.locator('#doctor-detail .doctor-copy').first().click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   assert(copied === 'orbit doctor --fix-stale-locks', `copy puts the command on the clipboard: ${copied}`);
-  assert(await page.locator('#doctor-body details.doctor-passing summary').textContent() === '4 passing checks · 1 skipped', 'passing and skipped checks are folded away');
+  assert(await page.locator('#doctor-body details.doctor-passing > summary').textContent() === '4 passing checks · 1 skipped', 'passing and skipped checks are folded away');
 
   // The copy controls are legible and usable at desktop and phone widths. They
   // are measured before the capture so the negative control is gone from the
@@ -460,17 +568,21 @@ try {
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.waitForTimeout(100);
-    legibility[width] = { view: await undersizedText(), control: await undersizedNegativeControl(), copy: await copyControls() };
+    legibility[width] = { view: await undersizedText(), control: await undersizedNegativeControl(), copy: [] };
+    for (const check of ['stale-locks', 'state-directory-permissions']) {
+      if (await queueRow(check).getAttribute('aria-expanded') !== 'true') await queueRow(check).click();
+      legibility[width].copy.push(...await copyControls());
+    }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   evidenceLog.legibility = legibility;
-  await capture('cached');
+  await capture('opened');
   for (const width of [1440, 375]) {
     const { view, control, copy } = legibility[width];
     assert(view.matched > 0, `the undersized-text check matched content text at ${width}px: ${JSON.stringify(view)}`);
     assert(view.found.length === 0, `no content text in the Doctor view is under 11px at ${width}px: ${JSON.stringify(view.found)}`);
     assert(control.found.some((item) => item.text === NEGATIVE_CONTROL_TEXT), `the undersized negative control is flagged at ${width}px: ${JSON.stringify(control)}`);
-    assert(copy.length === 3, `each remediation command has its copy control at ${width}px: ${JSON.stringify(copy)}`);
+    assert(copy.length === 3 && copy.every((item) => item.command), `each remediation command has its copy control at ${width}px: ${JSON.stringify(copy)}`);
     for (const item of copy) {
       assert(!item.overlapsCommand && !item.commandClipped, `the copy control neither covers nor clips ${item.command} at ${width}px: ${JSON.stringify(item)}`);
       assert(item.insideRemediation, `the copy control stays inside its remediation row at ${width}px: ${JSON.stringify(item)}`);
@@ -479,10 +591,11 @@ try {
     }
   }
 
-  // Keyboard: Tab from the report region reaches the third copy control, which
-  // shows its focus ring and copies its command on Enter.
-  await page.locator('#doctor-body').focus();
-  for (let i = 0; i < 3; i += 1) await page.keyboard.press('Tab');
+  // Keyboard: Enter on a row, then Tab through the pane, reaches its second copy
+  // control, which shows its focus ring and copies on Enter.
+  await queueRow('state-directory-permissions').focus();
+  await page.keyboard.press('Enter');
+  for (let i = 0; i < 2; i += 1) await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => {
     const node = document.activeElement;
     const style = getComputedStyle(node);
@@ -535,7 +648,7 @@ try {
   assert(doctorState(SERVING).runs === 1, 'Refresh runs doctor once');
   assert(doctorRequests().some((entry) => entry.path.startsWith('/api/doctor?') && query(entry).get('refresh') === 'true' && query(entry).get('workspace') === 'ws_orbit'), `Refresh asks for a new run: ${JSON.stringify(doctorRequests())}`);
   evidenceLog.metaAfterRefresh = await meta();
-  await page.locator('#doctor-body details.doctor-passing summary').click();
+  await page.locator('#doctor-body details.doctor-passing > summary').click();
   await capture('refreshed');
 
   // A poll's cached read that the network delays until after a newer refresh
@@ -570,6 +683,19 @@ try {
   const newer = await panelState();
   assert(newer.problems === 3 && /^Ran (0s|just now|\ds) ago/.test(newer.meta), `a newer cached report replaces the panel: ${JSON.stringify(newer)}`);
   assert(doctorState(SERVING).runs === 2, 'reading another tab\'s report never runs doctor');
+
+  // A fix turns the selected check passing: with the fold closed, the next
+  // Refresh hands over to the next problem instead of keeping a hidden row.
+  await page.locator('#doctor-body details.doctor-passing > summary').click();
+  await queueRow('stale-locks').click();
+  other.fixed = 'stale-locks';
+  await page.locator('#doctor-refresh').click();
+  await until('the report with the check fixed', async () => (await railCount()).text === '1 err · 1 warn');
+  const handedOver = await detailText();
+  evidenceLog.handedOver = handedOver;
+  assert(handedOver.check === 'provider:system', `a fixed check hands over to the first remaining problem: ${JSON.stringify(handedOver)}`);
+  other.fixed = null;
+  assert(doctorState(SERVING).runs === 3, 'the handover took one Refresh');
 
   // 4. The panel follows the selected host through the forward. A remote
   //    with no report shows doctor running, with Refresh disabled, until its
@@ -625,7 +751,11 @@ try {
   fs.writeFileSync(path.join(evidence, 'doctor-assertions.json'), `${JSON.stringify({
     passed: true,
     assertions: [
-      'browser-doctor-rows-show-full-message-and-remediation',
+      'browser-doctor-rows-one-line-problems-first',
+      'browser-doctor-first-problem-fix-on-screen',
+      'browser-doctor-selected-check-shows-full-message-and-remediation',
+      'browser-doctor-fixed-check-hands-over-to-next-problem',
+      'browser-doctor-panel-note-behind-info-hint',
       'browser-doctor-remediation-commands-copy',
       'browser-doctor-copy-controls-legible-and-usable',
       'browser-doctor-undersized-text-clear-with-negative-control',
@@ -647,7 +777,7 @@ try {
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard doctor browser checks passed at 1440px, 768px and 375px: rows, remediation copy legibility and keyboard use, cached age, Refresh, peek-only polling, host forward and unavailable host.');
+  console.log('Dashboard doctor browser checks passed at 1440px, 768px and 375px: work queue, fix pane, panel hint, remediation copy legibility and keyboard use, cached age, Refresh, peek-only polling, host forward and unavailable host.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'doctor-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   throw error;
