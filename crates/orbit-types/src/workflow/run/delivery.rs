@@ -80,6 +80,9 @@ pub enum CommitObservationStatus {
     AlreadyCommitted,
     VerifiedNoDiff,
     VerifiedAlreadyLanded,
+    /// A claimed leaf found its pinned base already resolves the task
+    /// (`decision: verified_already_resolved`).
+    VerifiedAlreadyResolved,
     SkippedNoDiffExpected,
     /// The run is live and the step has not completed.
     Pending,
@@ -93,7 +96,10 @@ impl CommitObservationStatus {
     pub fn is_no_change(self) -> bool {
         matches!(
             self,
-            Self::VerifiedNoDiff | Self::VerifiedAlreadyLanded | Self::SkippedNoDiffExpected
+            Self::VerifiedNoDiff
+                | Self::VerifiedAlreadyLanded
+                | Self::VerifiedAlreadyResolved
+                | Self::SkippedNoDiffExpected
         )
     }
 }

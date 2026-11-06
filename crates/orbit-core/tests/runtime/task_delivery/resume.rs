@@ -641,3 +641,93 @@ pub(super) fn legacy_checkpoint_and_wire_shape_remain_readable_after_resume() {
     assert_eq!(decoded.commit.status, CommitObservationStatus::Committed);
     assert_eq!(decoded.commit.provenance.unwrap().source_run_id, None);
 }
+
+/// The claimed already-resolved route settles through `verified_already_resolved`
+/// [ORB-22407]; observation reads it as a no-change delivery, and still refuses
+/// an unknown decision, a foreign identity or a checkpoint claiming a commit.
+pub(super) fn already_resolved_checkpoint_is_observed_as_no_change() {
+    let checkpoint = |run_id: &str, task_id: &str| {
+        json!({
+            "phase": "commit",
+            "decision": "verified_already_resolved",
+            "committed": false,
+            "skipped_no_diff_expected": true,
+            "task_id": task_id,
+            "job_run_id": run_id,
+            "base_sha": "a".repeat(40),
+            "already_resolved_evidence": {
+                "execution_summary": "The base already resolves the task.",
+                "selectors": ["cargo test -p fixture --test fixture"],
+            },
+        })
+    };
+    for case in [
+        "valid",
+        "unknown_decision",
+        "foreign_task",
+        "foreign_run",
+        "claims_commit",
+    ] {
+        let fixture = Fixture::new();
+        fixture.delivery_job();
+        let mut run = fixture.run(
+            "resolved",
+            "fixture_delivery",
+            1,
+            Some(json!({"task_ids": [fixture.task]})),
+        );
+        run.state = JobRunState::Success;
+        run.finished_at = Some(run.created_at + Duration::seconds(2));
+        fixture.save_run(&run);
+        fixture.step(&run, 1, "commit");
+        let mut output = checkpoint(&run.run_id, &fixture.task);
+        match case {
+            "valid" => {}
+            "unknown_decision" => output["decision"] = json!("verified_already_resolved_v2"),
+            "foreign_task" => output["task_id"] = json!(fixture.other_task),
+            "foreign_run" => output["job_run_id"] = json!("another-run"),
+            "claims_commit" => output["committed"] = json!(true),
+            _ => unreachable!(),
+        }
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        state.record_step(0, JobRunState::Success, Some(json!({})), None);
+        state.record_pipeline_output("locks", json!({}));
+        state.record_step(1, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output("commit", output);
+        fixture
+            .runtime
+            .write_run_state(&run.run_id, &state)
+            .unwrap();
+
+        let observed = fixture
+            .runtime
+            .observe_task_delivery(&fixture.task, Some(&run.run_id))
+            .unwrap();
+        if case == "valid" {
+            assert_eq!(
+                observed.commit.status,
+                CommitObservationStatus::VerifiedAlreadyResolved,
+                "{:?}",
+                observed.commit
+            );
+            assert!(observed.commit.reason.is_none());
+            assert_eq!(observed.commit.base_sha, Some("a".repeat(40)));
+            assert_eq!(
+                observed.delivery_status,
+                orbit_types::workflow::RunDeliveryStatus::NoChange,
+                "{observed:?}"
+            );
+        } else {
+            assert_eq!(
+                observed.commit.status,
+                CommitObservationStatus::Unavailable,
+                "{case}"
+            );
+            assert_eq!(
+                observed.delivery_status,
+                orbit_types::workflow::RunDeliveryStatus::Unavailable,
+                "{case}"
+            );
+        }
+    }
+}
