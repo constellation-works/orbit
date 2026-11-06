@@ -76,8 +76,9 @@ template:
       `pilot-block-report.json` field `window_start`: read it from that artifact in the
       cursor step above, and write that same value as the window start this pass
       continued (the report's `window_start`, and the cursor's `window_start` when this
-      pass is still capped). Do not recompute the start from this scan. Continue with
-      events strictly after `resume_after`, oldest first, and not past that window end.
+      pass is still capped). Do not recompute the start from this scan. Continue with the
+      candidates after the prior pass's boundary (section 2), in candidate order,
+      recording only occurrences inside that window.
       Each later capped resume reads the window start from the prior report's
       `window_start` and again writes the same `cursor`, so the chain keeps one fixed
       window. A later pass advances the window only after a pass finishes it (`partial`
@@ -96,13 +97,23 @@ template:
       Each run's `task_ids` is a candidate. Those triage runs are the primary input.
       Add the proposed and blocked tasks from the list in Rules when a run did not already
       name them.
-    - **Order and cap.** Sort by the earliest time you can see without a per-task read
-      (the run's `created_at`, else the task's `updated_at`). Show the first 60 with the
-      fields in Rules. When candidates remain, the pass is partial: stop reading, finish
-      sections 3–6 for what you read, and still succeed. Set `partial` to true and set
-      `resume_after` to the time of the last occurrence you processed. The next pass
-      continues from that `resume_after` inside this same window. It does not move the
-      window end or the window start.
+    - **Order and cap.** One candidate per task. Its sort time is the earliest time you
+      can see without a per-task read: the earliest `created_at` of the candidate runs
+      naming it, else the task's `updated_at`. Sort by sort time, then task id. A resume
+      pass first drops every candidate at or before the prior cursor's boundary (sort
+      time before `resume_after`, or equal to it with a task id not after
+      `resume_after_task`; with no `resume_after_task`, equal counts as at or before)
+      and every task in the prior report's `read_tasks`. Occurrence times never decide
+      which candidates remain. Show the first 60 remaining with the fields in Rules, and
+      record every in-window occurrence of each task you read, so a task is processed
+      whole or not at all. When candidates remain, the pass is partial: stop reading,
+      finish sections 3–6 for what you read, and still succeed. Set `partial` to true,
+      `resume_after` to the sort time of the last candidate you read and
+      `resume_after_task` to its task id. That boundary is a candidate position, not an
+      occurrence time: a read task's occurrences can fall after it and are already
+      counted, and an unread candidate can hold occurrences before it. The next pass
+      continues after that boundary inside this same window. It does not move the window
+      end or the window start.
 
     For every task you read, record each in-window occurrence with its task id, time and
     source record. Start from the records `escalation_triage_pipeline` already left: its
@@ -237,16 +248,20 @@ template:
 
     ```json
     {"schema_version": 1, "partial": false, "scan_start": "<RFC 3339>", "head": "<sha>",
-     "window_start": "<RFC 3339>", "resume_after": null,
+     "window_start": "<RFC 3339>", "resume_after": null, "resume_after_task": null,
+     "read_tasks": ["..."],
      "groups": [{"signature": "...", "route": "authoring|pilot|recovery|run_failure|setup",
                  "occurrences": 0, "new_since_cursor": 0, "previous": 0, "tasks": ["..."],
                  "disposition": "filed:<id>|commented:<id>|rejected:<id>|regression:<id>|deferred|counted"}],
      "fix_effectiveness": [{"task": "...", "landed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
     ```
 
-    A capped pass sets `"partial": true` and `resume_after` to the last processed event
-    time. Counts cover only the tasks this pass read. A finished window sets `"partial":
-    false` and `resume_after` to null. A first or steady pass sets `window_start` from
+    A capped pass sets `"partial": true`, and `resume_after` and `resume_after_task` to
+    the section 2 boundary: the sort time and task id of the last candidate read.
+    Counts cover only the tasks this pass read. `read_tasks` lists every task read in
+    this window: a first or steady pass lists its own reads, and a resume pass adds its
+    reads to the prior report's `read_tasks`. A finished window sets `"partial": false`
+    and both boundary fields to null. A first or steady pass sets `window_start` from
     section 1 (3 days or 14 days before this scan start). A resume pass sets
     `window_start` to the window start it continued: the prior report's `window_start`,
     read from that prior `pilot-block-report.json`. It sets `scan_start` to the moment
@@ -258,9 +273,9 @@ template:
     `{"schema_version":1,"cursor":"<scan start>"}`. A finished resume pass is
     `{"schema_version":1,"cursor":"<prior cursor's cursor>"}`: `cursor` is the prior
     cursor's `cursor` value, not this pass's scan start. A capped first or steady pass is
-    `{"schema_version":1,"cursor":"<scan start>","resume_after":"<last processed event time>"}`.
+    `{"schema_version":1,"cursor":"<scan start>","resume_after":"<last read candidate's sort time>","resume_after_task":"<its task id>"}`.
     A capped resume pass is
-    `{"schema_version":1,"cursor":"<prior cursor's cursor>","resume_after":"<last processed event time>","window_start":"<prior report's window_start>"}`.
+    `{"schema_version":1,"cursor":"<prior cursor's cursor>","resume_after":"<last read candidate's sort time>","resume_after_task":"<its task id>","window_start":"<prior report's window_start>"}`.
     That `cursor` is the prior cursor's `cursor` value, not this pass's scan start, and
     that `window_start` is the window start read from the prior pass's
     `pilot-block-report.json`. The next capped resume reads the window start from the
@@ -278,7 +293,7 @@ template:
   - Run-failure groups were only commented on an open `run-failure-patterns` task or filed as one tagged `run-failure-patterns`; no failure-rate measurement task was filed.
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
-  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` and `resume_after_task` (the last read candidate's sort time and task id) when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
   - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
   task_type: chore
   tags:

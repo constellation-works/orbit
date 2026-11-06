@@ -551,9 +551,12 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   that window instead of advancing it. It takes candidates from
   `escalation_triage_pipeline` and `blocked_task_recovery_pipeline` run history
   plus the current proposed and blocked tasks, and it reads at most 60 tasks
-  per pass, oldest first. A pass that hits the cap still completes: it stores
-  `pilot-block-report.json` with `partial` true and `pilot-block-cursor.json`
-  with `resume_after` set to the last processed event. Its first input is the
+  per pass, oldest candidate first. A pass that hits the cap still completes:
+  it stores `pilot-block-report.json` with `partial` true and the tasks it read,
+  and `pilot-block-cursor.json` with `resume_after` and `resume_after_task` set
+  to the last candidate read (its sort time and task id, not an occurrence
+  time). The next pass skips candidates up to that boundary and tasks already
+  read. Its first input is the
   disposition `escalation_triage_pipeline` recorded (the `pilot_warning_triaged`
   and, on older history, `blocked_task_triaged` markers and comments, plus final
   recovery's decision cards, whose named human actions recur), then task history, `pilot_warnings` and run records for what triage

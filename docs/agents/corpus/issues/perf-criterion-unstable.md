@@ -50,6 +50,8 @@ Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-
 
 Durable source evidence: task histories/comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` in ORB-22246, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
 
+Boundary reconciliation (ORB-22248): ORB-22246's cursor `resume_after` `2026-10-31T12:50:12.003276941+00:00` is the sort time of its last read candidate, ORB-20473, whose earliest triage run `jrun-20261031-1250-t1` was created then and names only ORB-20473. It is not an occurrence time. The ORB-20473 row below, at `12:51:42.177713963Z`, was read and counted in this slice, and it is the only counted occurrence after that boundary. The next resume pass skips ORB-20473 as a candidate at the boundary and does not count this row again. Its next run-history candidate is ORB-20503 (not read by ORB-22246), run `jrun-20261031-1658-t1`, created `2026-10-31T16:58:06.971837323+00:00`. Evidence: ORB-22248 artifact `pilot-block-boundary-reconciliation.json`.
+
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-10-31T09:45:34.645574567Z | ORB-20470 | not recorded in triage comment | performance criterion unstable on identical binaries (warm p95 ratio); source ORB-20470 history:blocked_triage@2026-10-31T09:45:34.645574567Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
