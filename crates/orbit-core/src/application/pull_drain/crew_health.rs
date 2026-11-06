@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
-use orbit_store::contracts::{FrictionAddParams, FrictionListFilter, FrictionStoreBackend};
+use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewPoolExclusion};
 use serde_json::Value;
@@ -110,9 +110,6 @@ pub(crate) fn record_pool_crew_health(
                 continue;
             }
             let frictions = crate::runtime::friction::store_for(runtime)?;
-            if open_friction_for_crew_cause_exists(frictions.as_ref(), &crew, &streak.reason)? {
-                continue;
-            }
             let key = dedupe_key(&crew, &streak.reason);
             let accepted = frictions.tags()?;
             let tags = ["automation", "other"]
@@ -121,12 +118,20 @@ pub(crate) fn record_pool_crew_health(
                 .map(str::to_string)
                 .into_iter()
                 .collect();
-            frictions.add(FrictionAddParams {
+            #[cfg(test)]
+            file_hook::run();
+            // The duplicate check and the insert share one store transaction,
+            // so concurrent drains cannot both file [ORB-22391].
+            frictions.add_unless_duplicate(
+                &open_pool_crew_filter(&crew),
+                &|row| exclusion_reason_from_body(&row.record.body, &crew).as_deref() == Some(streak.reason.as_str()),
+                FrictionAddParams {
                 model: "system".into(),
                 title: Some(format!("Pool crew `{crew}` excluded on every admission pass")),
                 body: format!("{}\nInspect `orbit run show {run_id}` and the managed launcher's environment; after repairing an env source, restart the service and start a new drain.\ndedupe-key: {key}\n", streak.describe(&crew)),
                 tags, status: FrictionStatus::Open, during_task: None, created_at: now,
-            })?;
+                },
+            )?;
         }
         Ok::<_, orbit_common::OrbitError>(())
     })();
@@ -146,26 +151,17 @@ fn dedupe_key(crew: &str, reason: &str) -> String {
     format!("crew-pool-excluded:{crew}:{}", sanitized.trim())
 }
 
-/// Whether an open (or triaged) friction already records this crew excluded
-/// for this exact cause. Matches on the crew's title and the reason suffix
-/// of the shared `describe` first line, so frictions filed under the old
-/// per-drain key still suppress a duplicate.
-fn open_friction_for_crew_cause_exists(
-    frictions: &dyn FrictionStoreBackend,
-    crew: &str,
-    reason: &str,
-) -> Result<bool, orbit_common::OrbitError> {
-    let filter = FrictionListFilter {
+/// Lists the open and triaged frictions that could record this crew excluded.
+/// Matches on the crew's title, so frictions filed under the old per-drain key
+/// still suppress a duplicate.
+fn open_pool_crew_filter(crew: &str) -> FrictionListFilter {
+    FrictionListFilter {
         statuses: vec![FrictionStatus::Open, FrictionStatus::Triaged],
         q: Some(format!(
             "Pool crew `{crew}` excluded on every admission pass"
         )),
         ..Default::default()
-    };
-    let existing = frictions.list(&filter)?;
-    Ok(existing
-        .iter()
-        .any(|row| exclusion_reason_from_body(&row.record.body, crew).as_deref() == Some(reason)))
+    }
 }
 
 /// The exclusion cause carried by a pool-crew friction body: the reason
@@ -180,4 +176,35 @@ fn exclusion_reason_from_body(body: &str, crew: &str) -> Option<String> {
     first
         .split_once("): ")
         .map(|(_, reason)| reason.to_string())
+}
+
+/// Production has no hook. A test installs one so two drains both reach the
+/// filing step before either writes.
+#[cfg(test)]
+pub(crate) mod file_hook {
+    use std::sync::{Arc, Mutex};
+
+    static HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+    pub(crate) fn install(hook: impl Fn() + Send + Sync + 'static) {
+        *HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(hook));
+    }
+
+    pub(crate) fn clear() {
+        *HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub(super) fn run() {
+        let hook = HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }

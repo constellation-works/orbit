@@ -140,6 +140,18 @@ pub trait FrictionStoreBackend: Send + Sync {
         dedupe_key: &str,
         params: FrictionAddParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Insert `params` unless a record listed by `filter` satisfies
+    /// `is_duplicate`; `Ok(None)` means a duplicate exists and nothing was
+    /// written. The list and the insert share one immediate write
+    /// transaction, so concurrent callers cannot both insert. Use it instead
+    /// of `add_or_reuse` when the duplicate test depends on more than the
+    /// body's dedupe key, such as the record's status.
+    fn add_unless_duplicate(
+        &self,
+        filter: &FrictionListFilter,
+        is_duplicate: &dyn Fn(&StoredFrictionRecord) -> bool,
+        params: FrictionAddParams,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError>;
     fn show(&self, id: &str) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     /// Workspace IDs other than this store's that already hold `id`.

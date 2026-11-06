@@ -273,6 +273,7 @@
         "application/plugin/tests/skills.rs::disabling_preserves_links_that_resolve_outside_the_namespace",
         "application/pull_drain/drain/tests/breaker.rs::a_half_open_breaker_admits_one_probe_and_only_once_nothing_is_unsettled",
         "application/pull_drain/drain/tests/breaker.rs::an_open_breaker_half_opens_after_its_cooldown_and_a_failed_probe_doubles_it",
+        "application/pull_drain/tests/crew_health.rs::concurrent_drains_with_same_crew_and_cause_file_one_friction",
         "application/pull_drain/tests/crew_health.rs::same_crew_same_cause_across_drains_keeps_one_open_friction",
         "application/pull_drain/tests/drain.rs::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
         "application/pull_drain/tests/drain.rs::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
