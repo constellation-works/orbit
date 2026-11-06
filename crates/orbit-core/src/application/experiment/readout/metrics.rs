@@ -483,30 +483,48 @@ impl OrbitRuntime {
             VisualPass, VisualResolution, VisualReviewRecord, VisualVerdictKind,
             visual_severity_weight,
         };
-        let read = |pass: VisualPass| -> Result<Option<VisualReviewRecord>, OrbitError> {
+        // A full artifact read verifies every blob the task holds, screenshots
+        // included, so it runs only for a visual record the manifest lists.
+        // Most tasks have none, and four full reads of each enrolled task
+        // dominated the readout [ORB-22445].
+        let listed: BTreeSet<String> = self
+            .get_task_artifact_manifest(task_id)?
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        let artifact = |path: String| -> Result<Option<Vec<u8>>, OrbitError> {
+            if !listed.contains(&path) {
+                return Ok(None);
+            }
             Ok(self
-                .get_task_artifact(task_id, &pass.review_artifact())?
-                .and_then(|artifact| serde_json::from_slice(&artifact.content).ok()))
+                .get_task_artifact(task_id, &path)?
+                .map(|artifact| artifact.content))
         };
-        let capture = self
-            .get_task_artifact(task_id, &VisualPass::Measure.capture_artifact())?
-            .and_then(|artifact| {
-                serde_json::from_slice::<orbit_types::task::VisualCaptureRecord>(&artifact.content)
-                    .ok()
-            });
-        let landed = match self.get_task(task_id)?.job_run_id {
-            Some(run) => crate::application::visual_delivery::visual_measurement_landed_revision(
-                self, task_id, &run,
-            )?,
-            None => None,
+        let read = |pass: VisualPass| -> Result<Option<VisualReviewRecord>, OrbitError> {
+            Ok(artifact(pass.review_artifact())?
+                .and_then(|content| serde_json::from_slice(&content).ok()))
         };
-        let settle = self
-            .get_task_artifact(task_id, &VisualPass::Measure.settle_artifact())?
-            .and_then(|artifact| {
-                serde_json::from_slice::<orbit_types::task::VisualSettleRecord>(&artifact.content)
-                    .ok()
+        let measure = read(VisualPass::Measure)?;
+        let (capture, landed, settle) = if measure.is_some() {
+            let capture = artifact(VisualPass::Measure.capture_artifact())?.and_then(|content| {
+                serde_json::from_slice::<orbit_types::task::VisualCaptureRecord>(&content).ok()
             });
-        let landed_mismatches = read(VisualPass::Measure)?
+            let landed = match self.get_task(task_id)?.job_run_id {
+                Some(run) => {
+                    crate::application::visual_delivery::visual_measurement_landed_revision(
+                        self, task_id, &run,
+                    )?
+                }
+                None => None,
+            };
+            let settle = artifact(VisualPass::Measure.settle_artifact())?.and_then(|content| {
+                serde_json::from_slice::<orbit_types::task::VisualSettleRecord>(&content).ok()
+            });
+            (capture, landed, settle)
+        } else {
+            (None, None, None)
+        };
+        let landed_mismatches = measure
             .filter(|record| {
                 landed.as_deref() == Some(record.candidate_sha.as_str())
                     && record.task_id == task_id
