@@ -57,8 +57,9 @@ const WORKSPACES = {
 const LONG_MESSAGE = '2 lock file(s) with dead holder records: '
   + '/srv/orbit/repo/.orbit/state/.task-store-write.lock (dead pid 48213, op: task store write, since 2026-10-08T04:11:52Z); '
   + '/srv/orbit/repo/.orbit/state/.dispatch-admission.lock (dead pid 48219, op: dispatch admission, since 2026-10-08T04:12:03Z)';
+let unrelatedPassingDurationMs = 3;
 const ROWS = (host, fixed) => [
-  { check: 'config', duration_ms: 3, status: 'ok', message: `valid (/home/fixture/.orbit/config.toml)`, remediation: null },
+  { check: 'config', duration_ms: unrelatedPassingDurationMs, status: 'ok', message: `valid (/home/fixture/.orbit/config.toml)`, remediation: null },
   { check: 'database', duration_ms: 1, status: 'ok', message: 'database readable (integrity scan: orbit doctor --deep); schema version 41 matches this binary', remediation: null },
   { check: 'stale-locks', duration_ms: 2, status: 'warning', message: LONG_MESSAGE, remediation: 'Run `orbit doctor --fix-stale-locks`.' },
   { check: 'validation-env', duration_ms: 0, status: 'skipped', message: 'no `workflow.required_validation_commands`; required validation does not run here', remediation: null },
@@ -607,6 +608,46 @@ try {
   await page.keyboard.press('Enter');
   await until('the keyboard copy', async () => (await page.evaluate(() => navigator.clipboard.readText())) === 'orbit doctor');
 
+  // A cached report that only changes an unrelated passing check must keep
+  // focus on the selected remediation's Copy button, at desktop and phone
+  // widths; an unchanged cached poll keeps it too.
+  const remediationFocus = {};
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(100);
+    if (await queueRow('stale-locks').getAttribute('aria-expanded') !== 'true') await queueRow('stale-locks').click();
+    const copy = page.locator('#doctor-detail .doctor-copy').first();
+    await copy.focus();
+    assert(await copy.evaluate((node) => node === document.activeElement && node.title === 'Copy: orbit doctor --fix-stale-locks'),
+      `the remediation Copy button starts focused at ${width}px`);
+    const focusState = () => page.evaluate(() => {
+      const detail = document.querySelector('#doctor-detail');
+      return {
+        tag: document.activeElement?.tagName,
+        title: document.activeElement?.title,
+        isCopy: document.activeElement?.classList.contains('doctor-copy'),
+        check: detail?.querySelector('.doctor-detail-check')?.textContent,
+      };
+    });
+    let requestsBefore = doctorRequests().length;
+    await page.evaluate(() => document.getElementById('refresh-btn').click());
+    await until('an unchanged cached poll', () => doctorRequests().length > requestsBefore);
+    await page.waitForTimeout(300);
+    remediationFocus[`${width}-unchanged`] = await focusState();
+    assert(remediationFocus[`${width}-unchanged`].isCopy, `an unchanged cached poll keeps remediation focus at ${width}px: ${JSON.stringify(remediationFocus[`${width}-unchanged`])}`);
+    unrelatedPassingDurationMs += 1;
+    requestsBefore = doctorRequests().length;
+    await page.evaluate(() => document.getElementById('refresh-btn').click());
+    await until('a cached poll changing only a passing check', () => doctorRequests().length > requestsBefore);
+    await page.waitForTimeout(300);
+    remediationFocus[`${width}-changed`] = await focusState();
+    assert(remediationFocus[`${width}-changed`].isCopy && remediationFocus[`${width}-changed`].title === 'Copy: orbit doctor --fix-stale-locks'
+      && remediationFocus[`${width}-changed`].check === 'stale-locks',
+    `a cached report changing only a passing check keeps remediation focus at ${width}px: ${JSON.stringify(remediationFocus[`${width}-changed`])}`);
+  }
+  evidenceLog.remediationFocus = remediationFocus;
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // 2. The dashboard's own refresh only peeks; it never runs doctor.
   const before = doctorRequests().length;
   for (let i = 0; i < 2; i += 1) {
@@ -760,6 +801,7 @@ try {
       'browser-doctor-copy-controls-legible-and-usable',
       'browser-doctor-undersized-text-clear-with-negative-control',
       'browser-doctor-copy-control-keyboard-focus-and-copy',
+      'browser-doctor-cached-report-preserves-remediation-focus',
       'browser-doctor-cached-report-shows-age',
       'browser-doctor-refresh-runs-again',
       'browser-doctor-first-run-shows-busy-state',

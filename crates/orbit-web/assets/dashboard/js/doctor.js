@@ -386,8 +386,7 @@ function triageNode() {
 /// narrow screen directly under the row. A selected passing row behind a closed
 /// fold no longer counts: a check that a fix just turned passing hands over to
 /// the next problem.
-function applySelection() {
-  const triage = triageNode();
+function applySelection(triage = triageNode()) {
   if (!triage) return;
   const detail = triage.querySelector(".doctor-detail");
   const fold = triage.querySelector(".doctor-passing");
@@ -494,7 +493,7 @@ function renderBody() {
     const info = quiet.filter(({ row }) => row.status === "info").length;
     const summary = [plural(ok, "passing check"), info ? `${info} info` : null, `${quiet.length - ok - info} skipped`];
     details.append(el("summary", { text: summary.filter(Boolean).join(" · ") }), ...statusGroups(quiet));
-    details.addEventListener("toggle", applySelection);
+    details.addEventListener("toggle", () => applySelection());
     queue.append(details);
   }
   const detail = el("aside", { class: "doctor-detail", id: "doctor-detail", "aria-label": "Selected check" });
@@ -508,6 +507,9 @@ function renderBody() {
   triage.dataset.key = "doctor-triage";
   triage.dataset.hash = JSON.stringify(checks);
   nodes.push(triage);
+  // Populate the detail pane before syncNodes restores focus, so a rebuilt
+  // triage already holds the selected remediation's controls.
+  applySelection(triage);
   syncNodes(body, nodes);
   applySelection();
 }
@@ -523,5 +525,5 @@ export function wireDoctorPanel() {
   if (button) button.addEventListener("click", () => { void refreshDoctor(); });
   const meta = $("doctor-meta");
   if (meta) meta.after(pinnedInfoHint(PANEL_HINT));
-  NARROW_LAYOUT.addEventListener("change", applySelection);
+  NARROW_LAYOUT.addEventListener("change", () => applySelection());
 }
