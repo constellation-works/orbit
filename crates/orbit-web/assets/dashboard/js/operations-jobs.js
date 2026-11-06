@@ -279,7 +279,6 @@ function jobRow(job, workspace, streak) {
     el("div", { class: "operation-row-head" }, [
       operationCell("Job", [
         el("div", { class: "operation-identity" }, [el("strong", { class: "mono", text: job.id })]),
-        el("span", { class: "operation-cell-sub", text: `${job.runs.length} recent run${job.runs.length === 1 ? "" : "s"} in this window` }),
       ], "operation-cell-identity"),
       operationCell("Scheduled by", [el("span", { class: "operation-chips" }, scheduledBy)]),
       operationCell("Last run", lastCell),
