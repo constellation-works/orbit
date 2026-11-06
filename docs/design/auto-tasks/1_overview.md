@@ -314,8 +314,9 @@ re-init does not overwrite a workspace-authored definition of the same name.
   Candidates come from `escalation_triage_pipeline` and
   `blocked_task_recovery_pipeline` run history plus current proposed and blocked
   tasks, and a pass reads at most 60 tasks. A capped pass still completes, with
-  `pilot-block-report.json` marked `partial` and `pilot-block-cursor.json`
-  carrying `resume_after`. It reads the dispositions `escalation_triage_pipeline`
+  `pilot-block-report.json` marked `partial` and listing `read_tasks`, while
+  `pilot-block-cursor.json` carries `resume_after` and `resume_after_task`. It reads
+  the dispositions `escalation_triage_pipeline`
   recorded (`pilot_warning_triaged` and, on older history, `blocked_task_triaged` markers
   and comments, plus final-recovery decision cards, grouped first by their
   recurring human actions), then untriaged

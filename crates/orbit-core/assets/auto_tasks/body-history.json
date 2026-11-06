@@ -1266,6 +1266,34 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## Attribute each finding to the task that introduced it",
+        "## Build the last-reviewed map and select two modules",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Partition the tree into modules",
+        "## Pin the commit",
+        "## Record the rotation and the cursor",
+        "## Review the two selected modules in full",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fea22ea9b53814167cdd718ccdc5b2d0a8ede0fe6fecdfa111e87b653b0261f6",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "comment-hygiene": [
@@ -1514,6 +1542,31 @@
       "comments": [],
       "digest": "4cf926a418b07f66cfa63ef6793d3cef4236832585a284aa826db39c7fcb2cfd",
       "revision": "c9ebc0bc60791950c7c6b4bec42d6eb8b4a3aabb",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "50b9bc2663d8f9208634c07fb972262d6ca20d0769e2418cd244c68adf7bab0b",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -2418,6 +2471,31 @@
         "## Record the run",
         "## Rules and command surfaces"
       ],
+      "digest": "dd77a85c5b995e1c13bbe0b262dd0be3dd2caf0edd518a3c95a34bb8e299d5b5",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 7 * * 1"
+        },
+        "tags": [
+          "escape-to-guard",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Classify unclassified and absent escapes",
+        "## Cluster by nature, escape, layer and mechanism",
+        "## File remedies for clusters at the bar",
+        "## Follow up earlier remedies",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
       "digest": "ede77797981ebeb75806adf171f534d66691b5b7cd3561184500877d31f87d19",
       "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
@@ -3023,6 +3101,31 @@
     },
     {
       "comments": [
+        "## Cap and rank the filings",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "b4a31d7922593da372d26c584e208d74b095640d5952358a1e19e4c106c9b7dd",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "## File one area review per area",
         "## Finish",
         "## Partition the tree",
@@ -3278,6 +3381,31 @@
     }
   ],
   "pilot-block-patterns": [
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "115eff93d74a9b0917928f9056f266051f7b03bd7982600bbeccc5bc5838d473",
+      "revision": "fbd213c7f114a7e7c3f0425f261ad7bb011b3c8d",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
     {
       "comments": [
         "## 1. Windows",
@@ -3682,6 +3810,32 @@
       ],
       "digest": "71f995b4250670467761c0227f74c9255789f8f9e71df75723a504399b39c0f5",
       "revision": "c9ebc0bc60791950c7c6b4bec42d6eb8b4a3aabb",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "77e5547deb9b2bef6a8ec4d5f756a6dc70812e5df8b93fc1515087e54b35179b",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4252,6 +4406,27 @@
     },
     {
       "comments": [
+        "## Persist the execution summary",
+        "## Record the cursor"
+      ],
+      "digest": "f5729e39d92fc91e1661cd6d1b0041095bf747298c50785d0a9726b8373f8a23",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# The portable system lane is seeded per machine and compatibility-aliased",
         "# for configs written before that crew existed."
       ],
@@ -4346,6 +4521,32 @@
       "settings": {
         "complexity": "medium",
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "297474524e298b7aa742fd9dba1c33fd3f29ae1b9cac09d36f1f1f7aacf48ebd",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "medium",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",
@@ -4878,6 +5079,28 @@
       "revision": "64241568ddc93ed29ce86e0982660e4adf5fedf8",
       "settings": {
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "3cd1ef0c87bf0b64ecfc36824feb311adce38677ab98c91257260b8dcbae52f6",
+      "revision": "6f0a564346ded7f0695f909b2fc17177cb266d58",
+      "settings": {
+        "complexity": "hard",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",

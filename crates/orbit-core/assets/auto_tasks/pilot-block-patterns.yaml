@@ -88,8 +88,8 @@ template:
 
     No list or search call selects tasks by history-event kind inside a time window. Do not
     scan the task corpus to find events. Build a candidate set, then read at most 60 tasks
-    this pass, oldest occurrence first. That cap is the whole collection, including triage
-    markers and raw pilot and recovery reads.
+    this pass, oldest candidate first (section 2 ordering below). That cap is the
+    whole collection, including triage markers and raw pilot and recovery reads.
 
     - **Candidates.** Runs of `escalation_triage_pipeline` and
       `blocked_task_recovery_pipeline` since the window start:
