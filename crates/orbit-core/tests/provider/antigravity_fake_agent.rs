@@ -142,6 +142,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     }
 }
 

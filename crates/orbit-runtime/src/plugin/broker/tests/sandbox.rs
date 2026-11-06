@@ -283,6 +283,7 @@ impl BrokerHost {
             crew_account: None,
             crew_vision_disabled: false,
             incomplete_continuation: None,
+            response_correction: None,
         };
         run_cli_backend(
             self,

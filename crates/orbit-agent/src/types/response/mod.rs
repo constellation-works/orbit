@@ -12,7 +12,7 @@ use serde_json::Value;
 
 pub use envelope::{
     DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
-    ParsedStdout,
+    ParsedStdout, is_success_carrying_error_violation,
 };
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};

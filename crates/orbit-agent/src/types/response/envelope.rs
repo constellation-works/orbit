@@ -21,6 +21,19 @@ pub struct DeclaredResponseFailure {
 /// is unfinished and could continue in a fresh invocation [ORB-21837].
 pub const IMPLEMENTATION_INCOMPLETE_CODE: &str = "implementation_incomplete";
 
+/// The parser's refusal of an envelope that says `success` and carries `error`.
+const SUCCESS_CARRYING_ERROR_VIOLATION: &str = "success status must not carry error object";
+
+/// Is `parse_error` exactly the parser's refusal of an envelope that says
+/// `success` and carries an `error` object [ORB-22426]?
+///
+/// Exact equality, so that an error quoting agent text can never match.
+pub fn is_success_carrying_error_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(SUCCESS_CARRYING_ERROR_VIOLATION.to_string())
+            .to_string()
+}
+
 /// Most `result.remaining_work` entries a continuation request may carry.
 const MAX_REMAINING_WORK_ITEMS: usize = 32;
 /// Longest `result.remaining_work` entry, in bytes.
@@ -82,6 +95,12 @@ impl<'a> ParsedStdout<'a> {
         self.discover(response_candidate)
             .unwrap_or_default()
             .and_then(|candidate| declared_response_failure(&candidate))
+    }
+
+    /// The newest response envelope in the capture, unvalidated. For handing a
+    /// rejected reply back to its author; it never supplies a step's result.
+    pub fn peek_response_envelope(&self) -> Option<Value> {
+        self.discover(response_candidate).unwrap_or_default()
     }
 
     fn discover<T>(&self, inspect: impl Fn(&Value) -> Option<T>) -> Result<Option<T>, OrbitError> {
@@ -234,7 +253,7 @@ fn parse_json_envelope(
         "success" => {
             if envelope.error.is_some() {
                 return Err(OrbitError::AgentProtocolViolation(
-                    "success status must not carry error object".to_string(),
+                    SUCCESS_CARRYING_ERROR_VIOLATION.to_string(),
                 ));
             }
             AgentResponseStatus::Success

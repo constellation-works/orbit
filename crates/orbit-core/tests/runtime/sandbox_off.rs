@@ -185,6 +185,7 @@ fn dispatch_codex(
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

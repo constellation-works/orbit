@@ -63,6 +63,7 @@ mod incomplete_continuation;
 mod no_diff;
 #[cfg(unix)]
 mod regression_risk;
+mod response_correction;
 #[cfg(unix)]
 mod stderr_failure;
 #[cfg(unix)]
@@ -1627,6 +1628,7 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         crew_account: None,
         crew_vision_disabled: false,
         incomplete_continuation: None,
+        response_correction: None,
     }
 }
 
@@ -1746,6 +1748,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 crew_account: None,
                 crew_vision_disabled: false,
                 incomplete_continuation: None,
+                response_correction: None,
             }),
             activity_name: None,
             input_schema_json: None,

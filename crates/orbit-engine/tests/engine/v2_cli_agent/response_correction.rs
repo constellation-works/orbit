@@ -1,0 +1,477 @@
+//! [ORB-22426] A reply that says `success` and carries an `error` object stays
+//! a parser refusal. A read-only activity that declares `response_correction`
+//! gets a bounded fresh invocation, within its own wall-clock budget and under
+//! the same authority, and only a newly valid reply succeeds.
+//!
+//! The provider is a scripted `claude` that numbers its invocations and saves
+//! each prompt and argv.
+
+use std::sync::Mutex;
+
+use orbit_types::workflow::activity_job::ResponseCorrectionPolicy;
+use serde_json::json;
+
+use super::*;
+
+const SIGNATURE: &str = "success status must not carry error object";
+const CONTRADICTORY: &str = r#"{"schemaVersion":1,"status":"success","result":{"summary":"the answer"},"error":{"code":"none","message":"nothing went wrong"}}"#;
+const VALID: &str =
+    r#"{"schemaVersion":1,"status":"success","result":{"summary":"the answer"},"error":null}"#;
+const DECLARED_FAILED: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"blocked","message":"the checkout was unreadable"}}"#;
+
+/// Records the sandbox each invocation asked the host for.
+struct RecordingHost {
+    cli: ScriptHost,
+    sandbox_requests: Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
+    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
+        RuntimeHost::agent_subprocess_environment(&self.cli, required_env_vars)
+    }
+
+    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        run_id: Option<&str>,
+        fs_profile: Option<&str>,
+        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        RuntimeHost::tool_context_for_activity(
+            &self.cli,
+            run_id,
+            fs_profile,
+            fs_audit,
+            proc_allowed_programs,
+        )
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        provider: &str,
+        fs_profile: Option<&str>,
+        _subprocess_cwd: Option<&Path>,
+    ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
+        self.sandbox_requests
+            .lock()
+            .unwrap()
+            .push((provider.to_string(), fs_profile.map(str::to_string)));
+        Ok(None)
+    }
+}
+
+struct Fixture {
+    temp: TempDir,
+    fake: FakeCli,
+}
+
+struct Dispatched {
+    outcome: orbit_engine::DispatchOutcome,
+    sandbox_requests: Vec<(String, Option<String>)>,
+}
+
+impl Fixture {
+    /// Invocation 1 runs `first` and each later one runs `later`, both shell.
+    fn new(first: &str, later: &str) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let script = format!(
+            "#!/bin/sh\n\
+             state='{state}'\n\
+             n=$(cat \"$state/count\" 2>/dev/null || echo 0)\n\
+             n=$((n+1))\n\
+             echo \"$n\" > \"$state/count\"\n\
+             cat > \"$state/prompt-$n\"\n\
+             printf '%s\\n' \"$@\" > \"$state/argv-$n\"\n\
+             if [ \"$n\" = 1 ]; then\n\
+             {first}\n\
+             else\n\
+             {later}\n\
+             fi\n",
+            state = temp.path().display(),
+        );
+        let fake = fake_cli("claude", &script).unwrap();
+        Self { temp, fake }
+    }
+
+    fn invocations(&self) -> usize {
+        fs::read_to_string(self.temp.path().join("count"))
+            .map(|count| count.trim().parse().unwrap())
+            .unwrap_or(0)
+    }
+
+    fn envelope(&self, invocation: usize) -> Value {
+        let prompt =
+            fs::read_to_string(self.temp.path().join(format!("prompt-{invocation}"))).unwrap();
+        let envelope = prompt
+            .split_once("Execution envelope:\n")
+            .expect("the prompt carries an execution envelope")
+            .1;
+        serde_json::from_str(envelope.trim()).expect("the envelope is JSON")
+    }
+
+    fn argv(&self, invocation: usize) -> String {
+        fs::read_to_string(self.temp.path().join(format!("argv-{invocation}"))).unwrap()
+    }
+
+    fn dispatch(
+        &self,
+        policy: Option<ResponseCorrectionPolicy>,
+        wall_clock_timeout_seconds: u64,
+    ) -> Dispatched {
+        let run_id = "response-correction";
+        let (writer, _store) = build_writer(self.temp.path(), run_id).unwrap();
+        let host = RecordingHost {
+            cli: ScriptHost::new(self.fake.cli_path()),
+            sandbox_requests: Mutex::new(Vec::new()),
+        };
+        let mut spec = cli_agent_loop_spec(None);
+        spec.require_response_envelope = true;
+        spec.wall_clock_timeout_seconds = wall_clock_timeout_seconds;
+        spec.response_correction = policy;
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "read_only_fixture",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: Some("reviewer"),
+            input: json!({ "question": "where is it?" }),
+            audit: writer,
+            run_id,
+            host: Some(&host),
+        })
+        .expect("the dispatch returns an outcome");
+        Dispatched {
+            outcome,
+            sandbox_requests: host.sandbox_requests.into_inner().unwrap(),
+        }
+    }
+}
+
+fn admitted(max_rounds: u32) -> Option<ResponseCorrectionPolicy> {
+    Some(ResponseCorrectionPolicy {
+        max_rounds,
+        min_remaining_seconds: 1,
+    })
+}
+
+fn reply(envelope: &str) -> String {
+    format!("echo '{envelope}'")
+}
+
+#[test]
+fn a_contradictory_reply_without_a_policy_fails_on_its_first_reply() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), &reply(VALID));
+    let outcome = fixture.dispatch(None, 30).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1, "no correction is started");
+    let message = outcome.message.as_deref().unwrap();
+    assert!(message.contains(SIGNATURE), "{message}");
+    assert!(!message.contains("correction"), "{message}");
+    assert_eq!(outcome.output["response_envelope_valid"], false);
+    assert!(outcome.output.get("response_correction").is_none());
+}
+
+#[test]
+fn a_contradictory_reply_is_replaced_by_a_newly_valid_one_under_the_same_authority() {
+    let later = r#"echo '{"schemaVersion":1,"status":"success","result":{"summary":"corrected"},"error":null}'"#;
+    let fixture = Fixture::new(&reply(CONTRADICTORY), later);
+    let Dispatched {
+        outcome,
+        sandbox_requests,
+    } = fixture.dispatch(admitted(1), 30);
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(fixture.invocations(), 2, "exactly one correction");
+    assert_eq!(
+        outcome.output["summary"], "corrected",
+        "the result is the new reply's, not the rejected one's"
+    );
+    assert_eq!(outcome.output["response_envelope_valid"], true);
+    assert!(
+        outcome.output.get("response_correction_request").is_none(),
+        "the rejected reply does not become step output"
+    );
+
+    // The original diagnostics survive the recovery.
+    let record = &outcome.output["response_correction"];
+    assert_eq!(record["rounds"], 1);
+    assert_eq!(record["max_rounds"], 1);
+    assert_eq!(record["refusal"], Value::Null);
+    assert!(
+        record["original_error"]
+            .as_str()
+            .unwrap()
+            .contains(SIGNATURE),
+        "{record}"
+    );
+    assert!(
+        record["original_stdout_blob_ref"].is_string(),
+        "the rejected capture stays addressable: {record}"
+    );
+
+    // The correction sees what was rejected, as a field of its input.
+    let first = fixture.envelope(1);
+    let second = fixture.envelope(2);
+    assert!(first["input"].get("response_correction").is_none());
+    let correction = &second["input"]["response_correction"];
+    assert_eq!(correction["round"], 1);
+    assert_eq!(correction["rejected_reply_truncated"], false);
+    assert_eq!(
+        serde_json::from_str::<Value>(correction["rejected_reply"].as_str().unwrap()).unwrap(),
+        serde_json::from_str::<Value>(CONTRADICTORY).unwrap(),
+    );
+    assert!(
+        correction["parser_error"]
+            .as_str()
+            .unwrap()
+            .contains(SIGNATURE)
+    );
+
+    // Same authority: same instruction, tool grant, input and provider argv,
+    // and the same sandbox requested for the same read-only profile.
+    for key in ["instruction", "tools", "task", "model"] {
+        assert_eq!(first.get(key), second.get(key), "{key}");
+    }
+    assert_eq!(first["input"]["question"], second["input"]["question"]);
+    assert_eq!(fixture.argv(1), fixture.argv(2), "provider argv");
+    assert_eq!(
+        sandbox_requests,
+        vec![("claude".to_string(), Some("reviewer".to_string())); 2],
+    );
+
+    // Same budget: the correction's deadline is what the first reply left.
+    let remaining = correction["remaining_budget_seconds"].as_u64().unwrap();
+    assert!(remaining < 30, "{remaining}");
+    assert_eq!(
+        outcome.output["effective_deadline_ms"],
+        json!(remaining * 1000),
+        "the correction's own kill deadline is the unspent budget"
+    );
+}
+
+#[test]
+fn repeated_contradictory_replies_exhaust_the_correction_rounds_and_fail() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), &reply(CONTRADICTORY));
+    let outcome = fixture.dispatch(admitted(2), 30).outcome;
+
+    assert!(!outcome.success, "an invalid reply earns no success");
+    assert_eq!(fixture.invocations(), 3, "two corrections, then stop");
+    let message = outcome.message.as_deref().unwrap();
+    assert!(
+        message.contains("after 2 response correction(s) (correction refused: rounds_exhausted)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("original error before correction:"),
+        "{message}"
+    );
+    assert!(message.contains(SIGNATURE), "{message}");
+    assert_eq!(outcome.output["response_envelope_valid"], false);
+    assert_eq!(outcome.output["response_correction"]["rounds"], 2);
+    assert!(outcome.output.get("response_correction_request").is_none());
+}
+
+#[test]
+fn a_correction_that_declares_failure_stays_failed() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), &reply(DECLARED_FAILED));
+    let outcome = fixture.dispatch(admitted(3), 30).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 2, "a declared failure is final");
+    let message = outcome.message.as_deref().unwrap();
+    assert!(message.contains("the checkout was unreadable"), "{message}");
+    assert!(message.contains(SIGNATURE), "{message}");
+}
+
+#[test]
+fn a_spent_wall_clock_budget_refuses_correction() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), &reply(VALID));
+    // The whole budget must remain: any time the first invocation spent leaves
+    // less, so the refusal does not depend on how long it ran.
+    let policy = Some(ResponseCorrectionPolicy {
+        max_rounds: 1,
+        min_remaining_seconds: 30,
+    });
+    let outcome = fixture.dispatch(policy, 30).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1);
+    let record = &outcome.output["response_correction"];
+    assert_eq!(record["rounds"], 0);
+    assert_eq!(record["refusal"], "wall_clock_exhausted");
+    assert!(
+        outcome.message.as_deref().unwrap().contains(SIGNATURE),
+        "{:?}",
+        outcome.message
+    );
+}
+
+#[test]
+fn a_correction_is_killed_at_the_end_of_the_original_budget() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), "exec sleep 60");
+    let started = Instant::now();
+    let outcome = fixture.dispatch(admitted(1), 4).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 2);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the correction outlived the 4s budget: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(outcome.output["timed_out"], true);
+    let message = outcome.message.as_deref().unwrap();
+    assert!(message.contains("wall-clock timeout"), "{message}");
+    assert!(message.contains(SIGNATURE), "{message}");
+}
+
+#[test]
+fn an_activity_timeout_is_not_a_correction_request() {
+    let fixture = Fixture::new(
+        &format!("{}; exec sleep 60", reply(CONTRADICTORY)),
+        &reply(VALID),
+    );
+    let outcome = fixture.dispatch(admitted(1), 1).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1);
+    assert_eq!(outcome.output["timed_out"], true);
+    assert!(outcome.output.get("response_correction").is_none());
+}
+
+#[test]
+fn other_failures_do_not_start_a_correction() {
+    let terminal = |frame: &str| format!("echo '{CONTRADICTORY}'; echo '{frame}'");
+    let cases = [
+        ("an explicit failed reply", reply(DECLARED_FAILED)),
+        (
+            "an explicit timeout reply",
+            reply(
+                r#"{"schemaVersion":1,"status":"timeout","result":{},"error":{"code":"late","message":"ran out of time"}}"#,
+            ),
+        ),
+        (
+            "a success without an error but no object result",
+            reply(r#"{"schemaVersion":1,"status":"success","result":"text","error":null}"#),
+        ),
+        (
+            "a malformed error object",
+            reply(r#"{"schemaVersion":1,"status":"success","result":{},"error":{"code":7}}"#),
+        ),
+        ("prose without an envelope", reply(SIGNATURE)),
+        (
+            "prose that quotes the refusal in a failed reply",
+            reply(&format!(
+                r#"{{"schemaVersion":1,"status":"failed","result":{{}},"error":{{"code":"x","message":"{SIGNATURE}"}}}}"#
+            )),
+        ),
+        (
+            "a nonzero provider exit",
+            format!("{}; exit 3", reply(CONTRADICTORY)),
+        ),
+        (
+            "a provider authentication failure",
+            terminal(
+                r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Failed to authenticate. API Error: 401 authentication_error"}"#,
+            ),
+        ),
+        (
+            "a provider usage limit",
+            terminal(
+                r#"{"type":"result","is_error":true,"result":"You\u0027ve hit your limit, resets 3pm"}"#,
+            ),
+        ),
+        (
+            "a provider capacity failure",
+            terminal(
+                r#"{"type":"result","is_error":true,"result":"Selected model is at capacity. Please try a different model."}"#,
+            ),
+        ),
+        (
+            "an unrecognized provider error",
+            terminal(r#"{"type":"result","is_error":true,"result":"something else broke"}"#),
+        ),
+        (
+            "a provider policy refusal",
+            terminal(
+                r#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"refusal","result":"I cannot help with that."}"#,
+            ),
+        ),
+    ];
+    for (case, first) in cases {
+        let fixture = Fixture::new(&first, &reply(VALID));
+        let outcome = fixture.dispatch(admitted(3), 30).outcome;
+        assert!(!outcome.success, "{case}: stays failed");
+        assert_eq!(fixture.invocations(), 1, "{case}: no correction");
+        assert!(
+            outcome.output.get("response_correction").is_none(),
+            "{case}: nothing was requested"
+        );
+        assert!(
+            !outcome.message.as_deref().unwrap().contains("correction"),
+            "{case}: {:?}",
+            outcome.message
+        );
+    }
+}
+
+#[test]
+fn only_a_read_only_activity_may_declare_response_correction() {
+    const CORRECTION: &str =
+        "  response_correction:\n    max_rounds: 1\n    min_remaining_seconds: 30\n";
+    const READ_ONLY: &str = "  require_response_envelope: true\n  fsProfile: reviewer\n";
+    const NO_MUTATION: &str = "  tools:\n    - orbit.task.show\n";
+    let asset = |policy: String| {
+        format!(
+            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: fixture\nspec:\n  type: agent_loop\n  description: Crafted policy fixture.\n  instruction: Test.\n{policy}{CORRECTION}"
+        )
+    };
+
+    orbit_engine::load_activity_asset(&asset(format!("{READ_ONLY}{NO_MUTATION}")))
+        .expect("a read-only activity may declare it");
+    let cases = [
+        (
+            "require_response_envelope",
+            format!("  fsProfile: reviewer\n{NO_MUTATION}"),
+        ),
+        (
+            "fsProfile: reviewer",
+            format!("  require_response_envelope: true\n{NO_MUTATION}"),
+        ),
+        (
+            "fsProfile: reviewer",
+            format!("  require_response_envelope: true\n  fsProfile: implementer\n{NO_MUTATION}"),
+        ),
+        (
+            "orbit.task.update",
+            format!("{READ_ONLY}  tools:\n    - orbit.task.update\n"),
+        ),
+        (
+            "orbit.task.add",
+            format!("{READ_ONLY}  tools:\n    - orbit.task.*\n"),
+        ),
+        (
+            "orbit.auto_task.add",
+            format!(
+                "{READ_ONLY}  tool_disallow_list:\n    - orbit.agent.invoke\n  proc_disallowed_programs: []\n"
+            ),
+        ),
+        (
+            "incomplete_continuation",
+            format!(
+                "{READ_ONLY}{NO_MUTATION}  incomplete_continuation:\n    max_rounds: 1\n    min_remaining_seconds: 1\n"
+            ),
+        ),
+    ];
+    for (expected, policy) in cases {
+        let error = orbit_engine::load_activity_asset(&asset(policy.clone()))
+            .err()
+            .unwrap_or_else(|| panic!("expected a refusal naming {expected}: {policy}"))
+            .to_string();
+        assert!(error.contains("response_correction"), "{error}");
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+}
