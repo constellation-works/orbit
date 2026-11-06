@@ -1,7 +1,7 @@
 ---
 type: issue
 applies_to: [final_recovery]
-status: active
+status: resolved
 links: [ORB-13958, ORB-13960, ORB-13970, ORB-13964]
 ---
 
@@ -13,15 +13,15 @@ links: [ORB-13958, ORB-13960, ORB-13970, ORB-13964]
 
 ## Mechanism
 
-The crew draw has no persisted run state on the owner for a task blocked by a follower's claimed run (ORB-13964 title).
+At the time of these occurrences, recovery looked up the crew draw using the failed follower run's ID, but that run state was not persisted on the owner. ORB-13964 fixed the lookup to use the active recovery run's persisted state.
 
 ## Resolution
 
-Take the task by hand: `orbit run show <run>` then move it. Not retryable.
+For the original failures, inspect `orbit run show <run>` and move the task by hand; the blocked run's recovery could not be resumed. ORB-13964 fixes the owner-side draw lookup so new recovery runs can use their own persisted draw.
 
 ## Fix task
 
-ORB-13964 was forced done by Daniel on 2026-10-04T20:15Z; whether its fix landed was not verified here.
+ORB-13964 was forced done by Daniel on 2026-10-04T20:15Z; its fix later merged in PR #3141 as commit `a0e689e69`.
 
 ## Occurrences
 

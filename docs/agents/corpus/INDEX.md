@@ -30,7 +30,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Two tasks own the same friction](issues/duplicate-friction-ownership.md) | issue | active | final_recovery |
 | [Executor returns an incomplete envelope early with no timeout](issues/executor-declares-incomplete.md) | issue | resolved | agent_implement, final_recovery |
 | [Experiment overlay overrides the explicit crew on a retry](issues/experiment-overlay-overrides-explicit-crew.md) | issue | resolved | agent_implement, final_recovery |
-| [Final recovery crew pool cannot be resolved](issues/final-recovery-crew-unresolvable.md) | issue | active | final_recovery |
+| [Final recovery crew pool cannot be resolved](issues/final-recovery-crew-unresolvable.md) | issue | resolved | final_recovery |
 | [Final recovery decision rejected for an unknown field](issues/final-recovery-decision-unknown-field.md) | issue | active | final_recovery |
 | [Final recovery has no checkout to work in](issues/final-recovery-no-checkout.md) | issue | active | final_recovery |
 | [Final recovery returns no decision while required checks are unconcluded](issues/final-recovery-no-decision-checks-unconcluded.md) | issue | active | final_recovery |
@@ -92,7 +92,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-19781", "ORB-19785", "ORB-19786"], "path": "issues/duplicate-friction-ownership.md", "status": "active", "title": "Two tasks own the same friction", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20625", "ORB-19962", "ORB-20129", "ORB-20137", "ORB-20455"], "path": "issues/executor-declares-incomplete.md", "status": "resolved", "title": "Executor returns an incomplete envelope early with no timeout", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-21875", "ORB-21111", "ORB-21202"], "path": "issues/experiment-overlay-overrides-explicit-crew.md", "status": "resolved", "title": "Experiment overlay overrides the explicit crew on a retry", "type": "issue"} -->
-<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-13958", "ORB-13960", "ORB-13970", "ORB-13964"], "path": "issues/final-recovery-crew-unresolvable.md", "status": "active", "title": "Final recovery crew pool cannot be resolved", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-13958", "ORB-13960", "ORB-13970", "ORB-13964"], "path": "issues/final-recovery-crew-unresolvable.md", "status": "resolved", "title": "Final recovery crew pool cannot be resolved", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20833"], "path": "issues/final-recovery-decision-unknown-field.md", "status": "active", "title": "Final recovery decision rejected for an unknown field", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18124", "ORB-18270", "ORB-18271"], "path": "issues/final-recovery-no-checkout.md", "status": "active", "title": "Final recovery has no checkout to work in", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18096", "ORB-18124", "ORB-18542", "ORB-18816"], "path": "issues/final-recovery-no-decision-checks-unconcluded.md", "status": "active", "title": "Final recovery returns no decision while required checks are unconcluded", "type": "issue"} -->
