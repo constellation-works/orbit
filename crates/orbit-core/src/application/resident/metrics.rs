@@ -426,7 +426,8 @@ impl OrbitRuntime {
                 {
                     continue;
                 }
-                let status_change = entry.from_status.is_some() || entry.to_status.is_some();
+                let status_change = entry.event != "created"
+                    && (entry.from_status.is_some() || entry.to_status.is_some());
                 let named = entry.event.contains("requeue")
                     || entry.event.contains("cancel")
                     || entry.event.contains("stop")

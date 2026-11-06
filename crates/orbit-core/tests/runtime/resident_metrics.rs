@@ -240,6 +240,40 @@ fn baseline_marks_underivable_measures_not_derivable() {
     assert_eq!(baseline_report["escalations"]["count"], 0, "{report}");
 }
 
+fn task_creation_is_not_an_intervention_but_later_status_changes_are() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, watched) = mandate_with_watched(&runtime);
+
+    let before = metrics(&runtime, json!({"mandate": id}));
+    let interventions = &before["mandates"][0]["interventions"];
+    assert_eq!(interventions["count"], 0, "{before}");
+    assert_eq!(
+        interventions["items"].as_array().unwrap().len(),
+        0,
+        "{before}"
+    );
+
+    runtime
+        .update_task_as_human(
+            &watched,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+
+    let after = metrics(&runtime, json!({"mandate": id}));
+    let items = after["mandates"][0]["interventions"]["items"]
+        .as_array()
+        .unwrap();
+    assert_eq!(items.len(), 1, "{after}");
+    assert_eq!(items[0]["task_id"], watched, "{after}");
+    assert_eq!(items[0]["kind"], "status_change", "{after}");
+}
+
 fn mandate_with_human_watched(runtime: &OrbitRuntime, leaf_title: &str) -> (String, String) {
     let workspace = runtime.workspace_id().unwrap();
     let watched = runtime
@@ -537,6 +571,7 @@ crate::scenario_table!(
     invalid_and_day_windows_at_tool_boundary,
     human_write_undoes_checkpoint_action_once,
     baseline_marks_underivable_measures_not_derivable,
+    task_creation_is_not_an_intervention_but_later_status_changes_are,
     totals_divide_per_mandate_day_by_summed_active_days,
     baseline_reads_references_in_another_workspace,
 );
