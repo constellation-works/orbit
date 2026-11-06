@@ -1320,6 +1320,67 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
     assert_steps(&host.forge.steps(), &expected_steps, "exact");
 }
 
+/// A BLOCKED head can report running checks before either required-check
+/// view identifies them. Waiting grants no merge authority: only CLEAN does.
+#[test]
+fn owner_landing_waits_out_pending_only_block_before_checks_pass() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_waits_out_pending_only_block_before_checks_pass",
+        || {
+            for passes in [true, false] {
+                let sandbox = tempdir().unwrap();
+                let pending = json!({"mergeStateStatus":"BLOCKED", "statusCheckRollup":[
+                    {"name":"clippy", "workflowName":"CI", "status":"IN_PROGRESS"}
+                ]});
+                let observations = if passes {
+                    vec![
+                        pending.clone(),
+                        pending,
+                        json!({"mergeStateStatus":"CLEAN"}),
+                    ]
+                } else {
+                    vec![pending]
+                };
+                let host = pending_forge(sandbox.path(), observations, vec![]);
+                let head = host.forge.context.candidate.candidate.commit.clone();
+                *host.policies.lock().unwrap() =
+                    vec![pending_policy(&head, "COMPLETED", false)].into();
+                let (result, waits) = counted_land(
+                    &host,
+                    json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+                );
+                if passes {
+                    assert_eq!(
+                        result.expect("pending-only BLOCKED must keep waiting")["phase"],
+                        "landed"
+                    );
+                    assert_eq!(waits, [5, 5]);
+                    assert_sent_len(&host.forge, "pr.merge", 1, "checks passed");
+                    assert_eq!(
+                        host.forge.steps().last(),
+                        Some(&HandoffLandingStep::Complete)
+                    );
+                } else {
+                    assert!(result.is_err(), "pending checks cannot extend the deadline");
+                    assert_eq!(waits, [5, 5, 5]);
+                    assert_not_sent(&host.forge, &["pr.merge"], "checks still pending");
+                    assert_steps(
+                        &host.forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: false }],
+                        "deadline",
+                    );
+                }
+                assert_not_sent(
+                    &host.forge,
+                    &["ci.rerun_failed", "pr.update_branch"],
+                    "pending only",
+                );
+            }
+        },
+    );
+}
+
 /// [ORB-16339] A freshly pushed head reads BLOCKED before the provider has
 /// queued any check run, so neither the rollup nor the required-check read
 /// names anything. While current branch policy names a required check the
@@ -1483,6 +1544,8 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
             "optional" => {
                 policy = pending_policy(&head, "IN_PROGRESS", false);
                 patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
+                expected_waits = 2;
+                reason = "within 10s";
             }
             "optional_failed_required_pending" => {
                 patch["statusCheckRollup"] = json!([ {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"}, {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"} ]);
@@ -1587,6 +1650,8 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 if case == "owed_foreign" {
                     patch["statusCheckRollup"] =
                         json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
+                    expected_waits = 2;
+                    reason = "within 10s";
                 }
                 if case == "owed" {
                     after = Some(json!({"mergeStateStatus":"CLEAN"}));
@@ -1733,7 +1798,9 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                     | "unreadable_rollup"
                     | "contradiction"
                     | "bounded_reason" => 0,
-                    "timeout" | "changing_checks_timeout" => expected_waits,
+                    "timeout" | "changing_checks_timeout" | "optional" | "owed_foreign" => {
+                        expected_waits
+                    }
                     "head_changed" | "base_changed" => 1,
                     _ => expected_waits + 1,
                 };

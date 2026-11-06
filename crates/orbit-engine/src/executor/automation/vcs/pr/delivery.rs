@@ -454,9 +454,10 @@ impl std::fmt::Display for CheckWaitRefusal {
 }
 
 /// Require green required checks even on a provider-reported mergeable head.
-/// Refine BLOCKED only from authenticated current policy on the observed head,
-/// or an actually running check captured as owner-owed. A completed
-/// neutral/skipped result is never pending. An absent check is pending only
+/// Refine BLOCKED from authenticated current policy on the observed head,
+/// an actually running owner-owed check, or an owner rollup still running
+/// after policy rules out failed gates. A completed neutral/skipped result
+/// is never pending. An absent check is pending only
 /// while current branch policy names it as required [ORB-16339]; when that
 /// policy is unreadable, owner consumers get the bounded unsettled-poll grace
 /// auto-fix already applies. When readable policy names nothing missing or
@@ -465,6 +466,8 @@ impl std::fmt::Display for CheckWaitRefusal {
 /// provider's merge state can lag behind checks that have already passed.
 /// This grants only another bounded observation
 /// within the caller's deadline; only the provider's mergeable state can merge.
+/// Owner landing also waits on a running rollup when neither required-check
+/// view identifies a pending check, provided current policy reports no failure.
 /// `None` performs the bounded immediate read used by zero-wait completion;
 /// a watch always passes its original absolute deadline.
 pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
@@ -621,6 +624,18 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     };
     match missing {
         Ok(assessment) if assessment.missing.is_empty() && assessment.pending.is_empty() => {
+            // The rollup can report checks still running before either policy
+            // view identifies them as required. An owner may keep observing
+            // within its existing deadline, but BLOCKED grants no merge
+            // authority. A failed policy gate still keeps its refusal.
+            if matches!(wait, BlockedCheckWait::Owner(_))
+                && assessment.failed.is_empty()
+                && checks
+                    .iter()
+                    .any(|check| check.state == Some(CheckState::Pending))
+            {
+                return Ok(PrMergeState::Pending);
+            }
             // Nothing is owed and every reported check explicitly
             // succeeded, yet the provider still reads BLOCKED: its
             // merge state can lag seconds behind the last required check

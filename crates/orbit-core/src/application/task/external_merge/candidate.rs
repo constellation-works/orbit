@@ -17,13 +17,13 @@ pub(super) struct Candidate {
     pub(super) task: Task,
     /// Accepted handoff and released claim PRs, each with its landing branch.
     follower_prs: BTreeMap<u64, String>,
-    /// The task's handed-off claim whose completion authority was revoked.
-    /// Only its candidate PR then settles the task, together with the claim.
+    /// The task's handed-off claim whose landing stopped or whose completion
+    /// authority was revoked. Only its candidate PR settles it with the claim.
     pub(super) revoked: Option<RevokedHandoff>,
 }
 
-/// A `handed_off` claim whose accepted handoff's completion authority an
-/// operator revoked, with the PR that handoff delivered.
+/// A `handed_off` claim whose owner landing stopped or whose completion
+/// authority an operator revoked, with the PR that handoff delivered.
 #[derive(Debug, Clone)]
 pub(super) struct RevokedHandoff {
     pub(super) claim_id: String,
@@ -32,10 +32,29 @@ pub(super) struct RevokedHandoff {
     pub(super) landing_branch: String,
     /// A stopped authorized handoff needs independent candidate/head verification.
     pub(super) candidate: Option<orbit_types::workflow::handoff::HandoffCandidate>,
+    /// The latest stopped attempt's readable cause, when authority is pending.
+    pub(super) stopped_reason: Option<String>,
+}
+
+impl RevokedHandoff {
+    pub(super) fn handoff_landing_refusal(&self) -> String {
+        if self.candidate.is_some() {
+            format!(
+                "its owner landing stopped: {}; its handoff still holds completion authority. \
+                 Resume it with the owner's Retry landing action or `orbit task retry-handoff` \
+                 (see `orbit task retry-handoff --help`)",
+                self.stopped_reason
+                    .as_deref()
+                    .unwrap_or("no readable stop reason was recorded")
+            )
+        } else {
+            "an operator revoked its handoff's completion authority".to_string()
+        }
+    }
 }
 
 impl Candidate {
-    /// Every PR Orbit recorded for the task, newest first. A revoked
+    /// Every PR Orbit recorded for the task, newest first. A stopped or revoked
     /// handoff's task has exactly one: the handoff's candidate PR.
     pub(super) fn pr_numbers(&self) -> Vec<u64> {
         if let Some(revoked) = &self.revoked {
@@ -56,7 +75,7 @@ impl Candidate {
     }
 }
 
-/// Why a revoked handoff's task did not settle: its candidate PR, as the
+/// Why a stopped or revoked handoff's task did not settle: its candidate PR, as the
 /// forge returned it (`None` when it is not merged), is not merged, names
 /// another task, or merged into another branch.
 pub(super) fn revoked_handoff_unmerged(
@@ -66,7 +85,17 @@ pub(super) fn revoked_handoff_unmerged(
     task_id: &str,
 ) -> String {
     let number = revoked.pull_request;
-    let prefix = "its handed-off claim's completion authority was revoked, and";
+    if revoked.candidate.is_some() && fetched.is_none() {
+        return format!(
+            "{}; the handoff's pull request #{number} is not merged",
+            revoked.handoff_landing_refusal()
+        );
+    }
+    let prefix = if revoked.candidate.is_some() {
+        "its authorized owner landing stopped, and"
+    } else {
+        "its handed-off claim's completion authority was revoked, and"
+    };
     match fetched {
         None => format!(
             "{prefix} the handoff's pull request #{number} is not merged; if it will not merge, \
@@ -145,8 +174,8 @@ impl OrbitRuntime {
         Ok(candidate)
     }
 
-    /// The task's unsettled claim as a revoked handoff that may settle, `None`
-    /// when the task has no unsettled claim, or why its claim refuses.
+    /// The task's unsettled claim as a stopped or revoked handoff that may
+    /// settle, `None` when it has no unsettled claim, or why its claim refuses.
     fn revoked_handoff(&self, task: &Task) -> Result<Option<RevokedHandoff>, String> {
         let Some(claim) = self.unsettled_task_claim(task)? else {
             return Ok(None);
@@ -178,6 +207,11 @@ impl OrbitRuntime {
             .into_iter()
             .find(|request| request.handoff_id == accepted.handoff_id)
             .map(|request| request.state);
+        let attempt = tasks
+            .landing_attempts()
+            .map_err(unreadable)?
+            .into_iter()
+            .find(|attempt| attempt.handoff_id == accepted.handoff_id);
         match authority {
             Some(LandingStartState::Revoked) => {}
             None => {
@@ -191,14 +225,9 @@ impl OrbitRuntime {
                 ));
             }
             Some(LandingStartState::Pending)
-                if tasks
-                    .landing_attempts()
-                    .map_err(unreadable)?
-                    .iter()
-                    .any(|attempt| {
-                        attempt.handoff_id == accepted.handoff_id
-                            && attempt.state == LandingAttemptState::Stopped
-                    }) => {}
+                if attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped) => {}
             Some(LandingStartState::Pending) => {
                 return Err(format!(
                     "{unsettled}: its handoff holds completion authority, and the owner's \
@@ -215,14 +244,9 @@ impl OrbitRuntime {
                 ));
             }
         }
-        if tasks
-            .landing_attempts()
-            .map_err(unreadable)?
-            .iter()
-            .any(|attempt| {
-                attempt.handoff_id == accepted.handoff_id
-                    && attempt.state == LandingAttemptState::Dispatched
-            })
+        if attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.state == LandingAttemptState::Dispatched)
         {
             return Err(format!(
                 "{unsettled}: an owner landing job still carries its revoked handoff"
@@ -243,6 +267,17 @@ impl OrbitRuntime {
             pull_request: number,
             landing_branch: candidate.landing_branch.clone(),
             candidate: (authority == Some(LandingStartState::Pending)).then_some(candidate),
+            stopped_reason: (authority == Some(LandingStartState::Pending))
+                .then(|| attempt.and_then(|attempt| attempt.evidence))
+                .flatten()
+                .and_then(|evidence| match serde_json::from_str::<Value>(&evidence) {
+                    Ok(Value::String(reason)) => Some(reason),
+                    Ok(value) => value
+                        .pointer("/reason/value")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    Err(_) => Some(evidence),
+                }),
         }))
     }
 
