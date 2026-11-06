@@ -114,6 +114,7 @@ function analyticsSubtabRoute(ctx, sub) {
   if (sub === "codebase") return ctx.buildCodebaseHash().slice(1);
   if (sub === "reliability" && ctx.getReliabilityView() === "tools") return "analytics/reliability/tools";
   if (sub === "experiments" && ctx.experimentsRoute) return ctx.experimentsRoute();
+  if (sub === "forecast" && ctx.forecastTabRoute) return ctx.forecastTabRoute();
   return `analytics/${sub}`;
 }
 
@@ -136,11 +137,15 @@ function setCostTabView(tab) {
   }
 }
 
-function selectCostTab(ctx, tab) {
-  setCostTabView(tab);
+function rewriteAnalyticsHash(ctx) {
   const url = new URL(window.location.href);
   url.hash = analyticsHash(ctx, parseHashRoute(window.location.hash).query).replace(/^#/, "");
   if (url.href !== window.location.href) window.history.replaceState(null, "", url);
+}
+
+function selectCostTab(ctx, tab) {
+  setCostTabView(tab);
+  rewriteAnalyticsHash(ctx);
 }
 
 function wireCostTabs(ctx) {
@@ -687,6 +692,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       }
       ctx.setExperimentId(id);
     }
+    // `#analytics/forecast[/accuracy|/data-gaps]`: the segment names the tab; a
+    // bare `#analytics` keeps the remembered one.
+    if (sub === "forecast" && segments[1] && ctx.setForecastTab) ctx.setForecastTab(segments[2]);
     setAnalyticsSubtabImpl(ctx, sub, view);
     setCostTabView(sub === "cost" ? query.get("tab") : null);
     if (sub === "agents") {
@@ -860,6 +868,8 @@ function initTabsImpl(ctx) {
     );
   }
   wireCostTabs(ctx);
+  // A Forecast tab switch is a view change too: it rewrites the hash in place.
+  ctx.onForecastTabPick?.(() => rewriteAnalyticsHash(ctx));
   for (const btn of document.querySelectorAll("#agents-roles .subtab")) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `analytics/agents/${btn.dataset.view}`, { refresh: false }),

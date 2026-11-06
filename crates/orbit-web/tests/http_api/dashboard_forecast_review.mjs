@@ -341,7 +341,7 @@ for (const [reason, expected] of [
   assert.equal(warning?.dataset.forecastReason, 'simulation_cut', `a ${reason} cut warns: ${text()}`);
   assert.ok(warning.textContent.startsWith('No forecast — '), `a ${reason} cut shows no figures: ${warning.textContent}`);
   assert.ok(warning.textContent.includes(expected), `a ${reason} cut names its bound: ${warning.textContent}`);
-  assert.ok(warning.textContent.includes('No arrivals'), `a ${reason} cut points at the readable scenario: ${warning.textContent}`);
+  assert.ok(warning.textContent.includes('Current backlog'), `a ${reason} cut points at the readable scenario: ${warning.textContent}`);
   assert.ok(!warning.textContent.includes('regression'), `a ${reason} cut is not a regression gap: ${warning.textContent}`);
 }
 
@@ -452,7 +452,8 @@ function unavailableFixture({
   if (baseline) fixture.forecast.pre_regression_baseline = baseline;
   return fixture;
 }
-const kpiFoot = (label) => [...body().querySelectorAll('.fc-kpi')].find((node) => node.textContent.includes(label))?.textContent ?? '';
+const kpiOf = (selector, label) => [...body().querySelectorAll(selector)].find((node) => node.textContent.includes(label))?.textContent ?? '';
+const kpiFoot = (label) => kpiOf('.fc-kpi', label);
 const compactLink = (summary) => forecast.drainBacklogForecastLink(summary);
 
 const gappedFixture = unavailableFixture();
@@ -471,7 +472,7 @@ assert.ok(/recorded pools contain gaps/i.test(body().querySelector('.fc-gap-note
 assert.ok(!/90-day horizon/i.test(regressionBlock.textContent), `regression gap is not labelled horizon exceedance: ${regressionBlock.textContent}`);
 assert.ok(baselineBlockNode && baselineBlockNode.dataset.forecastBaseline === 'pre-regression', `baseline is labelled separately: ${regressionText}`);
 assert.ok(/excludes unsupported regression/i.test(regressionText) && /not the regression-adjusted/i.test(regressionText), `baseline states its limitation: ${regressionText}`);
-assert.ok(baselineBlockNode.textContent.includes('2.7h') && /p90\s*unknown/i.test(baselineBlockNode.textContent), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
+assert.ok(baselineBlockNode.textContent.includes('2.7h – unknown'), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
 const baselineFigures = body().querySelectorAll('.fc-baseline-fig');
 assert.equal(baselineFigures.length, 3, `time, cost and tokens are the drawn baseline figures: ${baselineFigures.map(node => node.textContent).join(' | ')}`);
 for (const figureNode of baselineFigures) {
@@ -543,9 +544,12 @@ approvedFixture.if_approved = {
 };
 await render(approvedFixture);
 assert.equal(body().querySelectorAll('.fc-unavailable').length, 1, `the unavailable warning appears once, not again for the if-approved figure: ${text()}`);
-const approvedFigure = body().querySelector('.fc-approved-fig')?.textContent ?? '';
-assert.ok(approvedFigure.includes('3.5h') && /baseline/.test(approvedFigure) && !/unavailable/i.test(approvedFigure), `the if-approved figure shows its baseline without restating the warning: ${approvedFigure}`);
 assert.ok(/If approved, the adjusted forecast is also unavailable/.test(body().querySelector('.fc-gap-note')?.textContent ?? ''), 'data gaps still say why the if-approved forecast is unavailable');
+clickForecastControl('With 2 proposed');
+assert.equal(body().querySelectorAll('.fc-unavailable').length, 1, `the proposed scenario keeps one warning too: ${text()}`);
+const approvedFigure = kpiOf('.fc-baseline-fig', 'Time to drain');
+assert.ok(approvedFigure.includes('3.5h') && /baseline/.test(approvedFigure), `the if-approved scenario shows its baseline: ${approvedFigure}`);
+clickForecastControl('Current backlog');
 
 const proposedOnly = payload();
 proposedOnly.backlog.proposed = 1;
@@ -561,6 +565,9 @@ proposedOnly.if_approved = {
   },
 };
 await render(proposedOnly);
+assert.equal(body().querySelectorAll('.fc-unavailable').length, 0, `the current scenario stays adjusted when only the proposed one is unavailable: ${text()}`);
+assert.ok(/6\.5h/.test(body().querySelector('.fc-figures')?.textContent ?? ''), `the main forecast stays available: ${text()}`);
+clickForecastControl('With 1 proposed');
 const proposedOnlyText = text();
 const proposedWarnings = body().querySelectorAll('.fc-unavailable');
 assert.equal(proposedWarnings.length, 1, `the proposed scenario keeps one warning when the main forecast is available: ${proposedOnlyText}`);
@@ -568,13 +575,13 @@ assert.equal(proposedWarnings[0].dataset.forecastReason, 'regression_history_mis
 const proposedWarningText = proposedWarnings[0].textContent;
 assert.ok(/missing regression history/i.test(proposedWarningText), `the warning names the proposed scenario's unavailable reason: ${proposedWarningText}`);
 assert.ok(/excludes unsupported regression follow-up work/i.test(proposedWarningText), `the warning states the proposed baseline excludes unsupported regression follow-up: ${proposedWarningText}`);
-const proposedFigure = body().querySelector('.fc-approved-fig')?.textContent ?? '';
-assert.ok(proposedFigure.includes('8.0h') && /baseline/i.test(proposedFigure) && !/unavailable/i.test(proposedFigure), `the if-approved figure shows its baseline without restating the warning: ${proposedFigure}`);
-assert.ok(/6\.5h/.test(body().querySelector('.fc-figures')?.textContent ?? ''), `the main forecast stays available: ${proposedOnlyText}`);
+const proposedFigure = kpiOf('.fc-baseline-fig', 'Time to drain');
+assert.ok(proposedFigure.includes('8.0h') && /baseline/i.test(proposedFigure), `the if-approved scenario shows its baseline: ${proposedFigure}`);
 const proposedNote = body().querySelector('.fc-gap-note')?.textContent ?? '';
 assert.ok(/missing regression history/i.test(proposedNote) && /excludes unsupported regression follow-up work/i.test(proposedNote), `data gaps name the proposed reason and the baseline limitation: ${proposedNote}`);
 assert.ok(/1 with missing fix history/.test(proposedNote), `data gaps carry the proposed scenario's support counts: ${proposedNote}`);
 assert.ok(!/No data gaps: every coverage check is clear/.test(proposedOnlyText), `data gaps do not claim every check is clear: ${proposedOnlyText}`);
+clickForecastControl('Current backlog');
 
 for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [{ arrival_conflict_unknown: true }, 'arrival_conflict_unknown']]) {
   const fixture = unavailableFixture({ flags, baseline: null });
@@ -593,7 +600,7 @@ assert.ok(/beyond the 90-day horizon/i.test(kpiFoot('Time to drain')), `true hor
 const horizonSummary = forecast.backlogForecastSummary(horizonFixture);
 assert.equal(horizonSummary.reasonKind, 'horizon');
 assert.ok(/beyond the 90-day horizon/i.test(forecast.drainBacklogForecastLink(horizonSummary).querySelector('.visually-hidden')?.textContent || ''), 'censoring evidence is explained in the dock row accessible text');
-assert.ok(/Drains within 90d in 90% of runs/i.test(body().querySelector('.fc-odds')?.textContent || ''), 'the available drain probability explains the horizon');
+assert.ok(/Drains within 90d in 90% of runs/i.test(kpiFoot('Time to drain')), 'the available drain probability explains the horizon');
 
 const metricFixture = payload({ coverage: { uncosted: 2, uncovered_model: 3 } });
 metricFixture.forecast.usd = { p50: null, p90: null };
@@ -633,7 +640,7 @@ await render(olderNullFixture);
 assert.ok(!body().querySelector('.fc-unavailable') && !body().querySelector('.fc-baseline'), 'older payload without unavailable flags invents no reason or baseline');
 assert.ok(/forecast unavailable, reason not reported/i.test(kpiFoot('Time to drain')), `older null-quantile payload names the missing reason neutrally: ${kpiFoot('Time to drain')}`);
 assert.ok(!/90-day horizon/i.test(kpiFoot('Time to drain')), `older null-quantile payload does not invent horizon censoring: ${kpiFoot('Time to drain')}`);
-assert.equal(body().querySelector('.fc-odds'), null, 'missing probabilities do not render an all-dashes probability sentence');
+assert.ok(!/Drains within|all finish in/.test(kpiFoot('Time to drain')), 'missing probabilities do not render an all-dashes probability sentence');
 const olderNullSummary = forecast.backlogForecastSummary(olderNullFixture);
 assert.equal(olderNullSummary.reasonKind, 'unknown');
 assert.equal(olderNullSummary.reason, 'Forecast unavailable, reason not reported');

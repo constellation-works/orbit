@@ -22,7 +22,7 @@ const payload = () => ({
   forecast: { tasks: 1, time_to_drain_hours: { p50: 3, p90: 5 }, usd: { p50: 10, p90: 20 }, tokens: { p50: 1000, p90: 2000 }, task_predictions: [] },
   coverage: {}, calibration: { model_version: 3, forecasts: rows() }, stored: {},
 });
-const html = `<!doctype html><html><head><link rel="stylesheet" href="/static/dashboard.css"></head><body><div class="panel"><div id="forecast-body" class="body forecast-body"></div></div><span id="forecast-count"></span><script type="module">import { fetchAndRenderForecast } from '/static/js/forecast.js'; window.loadForecast = fetchAndRenderForecast; await window.loadForecast();</script></body></html>`;
+const html = `<!doctype html><html><head><link rel="stylesheet" href="/static/dashboard.css"></head><body><div class="panel"><div id="forecast-body" class="body forecast-body"></div></div><span id="forecast-count"></span><script type="module">import { fetchAndRenderForecast, setForecastTab } from '/static/js/forecast.js'; window.loadForecast = fetchAndRenderForecast; setForecastTab('accuracy'); await window.loadForecast();</script></body></html>`;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') { res.setHeader('content-type', 'text/html'); res.end(html); return; }
