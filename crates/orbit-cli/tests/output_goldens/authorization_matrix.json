@@ -173,6 +173,32 @@
   },
   {
     "surface": "cli_command",
+    "operation": "routine disable",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "routine enable",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
     "operation": "script grant",
     "required_any": [
       "operator"

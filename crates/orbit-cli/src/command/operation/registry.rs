@@ -342,24 +342,36 @@ impl Commands {
             ),
             Commands::Routine(command) => {
                 use super::super::routine::RoutineSubcommand;
-                let subcommand = match &command.command {
-                    RoutineSubcommand::List(_) => "list",
-                    RoutineSubcommand::Show(_) => "show",
-                    RoutineSubcommand::Pause(_) => "pause",
-                    RoutineSubcommand::Resume(_) => "resume",
-                    RoutineSubcommand::Init(_) => "init",
+                // The two governed verbs open a runtime so the authorization
+                // chokepoint can decide and audit; the rest stay runtime-free.
+                let (subcommand, target_id, toggle) = match &command.command {
+                    RoutineSubcommand::List(_) => ("list", None, None),
+                    RoutineSubcommand::Show(_) => ("show", None, None),
+                    RoutineSubcommand::Pause(_) => ("pause", None, None),
+                    RoutineSubcommand::Resume(_) => ("resume", None, None),
+                    RoutineSubcommand::Init(_) => ("init", None, None),
+                    RoutineSubcommand::Enable(args) => {
+                        ("enable", Some(args.name.as_str()), Some("enable"))
+                    }
+                    RoutineSubcommand::Disable(args) => {
+                        ("disable", Some(args.name.as_str()), Some("disable"))
+                    }
                 };
-                CommandOperation::new(
-                    RuntimeNeed::Forbidden,
-                    Some(admin_meta(
-                        "routine",
-                        Some(subcommand),
-                        Some("routine"),
-                        None,
-                    )),
-                    None,
-                    dispatch_routine,
-                )
+                let runtime_need = if toggle.is_some() {
+                    RuntimeNeed::Required
+                } else {
+                    RuntimeNeed::Forbidden
+                };
+                let mut meta = admin_meta("routine", Some(subcommand), Some("routine"), target_id);
+                // Carry the requested state like the dashboard toggle's audit row.
+                meta.arguments_json = toggle
+                    .map(|verb| serde_json::json!({ "enabled": verb == "enable" }).to_string());
+                let mut operation =
+                    CommandOperation::new(runtime_need, Some(meta), None, dispatch_routine);
+                if let Some(toggle) = toggle {
+                    operation = operation.governed_when(true, "routine", toggle);
+                }
+                operation
             }
             Commands::Script(command) => {
                 use super::super::script::ScriptSubcommand;

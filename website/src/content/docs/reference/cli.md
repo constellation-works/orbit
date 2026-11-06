@@ -290,7 +290,7 @@ reported as `skipped:owner_unreachable` (transport failure),
 |---|---|
 | `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run`, `--verbose`. The global `--workspace <SELECTOR>` limits the pass to one registered workspace. |
 | `orbit sweep` | Alias for `orbit clock tick`, with the same arguments and output. |
-| `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines, and pause or resume them on this host only. `list --include-inactive-plugins` (alias `--all`) also shows routines seeded by a plugin that is switched off, marked inactive with the reason. |
+| `orbit routine list` \| `show` \| `enable` \| `disable` \| `pause` \| `resume` | Inspect routines; `enable <name>` and `disable <name>` change the definition's versioned `enabled` field like the dashboard toggle (operator only, audited; an agent is refused); `pause` and `resume` act on this host only. `list --include-inactive-plugins` (alias `--all`) also shows routines seeded by a plugin that is switched off, marked inactive with the reason. |
 | `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |
 | `orbit clock repair` | Rewrite the installed clock unit when it names a missing, moved, or stale program, then re-register it. `orbit update` runs this as its last step. |
 | `orbit routine init [--install-clock]` | Read this machine's identity; `--install-clock` also installs the OS clock unit. |

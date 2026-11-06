@@ -1,8 +1,11 @@
 //! `orbit routine` — inspect and control routines on this host [ORB-10021].
 //!
 //! Every subcommand operates on the global registry and host-local scheduler
-//! state, so the whole parent command dispatches without a workspace runtime
-//! (see `main.rs`), like `orbit sweep` itself.
+//! state, so the parent command dispatches without a workspace runtime (see
+//! `main.rs`), like `orbit sweep` itself. The exceptions are `enable` and
+//! `disable`: they are governed operator-only operations, so they open a
+//! runtime for the authorization and audit chokepoint but still act on the
+//! global registry.
 
 use std::path::Path;
 
@@ -15,6 +18,7 @@ use super::list::RoutineListArgs;
 use super::pause::RoutinePauseArgs;
 use super::resume::RoutineResumeArgs;
 use super::show::RoutineShowArgs;
+use super::toggle::{RoutineDisableArgs, RoutineEnableArgs};
 use crate::command::CommandOut;
 
 #[derive(Args)]
@@ -27,8 +31,10 @@ use crate::command::CommandOut;
                   git ignores, so a definition edit applies to that checkout only.\n\
                   A replica checkout schedules only its worktree GC and store GC\n\
                   routines; its other routines are listed as owner-only. Pauses are\n\
-                  host-local and never synced. The host scheduler is controlled through\n\
-                  `orbit clock`."
+                  host-local and never synced. `enable` and `disable` edit the definition's\n\
+                  versioned `enabled` field like the dashboard toggle, are operator-only\n\
+                  and are audited; a seeded routine stays off until enabled. The host\n\
+                  scheduler is controlled through `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]
@@ -65,6 +71,10 @@ pub enum RoutineSubcommand {
     List(RoutineListArgs),
     /// Show one routine's definition, effective state, and recent fires
     Show(RoutineShowArgs),
+    /// Enable a routine's versioned definition (operator only)
+    Enable(RoutineEnableArgs),
+    /// Disable a routine's versioned definition (operator only)
+    Disable(RoutineDisableArgs),
     /// Suppress a routine on this host (host-local, survives reboots)
     Pause(RoutinePauseArgs),
     /// Clear a host-local pause
@@ -82,6 +92,8 @@ impl RoutineSubcommand {
         match self {
             Self::List(args) => args.execute_without_runtime(global_root, workspace_selector),
             Self::Show(args) => args.execute_without_runtime(global_root),
+            Self::Enable(args) => args.execute_without_runtime(global_root),
+            Self::Disable(args) => args.execute_without_runtime(global_root),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
             Self::Init(args) => args.execute_without_runtime(global_root),

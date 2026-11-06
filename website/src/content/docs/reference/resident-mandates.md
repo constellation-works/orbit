@@ -5,7 +5,7 @@ description: "Prepare a resident mandate, check its fields, inspect its effectiv
 
 A resident mandate is an assignment task tagged `resident` that carries a `resident/mandate.json` artifact. The artifact says what the resident works toward and which workspaces it concerns. The mandate's authority, the rights and workspaces the resident may use, is a separate record. It starts with no rights. A human widens it. Anyone who can write the assignment task can narrow it.
 
-This page covers the mandate format, the authority commands, the manager's relay and control commands, and the digest and metrics reports in this release. It does not describe how a resident cycle is scheduled or started. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
+This page covers the mandate format, the authority commands, the routine that starts cycles, the manager's relay and control commands, and the digest and metrics reports in this release. The [checkpoint command](#record-a-checkpoint) records only a cycle that is already live.
 
 ## Prepare the assignment
 
@@ -184,6 +184,23 @@ A widening applies directly only when the caller is the operator, and the caller
 | Any other caller, including an MCP session | Raises a request. The authority changes only when a human answers `grant`. | Applies at once |
 
 Over MCP the same operations take these argument names: `task_id`, `add`, `workspaces`, `remove`, `drop_workspaces`, `deadline` and `quote` for `orbit.resident.grant`, `task_id`, `quote`, `source`, `request_id` and `reverses` for `orbit.resident.relay`, `task_id`, `action`, `reason`, `status_request` and `by_session` for `orbit.resident.control`, and `include_ended` for `orbit.resident.list`. `workspaces` and `drop_workspaces` are the CLI's `--add-workspace` and `--drop-workspace` flags.
+
+## Enable the cycle routine
+
+A mandate runs only when its workspace's cycle routine fires. Each workspace carries a seeded `resident-cycle-<workspace>` routine, and it ships disabled. Until an operator enables it, no cycle starts for any mandate in that workspace, however complete the mandate and its authority are.
+
+Enable it from the CLI:
+
+```bash
+orbit routine list
+orbit routine enable resident-cycle-<workspace>
+```
+
+Use the workspace's name in place of `<workspace>`. `orbit routine disable resident-cycle-<workspace>` turns it off again. Both commands change the routine definition's versioned `enabled` field, the same change the dashboard's toggle makes, and both are audited. They are operator-only: an agent or an MCP session that runs them is refused, so a manager cannot start a resident on its own.
+
+Or in the dashboard, open **Automation**, find the `resident-cycle-<workspace>` routine and press **Enable**. The button works only on a dashboard served with `--operator`.
+
+An enabled routine can still be held by a host-local pause, which `orbit routine resume <name>` clears. A replica checkout does not schedule this routine, so enable it on the machine that owns the workspace. `orbit routine show resident-cycle-<workspace>` reports the effective state.
 
 ## Record a checkpoint
 
