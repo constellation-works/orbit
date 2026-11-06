@@ -40,6 +40,8 @@ mod query;
 mod queued_cancel;
 mod reconcile;
 mod root_cause;
+#[cfg(feature = "test-support")]
+pub use root_cause::with_run_root_cause_write_hook;
 mod step_recovery;
 mod types;
 mod window_extension;

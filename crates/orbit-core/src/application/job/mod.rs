@@ -23,6 +23,8 @@ mod pr_repair;
 mod resume;
 mod review_hook;
 mod run;
+#[cfg(feature = "test-support")]
+pub use run::with_run_root_cause_write_hook;
 mod run_stage;
 mod run_worktree;
 mod task_port;

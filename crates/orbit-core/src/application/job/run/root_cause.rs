@@ -219,14 +219,49 @@ impl OrbitRuntime {
     /// Record on a parent run the leaf failure its own failure echoes. Best
     /// effort: the parent's failure stands whether or not the record lands.
     pub(crate) fn record_run_root_cause(&self, run_id: &str, cause: &RunRootCause) {
-        let result = self.read_run_state(run_id).and_then(|state| {
-            let Some(mut state) = state else {
-                return Ok(());
-            };
-            state.root_cause = Some(cause.clone());
-            self.write_run_state(run_id, &state)
-        });
+        #[cfg(feature = "test-support")]
+        run_root_cause_write_hook();
+        let result = self
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.root_cause = Some(cause.clone());
+                Ok(())
+            })
+            .map(|_| ());
         crate::application::job::log_best_effort("record run root cause", run_id, result);
+    }
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static ROOT_CAUSE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Interleave one control write immediately before a root-cause write on this
+/// thread, restoring the previous hook on return or unwind.
+#[cfg(feature = "test-support")]
+pub fn with_run_root_cause_write_hook<T>(
+    hook: impl FnOnce() + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Box<dyn FnOnce()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+fn run_root_cause_write_hook() {
+    let hook = ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
     }
 }
 
