@@ -5,7 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 /// waiting in the backlog between attempts) do not.
 pub(super) const GAP_BRIDGE_HOURS: f64 = 2.0;
 /// One managed invocation linked to a task: when it ran and what it used.
-pub(in crate::application::task) struct ForecastRun {
+pub(in crate::application::backlog_forecast) struct ForecastRun {
     pub(super) start: DateTime<Utc>,
     pub(super) end: DateTime<Utc>,
     pub(super) tokens: Option<f64>,
@@ -13,19 +13,19 @@ pub(in crate::application::task) struct ForecastRun {
 }
 
 /// What a task's invocations used, from some time on.
-pub(in crate::application::task) struct ForecastUsage {
-    pub(in crate::application::task) invocations: usize,
-    pub(in crate::application::task) hours: f64,
+pub(in crate::application::backlog_forecast) struct ForecastUsage {
+    pub(in crate::application::backlog_forecast) invocations: usize,
+    pub(in crate::application::backlog_forecast) hours: f64,
     /// `None` when an invocation ran an uncovered model.
-    pub(in crate::application::task) tokens: Option<f64>,
+    pub(in crate::application::backlog_forecast) tokens: Option<f64>,
     /// `None` when an invocation recorded no valid provider cost.
-    pub(in crate::application::task) usd: Option<f64>,
-    pub(in crate::application::task) last_end: Option<DateTime<Utc>>,
+    pub(in crate::application::backlog_forecast) usd: Option<f64>,
+    pub(in crate::application::backlog_forecast) last_end: Option<DateTime<Utc>>,
 }
 
 /// The usage of `runs` (sorted by start) that ended after `after`; a run
 /// that started before `after` counts from it.
-pub(in crate::application::task) fn forecast_usage(
+pub(in crate::application::backlog_forecast) fn forecast_usage(
     runs: &[ForecastRun],
     after: Option<DateTime<Utc>>,
 ) -> ForecastUsage {

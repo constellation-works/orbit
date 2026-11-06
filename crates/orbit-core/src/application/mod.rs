@@ -23,6 +23,7 @@ pub mod assistance;
 pub mod attention;
 pub mod audit_event;
 pub mod auto_tasks;
+mod backlog_forecast;
 pub mod change_watch;
 pub mod codebase;
 pub mod config;

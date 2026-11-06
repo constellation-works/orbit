@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-use super::super::terminal_dates::latest_status_entry_at;
+use crate::application::task::latest_status_entry_at;
 use super::assembly::ARRIVAL_DAYS;
 use super::options::{DEFAULT_LOOKBACK_DAYS, MIN_HISTORY_TASKS, Options};
 use super::outcomes::TaskEpisodes;
