@@ -72,7 +72,7 @@ pub(super) struct ResidentListQuery {
 /// Body of `POST /api/residents`.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct ResidentCreateBody {
-    /// Assignment title; the goal when blank.
+    /// Assignment title; a shortened goal when blank.
     #[serde(default)]
     title: Option<String>,
     /// Assignment narrative.
@@ -328,7 +328,16 @@ pub(super) async fn create_resident(
         .unwrap_or_default()
         .trim()
         .to_string();
-    let title = non_blank(body.title.as_deref()).unwrap_or(goal);
+    let title = non_blank(body.title.as_deref()).unwrap_or_else(|| {
+        const GOAL_TITLE_CHARS: usize = 60;
+        let shortened: String = goal.chars().take(GOAL_TITLE_CHARS).collect();
+        let suffix = if goal.chars().count() > GOAL_TITLE_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        format!("[resident]: {}{suffix}", shortened.trim_end())
+    });
     let arguments = json!({"title": title, "mandate": mandate});
     let complexity = body.complexity;
     let description = body.description.unwrap_or_default();

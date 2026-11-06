@@ -372,6 +372,7 @@ fn cli_update(
     }
     let mut params = task_update_params_from_input(input, status)?;
     params.upsert_artifacts = parse_artifacts(options)?;
+    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     params.discard_candidate =
         optional_bool_alias(options, &["discard_candidate"])?.unwrap_or(false);
     let authority = if force {
@@ -423,11 +424,12 @@ pub(super) fn artifact_put(
 ) -> Result<TaskWriteOutput, OrbitError> {
     let origin = runtime.artifact_origin(caller.session_context);
     let id = required_string(input, &["id"], "id")?;
-    let params = TaskUpdateParams {
+    let mut params = TaskUpdateParams {
         trusted_artifact_origin: origin,
         upsert_artifacts: parse_artifacts(input)?,
         ..TaskUpdateParams::default()
     };
+    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     // Preserve the authenticated native operator decision, using the same
     // screened lifecycle write as `task update --artifact`. A transport or
     // worker call keeps the owner-aware tool path even on a human host.
@@ -465,6 +467,31 @@ pub(super) fn artifact_put(
         written.task = task;
     }
     screened_write_response(runtime, written, None)
+}
+
+// Keep the assignment's crew in the same screened write as a valid mandate.
+fn sync_resident_mandate_crew(
+    runtime: &OrbitRuntime,
+    id: &str,
+    params: &mut TaskUpdateParams,
+) -> Result<(), OrbitError> {
+    let Some(mandate) = params
+        .upsert_artifacts
+        .iter()
+        .find(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT)
+        .and_then(|artifact| runtime.check_resident_mandate(&artifact.content).ok())
+    else {
+        return Ok(());
+    };
+    if runtime
+        .get_task(id)?
+        .tags
+        .iter()
+        .any(|tag| tag == "resident")
+    {
+        params.crew = Some(Some(mandate.crew));
+    }
+    Ok(())
 }
 
 /// The write response in the tool host's compact/projected profile:

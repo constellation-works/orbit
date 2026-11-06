@@ -76,6 +76,37 @@ fn create(server: &super::support::Server, goal: &str) -> String {
 }
 
 #[test]
+fn dashboard_assignment_preserves_mandate_fields() {
+    isolated(
+        "residents::dashboard_assignment_preserves_mandate_fields",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            let goal = "A deliberately long goal describing the complete ongoing responsibility of this resident assignment and its desired outcome";
+            let created = json_ok(server.send(
+                "POST",
+                &format!("/api/residents{WS}"),
+                json!({"mandate": mandate(goal)}),
+            ));
+            let id = created["task_id"].as_str().unwrap();
+            let task = fixture.runtime.get_task(id).unwrap();
+            assert_eq!(task.crew.as_deref(), Some("sol"));
+            assert_eq!(
+                task.acceptance_criteria,
+                vec!["Every task tagged release is done."]
+            );
+            assert!(task.title.starts_with("[resident]:"), "{}", task.title);
+            assert!(
+                task.title.chars().count() < goal.chars().count(),
+                "{}",
+                task.title
+            );
+        },
+    );
+}
+
+#[test]
 fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
     isolated(
         "residents::operator_sets_up_an_active_mandate_from_the_dashboard_alone",

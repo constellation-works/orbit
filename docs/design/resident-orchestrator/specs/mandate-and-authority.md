@@ -30,7 +30,7 @@ being able to delegate power.
 ## Mandate artifact
 
 `resident/mandate.json`, written with `orbit.task.artifact.put` (or `orbit task update
---artifact`). `orbit resident grant` never writes it, except to shorten its `deadline` (see
+--artifact`). Attaching a valid mandate to a resident assignment also updates its task crew to the mandate crew, including on later edits. Dashboard creation copies the exit criteria to the task and uses a shortened goal for a blank title. `orbit resident grant` never writes it, except to shorten its `deadline` (see
 [Narrowing](#narrowing)). Schema version 1:
 
 ```json

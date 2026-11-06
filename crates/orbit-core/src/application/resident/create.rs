@@ -51,6 +51,8 @@ impl OrbitRuntime {
         let task = self.add_task(TaskAddParams {
             title: params.title,
             description: params.description,
+            acceptance_criteria: mandate.exit_criteria.clone(),
+            crew: Some(mandate.crew.clone()),
             tags: vec![RESIDENT_TAG.to_string()],
             complexity: params.complexity,
             origin: Some(TaskOrigin::OperatorRequest),
