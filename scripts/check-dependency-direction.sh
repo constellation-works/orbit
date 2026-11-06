@@ -283,7 +283,7 @@ fi
 # `TaskAutomationPort`, and `job` reaches review admission only through its
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
-app_modules='task|automation|job|review|distributed|admission|workspace_auto|pull_drain|sweep_filing'
+app_modules='task|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
 # [ORB-22313] The precedent-assistance records keep contracts below their
 # consumer and the assistance grants that consumer reads.
 contracts_higher="${app_modules}|precedent_decision|assistance"
@@ -659,8 +659,7 @@ fi
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and
 # `task::SourceGit`, with no allowlist. A call to an inherent `OrbitRuntime`
-# method that automation defines is the same edge by name [ORB-22035], so it
-# is refused here without the backlog-forecast exemption below.
+# method that automation defines is the same edge by name [ORB-22035].
 if rg -n 'crate::application::automation\b|(super::)+automation\b' \
   "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
@@ -671,7 +670,7 @@ if rg -n 'crate::application::automation\b|(super::)+automation\b' \
   fail=1
 fi
 
-# [ORB-17936] `task` is the lowest of the nine modules above contracts. It
+# [ORB-17936] `task` is the lowest of the ten modules above contracts. It
 # reaches `job`, `review`, `distributed`, `pull_drain`, `admission`,
 # `sweep_filing` and `workspace_auto` only through the ports it owns
 # (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
@@ -682,24 +681,25 @@ fi
 # derived from their `impl OrbitRuntime` blocks, so port methods use distinct
 # names. `tag_instructions` sits outside the module order but above `task`
 # [ORB-22289]: task reads commit-pinned files through its own
-# `task::base_revision`, never through it.
-task_upper_modules='job|review|distributed|pull_drain|admission|sweep_filing|workspace_auto|tag_instructions'
+# `task::base_revision`, never through it. `backlog_forecast` is above
+# `workspace_auto` and task has no port to it [ORB-22287]: only the two
+# re-export lines below name it, a compatibility shim for `lib.rs` and
+# `orbit-web`.
+task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions'
+task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
 task_upper_store_allowed='^task/steering\.rs:[0-9]+:.*stores\(\)\.jobs\(\)\.read_run_state|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(&source\.run_id\)|^task/pilot/drain_promotion\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_start_requests\(\)'
-# `task/backlog_forecast/` still calls `job`, `admission` and
-# `workspace_auto` directly; it waits for the forecast's move above
-# `workspace_auto`, so it is the one exempt path.
-task_upper_exempt='task/backlog_forecast/'
-if rg -n "crate::application::(${task_upper_modules})\\b" \
-  "$app_src/task" -g '*.rs' -g '!**/tests/**' -g '!**/task/backlog_forecast/**' ||
+task_upper_paths="$(rg -n "crate::application::(${task_upper_modules})\\b" \
+  "$app_src/task" -g '*.rs' -g '!**/tests/**' | grep -Ev "$task_forecast_shim_allowed" || true)"
+if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   rg -n -U "crate::application::\\{[^}]*\\b(${task_upper_modules})\\b" \
-    "$app_src/task" -g '*.rs' -g '!**/tests/**' -g '!**/task/backlog_forecast/**' ||
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
-    "$task_upper_store_allowed" "$task_upper_exempt" ||
+    "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not route through tag_instructions"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, must not route through tag_instructions, and names backlog_forecast only in its two task/mod.rs re-exports"
   fail=1
 fi
 
@@ -731,7 +731,7 @@ fi
 # inherent method they define (derived from their `impl OrbitRuntime`
 # blocks [ORB-22003]) is a reintroduced edge. Their free functions are
 # reachable only by the paths these checks refuse.
-job_upper_modules='admission|automation|review|sweep_filing|workspace_auto'
+job_upper_modules='admission|automation|backlog_forecast|review|sweep_filing|workspace_auto'
 if rg -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   rg -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
@@ -747,8 +747,7 @@ fi
 # task reaches it only through `task::TaskPrecedentDecisionPort`, and the digest
 # names its records from contracts. A path, a grouped tree, a `super::` chain or
 # a call to an inherent method it defines (names derived, so port methods use
-# distinct names) is a reintroduced edge; `task/backlog_forecast/` has no
-# exemption here.
+# distinct names) is a reintroduced edge.
 if rg -n 'crate::application::precedent_decision\b' \
   "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   rg -n -U 'crate::application::\{[^}]*\bprecedent_decision\b' \
@@ -761,7 +760,7 @@ fi
 
 # [ORB-17939] Above `job`, each module names only the modules below it in
 # `automation < review < distributed < pull_drain < admission <
-# workspace_auto < sweep_filing`. The cut edges go through ports the lower
+# workspace_auto < backlog_forecast < sweep_filing`. The cut edges go through ports the lower
 # module owns: `automation::AutomationReviewPort` (before-PR coverage and the
 # reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
 # (the owner's ship contract and machine) and `distributed::
@@ -790,14 +789,52 @@ guard_upper_layer() {
     fail=1
   fi
 }
-guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto|sweep_filing' \
+guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' \
   'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
-guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto|sweep_filing' \
+guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' \
   'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
-guard_upper_layer distributed 'pull_drain|admission|workspace_auto|sweep_filing' 'executor_census'
-guard_upper_layer pull_drain 'admission|workspace_auto|sweep_filing' ''
-guard_upper_layer admission 'workspace_auto|sweep_filing' 'read_live_leaf_runs'
-guard_upper_layer workspace_auto 'sweep_filing' ''
+guard_upper_layer distributed 'pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' 'executor_census'
+guard_upper_layer pull_drain 'admission|workspace_auto|backlog_forecast|sweep_filing' ''
+guard_upper_layer admission 'workspace_auto|backlog_forecast|sweep_filing' 'read_live_leaf_runs'
+guard_upper_layer workspace_auto 'backlog_forecast|sweep_filing' ''
+guard_upper_layer backlog_forecast 'sweep_filing' ''
+
+# [ORB-22287] The forecast has no ports, so nothing below it may call its
+# inherent methods (names derived); `task` and `job` are covered above, through
+# their upper-module lists.
+for lower_module in automation review distributed pull_drain admission workspace_auto; do
+  if ! inherent_calls_into "$app_src" "$lower_module" backlog_forecast '' ''; then
+    echo "orbit-core ${lower_module} must not call backlog_forecast's inherent methods"
+    fail=1
+  fi
+done
+
+# [ORB-22287] `codebase` sits outside the order. The forecast's one authorized
+# edge into it is `runtime.task_riskiness_model()` in `assembly.rs`, whose
+# returned model answers `forecast_regression_prior`. Any other path or inherent
+# call into `codebase`, or any `codebase` path or call back into the forecast,
+# is a new edge. `automation -> routines -> backlog_forecast` is the documented
+# indirect path through unordered `routines` (the sweep clock), which these
+# direct-reference checks cannot see.
+forecast_codebase_allowed='^backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = runtime\.task_riskiness_model\(\)\?;$'
+if rg -n 'crate::application::codebase\b' \
+  "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U 'crate::application::\{[^}]*\bcodebase\b' \
+    "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" backlog_forecast codebase "$forecast_codebase_allowed" '' ||
+  ! super_chains_into "$app_src" backlog_forecast codebase; then
+  echo "orbit-core backlog_forecast may reach codebase only through runtime.task_riskiness_model() in assembly.rs"
+  fail=1
+fi
+if rg -n 'crate::application::backlog_forecast\b' \
+  "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
+    "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" codebase backlog_forecast '' '' ||
+  ! super_chains_into "$app_src" codebase backlog_forecast; then
+  echo "orbit-core codebase must not name backlog_forecast or call its inherent methods"
+  fail=1
+fi
 
 shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery|PrecedentAssistState|PrecedentAssistOutcomeSource|PrecedentAssistOutcome|PrecedentAssistDemotion|PrecedentAssistEnd|PrecedentAssistEnablement'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \

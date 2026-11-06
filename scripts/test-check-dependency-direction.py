@@ -52,6 +52,8 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/pull_drain",
             "crates/orbit-core/src/application/admission",
             "crates/orbit-core/src/application/workspace_auto",
+            "crates/orbit-core/src/application/backlog_forecast",
+            "crates/orbit-core/src/application/codebase",
             "crates/orbit-core/src/adapter", "crates/orbit-core/src/bootstrap",
             "crates/orbit-runtime/src", "crates/orbit-automation/src",
             "crates/orbit-store/src/contracts", "crates/orbit-store/src/driver/file",
@@ -87,7 +89,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
         for owner in ("automation", "job", "review", "distributed", "pull_drain",
-                      "admission", "sweep_filing", "workspace_auto"):
+                      "admission", "backlog_forecast", "sweep_filing", "workspace_auto"):
             with self.subTest(owner=owner):
                 self.check_files({
                     f"{owner}/state.rs":
@@ -107,6 +109,61 @@ class RelativeImportTests(unittest.TestCase):
                 "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
                 "        self.fresh_owner_method();\n    }\n}\n",
         }, rejected=True)
+
+    def test_lower_modules_cannot_reach_the_forecast(self):
+        forecast_method = {
+            "backlog_forecast/runtime.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_forecast_method(&self) {}\n}\n",
+        }
+        for lower in ("job", "automation", "review", "distributed", "pull_drain",
+                      "admission", "workspace_auto"):
+            with self.subTest(lower=lower, edge="call"):
+                self.check_files({
+                    **forecast_method,
+                    f"{lower}/probe.rs":
+                        "impl OrbitRuntime {\n    pub(crate) fn probe(&self) {\n"
+                        "        self.fresh_forecast_method();\n    }\n}\n",
+                }, rejected=True)
+            with self.subTest(lower=lower, edge="path"):
+                self.check_import(f"{lower}/probe.rs",
+                                  "use crate::application::backlog_forecast::Probe;", True)
+
+    def test_task_names_the_forecast_only_in_its_two_shim_lines(self):
+        shim = ("pub use crate::application::backlog_forecast::BacklogForecastHistory;\n"
+                "pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;\n")
+        self.check_files({"task/mod.rs": shim}, rejected=False)
+        for relative, source in (
+            ("task/mod.rs", "pub use crate::application::backlog_forecast::Options;\n"),
+            ("task/worker.rs", shim),
+            ("task/mod.rs", "use crate::application::{backlog_forecast::BacklogForecastHistory};\n"),
+            ("task/mod.rs", "pub use super::backlog_forecast::BacklogForecastHistory;\n"),
+        ):
+            with self.subTest(relative=relative, source=source):
+                self.check_files({relative: source}, rejected=True)
+
+    def test_forecast_codebase_edge_is_exactly_the_authorized_call(self):
+        codebase = "impl OrbitRuntime {\n    pub fn task_riskiness_model(&self) {}\n    pub fn other_codebase_method(&self) {}\n}\n"
+        self.check_files({
+            "codebase/riskiness.rs": codebase,
+            "backlog_forecast/assembly.rs":
+                "fn assemble(runtime: &OrbitRuntime) {\n"
+                "    let risk_model = runtime.task_riskiness_model()?;\n}\n",
+        }, rejected=False)
+        for relative, source in (
+            ("backlog_forecast/assembly.rs",
+             "fn assemble(runtime: &OrbitRuntime) {\n    runtime.other_codebase_method();\n}\n"),
+            ("backlog_forecast/projection.rs",
+             "fn assemble(runtime: &OrbitRuntime) {\n"
+             "    let risk_model = runtime.task_riskiness_model()?;\n}\n"),
+            ("backlog_forecast/assembly.rs", "use crate::application::codebase::Probe;\n"),
+            ("codebase/probe.rs", "use crate::application::backlog_forecast::Probe;\n"),
+        ):
+            with self.subTest(relative=relative, source=source):
+                self.check_files({"codebase/riskiness.rs": codebase, relative: source}, rejected=True)
+
+    def test_forecast_cannot_reach_sweep_filing(self):
+        self.check_import("backlog_forecast/probe.rs",
+                          "use crate::application::sweep_filing::Probe;", True)
 
     def test_qualified_self_inherent_calls_rejected(self):
         # [ORB-22159] `<OrbitRuntime>::name(` names the same inherent method as

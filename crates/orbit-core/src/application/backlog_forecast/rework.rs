@@ -10,7 +10,7 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
-use crate::application::task::paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
+use crate::application::task::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 
 use super::correction::{self, Correction};
 use super::model::{self, Delivery, Draw, Item, Rng, Script};
