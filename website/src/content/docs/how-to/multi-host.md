@@ -130,12 +130,12 @@ Before pulling, check:
   and access the repository's forge. Differing local declarations warn when
   the drain starts; they do not replace the owner's checks.
 - The follower has an enabled crew, its provider CLI installed and signed
-  in, and the tools the task needs. If the owner enables before-PR review,
-  the follower can also run the owner's pre-landing reviewer:
-  `workflow.purpose_crews.pre_landing_review`, or `workflow.purpose_crews.review`
-  while that is unset. The same reviewer requirement applies to
-  `review.timing = "before_landing"` and to machines selected by the owner's
-  `review.before_landing_hosts`.
+  in, and the tools the task needs. If the owner reviews before landing
+  (`review.timing = "before_landing"`, or this machine is listed in the owner's
+  `review.before_landing_hosts`), the follower can also run the owner's
+  pre-landing reviewer: `workflow.purpose_crews.pre_landing_review`, or
+  `workflow.purpose_crews.review` while that is unset. The deprecated
+  `review.timing = "before_pr"` carries the same requirement.
 - A task tagged `ui` needs a verified browser kit on the follower. Check with
   `orbit browser-kit status` before pulling UI work.
 
