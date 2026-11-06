@@ -25,4 +25,5 @@ pub(crate) use approvals::{
 pub(crate) use classify::classify_workspace_auto_tasks;
 #[cfg(feature = "test-support")]
 pub use classify::release_failure_hook::with_reservation_release_failure;
+pub use readiness::FleetReadinessFacts;
 pub(crate) use window::drain_window;

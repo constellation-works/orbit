@@ -1,3 +1,4 @@
+use std::cell::LazyCell;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -45,7 +46,11 @@ pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
 /// without a live run, readiness judges the observing environment.
 pub(super) enum BacklogReadMode<'a> {
     Admission,
-    Observation(Option<&'a [orbit_types::workflow::CrewEnvUnset]>),
+    Observation {
+        crew_env_unset: Option<&'a [orbit_types::workflow::CrewEnvUnset]>,
+        /// The registry-global status index this read's caller already holds.
+        shared_status: Option<&'a BTreeMap<String, TaskStatus>>,
+    },
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
@@ -75,6 +80,9 @@ pub(crate) fn backlog_snapshot(
 /// reads never queue behind — or hold up — a drain's task commits. Ancestor
 /// and explicit-id loads still settle a pending commit first. Observation
 /// only: nothing admission decides may consume this snapshot.
+///
+/// `shared_status` lets one aggregate read reuse the registry-global status
+/// index across its workspaces instead of reading it once for each.
 pub(crate) fn backlog_snapshot_observed(
     runtime: &OrbitRuntime,
     action: &str,
@@ -82,6 +90,7 @@ pub(crate) fn backlog_snapshot_observed(
     pools: &CapturedCrewPools,
     review: Option<&ReviewAdmission>,
     crew_env_unset: Option<&[orbit_types::workflow::CrewEnvUnset]>,
+    shared_status: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -90,7 +99,10 @@ pub(crate) fn backlog_snapshot_observed(
         pools,
         workspace_ship_mode(runtime),
         review,
-        BacklogReadMode::Observation(crew_env_unset),
+        BacklogReadMode::Observation {
+            crew_env_unset,
+            shared_status,
+        },
     )
 }
 
@@ -110,7 +122,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // references and the snapshot hands back IDs.
     let mut task_lookup = admission_population(
         runtime.stores().tasks(),
-        matches!(read_mode, BacklogReadMode::Observation(_)),
+        matches!(read_mode, BacklogReadMode::Observation { .. }),
     )
     .map_err(|error| PassError::store(action, "list tasks", error))?;
     if matches!(read_mode, BacklogReadMode::Admission) {
@@ -118,13 +130,24 @@ pub(super) fn backlog_snapshot_in_mode(
     }
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
-    let status_by_id = runtime
-        .dependency_status_index(
-            task_lookup
-                .values()
-                .filter(|task| task.status == TaskStatus::Backlog),
-        )
-        .map_err(|error| PassError::store(action, "load global task status projection", error))?;
+    let backlog_tasks = task_lookup
+        .values()
+        .filter(|task| task.status == TaskStatus::Backlog);
+    let status_by_id = match read_mode {
+        BacklogReadMode::Observation {
+            shared_status: Some(shared),
+            ..
+        } if runtime.coordination_task_reads_visible() => {
+            let mut status_by_id = shared.clone();
+            runtime.satisfy_completed_archived_dependencies(&mut status_by_id, backlog_tasks);
+            status_by_id
+        }
+        _ => runtime
+            .dependency_status_index(backlog_tasks)
+            .map_err(|error| {
+                PassError::store(action, "load global task status projection", error)
+            })?,
+    };
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     // [ORB-12500] Claims need no separate holder entry here. A claimed task is
@@ -361,21 +384,26 @@ pub(super) fn backlog_snapshot_in_mode(
     // [ORB-14697] A task every crew of which is at its provider's usage
     // limit on this host waits for the reading's reset; one with an
     // unlimited crew left is admitted and drawn onto it.
-    backlog.retain(|task| match runtime.provider_limit_deferral(task, pools) {
-        Ok(None) => true,
-        Ok(Some(why)) => {
-            excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
-                reason: BacklogTaskExclusionReason::ProviderLimit,
-                conflicts: Vec::new(),
-                crew: None,
-                detail: Some(why),
-            });
-            false
-        }
-        Err(error) => {
-            tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
-            true
+    // The readings are host-wide, so one read serves the whole pass, and a pass
+    // with no backlog reads none.
+    let provider_limit_gate = LazyCell::new(|| runtime.provider_limit_gate(Utc::now()));
+    backlog.retain(|task| {
+        match runtime.provider_limit_deferral(task, pools, &provider_limit_gate) {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::ProviderLimit,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
+                true
+            }
         }
     });
     // [ORB-14168] A task that cleared the per-task gates would still fail
@@ -440,8 +468,15 @@ pub(super) fn backlog_snapshot_in_mode(
     // reason. Everything that survives keeps
     // its ordinary priority/age order.
     let crew_unset = match read_mode {
-        BacklogReadMode::Observation(Some(unset)) => unset.to_vec(),
-        BacklogReadMode::Observation(None) | BacklogReadMode::Admission => runtime.unset_crew_env(),
+        BacklogReadMode::Observation {
+            crew_env_unset: Some(unset),
+            ..
+        } => unset.to_vec(),
+        BacklogReadMode::Observation {
+            crew_env_unset: None,
+            ..
+        }
+        | BacklogReadMode::Admission => runtime.unset_crew_env(),
     };
     backlog.retain(|task| {
         if allowlist.is_none() && crew_unset.is_empty() {

@@ -350,6 +350,36 @@ fn open_task_selection_reads_only_open_envelopes() {
     let (all, baseline_reads, _) = cold_selection(root.path(), &TaskListFilter::default());
     assert_eq!(all, OPEN + CLOSED);
     assert!(baseline_reads >= OPEN + CLOSED, "read {baseline_reads}");
+
+    // A partition this large stamps its envelopes concurrently. The scan still
+    // covers every row, so one out-of-band envelope change is found (ORB-22421).
+    let owner = Coordinated::open(root.path());
+    let path = owner
+        .registry
+        .canonical_task_bundle_path(PARTITION_ID, &open[OPEN - 1].id)
+        .unwrap()
+        .join(TASK_ENVELOPE_FILE_NAME);
+    let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    envelope.status = TaskStatus::Done;
+    let restored = path.with_extension("restored");
+    std::fs::write(&restored, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+    std::fs::rename(restored, path).unwrap();
+    drop(owner);
+    let refused = Coordinated::open(root.path())
+        .backends
+        .task
+        .task
+        .task_candidates(&open_filter, usize::MAX);
+    assert!(
+        matches!(
+            &refused,
+            Err(orbit_common::OrbitError::TaskBundleCorrupt { task_id, .. })
+                if task_id == &open[OPEN - 1].id
+        ),
+        "the freshness scan must reach the envelope changed behind the index: {:?}",
+        refused.map(|page| page.items.len())
+    );
 }
 
 /// A restored envelope can move a child without changing scalar metadata.

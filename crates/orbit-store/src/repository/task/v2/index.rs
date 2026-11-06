@@ -44,6 +44,13 @@ enum IndexFreshness {
     Mismatch(String),
 }
 
+/// Partition size from which a freshness scan stamps envelopes on helper
+/// threads. Smaller partitions finish faster than the threads would start.
+const PARALLEL_STAMP_MIN_ROWS: usize = 256;
+/// Most threads one freshness scan stamps envelopes on. Aggregate reads scan
+/// workspaces concurrently, so this stays well below the host's core count.
+const MAX_STAMP_THREADS: usize = 4;
+
 impl TaskV2Store {
     pub(crate) fn task_status_index(
         &self,
@@ -298,8 +305,9 @@ impl TaskV2Store {
 
         let mut unsettled = Vec::new();
         let mut proofs = Vec::new();
-        for row in rows {
-            match self.settled_envelope_matches(row, &mut proofs)? {
+        let stamps = self.stamp_index_rows(rows);
+        for (row, stamp) in rows.iter().zip(stamps) {
+            match self.settled_envelope_matches(row, stamp, &mut proofs)? {
                 Some(true) => {}
                 Some(false) => return Ok(IndexFreshness::Mismatch(row.task_id.clone())),
                 None => unsettled.push(row.task_id.clone()),
@@ -332,6 +340,49 @@ impl TaskV2Store {
         Ok(IndexFreshness::Usable(unsettled))
     }
 
+    /// Stamp every row's envelope, in row order. This is one metadata call per
+    /// registered task, the bulk of a scan over a large partition, and nothing
+    /// is skipped. Only these lock-free calls leave the caller's thread: bundle
+    /// reads stay on it, because file-lock re-entrancy is tracked per thread. A
+    /// row with no stamp falls through to the strict envelope read.
+    fn stamp_index_rows(&self, rows: &[Arc<TaskIndexProofRow>]) -> Vec<Option<EnvelopeStamp>> {
+        let stamp_rows = |rows: &[Arc<TaskIndexProofRow>]| {
+            rows.iter()
+                .map(|row| {
+                    let path = self.bundle_store.envelope_path(&row.task_id).ok()?;
+                    self.envelope_cache.stamp(&path)
+                })
+                .collect::<Vec<_>>()
+        };
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(MAX_STAMP_THREADS);
+        if rows.len() < PARALLEL_STAMP_MIN_ROWS || threads < 2 {
+            return stamp_rows(rows);
+        }
+        let stamp_rows = &stamp_rows;
+        std::thread::scope(|scope| {
+            let chunks = rows
+                .chunks(rows.len().div_ceil(threads))
+                .map(|chunk| {
+                    let handle = std::thread::Builder::new()
+                        .spawn_scoped(scope, move || stamp_rows(chunk))
+                        .ok();
+                    (chunk, handle)
+                })
+                .collect::<Vec<_>>();
+            chunks
+                .into_iter()
+                .flat_map(|(chunk, handle)| match handle {
+                    // A stamp is only an optimization, so a lost helper leaves
+                    // its rows to the strict envelope read.
+                    Some(handle) => handle.join().unwrap_or_else(|_| vec![None; chunk.len()]),
+                    None => stamp_rows(chunk),
+                })
+                .collect()
+        })
+    }
+
     /// Whether one registered task's envelope matches its index row, reusing
     /// a previous parse or a recorded proof while the envelope file is
     /// unchanged. `None` carries the same meaning as
@@ -341,14 +392,16 @@ impl TaskV2Store {
     fn settled_envelope_matches(
         &self,
         row: &Arc<TaskIndexProofRow>,
+        // Taken before the parse it labels, so a write that races this read
+        // costs one extra parse next scan instead of pinning stale content.
+        stamp: Option<EnvelopeStamp>,
         proofs: &mut Vec<EnvelopeStampRecord>,
     ) -> Result<Option<bool>, OrbitError> {
         let task_id = &row.task_id;
-        // Stamped before the parse it labels, so a write that races this read
-        // costs one extra parse next scan instead of pinning stale content.
-        let stamp = self
-            .envelope_cache
-            .stamp(&self.bundle_store.envelope_path(task_id)?);
+        if stamp.is_none() {
+            // Stamping drops the reason, so report an unusable id here.
+            self.bundle_store.envelope_path(task_id)?;
+        }
         if let Some(stamp) = &stamp {
             if let Some((matches, pending)) =
                 self.envelope_cache.cached_index_match(task_id, stamp, row)

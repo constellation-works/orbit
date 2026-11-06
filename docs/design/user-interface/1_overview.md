@@ -70,7 +70,10 @@ These fields are null on unavailable workspaces. Failed/inactive workspaces stay
 `error`, and null counts. Counts use the read-only readiness snapshot (up to 500
 tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
 is the most frequent reason among those tasks, with alphabetical ties. Slots
-include shared leaf occupancy, matching the workspace Drain card.
+include shared leaf occupancy, matching the workspace Drain card. Rows run the
+same admission decisions as workspace readiness, read concurrently with one
+registry-global task status read per request, and skip the approval, claim and
+validation-environment diagnostics a row does not report.
 
 The browser combines this endpoint across the serving host's registered hosts
 through `/api/on/<host>/fleet/drains`, with at most three requests in flight.
