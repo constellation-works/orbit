@@ -589,8 +589,8 @@ The card shows:
   is remembered.
 
 **Start a window** offers duration, parallelism, and the
-permissions below. Its footer sums the window up and shows any refusal or
-throttle warning. The server validates the request before starting a run.
+permissions below. Its footer shows any refusal or throttle warning beside
+the Start control. The server validates the request before starting a run.
 
 | Control | Effect |
 |---|---|
