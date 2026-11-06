@@ -1,11 +1,11 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-11-04
-status: Accepted
+last_updated: 2026-11-06
+last_validated: 2026-11-06
+status: Implemented
 stage: shipped
-next: "Operate the shipped grants and reviewed mutation proposal path"
+next: "—"
 feature: granted-tools
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [granted-tools]
 
 # Scope: operator-granted tools for the implementing activity (`granted_tools`)
 
-Status: Accepted — all six implementation phases are shipped. Grants are
+Status: Implemented — all six implementation phases are shipped. Grants are
 operator-only, owner-host-only and frozen for a dispatched attempt. Every
 currently denied implementer tool is mutating: grants authorize reviewed
 proposals, never live mutations. See the shipped
@@ -41,7 +41,7 @@ Before this feature that was impossible by design.
 `agent_implement`'s `tool_disallow_list`
 names `orbit.auto_task.add`, `orbit.auto_task.mint`, `orbit.auto_task.update`,
 `orbit.command.exec`, `orbit.pipeline.invoke`, `orbit.workflow.land`,
-`orbit.workflow.run.resume` and `orbit.workflow.ship`. Listing one in
+`orbit.workflow.run.resume`, `orbit.workflow.run.show` and `orbit.workflow.ship`. Listing one in
 `required_tools` does not help:
 `admit_required_tools` in
 [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs)
@@ -74,7 +74,7 @@ denied ones.
 
 | Fact | Source |
 |---|---|
-| `agent_implement` denies the eight tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
+| `agent_implement` denies the nine tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
 | A requirement that the deny list covers fails implementer admission; non-implementers drop it with a note [ORB-15162] | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) (`admit_required_tools`, `resolve_activity_tool_denials`), [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs) (`drops_disallowed_requirements`) |
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
 | Field-level operator authorization: `orbit.auto_task.update` carrying `expected_enabled`, and `orbit.auto_task.mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`operations.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operations.rs) (`orbit.routine.control`, Operator-only) |
@@ -167,9 +167,12 @@ its allowed set. `orbit.auto_task.update` (ungoverned except for the
 `AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS` in
 [`authorization/grants.rs`](../../../crates/orbit-common/src/governance/authorization/grants.rs),
 beside the governed-operation catalog. Authorization reviewers own additions
-and any change to repeat-safety, as they do catalog rows. It classifies all
-eight shipped deny entries: the three auto-task operations are grantable;
+and any change to repeat-safety, as they do catalog rows. It classifies eight of the nine
+shipped deny entries: the three auto-task operations are grantable;
 the command, pipeline and workflow operations are always operator-only.
+`orbit.workflow.run.show` joined the deny lists under [ORB-22215] without a classification
+row; it defaults to mutating and the governed-row recheck keeps it always operator-only,
+so the omission fails closed.
 Every current entry is mutating: definition edits, task minting, arbitrary
 commands and run submission/resumption can all change live state. There are
 no reviewed read/repeat-safe entries yet. `classify_agent_tool_grant` treats
@@ -493,5 +496,6 @@ differently), and phase 5 is the only one that can change live state.
 - [ORB-18549] — phase 5: mutation proposal artifacts and post-approval application.
 - [ORB-18550] — phase 6: surfaces, runbook notes, and this doc to Accepted.
 - [ORB-18641] — the preserved-worktree refusal in the grant change window.
+- [ORB-22215] — added `orbit.workflow.run.show` to the `agent_implement` deny lists; it stays always operator-only through the default-mutating rule and the governed-row recheck.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

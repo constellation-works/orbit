@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 stage: shipped
 next: "—"
@@ -100,7 +100,7 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`), the intake socket, native TLS and configured listener limits are implemented; preemption and signed webhooks remain later work, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
 | Listener user and intake socket | intake socket and the listener's startup checks implemented ([crates/orbit-web/src/lease/intake/mod.rs](../../../crates/orbit-web/src/lease/intake/mod.rs)); creating the user is the host's, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
 | Security review and repairs | [ORB-18414] reviewed the listener; [ORB-18774], [ORB-18775] and [ORB-18776] delivered renewal ceilings, secret redaction and token resource bounds | [ORB-18414], [ORB-18774], [ORB-18775], [ORB-18776] |
-| Dashboard Leases view | implemented by [ORB-18555] | [ORB-18555] |
+| Dashboard Leases view | implemented by [ORB-18555]; disabled-workspace off-state by [ORB-20477] | [ORB-18555], [ORB-20477] |
 | Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
 
 Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
@@ -126,5 +126,6 @@ Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
 - [ORB-18553] — delivered the hard-lease queue and expansion.
 - [ORB-18554] — delivered landing release and expiry notices.
 - [ORB-18555] — delivered the dashboard Leases view.
+- [ORB-20477] — corrected the dashboard Leases view off-state for disabled workspaces.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
