@@ -13,11 +13,12 @@ use super::compatibility::{
     validate_task_artifact_store_from_raw,
 };
 use super::crew::{
-    IgnoredCrewProperty, crews_from_raw, default_crews, explain_human_crew_reference,
-    human_crews_from_raw, reject_human_crew_name_collisions,
+    IgnoredCrewProperty, crews_from_raw, explain_human_crew_reference, human_crews_from_raw,
+    reject_human_crew_name_collisions,
 };
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
+use crate::crew_defaults::builtin_default_crews;
 use crate::layering::load_layered_resolved;
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -140,7 +141,7 @@ impl ResolvedConfig {
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
-            crews: default_crews(),
+            crews: builtin_default_crews(),
             human_crews: BTreeMap::new(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {

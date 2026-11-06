@@ -454,6 +454,28 @@ if [ -f "$config_src/config_io.rs" ]; then
   fi
 fi
 
+# [ORB-22417] Built-in crew defaults live in the crew_defaults leaf, below
+# snapshot admission, resolved config, layering and seeding, so the registry
+# admits the default crews without naming resolved config (the crate-root
+# re-exports of resolved config count as the same edge). The leaf itself uses
+# only std, orbit-common and orbit-types: no sibling module.
+config_resolved_names='resolved|ResolvedConfig|PrSettings|CodexExecutionPolicy|ExecutionEnvPolicy'
+if [ -e "$config_src/registry" ] && ! super_chains_into "$config_src" registry "$config_resolved_names" crate-root; then
+  echo "orbit-config registry must not name resolved config; read crew defaults through crew_defaults"
+  fail=1
+fi
+if [ -f "$config_src/crew_defaults.rs" ]; then
+  if rg -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/crew_defaults.rs"; then
+    echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
+    fail=1
+  fi
+  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/crew_defaults.rs" |
+    grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common|orbit_types)::|:use[[:space:]]+(std|orbit_common|orbit_types)::'; then
+    echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
+    fail=1
+  fi
+fi
+
 # Print every call in production code under application module `$2` (outside
 # the `|`-separated path prefixes `$5`, relative to `$1`) to an inherent
 # `OrbitRuntime` method that an `impl OrbitRuntime` block under one of the

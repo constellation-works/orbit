@@ -21,9 +21,9 @@ use orbit_common::fs::io::write_text_with_parent;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::ShipMode;
 
+use crate::crew_defaults::builtin_default_crews;
 use crate::layering::WORKSPACE_REPLACE_ONLY_KEYS;
 use crate::plugin_enablement::workspace_config_sets_policy;
-use crate::resolved::default_crews;
 use crate::{ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig};
 
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
@@ -121,7 +121,7 @@ impl ConfigSeed {
     /// them, enabled exactly when its provider family is available.
     pub fn seeded_crews(&self) -> BTreeMap<String, Crew> {
         let available_families = self.available_families();
-        default_crews()
+        builtin_default_crews()
             .into_iter()
             .map(|(name, mut crew)| {
                 crew.enabled = available_families.contains(&crew.assignment.provider.as_str());
