@@ -12,8 +12,10 @@
 //! scan behind `/api/agents/*` and the task riskiness model behind the task list
 //! and detail, which cache typed facts rather than a response body. The agent
 //! and codebase analytics scans and the riskiness model are served stale while
-//! one background refresh replaces them. `/api/routines` uses a host namespace keyed by
-//! definition, config and database stamps instead of a selected runtime. Every
+//! one background refresh replaces them. `/api/routines` uses a host namespace keyed
+//! by definition and config stamps plus a token over the routine, job-run and
+//! automation rows instead of a selected runtime; a hit near expiry starts one
+//! background recompute. Every
 //! payload served from a memo reports its age in an `Age` header.
 
 use std::collections::HashMap;
@@ -135,16 +137,48 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     }
 
     /// Host-wide projection, independent of the workspace selected by a tab.
-    pub(crate) async fn get_or_compute_for_host<F>(
+    /// Returns a payload computed for the same key within `ttl`, or runs
+    /// `compute` once while concurrent callers wait. A hit at least
+    /// `refresh_after` old also starts one background recompute, so a client
+    /// polling steadily meets a replacement before `ttl` ends instead of
+    /// waiting out the compute. The hit is still served within `ttl`: the
+    /// freshness bound does not move, and a failed refresh keeps the entry
+    /// until it expires.
+    pub(crate) async fn get_or_compute_for_host_ahead<F>(
         &self,
         key: K,
         ttl: Duration,
+        refresh_after: Duration,
         compute: F,
     ) -> Result<Served<V>, OrbitError>
     where
         F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
     {
-        self.compute(None, key, ttl, compute).await
+        let slot = self.slot((0, key));
+        if let Some(hit) = slot.hit(None) {
+            tracing::debug!(memo = self.label, "cache hit");
+            if hit.age >= refresh_after && !slot.refreshing.swap(true, Ordering::AcqRel) {
+                tracing::debug!(memo = self.label, "aging hit; refreshing in background");
+                let refresh = Arc::clone(&slot);
+                let label = self.label;
+                tokio::spawn(async move {
+                    let _gate = refresh.gate.lock().await;
+                    match tokio::task::spawn_blocking(compute).await {
+                        Ok(Ok(value)) => refresh.store(None, ttl, Duration::ZERO, Arc::new(value)),
+                        Ok(Err(error)) => {
+                            tracing::warn!(memo = label, %error, "background refresh failed");
+                        }
+                        Err(join_err) => {
+                            tracing::warn!(memo = label, %join_err, "background refresh panicked");
+                        }
+                    }
+                    refresh.refreshing.store(false, Ordering::Release);
+                });
+            }
+            return Ok(hit);
+        }
+        self.compute_in(&slot, None, ttl, Duration::ZERO, compute)
+            .await
     }
 
     /// Like [`Self::get_or_compute`], but an entry past `ttl` and within

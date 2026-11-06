@@ -60,9 +60,15 @@ The dashboard Operations view projects the same typed status and control functio
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace
-registry, global and workspace config, routine and target definitions, and
-resolved database files plus their WALs; changes invalidate the next read,
-including definition toggles, pauses and recorded runs. Status opens existing
+registry, global and workspace config, routine and target definitions, and the
+task registry database plus its WAL, and reads a change token over the routine
+fire, cursor, pause, job-run and automation-consumer rows of the shared audit database; changes invalidate
+the next read, including definition toggles, pauses and recorded runs. The
+audit database's own file stamp is not part of the key: unrelated audit rows
+share that file and would otherwise force a full recompute on every poll. A hit
+three seconds old or more starts one background recompute while the entry is
+still served, so steady polling meets a replacement before the five-second bound
+and never waits out the compute; the bound itself is unchanged. Status opens existing
 stores observationally, without migrations or run reconciliation. Branch
 inspection reads local Git objects, config and refs in process, sharing heads
 across routines within a request; a repository libgit2 cannot open (a partial

@@ -162,8 +162,10 @@ pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, Orbit
 }
 
 /// Files and definition directories whose changes invalidate host routine status.
-/// Includes each resolved SQLite path and its WAL, since committed run changes
-/// need not touch the main database until a checkpoint.
+/// The task registry database and its WAL are included, since committed task
+/// changes need not touch the main database until a checkpoint. The shared
+/// audit database is not: it takes writes from every audit event on the host,
+/// so [`routine_status_store_fingerprint`] reads just the routine tables.
 pub fn routine_status_input_paths(
     global_root: &Path,
 ) -> Result<Vec<std::path::PathBuf>, OrbitError> {
@@ -192,12 +194,6 @@ pub fn routine_status_input_paths(
         let persistence = orbit_config::PersistenceConfig::default_for_roots(global_root, &root);
         paths.push(persistence.job_dir);
         paths.push(persistence.activity_dir);
-        let database = persistence.audit_db;
-        paths.push(database.with_file_name(format!(
-            "{}-wal",
-            database.file_name().unwrap_or_default().to_string_lossy()
-        )));
-        paths.push(database);
     }
     let database = orbit_store::maintenance::task_registry::task_registry_path(global_root);
     paths.push(database.with_file_name(format!(
@@ -209,6 +205,22 @@ pub fn routine_status_input_paths(
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+/// Change token over the rows (routine fires, cursors and pauses, job runs and
+/// automation consumers) that host routine status reads from the global store, `None`
+/// before that database exists. Best effort like the file stamps: a database
+/// that cannot be read yields `None`, and the caller's freshness bound still
+/// limits how long a change can hide.
+pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<String> {
+    let database =
+        orbit_config::PersistenceConfig::default_for_roots(global_root, global_root).audit_db;
+    if !database.exists() {
+        return None;
+    }
+    orbit_store::Store::open_read_only(&database)
+        .and_then(|store| store.routine_state_fingerprint())
+        .ok()
 }
 
 /// Read host routine status from one registered workspace.
