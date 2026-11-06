@@ -823,3 +823,78 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
         },
     );
 }
+
+/// Audit rows unrelated to routines land in the same database file as fires
+/// and pauses. They must not invalidate the host memo (every busy host would
+/// recompute the whole report per poll), while a recorded fire still must.
+#[test]
+fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
+    isolated(
+        "automation::routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("watch_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("watch.yaml"),
+                "schemaVersion: 1\nname: watch\nenabled: true\ntarget: job:watch_pipeline\ntrigger: {cron: '*/20 * * * *'}\n",
+            )
+            .unwrap();
+            let server = fixture.server(false);
+            let read = || json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            let first = read();
+            assert!(first["routines"][0]["last_fire"].is_null());
+
+            let database = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            for i in 0..3 {
+                database
+                    .execute(
+                        "INSERT INTO audit_events (execution_id, timestamp, command, role, status, \
+                         exit_code, duration_ms, working_directory, pid) \
+                         VALUES (?1, '2026-11-06T00:00:00Z', 'task', 'agent', 'ok', 0, 1, '/', 1)",
+                        [format!("unrelated-{i}")],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    read()["generated_at"],
+                    first["generated_at"],
+                    "an unrelated audit write is served from the memo"
+                );
+            }
+
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let slot = "2026-10-10T06:00:00+00:00";
+            store
+                .routine_record_fire_intent(&RoutineFireIntentParams {
+                    routine_name: "watch".into(),
+                    slot: slot.into(),
+                    attempt: 1,
+                    source_workspace: "fixture".into(),
+                })
+                .unwrap();
+            store
+                .routine_mark_fire_dispatched("watch", slot, 1, "jrun-new-fire")
+                .unwrap();
+            let after = read();
+            assert_eq!(
+                after["routines"][0]["last_fire"]["run_id"], "jrun-new-fire",
+                "a recorded fire invalidates the memo at once"
+            );
+            store
+                .routine_mark_fire_outcome("watch", slot, 1, RoutineFireState::Succeeded, None)
+                .unwrap();
+            assert_eq!(
+                read()["routines"][0]["last_fire"]["state"],
+                "succeeded",
+                "a fire outcome invalidates the memo at once"
+            );
+            store.routine_pause("watch", "tester").unwrap();
+            assert!(
+                !read()["routines"][0]["paused_at"].is_null(),
+                "a pause invalidates the memo at once"
+            );
+        },
+    );
+}

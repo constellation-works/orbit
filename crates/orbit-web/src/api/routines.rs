@@ -9,7 +9,9 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Local, Utc};
-use orbit_cmd::registry_routines::{routine_status_input_paths, routine_statuses};
+use orbit_cmd::registry_routines::{
+    routine_status_input_paths, routine_status_store_fingerprint, routine_statuses,
+};
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE,
@@ -30,10 +32,23 @@ use serde_json::{Value, json};
 use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
 
+/// Freshness bound of a served routine health body. Fires, pauses and
+/// definition or config edits change the memo key and recompute at once; this
+/// bound covers what the key cannot see (the clock, due times, automation
+/// state).
+const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
+
+/// Age at which a hit starts a background recompute, leaving the rest of
+/// [`ROUTINE_HEALTH_TTL`] for it to land before the entry expires.
+const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
+
 /// Host-wide cache key: selection does not restrict the host's routine list.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RoutineMemoKey {
     inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+    /// Routine, job-run and automation rows in the shared audit database. Not
+    /// the database's file stamp, which every unrelated audit write moves.
+    routine_store: Option<String>,
     include_inactive_plugins: bool,
     operator: bool,
 }
@@ -110,7 +125,6 @@ pub(super) async fn list_routine_health(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
 ) -> Response {
-    let generated_at = Utc::now();
     let include_inactive_plugins = query.include_inactive_plugins;
     let operator_session = state.operator_session();
     let stamp_state = state.clone();
@@ -122,6 +136,7 @@ pub(super) async fn list_routine_health(
         inputs.sort();
         Ok(RoutineMemoKey {
             inputs,
+            routine_store: routine_status_store_fingerprint(stamp_state.global_root()),
             include_inactive_plugins,
             operator: operator_session,
         })
@@ -134,14 +149,19 @@ pub(super) async fn list_routine_health(
     let compute_state = state.clone();
     match state
         .routines_memo()
-        .get_or_compute_for_host(key, Duration::from_secs(5), move || {
-            compute_routine_health(
-                compute_state,
-                generated_at,
-                operator_session,
-                include_inactive_plugins,
-            )
-        })
+        .get_or_compute_for_host_ahead(
+            key,
+            ROUTINE_HEALTH_TTL,
+            ROUTINE_HEALTH_REFRESH_AFTER,
+            move || {
+                compute_routine_health(
+                    compute_state,
+                    Utc::now(),
+                    operator_session,
+                    include_inactive_plugins,
+                )
+            },
+        )
         .await
     {
         Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
@@ -156,18 +176,28 @@ fn compute_routine_health(
     operator_session: bool,
     include_inactive_plugins: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
+    let started = Instant::now();
     let report = routine_statuses(state.global_root())?;
+    let report_ms = started.elapsed().as_millis();
     let clock = match state.clock_status() {
         Ok(status) => clock_json(&status),
         Err(error) => unavailable_clock_json(&error.to_string()),
     };
-    Ok(report_json(
+    let clock_ms = started.elapsed().as_millis();
+    let body = report_json(
         &report,
         clock,
         generated_at,
         operator_session,
         include_inactive_plugins,
-    ))
+    );
+    tracing::debug!(
+        report_ms,
+        clock_ms,
+        total_ms = started.elapsed().as_millis(),
+        "routine health computed"
+    );
+    Ok(body)
 }
 
 /// `POST /api/routines/toggle` — atomically change one selected workspace's
