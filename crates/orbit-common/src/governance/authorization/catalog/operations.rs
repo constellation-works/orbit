@@ -645,6 +645,18 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "applying journal retention permanently deletes applied task commit decisions",
     },
+    GovernedOperation {
+        id: "routine enable",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "enabling a versioned routine definition starts unattended execution",
+    },
+    GovernedOperation {
+        id: "routine disable",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "disabling a versioned routine definition changes unattended execution",
+    },
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_ROUTINE_TRIGGER,
     DASHBOARD_JOB_RUN,
