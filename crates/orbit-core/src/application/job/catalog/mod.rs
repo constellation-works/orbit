@@ -17,3 +17,4 @@ pub(in crate::application::job) use loading::{
 };
 
 pub use projection::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
+pub use roles::JobDefinitionReads;
