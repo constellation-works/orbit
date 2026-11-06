@@ -324,20 +324,32 @@ template:
       behaviour-preserving rule needs no approval: never invent a sign-off
       for it. Only a change to a public surface the repository's documents
       mark as stable (breaking changes needing an owner's sign-off) does. An
-      implementer cannot obtain that approval, so settle it before the task
-      is filed, and record one of two states in the description:
+      implementer cannot obtain that approval, so never leave it for the
+      implementer; record one of two states in the description:
       - **Owner approval recorded**: who granted it, where (task comment,
         document or decision record) and the exact surface and change it
         covers. State the authorized change as the Outcome; every criterion
         then proves that change and its behaviour.
-      - **Owner decision required before implementation**: a section opening
-        the description, naming the surface, the change it would authorize and
-        the question for the owner. Keep the stable-surface change out of the
-        Outcome, scope and criteria, so it stays unauthorized, and write the
-        criteria as they would read once the owner approves. The task stays
-        `proposed` until the owner records the decision in a comment.
-      Acceptance criteria prove the authorized change; none may require
-      obtaining, recording or confirming sign-off, because a non-interactive
+      - **Owner decision required before implementation**: open the
+        description with a section naming the surface, the proposed change
+        and the question for the owner. Write the Outcome, scope and
+        criteria as the complete proposed contract: name the proposed
+        change in the Outcome, include it in scope, and include criteria
+        proving it, each explicitly marked as proposed pending the owner's
+        decision. The task stays `proposed` until the owner records the
+        decision in a comment; the pending marking plus `proposed` status
+        is what keeps the change unauthorized, and a pending-marked naming
+        does not satisfy the Conventions block's "unless this task names
+        the change" until the owner has approved and the marking is
+        removed. Once the owner approves, update the task before it leaves
+        `proposed` to record the approval (who, where, exact change
+        covered) and remove the pending marking, so the Outcome and
+        criteria read as the authorized contract; if the owner narrows or
+        rejects the proposal, update the Outcome, scope and criteria to
+        match that decision instead.
+      Acceptance criteria prove the authorized change, or the proposed
+      change while the decision is pending; none may require obtaining,
+      recording or confirming sign-off, because a non-interactive
       implementer cannot satisfy it.
     - **Compatibility retirement** also gives the evidence for each Pass C
       condition, quotes the documented support window and its source, and names
