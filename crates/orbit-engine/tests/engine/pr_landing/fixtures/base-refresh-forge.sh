@@ -57,6 +57,11 @@ if [ -f "$forge/gates-pending" ] && [ -f "$forge/base-applied" ]; then
     rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
+# Every required check has passed, but the provider merge state still reads
+# BLOCKED: its mergeability has not refreshed yet.
+if [ -f "$forge/blocked-lag" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+fi
 # The policy-required check is running: the PR rollup and the check-runs API
 # show it in progress, but the required-checks GraphQL read has not reported
 # it as required yet (its nodes below carry only the non-required check).
@@ -165,7 +170,7 @@ case "$1 ${2:-}" in
         [ ! -f "$forge/lost-reply" ] || exit 1
         echo '{}' ;;
     'api repos/{owner}/{repo}/pulls/42/merge')
-        [ -f "$forge/base-applied" ] && [ ! -f "$forge/gates-pending" ] || { echo 'merge before checks' >&2; exit 1; }
+        [ -f "$forge/base-applied" ] && [ ! -f "$forge/gates-pending" ] && [ ! -f "$forge/blocked-lag" ] || { echo 'merge before checks' >&2; exit 1; }
         case "$*" in *"sha=$head"*) ;; *) echo 'merge lease' >&2; exit 1 ;; esac
         printf 'merge\n' >> "$forge/mutations"
         tree=$(git --git-dir="$remote" rev-parse "$head^{tree}")

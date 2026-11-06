@@ -320,6 +320,10 @@ enum UnreportedWait {
     Pending(Vec<String>),
     /// Branch policy could not be read, so a bounded grace stands in for it.
     Unsettled(String),
+    /// Branch policy names nothing missing or pending, but the provider
+    /// still reports BLOCKED: its merge state may lag the checks that just
+    /// passed, so a bounded grace re-polls it.
+    LaggingMergeState,
 }
 
 /// Required checks a freshly published head has not reported yet, tracked
@@ -332,6 +336,9 @@ pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     policy_observation: Value,
     /// Observations waited on while branch policy was unreadable.
     unsettled_polls: u32,
+    /// Observations waited on while the provider merge state lagged
+    /// behind checks that had already passed.
+    lagging_blocked_polls: u32,
 }
 
 impl UnreportedChecks {
@@ -341,6 +348,7 @@ impl UnreportedChecks {
             required_observation: json!({"state":"not_collected"}),
             policy_observation: json!({"state":"not_collected"}),
             unsettled_polls: 0,
+            lagging_blocked_polls: 0,
         }
     }
 
@@ -372,6 +380,9 @@ impl UnreportedChecks {
                 " (the head reported no pending required check and branch policy is \
                  unreadable: {why})"
             ),
+            UnreportedWait::LaggingMergeState => " (the provider still reports the pull \
+                 request BLOCKED although no required check is missing or pending)"
+                .to_string(),
         }
     }
 }
@@ -448,7 +459,11 @@ impl std::fmt::Display for CheckWaitRefusal {
 /// neutral/skipped result is never pending. An absent check is pending only
 /// while current branch policy names it as required [ORB-16339]; when that
 /// policy is unreadable, owner consumers get the bounded unsettled-poll grace
-/// auto-fix already applies. This grants only another bounded observation
+/// auto-fix already applies. When readable policy names nothing missing or
+/// pending either and every reported check explicitly succeeded, owner
+/// consumers get the same bounded grace, because the
+/// provider's merge state can lag behind checks that have already passed.
+/// This grants only another bounded observation
 /// within the caller's deadline; only the provider's mergeable state can merge.
 /// `None` performs the bounded immediate read used by zero-wait completion;
 /// a watch always passes its original absolute deadline.
@@ -606,7 +621,34 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     };
     match missing {
         Ok(assessment) if assessment.missing.is_empty() && assessment.pending.is_empty() => {
-            Ok(state)
+            // Nothing is owed and every reported check explicitly
+            // succeeded, yet the provider still reads BLOCKED: its
+            // merge state can lag seconds behind the last required check
+            // going green [ORB-22350]. Re-poll it for the same bounded
+            // grace an unreadable policy gets, within the caller's
+            // existing deadline (this branch is only reached with one);
+            // a genuine block still returns BLOCKED after the bound and
+            // is never bypassed. Auto-fix keeps its own unsettled grace.
+            match wait {
+                BlockedCheckWait::Owner(_)
+                    if assessment.failed.is_empty()
+                        && !required.checks.is_empty()
+                        && required
+                            .checks
+                            .iter()
+                            .all(|check| check.owed_state == Some(CheckState::Passed))
+                        && !checks.is_empty()
+                        && checks
+                            .iter()
+                            .all(|check| check.owed_state == Some(CheckState::Passed))
+                        && unreported.lagging_blocked_polls < UNSETTLED_BLOCKED_POLLS =>
+                {
+                    unreported.lagging_blocked_polls += 1;
+                    unreported.last = UnreportedWait::LaggingMergeState;
+                    Ok(PrMergeState::Pending)
+                }
+                _ => Ok(state),
+            }
         }
         Ok(assessment) => {
             unreported.last = if assessment.missing.is_empty() {
@@ -639,6 +681,9 @@ struct PolicyRequiredAssessment {
     /// branch policy and the check-runs read already agree it is required
     /// and running [ORB-21458]: that is a wait, not an unsatisfied refusal.
     pending: Vec<String>,
+    /// Policy-required checks the head reported failed. A failed gate
+    /// keeps its existing recovery or stop, never a merge-state wait.
+    failed: Vec<String>,
 }
 
 /// The checks current branch policy requires that the observed head has not
@@ -682,26 +727,32 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
                 .ok_or_else(|| "the current-gates answer named an unreadable check".to_string())
         })
         .collect::<Result<_, _>>()?;
-    let pending = pending_policy_required_checks(&gates, &missing);
-    Ok(PolicyRequiredAssessment { missing, pending })
+    let (pending, failed) = pending_policy_required_checks(&gates, &missing);
+    Ok(PolicyRequiredAssessment {
+        missing,
+        pending,
+        failed,
+    })
 }
 
-/// Policy-required gates the head reported still running in the same
-/// current-gates answer, excluding any that also reported a failure: a
-/// failed gate keeps its existing recovery or stop, never a wait.
-fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> Vec<String> {
+/// Policy-required gates the head reported still running, and those it
+/// reported failed, in the same current-gates answer. A gate that also
+/// reported a failure is failed, never pending: a failed gate keeps its
+/// existing recovery or stop, never a wait.
+fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> (Vec<String>, Vec<String>) {
     // The current-gates answer carries the provider's raw list objects:
     // `checks` holds a `check_runs` list and `statuses` a `statuses` list.
     let checks = gates["checks"]
         .as_array()
         .or_else(|| gates["checks"]["check_runs"].as_array());
     let (Some(required), Some(checks)) = (gates["required"].as_array(), checks) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let statuses = gates["statuses"]
         .as_array()
         .or_else(|| gates["statuses"]["statuses"].as_array());
     let mut pending = Vec::new();
+    let mut failed = Vec::new();
     for gate in required {
         let Some(context) = gate["context"]
             .as_str()
@@ -709,14 +760,16 @@ fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> Vec<Stri
         else {
             continue;
         };
-        if missing.iter().any(|name| name == context) || pending.iter().any(|name| name == context)
+        if missing.iter().any(|name| name == context)
+            || pending.iter().any(|name| name == context)
+            || failed.iter().any(|name| name == context)
         {
             continue;
         }
         let app_id = gate["app_id"].as_u64();
         let mut present = false;
         let mut running = false;
-        let mut failed = false;
+        let mut gate_failed = false;
         for check in checks {
             if check["name"].as_str() != Some(context)
                 || app_id.is_some_and(|app| check["app"]["id"].as_u64() != Some(app))
@@ -731,7 +784,7 @@ fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> Vec<Stri
                         | "startup_failure" | "stale",
                     ) = check["conclusion"].as_str()
                     {
-                        failed = true;
+                        gate_failed = true;
                     }
                 }
                 Some(_) => running = true,
@@ -748,16 +801,18 @@ fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> Vec<Stri
                 present = true;
                 match status["state"].as_str() {
                     Some("pending" | "expected") => running = true,
-                    Some("failure" | "error") => failed = true,
+                    Some("failure" | "error") => gate_failed = true,
                     _ => {}
                 }
             }
         }
-        if present && running && !failed {
+        if present && gate_failed {
+            failed.push(context.to_string());
+        } else if present && running {
             pending.push(context.to_string());
         }
     }
-    pending
+    (pending, failed)
 }
 
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.

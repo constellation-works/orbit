@@ -1142,7 +1142,7 @@ current branch policy for the pinned head [ORB-16339]: a required check that pol
 freshly pushed head has not reported yet keeps the owner waiting within `max_wait_seconds`, and a
 check that never appears stops at that deadline with the missing check named. Absent-context base
 refresh still diagnoses such a head. When the policy cannot be read, the owner waits at most four
-polls before stopping as before; a readable policy with neither an unreported (missing) nor a reported-but-running (pending) policy-required check stops at once, while a reported-but-running policy-required check keeps the owner waiting within `max_wait_seconds` even when nothing is unreported [ORB-21458].
+polls before stopping as before; a reported-but-running policy-required check keeps the owner waiting within `max_wait_seconds` even when nothing is unreported [ORB-21458]. A readable policy with neither an unreported (missing) nor a reported-but-running (pending) policy-required check, on a head whose every reported check explicitly succeeded, is also re-polled for at most four polls within `max_wait_seconds`, because the provider merge state can lag behind checks that have already passed; it still stops as before after that bound and is never bypassed [ORB-22350].
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
