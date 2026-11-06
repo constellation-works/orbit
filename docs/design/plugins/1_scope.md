@@ -744,11 +744,14 @@ call, neither read from the child's environment:
 - The *session* half is fixed at mint and never rewritten, so nothing done to the row
   afterwards (re-grant, widening upgrade, a backend rewriting its tree) widens a live child.
 
-**Session record schema.** Current records use `schema_version: 3`, carrying their own token
-as well as the tool ceiling introduced in version 2. A record with no ceiling or a schema this
-host cannot read is refused and counted stale: `orbit plugin doctor` reports it and the next
-session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since a record is
-briefly empty between open and its single write.
+**Session record schema.** Current records use `schema_version: 5`: version 5 adds the
+application-invocation evidence (entry bindings, text digests, the predicate it was admitted
+on) and the pin slot, version 4 bound the application scope, version 3 gave records their own
+token, and the tool ceiling dates to version 2. The reader still accepts the previous schema
+4, whose invocations read with the newer fields defaulted. A record with no ceiling or a
+schema this host cannot read is refused and counted stale: `orbit plugin doctor` reports it
+and the next session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone,
+since a record is briefly empty between open and its single write.
 
 **Every other CLI command is refused.** The CLI resolves the callback session once, before it
 pins a generation or opens a runtime. A recognized plugin child may run only `orbit tool run
@@ -1087,9 +1090,9 @@ removed. A typed task field would do the same job as the tag but change the pers
 | `string` | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
 | `integer` / `number` | `--kebab-case <N>`, sent as a JSON number; `NaN`, infinities and overflowing literals such as `1e999` are refused |
 | `boolean` | `--kebab-case` for true, or `--kebab-case=<true\|false>` (the `=` is required, so a boolean never swallows a following positional) |
-| `array` of scalars | `--kebab-case <VALUE>`, repeated |
-| `object`, `array` of objects, or untyped | `--kebab-case-json '<JSON>'` |
-| named in `cli.positional` | also a positional argument, in manifest order; its flag remains |
+| `array` of `string` / `integer` / `number` | `--kebab-case <VALUE>`, repeated |
+| `object`, `array` of objects, `array` of booleans, or untyped | `--kebab-case-json '<JSON>'` (so `flags: {type: array, items: {type: boolean}}` uses `--flags-json '[true,false]'`) |
+| named in `cli.positional` | also a positional argument, in manifest order; its flag remains — except a JSON-shaped property, which keeps only its `--<name>-json` flag (an object named in `cli.positional` has no positional form) |
 
 - `cli.verb` renames the subcommand; two tools of one plugin may not claim the same one.
   Each `cli.positional` entry must name a top-level property exactly once or the plugin is

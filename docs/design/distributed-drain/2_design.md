@@ -389,12 +389,15 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   (including their aliases). Task show and artifact get read any task in that
   workspace, except another task's `review-*` artifact, which stays refused on
   the remote route under the narrower reviewer, recovery or findings scope.
-  The diagnostic depends on dispatch order: an ordinary `agent_implement`
-  read of `review-report.json` or `review-manifest.json` fails the reviewer
-  activity check with `claimed_review_bridge_refused` before task identity is
-  checked. An admitted reviewer, a live final recovery or the findings-read
-  route can instead reach the claimed-task check and receive
-  `claimed_owner_bridge_refused` for another task. For task show and ordinary
+  A `review-*` call naming another task is refused with
+  `claimed_owner_bridge_refused` before any activity-dependent scope: an
+  ordinary `agent_implement` read of another task's `review-report.json` or
+  `review-manifest.json` never reaches the reviewer activity check. For the
+  claimed task's own artifacts, an ordinary `agent_implement` read of
+  `review-report.json` or `review-manifest.json` fails the reviewer activity
+  check with `claimed_review_bridge_refused`, while an admitted reviewer, a
+  live final recovery and the findings-read route serve their own named
+  artifacts. For task show and ordinary
   artifact get, a task the owner does not hold in the claimed workspace is
   refused (`claimed_owner_bridge_refused`). Artifact put stays on the claimed task, and
   follow-up creation retains its claim relation checks. No additional
