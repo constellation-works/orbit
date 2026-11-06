@@ -638,7 +638,7 @@ export function renderAutoTasks(payload, { force = false } = {}) {
     body.appendChild(schedulerNote);
     const query = autoTaskFilterQuery.trim().toLowerCase();
     const groups = [
-      ["active", "On a schedule", "minted by the scheduler when due; a skip-if-open slot is skipped while an instance is open", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
+      ["active", "On a schedule", "", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
       ["accent", "On delivery", "minted after landed deliveries, not on a clock", enabled.filter((definition) => autoTaskTrigger(definition) === "delivery")],
       ["paused", "Disabled", "kept in the repo, never evaluated", definitions.filter((definition) => !autoTaskOn(definition))],
     ];
@@ -666,9 +666,9 @@ export function renderAutoTasks(payload, { force = false } = {}) {
       if (query && !matched.length) continue;
       const count = query ? matched.length : members.length;
       const detail = query
-        ? `${hint} · ${matched.length} of ${members.length} match the filter`
+        ? [hint, `${matched.length} of ${members.length} match the filter`].filter(Boolean).join(" · ")
         : matched.length > visible.length
-          ? `${hint} · showing ${visible.length} of ${members.length}`
+          ? [hint, `showing ${visible.length} of ${members.length}`].filter(Boolean).join(" · ")
           : hint;
       const group = operationGroup(tone, title, count, detail);
       if (visible.length) group.appendChild(operationColumns(columns));
