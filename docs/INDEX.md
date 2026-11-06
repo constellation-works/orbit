@@ -159,7 +159,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | — | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
@@ -226,7 +226,7 @@ a conservative title/status fallback.
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Implemented | claude |
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data | Draft | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Accepted | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Implemented | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Scope: a core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email | Draft | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Implemented | codex |
