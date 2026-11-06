@@ -121,8 +121,6 @@ a.agents-strip-entry:hover { color: var(--fg); background: var(--bg-hover); }
 a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-strip-legend li.is-current .agents-strip-entry { color: var(--fg); font-weight: 600; background: var(--bg-selected); }
 .agents-strip-count { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-mute); }
-.agents-strip-reasons { margin: 2px 0 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.45; }
-
 .agents-state { border: 1px dashed var(--border); border-radius: 3px; padding: 18px 16px; }
 .agents-state p { margin: 6px 0 0; color: var(--fg-dim); font-size: 13px; line-height: 1.5; max-width: 720px; }
 

@@ -181,6 +181,12 @@ function setCountWindow(next) {
 /// Wire the Agents window selector: its count tabs are the panel's own, its
 /// calendar tabs the shared window.
 export function wireAgentControls() {
+  const purposeHint = document.querySelector(".agents-purpose-hint");
+  if (purposeHint) {
+    purposeHint.replaceWith(common.infoHint(
+      "One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it.",
+    ));
+  }
   const selector = $("agents-window-selector");
   if (selector) selector.dataset.panelWindow = countWindow || "";
   wireWindowSelector("agents-window-selector", {
@@ -429,7 +435,7 @@ function scanFreshness(payload, now = Date.now()) {
 
 const SCAN_QUALIFIERS = {
   fresh: (scan) => `current, within its ${scan.ttl} s cache window`,
-  stale: (scan) => `stale, past its ${scan.ttl} s cache window; a background refresh may be running or may have failed`,
+  stale: () => "stale",
   unjudged: () => "no cache window reported, so freshness is not judged",
   ahead: () => "ahead of this browser's clock, so freshness is not judged",
 };
@@ -452,6 +458,9 @@ function scanNode(payload) {
     time.setAttribute("datetime", scan.at);
     clockStamp(time, scan.at);
     node.append("Scan ", time, scan.state === "ahead" ? "" : ` (${scan.ago})`, ` · ${SCAN_QUALIFIERS[scan.state](scan)}`);
+    if (scan.state === "stale") {
+      node.append(" ", common.infoHint(`Past its ${scan.ttl} s cache window; a background refresh may be running or may have failed.`));
+    }
     // Age the retained response even while a refresh is pending or failed.
     // Refresh only this status, preserving ranks, selection and request errors.
     const untilExpiry = Date.parse(scan.at) + scan.ttl * 1000 - Date.now() + 1;
@@ -519,11 +528,17 @@ function render() {
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
-        + ` · ${role === "implementers" && implementerTier ? `${implementerTier} tier · ` : ""}rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
-        + (ranking.some((row) => row.unjudged) ? " · unjudged rows are listed last, without a score" : "")
-        + (role === "implementers" ? ` · counting ${EXECUTION_LABELS[scorecard.execution] || "managed"} tasks` : "")
+      ? `${units} ${scorecard.unit} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
+    if (scorecard.status === "ok") {
+      const notes = [
+        `The ${units} ${scorecard.unit} shown are in ${windowLabel()}.`,
+        `Rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked.`,
+      ];
+      if (ranking.some((row) => row.unjudged)) notes.push("unjudged rows are listed last, without a score.");
+      if (role === "implementers") notes.push(`Counting ${EXECUTION_LABELS[scorecard.execution] || "managed"} tasks.`);
+      meta.append(" ", common.infoHint(notes.join(" ")));
+    }
     meta.append(" · ", scanNode(scorecard));
   }
   const panel = ROLE_PANELS[role];
@@ -632,6 +647,9 @@ function stripNode() {
   const reasons = Object.entries(notScored.reasons || {})
     .filter(([, count]) => count)
     .map(([reason, count]) => `${count} ${NOT_SCORED_REASONS[reason] || reason.replace(/_/g, " ")}`);
+  const stripContext = common.infoHint("Ownership counts include unscored context; rankings use only each role's scored terms.");
+  stripContext.id = "agents-strip-context";
+  stripContext.setAttribute("role", "note");
   const legend = el("ul", { class: "agents-strip-legend" });
   for (const segment of segments) {
     const swatch = el("span", { class: `agents-swatch agents-owner-${segment.key}`, "aria-hidden": "true" });
@@ -650,14 +668,12 @@ function stripNode() {
   }
   const children = [
     el("header", { class: "agents-strip-head" }, [
-      el("h3", { text: "Who each problem counts against" }),
+      el("h3", {}, ["Who each problem counts against", " ", stripContext]),
       el("span", { class: "agents-strip-total", text: attribution ? `${plural(total, "problem")} in ${windowLabel()}` : "Loading…" }),
     ]),
     total ? bar : el("p", { class: "agents-strip-none", text: "No problem was recorded in this window." }),
     legend,
-    el("p", { id: "agents-strip-context", class: "agents-strip-reasons", role: "note", text: "Ownership counts include unscored context; rankings use only each role’s scored terms." }),
   ];
-  if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
   if (role === "implementers") {
     const select = el("select", { id: "agents-tier", "aria-label": "Implementer tier" },
       [["", "All tiers"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"]]
