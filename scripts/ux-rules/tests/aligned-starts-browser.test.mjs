@@ -52,10 +52,18 @@ const CHIPS = `
 </div>`;
 
 // Title width forces the count onto the next line while the toolbar columns
-// stay on one row, which is the incidents false measurement.
+// stay on one row, which is the incidents false measurement. The fixture loads
+// no font faces, so each host measures with its own fallback metrics. A free
+// title height (line-height normal, a count that wraps to a third line) moved
+// the three toolbar children's tops apart by more than the rule's row
+// tolerance on macOS, and the rule then skipped the whole row. Two pinned
+// 20px lines make the title as tall as the 40px search field, so the tops
+// agree whatever the fallback font; the count is short and its words are joined
+// by a no-break space, so it wraps whole onto the second line at any plausible
+// fallback width instead of splitting across lines.
 const INCIDENTS = `
 <div class="incident-toolbar" id="incidents-toolbar" style="width:1100px">
-  <h3 class="incident-list-title" style="max-width:112px">Unexpected<span class="incident-list-count"> 12 signatures of 20 in 4 causes</span></h3>
+  <h3 class="incident-list-title" style="max-width:140px;line-height:20px">Unexpected<span class="incident-list-count"> 5&nbsp;signatures</span></h3>
   <div class="incident-search-wrap">
     <label class="visually-hidden" for="incident-search">Filter incidents</label>
     <input class="incident-search" id="incident-search" type="search" placeholder="Filter by message" aria-label="Filter incidents">
@@ -186,10 +194,14 @@ test("incidents toolbar does not measure the wrapped count or the hidden label",
         count_top_px: Math.round(document.querySelector(".incident-list-count").getBoundingClientRect().top),
         button_text_top_px: Math.round(buttonRange.getClientRects()[0].top),
         label_top_px: Math.round(document.querySelector(".incident-search-wrap .visually-hidden").getBoundingClientRect().top),
+        children: [...document.querySelector("#incidents-toolbar").children].map((child) => {
+          const rect = child.getBoundingClientRect();
+          return { selector: child.className, top_px: rect.top, height_px: rect.height };
+        }),
       };
     });
     const row = rowOf(result, "incidents-toolbar");
-    assert.ok(row, JSON.stringify(result.measurements));
+    assert.ok(row, JSON.stringify({ toolbar_children: probe.children, measurements: result.measurements }));
     assert.equal(row.anchors.some((anchor) => anchor.text.includes("signatures")), false, JSON.stringify(row));
     assert.equal(row.anchors.some((anchor) => anchor.text === "Unexpected"), false, JSON.stringify(row));
     assert.equal(row.anchors.some((anchor) => anchor.text === "Filter incidents"), false, JSON.stringify(row));
