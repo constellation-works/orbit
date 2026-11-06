@@ -1,6 +1,5 @@
-# Superseded `task_pilot` default (shipped 2026-08-15 to 2026-08-23): the
-# cadence changed on 2026-08-23. Kept as a provenance shape only — see
-# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+# Superseded `task_pilot` default, kept as a provenance shape only — see
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

@@ -3,7 +3,7 @@
 # attached and re-backlogging is a deliberate human transition, so this routine
 # has no job to fire. Kept as a provenance shape only, so `orbit workspace sync`
 # can tell an Orbit-seeded copy from an operator-authored one — see
-# `RETIRED_ROUTINE_FILES` in `application/routine.rs`.
+# `RETIRED_ROUTINE_FILES` in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
