@@ -1,4 +1,6 @@
-//! Resident digest reports the same stall state as the resident list.
+//! Resident digest reports the same stall state as the resident list, and
+//! omits an ended mandate with its vetoes while keeping handed-off and active
+//! ones.
 
 use std::path::Path;
 
@@ -6,7 +8,7 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_types::task::{TaskArtifact, TaskEnvelopeV2};
+use orbit_types::task::{TaskArtifact, TaskEnvelopeV2, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::ResidentLiveCycle;
 use serde_json::{Value, json};
@@ -178,7 +180,129 @@ fn digest_and_list_agree_for_a_single_incomplete_checkpoint_and_long_silence() {
     }
 }
 
+/// One checkpoint carrying a single reversible decision, so the mandate
+/// would be offered a veto in the digest. A checkpoint must name the live
+/// cycle, so the cycle is published for the write and then released.
+fn checkpoint_with_one_veto(runtime: &OrbitRuntime, mandate: &str, decision: &str) {
+    let cycle = format!("rcy-{decision}");
+    let run_id = format!("jrun-{decision}");
+    let live = ResidentLiveCycle {
+        cycle: cycle.clone(),
+        run_id: run_id.clone(),
+        expires_at: Utc::now() + Duration::hours(1),
+    };
+    runtime
+        .set_resident_live_cycle(mandate, None, Some(&live))
+        .unwrap();
+    runtime
+        .append_resident_checkpoint(
+            mandate,
+            json!({
+                "kind": "resident.checkpoint", "schema": 1,
+                "mandate": mandate, "cycle": cycle, "run_id": run_id,
+                "crew": "sol", "recovery_of": null,
+                "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
+                "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
+                "actions": [],
+                "decisions": [{
+                    "id": decision, "summary": format!("Take {decision}"), "class": "reversible",
+                    "reversible": true, "p_wrong": "low", "rework_units": 1, "precedent": null
+                }],
+                "requests": [], "costs": [], "notes": "",
+                "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
+                "continuity": "off", "outcome": "idle", "probe": false
+            }),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    runtime
+        .set_resident_live_cycle(mandate, Some(&cycle), None)
+        .unwrap();
+}
+
+fn digest_omits_an_ended_mandate_and_its_vetoes_but_keeps_handed_off_and_active_ones() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let stopped = mandate(&runtime, 120);
+    let handed_off = mandate(&runtime, 120);
+    let active = mandate(&runtime, 120);
+    checkpoint_with_one_veto(&runtime, &stopped, "veto-stopped");
+    checkpoint_with_one_veto(&runtime, &handed_off, "veto-handed-off");
+    checkpoint_with_one_veto(&runtime, &active, "veto-active");
+
+    // A stop ends the mandate but leaves its assignment in review.
+    call(
+        &runtime,
+        "orbit.resident.control",
+        json!({"task_id": stopped, "action": "stop", "reason": "Enough for now"}),
+    );
+    // A task starts with a plan, and proposed must pass in-progress before review.
+    for id in [&active, &handed_off] {
+        runtime
+            .update_task_as_human(
+                id,
+                TaskUpdateParams {
+                    plan: Some("Run cycles until stopped.".into()),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                "human:daniel".into(),
+            )
+            .unwrap();
+    }
+    runtime
+        .update_task_as_human(
+            &handed_off,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime.get_task(&stopped).unwrap().status,
+        TaskStatus::Review
+    );
+    assert_eq!(
+        runtime.show_resident_mandate(&stopped).unwrap()["state"],
+        "ended"
+    );
+    assert_eq!(
+        runtime.show_resident_mandate(&handed_off).unwrap()["state"],
+        "handed_off"
+    );
+
+    let digested = call(&runtime, "orbit.resident.digest", json!({"since": "1d"}));
+    let residents: Vec<&str> = digested["residents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["task_id"].as_str().unwrap())
+        .collect();
+    let vetoes: Vec<&str> = digested["decisions_awaiting_veto"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["mandate"].as_str().unwrap())
+        .collect();
+    for (id, expected) in [(&stopped, false), (&handed_off, true), (&active, true)] {
+        assert_eq!(
+            residents.contains(&id.as_str()),
+            expected,
+            "residents for {id}: {digested}"
+        );
+        assert_eq!(
+            vetoes.contains(&id.as_str()),
+            expected,
+            "decisions awaiting veto for {id}: {digested}"
+        );
+    }
+}
+
 crate::scenario_table!(
     resident_digest,
     digest_and_list_agree_for_a_single_incomplete_checkpoint_and_long_silence,
+    digest_omits_an_ended_mandate_and_its_vetoes_but_keeps_handed_off_and_active_ones,
 );
