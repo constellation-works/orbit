@@ -546,6 +546,52 @@ fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
     });
 }
 
+/// The run's recorded state and step errors, then the tail of its worker log,
+/// where the worker's own stderr lands. The run record does not show that log.
+fn leaf_diagnostics(fx: &Fixture, run_id: &str) -> String {
+    let record = match fx
+        .runtime
+        .list_job_runs_observed(orbit_core::application::job::JobRunListParams::default())
+    {
+        Ok(runs) => match runs.into_iter().find(|run| run.run_id == run_id) {
+            Some(run) => {
+                let steps = run
+                    .steps
+                    .iter()
+                    .map(|step| {
+                        format!(
+                            "step {} {:?} exit_code={:?} error_code={:?} error_message={:?}",
+                            step.step_index,
+                            step.state,
+                            step.exit_code,
+                            step.error_code,
+                            step.error_message,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("run state {:?}; steps: [{steps}]", run.state)
+            }
+            None => "run record not found".to_string(),
+        },
+        Err(error) => format!("run record unreadable: {error}"),
+    };
+    let log = fx
+        .runtime
+        .paths()
+        .logs_dir
+        .join(format!("{run_id}.worker.log"));
+    let tail = match std::fs::read_to_string(&log) {
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().collect();
+            let from = lines.len().saturating_sub(20);
+            orbit_common::observability::logging::redact_event_text(&lines[from..].join("\n"))
+        }
+        Err(error) => format!("no worker log at {}: {error}", log.display()),
+    };
+    format!("{record}; worker log tail: {tail}")
+}
+
 /// A resident's `dispatch` right starts a leaf run through the tool the cycle
 /// reference names (ORB-21968): it used to be refused as `capability_denied`
 /// whatever the grant. The grant still decides: no right, a foreign workspace,
@@ -562,11 +608,18 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
         },
     )
     .unwrap();
-    let worker_env = fx._root.path().join("worker.env");
+    // The capture must not be named `*.env` or `*.env.*`: the shipped policy
+    // denies read and modify of those, so under a managed sandbox such a write
+    // is refused. The worker writes only the two binding fields the assertions
+    // below check, after a start sentinel, so a worker that ran is told apart
+    // from one that never did.
+    const WORKER_BINDING_CAPTURE: &str = "{ echo worker-started; if [ -n \"${ORBIT_MANAGED_RUN_CONTEXT+x}\" ]; then echo \"ORBIT_MANAGED_RUN_CONTEXT=$ORBIT_MANAGED_RUN_CONTEXT\"; fi; if [ -n \"${ORBIT_RUN_ID+x}\" ]; then echo \"ORBIT_RUN_ID=$ORBIT_RUN_ID\"; fi; } > \"$0.tmp\" && mv \"$0.tmp\" \"$0\"";
+    let worker_binding = fx._root.path().join("worker-binding.txt");
     orbit_core::test_support::install_substitute_pipeline_worker([
         "sh".to_string(),
         "-c".to_string(),
-        format!("env > {0}.tmp && mv {0}.tmp {0}", worker_env.display()),
+        WORKER_BINDING_CAPTURE.to_string(),
+        worker_binding.to_string_lossy().into_owned(),
     ]);
     let leaf = |title: &str| {
         fx.runtime
@@ -618,15 +671,31 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
         "the write is on the cycle's ledger: {shipped}"
     );
 
+    // The state is read before the capture is checked: a terminal run has
+    // already exited, so any capture its worker wrote is on disk by then. A run
+    // that ends without one fails at once, with its own record and log tail.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !worker_env.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the leaf's worker never started"
-        );
+    loop {
+        let finished = fx
+            .runtime
+            .show_job_run_observed(shipped_run)
+            .is_ok_and(|run| run.state.is_terminal());
+        if worker_binding.exists() {
+            break;
+        }
+        if finished || std::time::Instant::now() >= deadline {
+            panic!(
+                "the leaf's worker wrote no binding capture (run {shipped_run}, finished: {finished}): {}",
+                leaf_diagnostics(&fx, shipped_run)
+            );
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let inherited = std::fs::read_to_string(&worker_env).unwrap();
+    let inherited = std::fs::read_to_string(&worker_binding).unwrap();
+    assert!(
+        inherited.lines().any(|line| line == "worker-started"),
+        "the binding capture lacks the worker's start sentinel"
+    );
     for name in ["ORBIT_MANAGED_RUN_CONTEXT=", "ORBIT_RUN_ID="] {
         assert!(
             !inherited.lines().any(|line| line.starts_with(name)),
