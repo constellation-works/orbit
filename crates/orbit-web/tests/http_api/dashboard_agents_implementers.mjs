@@ -206,7 +206,8 @@ assert.ok(radarRadius('weighted_landed') > 52, 'a rank-2 row above the landed me
 for (const term of ['first_pass_accepts', 'review_rejects', 'reviewer_repairs']) {
   const rankingRow = part('ranking').querySelectorAll('tr.agents-row').find(node => node.textContent.includes('sol'));
   const cell = rankingRow.querySelectorAll('td').find(node => node.dataset.term === term);
-  assert.equal(cell.textContent, 'no reviewed deliveries', `${term} table cell distinguishes missing reviews from zero`);
+  assert.equal(cell.textContent, '—', `${term} table cell marks missing reviews compactly, not as a zero`);
+  assert.match(cell.title, /no reviewed deliveries/, `${term} table cell names the reason`);
   const breakdown = part('detail').querySelectorAll('.agents-breakdown li').find(node => node.dataset.term === term);
   assert.equal(breakdown.querySelector('.agents-term-value').textContent, '+0', `${term} without reviews contributes nothing`);
   assert.ok(hasClass(radarVertex(term), 'is-gap'), `${term} with no reviewed deliveries is a gap`);
@@ -215,6 +216,24 @@ for (const term of ['first_pass_accepts', 'review_rejects', 'reviewer_repairs'])
 }
 assert.match(radarVertex('weighted_landed').getAttribute('aria-label'), /weight \+1; contribution vs fleet median \+20/, 'the landed vertex discloses weight and signed contribution vs the median');
 assert.match(radarTableRow('weighted_landed').textContent, /\+20/, 'the accessible table carries the landed contribution vs the median');
+
+// With no reviewed delivery anywhere (review timing off), the three review
+// columns leave the table and one note says why; measured zeros stay.
+assert.equal(part('ranking').querySelectorAll('.agents-ranking-note').length, 0, 'a fleet with some reviewed rows needs no note');
+const unreviewedCard = implementerRadarCard();
+for (const row of unreviewedCard.rows) row.reviewed_units = 0;
+await loadCard(unreviewedCard);
+const rankingTerms = () => part('ranking').querySelectorAll('th').map(node => node.textContent);
+for (const label of ['First-pass accepts', 'Review rejects', 'Reviewer repairs']) {
+  assert.ok(!rankingTerms().some(text => text.includes(label)), `${label} leaves a table no row can score`);
+}
+assert.equal(part('ranking').querySelectorAll('td').filter(node => ['first_pass_accepts', 'review_rejects', 'reviewer_repairs'].includes(node.dataset.term)).length, 0, 'no cell repeats the empty review phrase');
+const hiddenNotes = part('ranking').querySelectorAll('.agents-ranking-note');
+assert.equal(hiddenNotes.length, 1, 'the reason appears once');
+assert.match(hiddenNotes[0].textContent, /First-pass accepts, Review rejects and Reviewer repairs are not shown: no row has a reviewed delivery/);
+assert.equal(part('ranking').textContent.split('no reviewed deliveries').length - 1, 0, 'the table never repeats the row phrase');
+assert.ok(part('ranking').querySelectorAll('td').some(node => node.dataset.term === 'crew_rework'), 'the other term columns stay');
+await loadCard(radarCard);
 
 // Adding one extreme outlier crew must not move the median ring or squeeze
 // a normal crew toward the rim.

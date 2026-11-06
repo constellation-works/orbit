@@ -741,8 +741,29 @@ function scoreBar(value, scale) {
 
 const SCORE_HINT = "One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
 
+// The ranking's term columns. A review term no row can score (implementers,
+// no reviewed deliveries anywhere) has nothing to show, so it leaves the
+// table; `hidden` lists those terms for the one note that says why.
+function rankingColumns(ranking) {
+  const all = role === "implementers" && implementerTier ? [] : terms();
+  if (!ranking.length) return { shown: all, hidden: [] };
+  const hidden = all.filter((term) => ranking.every((row) => noReviewedDeliveries(term, row)));
+  return { shown: all.filter((term) => !hidden.includes(term)), hidden };
+}
+
+function hiddenColumnsNote(hidden) {
+  const labels = hidden.map((term) => term.label);
+  const list = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels[0];
+  const note = el("p", {
+    class: "agents-ranking-note",
+    text: `${list} ${hidden.length > 1 ? "are" : "is"} not shown: no row has a reviewed delivery in this window, so none can be scored.`,
+  });
+  return note;
+}
+
 function rankingNode(ranking) {
   const scale = scoreScale(ranking);
+  const columns = rankingColumns(ranking);
   const selectedKey = selected.get(role);
   const panel = ROLE_PANELS[role];
   const header = el("tr", {}, [
@@ -750,7 +771,7 @@ function rankingNode(ranking) {
     el("th", { text: "Crew · model" }),
     el("th", { class: "agents-score-col" }, [el("span", { text: "Score" }), common.pinnedInfoHint(SCORE_HINT)]),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
-    ...(role === "implementers" && implementerTier ? [] : terms()).map((term) => el("th", {
+    ...columns.shown.map((term) => el("th", {
       class: "agents-num",
       text: term.label,
       title: `${term.label} per 100 ${termUnit(term)} (weight ${weight(term.weight)}): ${term.definition}`,
@@ -775,16 +796,17 @@ function rankingNode(ranking) {
     nameCell.setAttribute("scope", "row");
     const support = el("td", { class: "agents-num agents-support" }, [el("span", { text: String(row.units) })]);
     if (row.below_support) support.append(el("span", { class: "agents-below", text: `below ${scorecard.min_support}` }));
-    const cells = (role === "implementers" && implementerTier ? [] : terms()).map((term) => {
+    const cells = columns.shown.map((term) => {
       const provisional = provisionalTerm(term, row);
       const noReviews = noReviewedDeliveries(term, row);
       const td = el("td", {
         class: provisional ? "agents-num agents-term-provisional" : "agents-num",
-        text: noReviews ? "no reviewed deliveries" : number(row.per_100 && row.per_100[term.key]),
+        text: noReviews ? "—" : number(row.per_100 && row.per_100[term.key]),
         title: noReviews ? `${term.label}: no reviewed deliveries; not scored` : `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)})`
           + (provisional ? `; provisional, too few ${termUnit(term)} to score` : ""),
       });
       td.dataset.term = term.key;
+      if (noReviews) td.setAttribute("aria-label", `${term.label}: no reviewed deliveries`);
       return td;
     });
     const score = el("td", { class: "agents-score-col" }, row.unjudged
@@ -820,7 +842,7 @@ function rankingNode(ranking) {
     wrap.scrollLeft = next;
     event.preventDefault();
   });
-  const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
+  const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [...(columns.hidden.length ? [hiddenColumnsNote(columns.hidden)] : []), wrap]);
   node.dataset.key = "ranking";
   node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, implementerTier]);
   return node;
