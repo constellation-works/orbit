@@ -265,6 +265,21 @@ textarea.ex-conclude-control { resize: vertical; min-height: 72px; }
 }
 .ex-conclude-submit:hover:not(:disabled) { background: var(--accent-hover); }
 .ex-conclude-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The readout loads beside the record: Result and Trust hold its loading or
+   error state, with a Retry, while the header and Setup stay usable. */
+.ex-readout-state .ex-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.ex-readout-error .mx-empty-detail { overflow-wrap: anywhere; }
+.ex-readout-notice {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0;
+  color: #f2c46d; font-size: 13px; overflow-wrap: anywhere;
+}
+.ex-readout-retry {
+  min-height: 36px; padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); color: var(--fg); font: 500 13px var(--font-sans); cursor: pointer;
+}
+.ex-readout-retry:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hover); }
+.ex-readout-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ex-readout-retry:disabled { opacity: 0.6; cursor: progress; }
 .ex-conclude-status { margin: 0; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; min-height: 1em; }
 .ex-task-link { color: var(--accent); overflow-wrap: anywhere; }
 

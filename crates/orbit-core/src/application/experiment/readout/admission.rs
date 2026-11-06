@@ -2,9 +2,9 @@
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contracts::{ClaimInspection, JobRunQuery};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct ClaimTreatment {
     pub(super) at: DateTime<Utc>,
@@ -12,24 +12,45 @@ pub(super) struct ClaimTreatment {
 }
 
 impl OrbitRuntime {
-    /// Owner-issued captures, joined to the actual crew reported at settlement.
-    /// Collect once per readout, rather than scanning all claims for each task.
+    /// Owner-issued captures of each of `tasks`' latest claim, joined to the
+    /// actual crew reported at settlement.
+    ///
+    /// One claim inspection and one admission boundary serve the whole
+    /// readout, and only the latest claim of an enrolled task has its receipt
+    /// read: a receipt lookup per claim, each re-inspecting every claim, made
+    /// this quadratic in the workspace's claims [ORB-22445].
     pub(super) fn latest_claim_experiment_treatments(
         &self,
         experiment: &str,
+        tasks: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, ClaimTreatment>, OrbitError> {
-        let mut latest: BTreeMap<String, ClaimTreatment> = BTreeMap::new();
+        let mut claims: BTreeMap<String, (DateTime<Utc>, ClaimInspection)> = BTreeMap::new();
         for inspection in self.inspect_execution_claims()? {
+            if !tasks.contains(&inspection.claim.task_id) {
+                continue;
+            }
             let Ok(at) = inspection.created_at.parse::<DateTime<Utc>>() else {
                 continue;
             };
-            let task = &inspection.claim.task_id;
-            if latest.get(task).is_some_and(|seen| seen.at >= at) {
+            if claims
+                .get(&inspection.claim.task_id)
+                .is_some_and(|(seen, _)| *seen >= at)
+            {
                 continue;
             }
-            let capture = self
-                .claim_receipt(&inspection.claim.claim_id)
-                .ok()
+            claims.insert(inspection.claim.task_id.clone(), (at, inspection));
+        }
+        if claims.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        // An unreadable receipt leaves the claim's treatment unknown, as it
+        // did when each receipt opened its own boundary.
+        let boundary = self.admission_boundary().ok();
+        let mut latest: BTreeMap<String, ClaimTreatment> = BTreeMap::new();
+        for (task, (at, inspection)) in claims {
+            let capture = boundary
+                .as_ref()
+                .and_then(|boundary| Self::admitted_claim_receipt(boundary, &inspection.claim).ok())
                 .and_then(|receipt| receipt.experiments);
             let entry = capture.as_ref().and_then(|capture| {
                 capture
@@ -59,7 +80,7 @@ impl OrbitRuntime {
                 }
                 None => None,
             };
-            latest.insert(task.clone(), ClaimTreatment { at, delivered });
+            latest.insert(task, ClaimTreatment { at, delivered });
         }
         Ok(latest)
     }

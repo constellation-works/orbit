@@ -257,10 +257,13 @@ function jsonResponse(body) {
 let finishConclude;
 let listAuthoring = null;
 const listResponses = [];
+const readoutResponses = [];
 function fetchImpl(url, options = {}) {
   if (options.method === 'POST') return new Promise(resolve => { finishConclude = resolve; });
   const path = String(url);
-  if (path.includes('/api/diagnostics/experiments/exp-intraday/readout')) return Promise.resolve(jsonResponse(readout));
+  if (path.includes('/api/diagnostics/experiments/exp-intraday/readout')) {
+    return readoutResponses.shift() || Promise.resolve(jsonResponse(readout));
+  }
   if (path.includes('/api/diagnostics/experiments/exp-intraday')) return Promise.resolve(jsonResponse(experiment));
   if (path.includes('/diagnostics/experiments')) {
     return listResponses.shift() || Promise.resolve(jsonResponse({ experiments: [], authoring: listAuthoring }));
@@ -455,6 +458,47 @@ assert.deepEqual(local.hovers.map(hover => hover.title), [
   '2026-10-26 02:10 PDT–02:12:30',
 ], `Local hover follows the browser zone and the same cutoff: ${local.hovers.map(hover => hover.title).join(' | ')}`);
 assert.deepEqual(local.hovers.map(hover => `${hover.n} ${hover.value}`), ['n 1 0%', 'n 2 50%', 'n 2 50%']);
+
+// [ORB-22445] On a large workspace the readout outlasted the 30-second request
+// limit, and the page withheld the experiment it already had until then. The
+// record renders on its own; the readout's pending and failed states stay in
+// the tabs that need it, and Retry reads it again.
+setExperimentId(null);
+await fetchAndRenderExperiments();
+let releaseReadout;
+readoutResponses.push(new Promise(resolve => { releaseReadout = resolve; }));
+setExperimentId('exp-intraday');
+const pendingDetail = fetchAndRenderExperiments();
+for (let turn = 0; turn < 5; turn += 1) await new Promise(resolve => setImmediate(resolve));
+const keepsRecord = phase => {
+  assert.match(experimentsBody.querySelector('.ex-title')?.textContent || '', /^Intraday buckets/, `${phase}: the header names the experiment`);
+  assert.ok(experimentsBody.querySelector('.ex-status-running'), `${phase}: the header shows its state`);
+  assert.ok(experimentsBody.querySelector('select.ex-conclude-control'), `${phase}: Conclude stays usable`);
+  const setup = experimentsBody.querySelector('#ex-panel-setup');
+  assert.ok(setup?.querySelector('.ex-hypothesis'), `${phase}: Setup shows the hypothesis`);
+  assert.match(setup.querySelector('dl.ex-facts')?.textContent || '', /Modeshadow/, `${phase}: Setup shows the definition`);
+  assert.ok(setup.querySelector('.ex-timeline') || setup.querySelector('.ex-empty'), `${phase}: Setup shows the timeline`);
+};
+keepsRecord('readout pending');
+assert.ok(experimentsBody.querySelector('#ex-panel-result .ex-readout-loading'), 'the result area says the readout is loading');
+assert.equal(experimentsBody.querySelector('.ex-arm-cost'), null, 'no arm result is drawn before the readout arrives');
+releaseReadout({
+  ok: false,
+  status: 504,
+  headers: { get: () => null },
+  text: async () => JSON.stringify({ error: 'readout timed out' }),
+});
+await pendingDetail;
+keepsRecord('readout failed');
+const failed = experimentsBody.querySelector('#ex-panel-result .ex-readout-error');
+assert.ok(failed, 'the result area shows the readout failure');
+assert.match(failed.textContent, /readout timed out/, 'the failure names its cause');
+const retry = failed.querySelector('button.ex-readout-retry');
+assert.ok(retry && !retry.disabled, 'a failed readout can be retried');
+retry.dispatch('click');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('.ex-readout-error'), null, 'a successful retry clears the failure');
+assert.equal(experimentsBody.querySelectorAll('.ex-arm-cost').length, 2, 'a successful retry draws the result');
 
 // Exercise the shipped listeners and list renderer, including the visit fence
 // when a destination read completes after leaving and returning to that scope.

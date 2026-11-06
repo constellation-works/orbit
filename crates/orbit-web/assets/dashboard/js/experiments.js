@@ -9,7 +9,10 @@
 // behind info icons. Drafts are created, edited and started through
 // experiment-form.js.
 // Read from /api/diagnostics/experiments[/{id}[/readout]]; conclude posts
-// to /api/diagnostics/experiments/{id}/conclude.
+// to /api/diagnostics/experiments/{id}/conclude. The detail renders from the
+// experiment record alone and loads the readout beside it: a slow or failed
+// readout holds only the Result and Trust tabs, which show their own loading
+// or error state and a Retry, never the header or Setup.
 // Pure vanilla JS, split into ES modules with no build step; every node is
 // built with DOM calls, never markup strings.
 //
@@ -68,6 +71,9 @@ let tabPickListener = null;
 let lastPayload = null;
 let requestScope = null;
 let draft = null;
+// The selected experiment's readout request: `{ scope, readout, error,
+// request }`, kept apart from the panel request so the record renders first.
+let readoutState = null;
 
 /// The experiment on screen, or null for the list.
 export function getExperimentId() {
@@ -98,6 +104,7 @@ export function onExperimentTabPick(listener) {
 
 function clearExperiments() {
   lastPayload = null;
+  readoutState = null;
   const count = $(COUNT);
   if (count) count.textContent = "—";
 }
@@ -117,16 +124,55 @@ onWorkspaceChange(() => {
 // An unknown id answers 400 or 404 naming it; the detail shows that as its
 // own state instead of a blank panel.
 async function readDetail(id) {
-  const base = `${ENDPOINT}/${encodeURIComponent(id)}`;
   try {
-    const [experiment, readout] = await Promise.all([fetchJson(base), fetchJson(`${base}/readout`)]);
-    return { kind: "detail", id, experiment, readout };
+    const experiment = await fetchJson(`${ENDPOINT}/${encodeURIComponent(id)}`);
+    return { kind: "detail", id, experiment };
   } catch (error) {
     if (error && (error.status === 400 || error.status === 404) && !error.routeMissing) {
       return { kind: "missing", id, message: error.message };
     }
     throw error;
   }
+}
+
+// Read `id`'s readout unless that read is already in flight, as a poll can
+// arrive while a slow one runs. A refresh keeps the readout on screen, and a
+// failure stays shown until a later read succeeds. Never rejects: the result
+// area shows the error.
+function loadReadout(id, revision) {
+  const scope = `${revision}:${id}`;
+  if (readoutState?.scope !== scope) readoutState = { scope, readout: null, error: null, request: null };
+  const state = readoutState;
+  if (state.request) return state.request;
+  state.request = fetchJson(`${ENDPOINT}/${encodeURIComponent(id)}/readout`).then((readout) => {
+    state.readout = readout;
+    state.error = null;
+  }, (error) => {
+    state.error = error;
+  }).finally(() => {
+    state.request = null;
+    if (readoutState === state && getWorkspaceRevision() === revision && selectedId === id) renderExperiments();
+  });
+  return state.request;
+}
+
+function retryReadout() {
+  const state = readoutState;
+  if (!state || state.request || !selectedId) return;
+  state.error = null;
+  loadReadout(selectedId, getWorkspaceRevision());
+  renderExperiments();
+}
+
+// The readout as the detail renders it: on screen once read, otherwise
+// loading or failed.
+function readoutView() {
+  const state = readoutState;
+  return {
+    readout: state?.readout || null,
+    error: state?.error ? state.error.message || "The readout could not be loaded." : null,
+    pending: Boolean(state?.request),
+  };
 }
 
 export function fetchAndRenderExperiments() {
@@ -146,11 +192,13 @@ export function fetchAndRenderExperiments() {
     : () => fetchJson(ENDPOINT).then((body) => ({
       kind: "list", experiments: body.experiments || [], authoring: body.authoring || null,
     }));
-  return requestPanel(BODY, `experiments:${id || ""}`, request, (payload) => {
+  const readout = id ? loadReadout(id, revision) : null;
+  const panel = requestPanel(BODY, `experiments:${id || ""}`, request, (payload) => {
     if (getWorkspaceRevision() !== revision || selectedId !== id) return;
     lastPayload = payload;
     renderExperiments();
   }, COUNT);
+  return readout ? panel.then(() => readout) : panel;
 }
 
 export function renderExperiments() {
@@ -173,13 +221,17 @@ export function renderExperiments() {
     if (count) count.textContent = "not found";
     nodes = [missingView(lastPayload)];
   } else {
-    const analysed = lastPayload.readout?.enrollment?.analysed ?? 0;
-    if (count) count.textContent = `${analysed} task${analysed === 1 ? "" : "s"} analysed`;
-    nodes = [detailView(lastPayload.experiment, lastPayload.readout)];
+    const view = readoutView();
+    const analysed = view.readout?.enrollment?.analysed ?? 0;
+    if (count) {
+      count.textContent = view.readout ? `${analysed} task${analysed === 1 ? "" : "s"} analysed`
+        : view.error && !view.pending ? "readout unavailable" : "reading results…";
+    }
+    nodes = [detailView(lastPayload.experiment, view)];
   }
   const root = el("div", { class: "ex-view" }, nodes);
   root.dataset.key = `experiments-${lastPayload.kind}`;
-  root.dataset.hash = JSON.stringify([lastPayload, draft, draftStartRenderState()]);
+  root.dataset.hash = JSON.stringify([lastPayload, lastPayload.kind === "detail" ? readoutView() : null, draft, draftStartRenderState()]);
   syncNodes(body, [root]);
   applyDetailTab();
 }
@@ -292,17 +344,25 @@ function missingView(payload) {
 
 // ---- detail -------------------------------------------------------------------
 
-function detailView(experiment, readout) {
-  const color = armIndex(readout);
-  const primary = (readout.metrics || []).find((metric) => metric.metric === readout.experiment?.primary_metric) || null;
+// The header and Setup come from the experiment record; Result and Trust wait
+// on the readout and say so while it loads or after it fails.
+function detailView(experiment, view) {
+  const { readout } = view;
+  const color = readout ? armIndex(readout) : null;
+  const primary = readout
+    ? (readout.metrics || []).find((metric) => metric.metric === readout.experiment?.primary_metric) || null
+    : null;
+  const notice = readout && view.error ? readoutNotice(view) : null;
   return el("div", { class: "ex-detail" }, [
-    headerCard(experiment, readout, primary),
+    headerCard(experiment, view, primary),
     detailTabStrip(),
-    detailTabPanel("result", [
+    detailTabPanel("result", readout ? [
+      notice,
       armCards(experiment, readout, primary, color),
       forestCard(experiment, readout, color),
-    ]),
-    detailTabPanel("trust", [
+    ] : [readoutPlaceholder("Result", view)]),
+    detailTabPanel("trust", readout ? [
+      notice,
       healthCard(readout),
       el("div", { class: "mx-row" }, [
         armEvidenceCard(readout),
@@ -312,12 +372,58 @@ function detailView(experiment, readout) {
         complexityCard(primary, color),
         cumulativeCard(readout, primary, color),
       ]),
-    ]),
+    ] : [readoutPlaceholder("Trust", view)]),
     detailTabPanel("setup", [
       definitionCard(experiment, readout),
       timelineCard(experiment),
     ]),
   ]);
+}
+
+function retryButton(view) {
+  const button = el("button", { class: "ex-readout-retry", type: "button", text: view.pending ? "Retrying…" : "Retry" });
+  button.disabled = view.pending;
+  button.addEventListener("click", retryReadout);
+  return button;
+}
+
+// A tab that needs the readout, before it has one.
+function readoutPlaceholder(title, view) {
+  if (view.error) {
+    return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-error", role: "alert", "aria-label": title }, [
+      el("div", { class: "mx-empty ex-empty" }, [
+        el("div", { class: "mx-empty-title", text: "The readout could not be loaded" }),
+        el("div", { class: "mx-empty-detail", text: view.error }),
+        retryButton(view),
+      ]),
+    ]);
+  }
+  return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-loading", role: "status", "aria-label": title, "aria-busy": "true" }, [
+    experimentEmpty("Reading results…", "The readout covers every enrolled task, so it can take a while on a large workspace."),
+  ]);
+}
+
+// A refresh that failed while an earlier readout stays on screen.
+function readoutNotice(view) {
+  return el("p", { class: "ex-readout-notice", role: "alert" }, [
+    el("span", { text: `Showing the last readout; refreshing it failed: ${view.error}` }),
+    retryButton(view),
+  ]);
+}
+
+// The definition as the record states it, so the header and Setup need no
+// readout: the first start event opens the horizon, as it does the readout's.
+function definitionInfo(experiment) {
+  const started = (experiment.events || []).find((event) => event.kind === "started")?.at || null;
+  const startedAt = started ? Date.parse(started) : NaN;
+  const days = num(experiment.max_days);
+  return {
+    primary_metric: experiment.primary_metric || null,
+    min_sample: num(experiment.min_sample),
+    max_days: days,
+    started_at: started,
+    horizon_at: Number.isFinite(startedAt) && days != null ? new Date(startedAt + days * 86400000).toISOString() : null,
+  };
 }
 
 // ---- detail tabs ----------------------------------------------------------------
@@ -408,15 +514,18 @@ function smallestArmText(primary, minSample) {
   return smallest < minSample ? `${smallest} of ${minSample} settled` : `${smallest} settled (min ${minSample})`;
 }
 
-function headerCard(experiment, readout, primary) {
-  const info = readout.experiment || {};
-  const verdict = readout.verdict;
-  const headline = outcomeHeadline(experiment, verdict);
+function headerCard(experiment, view, primary) {
+  const { readout } = view;
+  const info = definitionInfo(experiment);
+  const verdict = readout?.verdict || null;
+  const headline = readout || !needsReadoutVerdict(experiment)
+    ? outcomeHeadline(experiment, verdict)
+    : { text: view.error ? "Readout unavailable" : "Reading results…", state: "collecting" };
   const concluded = concludedEvent(experiment);
   const notes = [
     concluded?.reason ? `Reason: ${concluded.reason}` : null,
     ...(verdict?.reasons || []).map((reason) => `${reason}.`),
-    `As of ${formatDateTime(readout.as_of)}.`,
+    readout ? `As of ${formatDateTime(readout.as_of)}.` : null,
   ].filter(Boolean);
   const promotion = concluded?.detail?.promotion_task;
   return el("section", { class: "mx-card ex-card ex-head", "aria-label": "Experiment" }, [
@@ -435,20 +544,29 @@ function headerCard(experiment, readout, primary) {
       el("div", { class: "ex-outcome" }, [
         el("p", { class: `ex-outcome-text ex-outcome-${headline.state}` }, [
           el("span", { class: "ex-outcome-label", text: headline.text }),
-          pinnedInfoHint(notes.join("\n")),
+          notes.length ? pinnedInfoHint(notes.join("\n")) : null,
         ]),
         readoutVerdictBadge(experiment, verdict),
       ]),
       factList([
-        ["Smallest arm", smallestArmText(primary, info.min_sample)],
+        ["Smallest arm", readout ? smallestArmText(primary, info.min_sample) : pendingFact(view)],
         concluded ? ["Concluded", formatDateTime(concluded.at)] : ["Horizon", horizonText(info)],
         typeof promotion === "string" && promotion ? ["Promotion task", taskLink(promotion)] : null,
-        ["Health", healthLink(readout)],
+        ["Health", readout ? healthLink(readout) : pendingFact(view)],
       ].filter(Boolean)),
       concludeMenu(experiment, verdict),
     ]),
     draftActions(experiment, experiment.authoring),
   ]);
+}
+
+// Only a running or paused experiment's headline is the readout's verdict.
+function needsReadoutVerdict(experiment) {
+  return experiment.status !== "concluded" && experiment.status !== "abandoned" && experiment.status !== "draft";
+}
+
+function pendingFact(view) {
+  return view.error && !view.pending ? "unavailable" : "reading…";
 }
 
 function horizonText(info) {
@@ -462,7 +580,7 @@ function factList(facts) {
 }
 
 function definitionCard(experiment, readout) {
-  const info = readout.experiment || {};
+  const info = definitionInfo(experiment);
   const facts = [
     ["Status", experiment.status],
     ["Mode", experiment.mode === "shadow" ? "shadow (assigns, applies nothing)" : experiment.mode],
@@ -471,8 +589,8 @@ function definitionCard(experiment, readout) {
     ["Minimum sample", info.min_sample != null ? `${info.min_sample} per arm` : "—"],
     ["Started", info.started_at ? formatDateTime(info.started_at) : "not started"],
     ["Horizon", horizonText(info)],
-    ["As of", formatDateTime(readout.as_of)],
-  ];
+    readout ? ["As of", formatDateTime(readout.as_of)] : null,
+  ].filter(Boolean);
   if (experiment.concluded_arm) facts.splice(2, 0, ["Concluded with", experiment.concluded_arm]);
   else if (experiment.status === "concluded") facts.splice(2, 0, ["Concluded with", "no winner"]);
   return experimentCard("Definition", [

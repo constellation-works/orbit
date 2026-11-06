@@ -260,7 +260,7 @@ impl OrbitRuntime {
         let modes = task_execution_modes(self, since, &executed, now);
         let mut interactive_excluded = 0;
 
-        let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id)?;
+        let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id, &ids)?;
         let mut outcomes = Vec::with_capacity(enrolled.len());
         for row in enrolled {
             let (Some(arm), Some(task)) = (row.arm.as_ref(), tasks.get(row.task_id.as_str()))
