@@ -728,6 +728,62 @@ await test('default read failures retain usable recovery controls', async () => 
   await settle();
 });
 
+function scenarioButton(label) {
+  const button = [...body().querySelectorAll('.fc-scenario button')].find(node => node.textContent === label);
+  assert.ok(button, `the scenario control has ${label}: ${text()}`);
+  return button;
+}
+
+function proposedPayload() {
+  const loaded = payload();
+  loaded.backlog.proposed = 2;
+  loaded.if_approved = { tasks: 3, time_to_drain_hours: { p50: 9, p90: 25 } };
+  return loaded;
+}
+
+await test('an unloaded forecast never states the proposed count as zero', async () => {
+  common.setWorkspace('ws-proposed-unknown');
+  const cold = forecast.fetchAndRenderForecast();
+  const rejected = assert.rejects(cold, /default forecast unavailable/);
+  for (const stage of ['loading', 'failed']) {
+    const label = scenarioButton('With proposed');
+    assert.ok(label.disabled, `the unknown count is not offered while ${stage}`);
+    assert.doesNotMatch(text(), /With 0 proposed/, `an unknown count is not read as zero while ${stage}`);
+    assert.doesNotMatch(label.attrs.title ?? label.title ?? '', /nothing is proposed/, `an unknown count is not read as none while ${stage}`);
+    if (stage === 'loading') {
+      pending.at(-1).resolve(response({ error: 'default forecast unavailable' }, 500));
+      await settle();
+    }
+  }
+  await rejected;
+  clickForecastControl('Refresh');
+  pending.at(-1).resolve(response(proposedPayload()));
+  await settle();
+  assert.ok(!scenarioButton('With 2 proposed').disabled, 'a successful read offers the count it learned');
+});
+
+await test('picking a scenario on the same read with no forecast loaded shows the pick', async () => {
+  common.setWorkspace('ws-scenario-no-payload');
+  await render(proposedPayload());
+  clickForecastControl('With new arrivals');
+  pending.at(-1).resolve(response(proposedPayload()));
+  await settle();
+  clickForecastControl('Current backlog');
+  assert.equal(pending.at(-1).url.searchParams.get('arrivals'), null);
+  pending.at(-1).resolve(response({ error: 'default forecast unavailable' }, 500));
+  await settle();
+  assert.match(text(), /default forecast unavailable/);
+
+  const requests = pending.length;
+  clickForecastControl('With 2 proposed');
+  assert.equal(scenarioButton('With 2 proposed').getAttribute('aria-pressed'), 'true', 'the click shows the proposed scenario as pressed');
+  assert.equal(scenarioButton('Current backlog').getAttribute('aria-pressed'), 'false', 'the previous scenario is no longer pressed');
+  clickForecastControl('Current backlog');
+  assert.equal(scenarioButton('Current backlog').getAttribute('aria-pressed'), 'true', 'picking back shows the current backlog as pressed');
+  assert.equal(scenarioButton('With 2 proposed').getAttribute('aria-pressed'), 'false');
+  assert.equal(pending.length, requests, 'the same read is not fetched again');
+});
+
 for (const overlap of [false, true]) {
   await test(overlap ? 'a poll cannot supersede a pending Refresh' : 'Live Refresh survives two dashboard poll ticks', async () => {
     common.setWorkspace(`ws-refresh-${overlap}`);
