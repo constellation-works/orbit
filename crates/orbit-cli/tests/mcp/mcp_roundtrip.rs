@@ -2701,9 +2701,9 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     let scratch = workspace.scratch("scratch");
     // Use the operator surface to keep checking every canonical tool's
     // selector contract, including tools omitted from agent listings and
-    // agent invocation's opt-in toolset.
+    // every opt-in toolset.
     let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
-        .args(["mcp", "serve", "--operator", "--toolset", "agent-invoke"])
+        .args(["mcp", "serve", "--operator", "--toolset", "all"])
         .spawn_piped();
     let mut client = McpClient::initialized(
         child,
@@ -2725,15 +2725,31 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     {
         let name = definition.schema.name.as_str();
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
-        let requires_selector = advertised
+        let advertised_tool = advertised
             .iter()
             .find(|tool| tool["name"] == json!(advertised_name))
-            .and_then(|tool| tool["inputSchema"]["required"].as_array())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name}: canonical workspace-scoped definition is not advertised; \
+                     --toolset all must expose every audited definition: {advertised_name}"
+                )
+            });
+        let requires_selector = advertised_tool["inputSchema"]["required"]
+            .as_array()
             .is_some_and(|required| required.contains(&json!("workspace")));
 
         let result = client.call_tool(&advertised_name, json!({}));
-        let message = result
-            .get("structuredContent")
+        let structured = result.get("structuredContent");
+        let code = structured
+            .and_then(|content| content.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert_ne!(
+            code, "toolset_not_enabled",
+            "{name}: --toolset all must expose every audited definition; \
+             a toolset refusal is incomplete coverage, not a selector agreement: {result}"
+        );
+        let message = structured
             .and_then(|content| content.get("message"))
             .and_then(Value::as_str)
             .unwrap_or_default();
