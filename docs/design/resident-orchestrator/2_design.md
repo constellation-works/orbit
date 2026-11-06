@@ -129,9 +129,11 @@ not the prompt.
    (tagged `resident`, control active): a grant is not an activation prerequisite. Its
    first fire follows on the next clock tick.
 
-From the dashboard, steps 2 and 3 are the Residents view's form and authority control
-([§6.1](#61-the-dashboard-path)): one action creates the tagged assignment with its
-`resident/mandate.json`, and a widening there is the human's answered request.
+From the dashboard, steps 2 and 3 are one start flow in the Residents view
+([§6.1](#61-the-dashboard-path)): it creates the tagged assignment with its
+`resident/mandate.json`, widens it with the human's words as an answered request, and turns the
+workspace's cycle routine on when it is off. These are three separate writes; a refusal names the
+step and says what already exists.
 
 Granted rights authorize action, not activation. A mandate without granted rights still runs
 observe-only cycles by default. That is useful for a resident that only watches and reports.
@@ -416,7 +418,7 @@ under the governed operation `resident.write` (operator session only):
 
 | View action | Route | Mechanism |
 |---|---|---|
-| List mandates, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents` | `orbit.resident.list`, then `orbit.resident.show` per mandate |
+| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | `orbit.resident.list`, then `orbit.resident.show` per mandate |
 | Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
 | Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
 | Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
@@ -430,7 +432,7 @@ The dashboard runs the tools with its own session envelope (Agent, plus Operator
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
 unchanged.
 
-The creation form offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
+The start flow offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
 the API validates the submitted tier. Repeating a widening whose rights and workspaces are
 already held reports unchanged authority and records no grant request. Applied widening is
 reported as an answered request; a combined deadline change reports its separate outcome,
