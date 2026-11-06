@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contracts::{FrictionAddParams, FrictionListFilter, FrictionStoreBackend};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewPoolExclusion};
 use serde_json::Value;
@@ -109,11 +109,11 @@ pub(crate) fn record_pool_crew_health(
                 tracing::warn!(target: "orbit.core.job_run", signal = "crew_pool_excluded", run_id, crew, warning = %streak.describe(&crew), "configured pool crew is excluded on every admission pass");
                 continue;
             }
-            let key = format!(
-                "crew-pool-excluded:{run_id}:{crew}:{}",
-                streak.since.to_rfc3339()
-            );
             let frictions = crate::runtime::friction::store_for(runtime)?;
+            if open_friction_for_crew_cause_exists(frictions.as_ref(), &crew, &streak.reason)? {
+                continue;
+            }
+            let key = dedupe_key(&crew, &streak.reason);
             let accepted = frictions.tags()?;
             let tags = ["automation", "other"]
                 .into_iter()
@@ -121,7 +121,7 @@ pub(crate) fn record_pool_crew_health(
                 .map(str::to_string)
                 .into_iter()
                 .collect();
-            frictions.add_or_reuse(&key, FrictionAddParams {
+            frictions.add(FrictionAddParams {
                 model: "system".into(),
                 title: Some(format!("Pool crew `{crew}` excluded on every admission pass")),
                 body: format!("{}\nInspect `orbit run show {run_id}` and the managed launcher's environment; after repairing an env source, restart the service and start a new drain.\ndedupe-key: {key}\n", streak.describe(&crew)),
@@ -133,4 +133,51 @@ pub(crate) fn record_pool_crew_health(
     if let Err(error) = result {
         tracing::warn!(target: "orbit.core.job_run", run_id, %error, "could not record sustained pool crew exclusions");
     }
+}
+
+/// Stable identity for one crew and one unchanged exclusion cause, across
+/// drains and streaks. The key is a single line so it can be written as the
+/// body's `dedupe-key:` line.
+fn dedupe_key(crew: &str, reason: &str) -> String {
+    let sanitized: String = reason
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    format!("crew-pool-excluded:{crew}:{}", sanitized.trim())
+}
+
+/// Whether an open (or triaged) friction already records this crew excluded
+/// for this exact cause. Matches on the crew's title and the reason suffix
+/// of the shared `describe` first line, so frictions filed under the old
+/// per-drain key still suppress a duplicate.
+fn open_friction_for_crew_cause_exists(
+    frictions: &dyn FrictionStoreBackend,
+    crew: &str,
+    reason: &str,
+) -> Result<bool, orbit_common::OrbitError> {
+    let filter = FrictionListFilter {
+        statuses: vec![FrictionStatus::Open, FrictionStatus::Triaged],
+        q: Some(format!(
+            "Pool crew `{crew}` excluded on every admission pass"
+        )),
+        ..Default::default()
+    };
+    let existing = frictions.list(&filter)?;
+    Ok(existing
+        .iter()
+        .any(|row| exclusion_reason_from_body(&row.record.body, crew).as_deref() == Some(reason)))
+}
+
+/// The exclusion cause carried by a pool-crew friction body: the reason
+/// suffix of its shared `describe` first line. `None` for a body that does
+/// not carry this crew's line (another crew, or a different record).
+fn exclusion_reason_from_body(body: &str, crew: &str) -> Option<String> {
+    let first = body.lines().next()?;
+    let prefix = format!("Pool crew `{crew}` excluded on every admission pass");
+    if !first.starts_with(&prefix) {
+        return None;
+    }
+    first
+        .split_once("): ")
+        .map(|(_, reason)| reason.to_string())
 }
