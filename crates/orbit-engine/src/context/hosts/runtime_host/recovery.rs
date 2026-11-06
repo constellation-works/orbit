@@ -128,9 +128,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _step_id: &str,
             _output: &Value,
-        ) -> Result<(), DispatchError> {
-            Ok(())
-        }
+        ) -> Result<(), DispatchError>;
 
         /// Persist a successful terminal failure activity separately from normal
         /// step checkpoints. The failed step remains failed; this records only the
@@ -170,9 +168,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _pull_request: &str,
             proposed: u64,
-        ) -> Result<u64, OrbitError> {
-            Ok(proposed)
-        }
+        ) -> Result<u64, OrbitError>;
 
         /// Bind native validation to task meaning and the effective completion policy.
         /// Hosts without this evidence never reuse a published completion prefix.
@@ -180,9 +176,7 @@ macro_rules! recovery_methods {
             &self,
             _run_id: &str,
             _task_ids: &[String],
-        ) -> Result<Option<String>, OrbitError> {
-            Ok(None)
-        }
+        ) -> Result<Option<String>, OrbitError>;
 
         /// Classify a transient completion observation after authenticating the
         /// publication and its receipts. This grants no authority to retry mutations.
@@ -200,9 +194,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _task_id: &str,
             _step_id: &str,
-        ) -> Result<bool, OrbitError> {
-            Ok(false)
-        }
+        ) -> Result<bool, OrbitError>;
 
         /// [ORB-13907] Act on an admitted final recovery's decision: record it,
         /// and apply every decision but `resume` to the task through the

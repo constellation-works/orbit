@@ -52,6 +52,39 @@ use super::super::super::{
 /// `gh` operations. Available only to tests, through
 /// `orbit_engine::test_support`.
 pub trait NullRuntimeHost: Send + Sync {
+    fn validation_build_output_env(&self) -> Vec<String> {
+        NullRuntimeHost::validation_subprocess_environment(self).build_output_env
+    }
+    fn mid_run_steering_enabled(&self) -> bool {
+        false
+    }
+    fn record_resident_continuity_rebuilt(&self, _run_id: &str) -> Result<(), OrbitError> {
+        Ok(())
+    }
+    fn completion_deadline(
+        &self,
+        _run_id: &str,
+        _pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError> {
+        Ok(proposed)
+    }
+    fn completion_policy_digest(
+        &self,
+        _run_id: &str,
+        _task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+    fn authenticate_completion_tail(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _step_id: &str,
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
     fn start_plugin_broker(
         &self,
         _run: &PluginBrokerRun,

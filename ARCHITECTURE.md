@@ -155,7 +155,8 @@ Engine's dev-only edge to itself enables its `test-support` feature for its own
 unit and integration tests. The feature exports `test_support::NullRuntimeHost`,
 the base every `RuntimeHost` test double in Engine and Core builds on, so the
 `RuntimeHost` trait itself carries no defaults and shipped builds have no null
-host.
+host. The test base forwards every capability, including overrides, through its
+blanket implementation.
 
 The `orbit-core` → `orbit-exec` edge is a production edge: Core's script steps,
 CodeQL fulfilment, plugin conformance, browser kit reads and Linux host probe use

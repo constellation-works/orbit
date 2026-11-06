@@ -870,7 +870,7 @@ The prescriptive contract for this area lives in [specs/backend-resolution.md](.
 
 Activity / Job is where orbit-core hands work to orbit-engine without depending on `orbit-agent` types.
 
-After [ORB-10633] / [Job execution crosses one RuntimeHost boundary](./4_decisions.md#job-execution-crosses-one-runtimehost-boundary), `RuntimeHost` is the single capability boundary and `OrbitRuntime` has one implementation. It presents run/task persistence, environment resolution, provider dispatch, audit/checkpoint hooks, and core-owned deterministic actions in one declaration; no parallel host-trait family remains. Every method is required, so a new capability fails to compile until `OrbitRuntime` answers it; test doubles build on the test-only `orbit_engine::test_support::NullRuntimeHost`, which answers each capability the way a host without it does.
+After [ORB-10633] / [Job execution crosses one RuntimeHost boundary](./4_decisions.md#job-execution-crosses-one-runtimehost-boundary), `RuntimeHost` is the single capability boundary and `OrbitRuntime` has one implementation. It presents run/task persistence, environment resolution, provider dispatch, audit/checkpoint hooks, and core-owned deterministic actions in one declaration; no parallel host-trait family remains. Every method is required, so a new capability fails to compile until `OrbitRuntime` answers it; test doubles build on the test-only `orbit_engine::test_support::NullRuntimeHost`, which answers each capability the way a host without it does and forwards test overrides through its blanket implementation.
 
 - run a core-owned deterministic action by name
 - resolve a provider's CLI executor command plus static args

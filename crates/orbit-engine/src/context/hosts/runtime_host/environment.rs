@@ -123,12 +123,10 @@ macro_rules! environment_methods {
         /// shell under `[workflow.validation_env]`, including workspace-selected
         /// build output bindings applied by host validation runners.
         fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment;
-        /// Workspace output bindings for cache identity. Configured hosts override
-        /// this with a config-only read so observational cache queries do not probe
-        /// a login shell. The default shares the host's environment contract.
-        fn validation_build_output_env(&self) -> Vec<String> {
-            self.validation_subprocess_environment().build_output_env
-        }
+        /// Workspace output bindings for cache identity. Configured hosts can use
+        /// a config-only read so observational cache queries do not probe a login
+        /// shell. The test-only host shares its environment contract.
+        fn validation_build_output_env(&self) -> Vec<String>;
 
         /// The authoritative shared Orbit registry root to hand a spawned CLI
         /// agent as `ORBIT_REGISTRY_ROOT`.
