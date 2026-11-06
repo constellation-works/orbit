@@ -73,10 +73,11 @@ function render({ rows, roleHref }) {
     list.append(item);
   });
   return [
-    el("p", { class: "agents-muted", text: "Repeat runs, [BLOCKED] or unmerged PRs and operator requeues on each orchestrator's tasks, by cause. Only spec-caused rework lowers an orchestrator's score." }),
     legend,
     list,
   ];
 }
 
-export const orchestratorsPanel = { title: "Rework by cause", render, scoreNote, how: HOW };
+const hint = () => "Repeat runs, [BLOCKED] or unmerged PRs and operator requeues on each orchestrator's tasks, by cause. Only spec-caused rework lowers an orchestrator's score.";
+
+export const orchestratorsPanel = { title: "Rework by cause", hint, render, scoreNote, how: HOW };

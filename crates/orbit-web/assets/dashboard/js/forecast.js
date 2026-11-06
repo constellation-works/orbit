@@ -24,7 +24,7 @@ import {
   bindTaskLink, relativeTime, statusPill,
 } from './common.js';
 import {
-  el, forecastView as view, forecastCard, forecastTable, forecastMoreSection, forecastHint,
+  el, forecastView as view, forecastCard, forecastTable, forecastMoreSection, pinnedInfoHint,
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
@@ -512,7 +512,7 @@ function rangeText(quantiles, fmt) {
 
 function totalTile(label, value, lines, className) {
   return el("div", { class: `mx-sc fc-fig fc-total ${className}`, role: "group", "aria-label": label }, [
-    el("span", { class: "mx-sc-label" }, [label, forecastHint(lines.filter(Boolean).join("\n"))]),
+    el("span", { class: "mx-sc-label" }, [label, pinnedInfoHint(lines.filter(Boolean).join("\n"))]),
     el("span", { class: value.known ? "fc-total-value" : "fc-total-value fc-total-unknown", text: value.text }),
   ]);
 }
@@ -702,7 +702,7 @@ function taskCell(row, review) {
   bindTaskLink(link, row.id);
   const lines = taskEvidenceLines(row, review);
   return el("th", { scope: "row" }, [
-    el("span", { class: "fc-task-line" }, [link, lines.length ? forecastHint(lines.join("\n")) : null]),
+    el("span", { class: "fc-task-line" }, [link, lines.length ? pinnedInfoHint(lines.join("\n")) : null]),
   ]);
 }
 
@@ -750,7 +750,7 @@ function waitsSection(scenario) {
   const waits = scenario.source?.wait_hours;
   if (!waits || !scenario.source?.tasks) return null;
   const items = WAITS.map(([key, label, hint]) => el("div", { class: "fc-wait" }, [
-    el("dt", {}, [label, forecastHint(hint)]),
+    el("dt", {}, [label, pinnedInfoHint(hint)]),
     el("dd", { class: "fc-wait-value", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
   ]));
   return forecastMoreSection("waits", "Wait breakdown", "task-hours, p50 – p90", [
@@ -763,7 +763,7 @@ function waitsSection(scenario) {
 
 function forecastPanelNodes(scenario) {
   return [
-    el("div", { class: "fc-scenario-row" }, [scenarioSwitch(), forecastHint(arrivalsText())]),
+    el("div", { class: "fc-scenario-row" }, [scenarioSwitch(), pinnedInfoHint(arrivalsText())]),
     ...totalsNodes(scenario),
     tasksCard(scenario),
     el("div", { class: "fc-more-list" }, [waitsSection(scenario)]),

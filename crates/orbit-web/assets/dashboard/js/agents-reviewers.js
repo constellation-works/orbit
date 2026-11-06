@@ -6,14 +6,14 @@
 // how a review job's filed findings are judged and what an unjudged row is
 // to "How the score works". Every node is built with `el()`.
 
-import { el } from './common.js';
+import { el, pinnedInfoHint } from './common.js';
 
 const OUTCOMES = [
   { key: "outcome_held_up", label: "Accepted and held up" },
   { key: "outcome_caught", label: "Caught a real problem" },
   { key: "outcome_false_alarm", label: "False alarm" },
   { key: "outcome_missed", label: "Missed a regression" },
-  { key: "outcome_unresolved", label: "Unresolved", note: "not judged yet, incomplete, failed fixes or findings dropped unverified" },
+  { key: "outcome_unresolved", label: "Unresolved" },
 ];
 // Reviews younger than this can still be charged a `review_missed`
 // regression (`roles/reviewers.rs`).
@@ -39,7 +39,6 @@ function render({ rows }) {
   const legend = el("ul", { class: "agents-cause-legend" }, OUTCOMES.map((outcome) => el("li", {}, [
     el("span", { class: `agents-swatch agents-outcome-${outcome.key}`, "aria-hidden": "true" }),
     el("span", { text: outcome.label }),
-    ...(outcome.note ? [el("span", { class: "agents-cause-note", text: outcome.note })] : []),
   ])));
   const list = el("ul", { class: "agents-cause-rows" });
   rows.forEach((row, index) => {
@@ -66,7 +65,6 @@ function render({ rows }) {
     list.append(item);
   });
   return [
-    el("p", { class: "agents-muted", text: "Each settled review by how its verdict turned out. Accepting or rejecting more never moves a score; only verdicts that turned out right earn credit." }),
     legend,
     list,
   ];
@@ -79,11 +77,9 @@ function banner({ scorecard }) {
   if (typeof provisional !== "number" || provisional <= 0) return null;
   const units = (Array.isArray(scorecard.rows) ? scorecard.rows : []).reduce((sum, row) => sum + (row.units || 0), 0);
   return el("p", {}, [
-    el("strong", { text: "Provisional. " }),
-    el("span", {
-      text: `${provisional} of ${plural(units, "review")} in this window ${provisional === 1 ? "is" : "are"} younger than the ${MISS_LOOKBACK_DAYS}-day miss lookback.`
-        + " A review_missed regression filed later still lowers the reviewer who accepted, so these scores can fall.",
-    }),
+    el("strong", { text: "Provisional" }),
+    el("span", { text: ` · ${provisional} of ${plural(units, "review")}` }),
+    pinnedInfoHint(`${provisional === 1 ? "This review is" : "These reviews are"} younger than the ${MISS_LOOKBACK_DAYS}-day miss lookback. A review_missed regression filed later still lowers the reviewer who accepted, so these scores can fall.`),
   ]);
 }
 
@@ -105,4 +101,6 @@ const how = [
   "A row none of whose units is judged yet (no review gate settlement, and no filed finding with a verdict or a landed or dropped task) is unjudged: it has no score or rank, is tagged unjudged, is listed after every other row, and stays out of the fleet average.",
 ];
 
-export const reviewersPanel = { title: "How verdicts turned out", render, banner, rowTags, how };
+const hint = () => "Each settled review by how its verdict turned out. Accepting or rejecting more never moves a score; only verdicts that turned out right earn credit. Unresolved: not judged yet, incomplete, failed fixes or findings dropped unverified.";
+
+export const reviewersPanel = { title: "How verdicts turned out", hint, render, banner, rowTags, how };
