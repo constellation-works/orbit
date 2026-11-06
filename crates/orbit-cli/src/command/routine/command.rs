@@ -34,7 +34,8 @@ use crate::command::CommandOut;
                   routines; its other routines are listed as owner-only. Pauses are\n\
                   host-local and never synced. `enable` and `disable` edit the definition's\n\
                   versioned `enabled` field like the dashboard toggle, are operator-only\n\
-                  and are audited; a seeded routine stays off until enabled. The host\n\
+                  and are audited; most seeded routines stay off until enabled, except\n\
+                  `crew-performance-refresh`, which is seeded enabled. The host\n\
                   scheduler is controlled through `orbit clock`."
 )]
 pub struct RoutineCommand {
