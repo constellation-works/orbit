@@ -161,6 +161,44 @@ class RelativeImportTests(unittest.TestCase):
             with self.subTest(relative=relative, source=source):
                 self.check_files({"codebase/riskiness.rs": codebase, relative: source}, rejected=True)
 
+    def test_distributed_reaches_experiment_only_through_its_port(self):
+        # [ORB-22416] Admission's capture call into experiment was a hidden
+        # cycle: experiment's readout reads distributed's claim receipt.
+        method = {
+            "experiment/overlay.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_capture_method(&self) {}\n}\n",
+        }
+        self.check_files({
+            **method,
+            "distributed/serve/admission.rs":
+                "impl OrbitRuntime {\n    fn admit(&self) {\n"
+                "        self.fresh_capture_method();\n    }\n}\n",
+        }, rejected=True)
+        for relative, source in (
+            ("distributed/serve/admission.rs", "use crate::application::experiment::Probe;\n"),
+            ("distributed/serve/admission.rs", "use crate::application::{experiment::Probe};\n"),
+            ("distributed/worker.rs", "use super::super::experiment::Probe;\n"),
+            ("distributed/worker.rs", "use super::super::{experiment::Probe};\n"),
+            ("distributed/serve/admission.rs", "use super::super::super::{experiment::Probe};\n"),
+        ):
+            with self.subTest(relative=relative, source=source):
+                self.check_files({relative: source}, rejected=True)
+        self.check_files({
+            **method,
+            "distributed/experiment_port.rs":
+                "pub(in crate::application) trait DistributedExperimentPort {\n"
+                "    fn capture_pull_experiments(&self);\n}\n",
+            "experiment/distributed_port.rs":
+                "impl DistributedExperimentPort for OrbitRuntime {\n"
+                "    fn capture_pull_experiments(&self) {\n"
+                "        self.fresh_capture_method();\n    }\n}\n",
+            "distributed/serve/admission.rs":
+                "impl OrbitRuntime {\n    fn admit(&self) {\n"
+                "        self.capture_pull_experiments();\n    }\n}\n",
+            "experiment/readout/admission.rs":
+                "use crate::application::distributed::claim_receipt;\n",
+        }, rejected=False)
+
     def test_forecast_cannot_reach_sweep_filing(self):
         self.check_import("backlog_forecast/probe.rs",
                           "use crate::application::sweep_filing::Probe;", True)

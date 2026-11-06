@@ -11,7 +11,9 @@ use orbit_types::tool::{CLAIMED_MODE_DENIED_TOOLS, is_claimed_owner_tool};
 use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
-use crate::application::distributed::{DistributedAdmissionPort, owner_binary_version};
+use crate::application::distributed::{
+    DistributedAdmissionPort, DistributedExperimentPort, owner_binary_version,
+};
 use crate::application::host_labels;
 use crate::application::task::PilotAdmissionHold;
 use crate::runtime::run_input::recorded_task_ids;
@@ -294,7 +296,7 @@ impl OrbitRuntime {
             &|task| self.fresh_claim_crew_task(task, request),
             &|task| {
                 Ok(AdmissionTaskGuidance {
-                    experiments: self.capture_claimed_task_experiments(task, &request.ship)?,
+                    experiments: self.capture_pull_experiments(task, &request.ship)?,
                     explore_brief: self.captured_explore_brief(&task.id),
                     // Freeze the claimed task's mock digests on the owner,
                     // where its artifacts live, in the same commit as the

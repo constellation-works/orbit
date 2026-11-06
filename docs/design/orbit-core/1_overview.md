@@ -124,6 +124,7 @@ source scan, enforces the runtime direction.
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
+| Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
 | Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition/services.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
@@ -253,7 +254,12 @@ moved the backlog forecast out of `task` to its own place in the order:
   review's handoff console take the owner's commit boundary, and the console
   the handoff completion authority, through `job::JobDrainPort`, and
   admission's backlog listing takes the tasks live `run auto` leaves carry
-  through `task::TaskWorkspaceAutoPort`.
+  through `task::TaskWorkspaceAutoPort`. `experiment` is outside the order
+  and above `distributed`: its readout reads the claim receipt `distributed`
+  owns, so admission captures a claimed task's experiments through
+  `distributed::DistributedExperimentPort::capture_pull_experiments`, which
+  `experiment` implements on `OrbitRuntime`; the receipt read stays a legal
+  `experiment -> distributed` edge [ORB-22416].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`
@@ -276,7 +282,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   chain, or calls the inherent methods and functions the [ORB-17939] ports
   and reused reads wrap, when `contracts` imports any of the ten modules,
   `precedent_decision` or `assistance`, when `task` names `precedent_decision`
-  or calls its inherent methods [ORB-22313],
+  or calls its inherent methods [ORB-22313], when `distributed` names
+  `experiment` or calls its inherent methods [ORB-22416],
   or when a shared contract is defined or imported anywhere but
   `application::contracts`. [ORB-22004] The same derivation covers the adapter:
   `application` may not import `crate::adapter`, and no application file may call
@@ -374,5 +381,6 @@ later audit.
 - [ORB-22289] — moved executor `host_os` limits, mock admission and the commit-pinned readers into `task`, put the host-OS wait in `job::crew_pools` and the wait and live-delivery-run reads behind `TaskJobPort`, and added `tag_instructions` to the guarded `task` upper modules.
 - [ORB-22287] — moved the backlog forecast from `task/backlog_forecast/` to `backlog_forecast/` above `workspace_auto`, removed its guard exemption, and guarded the forecast → `codebase` edge to the one authorized call.
 - [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
+- [ORB-22416] — cut the distributed → experiment capture edge through `distributed::DistributedExperimentPort`, implemented by `experiment`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

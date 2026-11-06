@@ -215,7 +215,7 @@ impl OrbitRuntime {
     /// live arm's instruction files read at the claim's base. A file that
     /// cannot be admitted is captured as a refusal, so the leaf refuses the
     /// role it applies to rather than running without it.
-    pub(crate) fn capture_claimed_task_experiments(
+    pub(super) fn capture_claimed_task_experiments(
         &self,
         task: &Task,
         ship: &AdmissionShipContract,
