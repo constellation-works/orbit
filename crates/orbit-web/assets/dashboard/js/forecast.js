@@ -83,8 +83,9 @@ const SCHEDULE_ROWS = 50;
 let requestScope = null;
 let liveRefresh = null;
 let tabPickListener = null;
-// The switch's label while a scenario with no payload yet loads.
-let proposedKnown = 0;
+// The switch's label while a scenario with no payload yet loads; null until a
+// read succeeds in the workspace, so an unknown count never reads as zero.
+let proposedKnown = null;
 
 function clearForecast() {
   view.payload = null;
@@ -169,7 +170,7 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
 
 onWorkspaceChange(() => {
   requestScope = null;
-  proposedKnown = 0;
+  proposedKnown = null;
   clearForecast();
 });
 
@@ -360,7 +361,9 @@ function renderViewControls() {
     el("div", { class: "fc-scenario-row" }, [scenarioSwitch()]),
   ]);
   root.dataset.key = "forecast-view";
-  root.dataset.hash = "controls";
+  // The scenario buttons close over their pressed state, so a pick or a newly
+  // learned count must replace the node rather than reuse the old one.
+  root.dataset.hash = JSON.stringify(["controls", view.history, view.scenario, proposedKnown]);
   syncNodes(body, [root]);
 }
 
@@ -386,20 +389,30 @@ function selectedScenario() {
 function pickScenario(key) {
   const before = endpoint();
   view.scenario = key;
-  if (endpoint() === before) renderForecast();
-  else refetch();
+  if (endpoint() !== before) refetch();
+  // Same read: with no forecast loaded there is nothing for renderForecast to
+  // draw, so redraw the controls to show the pick.
+  else if (view.payload) renderForecast();
+  else renderViewControls();
 }
 
 function scenarioSwitch() {
   const payload = view.payload;
   const proposed = payload ? forecastCount(payload.backlog?.proposed) : proposedKnown;
+  const countKnown = proposed != null;
   // The proposed scenario lives in the no-arrivals read, so any loaded response
   // or a remembered count is enough to offer it.
-  const offerable = payload ? proposedScenarioReady() : proposed > 0;
+  const offerable = payload ? proposedScenarioReady() : countKnown && proposed > 0;
+  let proposedTitle = "The proposed-task count is unknown until a forecast loads";
+  if (countKnown) {
+    proposedTitle = offerable
+      ? `If the ${proposed} proposed task${proposed === 1 ? " is" : "s are"} approved`
+      : "No proposed-work forecast: nothing is proposed in this workspace";
+  }
   const on = view.scenario === "proposed" && !offerable ? "current" : view.scenario;
   const choices = [
     ["current", "Current backlog", "The backlog and in-progress tasks, with no new tasks arriving"],
-    ["proposed", `With ${proposed} proposed`, offerable ? `If the ${proposed} proposed task${proposed === 1 ? " is" : "s are"} approved` : "No proposed-work forecast: nothing is proposed in this workspace"],
+    ["proposed", countKnown ? `With ${proposed} proposed` : "With proposed", proposedTitle],
     ["arrivals", "With new arrivals", "New tasks keep arriving at the recent rate"],
   ];
   return el("div", { class: "mx-seg mx-seg-wrap fc-scenario", role: "group", "aria-label": "Scenario" }, choices.map(([key, text, title]) => {
