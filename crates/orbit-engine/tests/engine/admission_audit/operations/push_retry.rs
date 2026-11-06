@@ -19,6 +19,17 @@ To https://github.com/constellation-works/orbit.git\n \
 ! [remote rejected]     orbit/ORB-14525-dd948970 -> orbit/ORB-14525-dd948970 (Internal Server Error)\n\
 error: failed to push some refs to 'https://github.com/constellation-works/orbit.git'\n";
 
+// Captured GitHub internal failures: the fatal line and ref rejection are
+// separate lines, and `(failure)` alone does not identify a transient fault.
+const GITHUB_COMMIT_REFS_FAILURES: [&str; 2] = [
+    "remote: fatal error in commit_refs\n\
+To https://github.com/example/orbit.git\n\
+ ! [remote rejected] branch -> branch (failure)\n",
+    "remote: fatal error in commit_refs_rules\n\
+To https://github.com/example/orbit.git\n\
+ ! [remote rejected] branch -> branch (failure)\n",
+];
+
 /// A budget short enough for a test, at the same shape as production.
 fn fast_retry(max_attempts: u64) -> serde_json::Value {
     json!({"max_attempts": max_attempts, "initial_backoff_ms": 4, "backoff_cap_ms": 8})
@@ -35,6 +46,7 @@ fn pushes_recover_from_transient_remote_failures() {
         ),
         |root| {
             let fixture = PushFixture::new(root);
+            let mut failures = Vec::new();
             for operation in ["push", "push.candidate_ref"] {
                 for message in [
                     GITHUB_INTERNAL_SERVER_ERROR,
@@ -48,14 +60,22 @@ fn pushes_recover_from_transient_remote_failures() {
                     "fatal: early EOF",
                     "fatal: connection reset by peer",
                     "fatal: TLS handshake timeout",
-                ] {
+                ]
+                .into_iter()
+                .chain(GITHUB_COMMIT_REFS_FAILURES)
+                {
                     fixture.reset(message, 1, false);
                     // A matching SHA on a different ref does not confirm this push.
                     fixture.write("remote", &format!("{PUSH_HEAD}\trefs/heads/another\n"));
                     let mut input = fixture.input(operation, false);
                     input["forge_retry"] = fast_retry(3);
-                    let output = run_private_operation(operation, &input)
-                        .expect("transient push failure must recover");
+                    let output = match run_private_operation(operation, &input) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            failures.push(format!("{operation}: {message}: {error}"));
+                            continue;
+                        }
+                    };
                     assert_eq!(output["stdout"], "pushed\n", "{operation}: {message}");
                     assert_eq!(output["attempts"], 2, "{operation}: {message}");
                     assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote", "push"]);
@@ -67,6 +87,10 @@ fn pushes_recover_from_transient_remote_failures() {
                     );
                 }
             }
+            assert!(
+                failures.is_empty(),
+                "transient pushes did not recover: {failures:#?}"
+            );
         },
     );
 }
@@ -159,16 +183,23 @@ fn pushes_do_not_retry_permanent_refusals_even_with_transport_diagnostics() {
                     "! [remote rejected] branch -> branch (pre-receive hook declined)",
                     "remote: error: GH006: Protected branch update failed",
                     "remote: error: GH013: Repository rule violations found",
+                    "remote: error: rule violation: unsigned commit",
                     "! [rejected] branch -> branch (stale info)",
                     "! [remote rejected] branch -> branch (unexpected reason)",
+                    "! [remote rejected] branch -> branch (failure)",
+                    "remote: fatal error in commit_refs_other\n! [remote rejected] branch -> branch (failure)",
+                    "fatal error in commit_refs\n! [remote rejected] branch -> branch (failure)",
                 ] {
                     let mixed = format!(
                         "{message}\nerror: RPC failed; HTTP 503\n\
-                     ! [remote rejected] branch -> branch (Internal Server Error)\n"
+                     ! [remote rejected] branch -> branch (Internal Server Error)\n{}\n{}",
+                        GITHUB_COMMIT_REFS_FAILURES[0], GITHUB_COMMIT_REFS_FAILURES[1]
                     );
                     // An unknown rejection alone is permanent; the other cases must
                     // dominate even an additional transient transport diagnostic.
-                    let failure = if message.ends_with("(unexpected reason)") {
+                    let failure = if message.ends_with("(unexpected reason)")
+                        || message.ends_with("(failure)")
+                    {
                         message
                     } else {
                         &mixed
@@ -199,12 +230,19 @@ fn pushes_confirm_lost_replies_without_reusing_a_consumed_lease() {
                 ("push", true),
                 ("push.candidate_ref", false),
             ] {
-                fixture.reset("error: RPC failed; connection reset by peer", 1, true);
-                let output = run_private_operation(operation, &fixture.input(operation, lease))
-                    .expect("the exact remote head proves the failed reply hid a successful push");
-                assert!(output["stdout"].as_str().unwrap().starts_with(PUSH_HEAD));
-                assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);
-                assert_eq!(fixture.push_count(), 1, "{operation}: lease={lease}");
+                for message in ["error: RPC failed; connection reset by peer"]
+                    .into_iter()
+                    .chain(GITHUB_COMMIT_REFS_FAILURES)
+                {
+                    fixture.reset(message, 1, true);
+                    let output = run_private_operation(operation, &fixture.input(operation, lease))
+                        .expect(
+                            "the exact remote head proves the failed reply hid a successful push",
+                        );
+                    assert!(output["stdout"].as_str().unwrap().starts_with(PUSH_HEAD));
+                    assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);
+                    assert_eq!(fixture.push_count(), 1, "{operation}: lease={lease}");
+                }
             }
         },
     );
@@ -255,68 +293,73 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
         |root| {
             let fixture = PushFixture::new(root);
             for operation in ["push", "push.candidate_ref"] {
-                fixture.reset(GITHUB_INTERNAL_SERVER_ERROR, 9, false);
-                let mut input = fixture.input(operation, true);
-                input["forge_retry"] = fast_retry(3);
-                let error = run_private_operation(operation, &input)
-                    .expect_err("repeated transient failures must exhaust the push budget");
-                assert!(error.to_string().contains("(Internal Server Error)"));
-                assert_eq!(fixture.push_count(), 3);
-                assert_eq!(
-                    fixture.calls(),
-                    [
-                        "push",
-                        "ls-remote",
-                        "ls-remote",
-                        "push",
-                        "ls-remote",
-                        "ls-remote",
-                        "push",
-                        "ls-remote",
-                        "ls-remote"
-                    ]
-                );
-                // Only the delivery push holds; a carried candidate ref is pushed by
-                // a failure activity, which has no later step to hold at.
-                let legacy = ForgeUnavailableHold::from_text(&error.to_string());
-                if operation == "push" {
-                    let failure = error
-                        .forge_push_hold()
-                        .expect("an exhausted delivery push carries a typed forge hold");
-                    let hold = &failure.hold;
-                    assert_eq!(
-                        legacy.as_ref(),
-                        Some(hold),
-                        "the rendered error still carries the same hold for legacy readers"
-                    );
-                    assert_eq!(
-                        error.to_string(),
-                        format!("execution failed: {}", failure.message)
-                    );
-                    assert_eq!(
-                        serde_json::to_value(&error).unwrap(),
-                        json!({"Execution": failure.message}),
-                        "the error wire shape must remain Execution(string)"
-                    );
-                    assert_eq!(hold.target_ref, "refs/heads/branch");
-                    assert_eq!(hold.head_sha, PUSH_HEAD);
-                    assert_eq!(hold.attempts, 3);
-                    assert!(hold.waited_ms <= 4 + 8, "{hold:?}");
+                for message in [GITHUB_INTERNAL_SERVER_ERROR]
+                    .into_iter()
+                    .chain(GITHUB_COMMIT_REFS_FAILURES)
+                {
+                    fixture.reset(message, 9, false);
+                    let mut input = fixture.input(operation, true);
+                    input["forge_retry"] = fast_retry(3);
+                    let error = run_private_operation(operation, &input)
+                        .expect_err("repeated transient failures must exhaust the push budget");
                     assert!(
-                        hold.diagnostic.contains("(Internal Server Error)"),
-                        "{hold:?}"
+                        error.to_string().contains(message.trim()),
+                        "{operation}: {error}"
                     );
-                    let redacted = orbit_common::security::redaction::redact_all_error(error);
+                    assert_eq!(fixture.push_count(), 3);
                     assert_eq!(
-                        redacted
-                            .forge_push_hold()
-                            .map(|failure| &failure.hold.head_sha[..]),
-                        Some(PUSH_HEAD),
-                        "redaction keeps the typed hold"
+                        fixture.calls(),
+                        [
+                            "push",
+                            "ls-remote",
+                            "ls-remote",
+                            "push",
+                            "ls-remote",
+                            "ls-remote",
+                            "push",
+                            "ls-remote",
+                            "ls-remote"
+                        ]
                     );
-                } else {
-                    assert_eq!(error.forge_push_hold(), None, "{error}");
-                    assert_eq!(legacy, None, "{error}");
+                    // Only the delivery push holds; a carried candidate ref is pushed by
+                    // a failure activity, which has no later step to hold at.
+                    let legacy = ForgeUnavailableHold::from_text(&error.to_string());
+                    if operation == "push" {
+                        let failure = error
+                            .forge_push_hold()
+                            .expect("an exhausted delivery push carries a typed forge hold");
+                        let hold = &failure.hold;
+                        assert_eq!(
+                            legacy.as_ref(),
+                            Some(hold),
+                            "the rendered error still carries the same hold for legacy readers"
+                        );
+                        assert_eq!(
+                            error.to_string(),
+                            format!("execution failed: {}", failure.message)
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&error).unwrap(),
+                            json!({"Execution": failure.message}),
+                            "the error wire shape must remain Execution(string)"
+                        );
+                        assert_eq!(hold.target_ref, "refs/heads/branch");
+                        assert_eq!(hold.head_sha, PUSH_HEAD);
+                        assert_eq!(hold.attempts, 3);
+                        assert!(hold.waited_ms <= 4 + 8, "{hold:?}");
+                        assert!(hold.diagnostic.contains(message.trim()), "{hold:?}");
+                        let redacted = orbit_common::security::redaction::redact_all_error(error);
+                        assert_eq!(
+                            redacted
+                                .forge_push_hold()
+                                .map(|failure| &failure.hold.head_sha[..]),
+                            Some(PUSH_HEAD),
+                            "redaction keeps the typed hold"
+                        );
+                    } else {
+                        assert_eq!(error.forge_push_hold(), None, "{error}");
+                        assert_eq!(legacy, None, "{error}");
+                    }
                 }
 
                 fixture.reset("fatal: early EOF", 1, false);
