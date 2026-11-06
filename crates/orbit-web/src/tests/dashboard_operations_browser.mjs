@@ -96,10 +96,12 @@ const shared = await import('/js/operations-shared.js');
 const { renderAutoTasks } = await import('/js/operations-auto-tasks.js');
 const allowed = { authorized: true, reason: null };
 const capabilities = { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed };
-const definition = (name, dedupe, enabled = true) => ({
+const definition = (name, dedupe, enabled = true, trigger = 'schedule') => ({
   name, enabled, effective_enabled: enabled, dedupe,
   template: { title: name, crew: 'fixture', priority: 'medium', status: 'backlog' },
-  template_summary: name, schedule: { cron: '0 9 * * *' }, schedule_summary: 'daily at 09:00',
+  template_summary: name,
+  schedule: trigger === 'delivery' ? { deliveries: ['landed'] } : { cron: '0 9 * * *' },
+  schedule_summary: trigger === 'delivery' ? 'after landed deliveries' : 'daily at 09:00',
   may_create_open_duplicate: true, open_duplicate: true,
   last_minted_task_id: 'ORB-2', last_minted_task_status: 'in_progress',
   last_evaluation: { kind: 'fired', last_task_id: 'ORB-1', last_fired_at: '2026-10-28T09:00:00Z' },
@@ -228,6 +230,47 @@ try {
   assert(summaryValue('Enabled') === '1', '[ORB-19707] mixed strip must count one enabled definition: ' + summaryValue('Enabled'));
   mintConfirm('held-chore');
   mintConfirm('paused-always');
+
+  // ORB-22328: the public renderer omits the duplicate schedule hint while
+  // preserving the schedule group, its table and other trigger groups.
+  const group = (title) => Array.from(body().querySelectorAll('.operation-group'))
+    .find((node) => node.querySelector('.operation-group-title strong')?.textContent === title);
+  render([
+    definition('single-schedule', 'always'),
+    definition('delivery-trigger', 'always', true, 'delivery'),
+    definition('disabled-trigger', 'always', false),
+  ]);
+  let scheduleGroup = group('On a schedule');
+  assert(scheduleGroup && !scheduleGroup.querySelector('.operation-group-hint'),
+    '[ORB-22328] one scheduled definition must not render a duplicate group hint');
+  assert(scheduleGroup.querySelector('.operation-group-count')?.textContent === '1'
+    && scheduleGroup.querySelector('.operation-columns')
+    && scheduleGroup.querySelector('.auto-task-card'),
+  '[ORB-22328] schedule title, count and table must stay rendered');
+  assert(group('On delivery')?.querySelector('.operation-group-hint')?.textContent,
+    '[ORB-22328] delivery group hint must remain present');
+  assert(group('Disabled')?.querySelector('.operation-group-hint')?.textContent,
+    '[ORB-22328] disabled group hint must remain present');
+
+  const scheduledDefinitions = Array.from({ length: 9 }, (_, index) =>
+    definition('schedule-' + (index + 1), 'always'));
+  render([...scheduledDefinitions, definition('delivery-trigger', 'always', true, 'delivery')]);
+  scheduleGroup = group('On a schedule');
+  const cappedHint = scheduleGroup?.querySelector('.operation-group-hint')?.textContent ?? '';
+  assert(scheduleGroup?.querySelector('.operation-group-count')?.textContent === '9'
+    && scheduleGroup.querySelectorAll('.auto-task-card').length === 8
+    && cappedHint && !cappedHint.trimStart().startsWith('·'),
+  '[ORB-22328] capped schedule detail must not start with a separator');
+  const filterInput = body().querySelector('#auto-tasks-filter-input');
+  assert(filterInput, '[ORB-22328] schedule filter must remain available');
+  filterInput.value = 'schedule-1';
+  filterInput.dispatchEvent(new Event('input', { bubbles: true }));
+  scheduleGroup = group('On a schedule');
+  const filteredHint = scheduleGroup?.querySelector('.operation-group-hint')?.textContent ?? '';
+  assert(scheduleGroup?.querySelector('.operation-group-count')?.textContent === '1'
+    && scheduleGroup.querySelectorAll('.auto-task-card').length === 1
+    && filteredHint && !filteredHint.trimStart().startsWith('·'),
+  '[ORB-22328] filtered schedule detail must not start with a separator');
   globalThis.autoTaskPolicyTestsPassed = true;
 } catch (error) {
   globalThis.autoTaskPolicyError = String(error && error.message ? error.message : error);
