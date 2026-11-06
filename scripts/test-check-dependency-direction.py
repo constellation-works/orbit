@@ -390,6 +390,16 @@ class RelativeImportTests(unittest.TestCase):
             "use super::super::super::resolved::Probe;",
             "use crate::ResolvedConfig;",
             "fn probe() { crate::resolved::default_crews(); }",
+            # [ORB-22452] Every crate-root re-export of resolved config from
+            # lib.rs counts as the same edge, in use and inline form.
+            "use crate::{CompatibilityConfigKey, CompatibilityConfigKeyDisposition, "
+            "RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING, "
+            "compatibility_config_keys_at, compatibility_config_keys_present, "
+            "disabled_crew_message, executor_host_os, names_retired_system_crew};",
+            "use crate::executor_host_os;",
+            "use crate::disabled_crew_message;",
+            "fn probe() { crate::executor_host_os(); }",
+            "fn probe() { crate::disabled_crew_message(); }",
         ):
             with self.subTest(source=source):
                 self.check_config({snapshot: source + "\n"}, rejected=True)
@@ -403,6 +413,11 @@ class RelativeImportTests(unittest.TestCase):
             "use super::registry::Probe;",
             "use crate::raw::Probe;",
             "use toml::Value;",
+            # [ORB-22452] Inline paths to crates outside std, orbit-common
+            # and orbit-types count as the same edge as a use.
+            "fn probe() -> toml::Value { toml::Value::Boolean(true) }",
+            "fn probe() { let _ = serde_json::Value::Null; }",
+            "fn probe() { let _ = serde::de::value::Error::custom(\"\"); }",
         ):
             with self.subTest(source=source):
                 self.check_config({leaf: source + "\n"}, rejected=True)
