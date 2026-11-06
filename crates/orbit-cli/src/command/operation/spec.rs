@@ -466,9 +466,11 @@ pub(super) fn dispatch_clock(command: Commands, context: DispatchContext<'_>) ->
 
 pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Routine(command) => {
-            command.execute_without_runtime(context.root_override, context.workspace_selector)
-        }
+        Commands::Routine(command) => command.execute_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+            context.runtime,
+        ),
         _ => dispatch_mismatch("Routine"),
     }
 }

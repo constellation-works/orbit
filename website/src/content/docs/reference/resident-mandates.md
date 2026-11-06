@@ -196,7 +196,7 @@ orbit routine list
 orbit routine enable resident-cycle-<workspace>
 ```
 
-Use the workspace's name in place of `<workspace>`. `orbit routine disable resident-cycle-<workspace>` turns it off again. Both commands change the routine definition's versioned `enabled` field, the same change the dashboard's toggle makes, and both are audited. They are operator-only: an agent or an MCP session that runs them is refused, so a manager cannot start a resident on its own.
+Use the workspace's name in place of `<workspace>`, and run the command from that workspace's checkout or add `--workspace <workspace>`: a command that selects another workspace's routine is refused and changes nothing, so the audit record always names the workspace whose definition changed. `orbit routine disable resident-cycle-<workspace>` turns it off again. Both commands change the routine definition's versioned `enabled` field, the same change the dashboard's toggle makes, and both are audited. They are operator-only: an agent or an MCP session that runs them is refused, so a manager cannot start a resident on its own.
 
 Or in the dashboard, open **Automation**, find the `resident-cycle-<workspace>` routine and press **Enable**. The button works only on a dashboard served with `--operator`.
 

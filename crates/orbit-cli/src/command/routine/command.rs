@@ -4,8 +4,9 @@
 //! state, so the parent command dispatches without a workspace runtime (see
 //! `main.rs`), like `orbit sweep` itself. The exceptions are `enable` and
 //! `disable`: they are governed operator-only operations, so they open a
-//! runtime for the authorization and audit chokepoint but still act on the
-//! global registry.
+//! runtime for the authorization and audit chokepoint, and change only a
+//! routine of that runtime's workspace so the audit row names the workspace
+//! whose definition changed.
 
 use std::path::Path;
 
@@ -43,15 +44,18 @@ pub struct RoutineCommand {
 
 impl RoutineCommand {
     /// Resolve the selected global root once for every routine subcommand;
-    /// none may bootstrap a workspace from the caller's cwd.
+    /// none may bootstrap a workspace from the caller's cwd. `runtime` is the
+    /// workspace runtime the governed `enable`/`disable` verbs were opened
+    /// with; they refuse a routine that belongs to another workspace.
     pub fn execute_without_runtime(
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        runtime: Option<&OrbitRuntime>,
     ) -> CommandOut {
         let global_root = selected_global_root(root_override)?;
         self.command
-            .execute_without_runtime(&global_root, workspace_selector)
+            .execute_without_runtime(&global_root, workspace_selector, runtime)
     }
 }
 
@@ -88,12 +92,13 @@ impl RoutineSubcommand {
         self,
         global_root: &Path,
         workspace_selector: Option<&str>,
+        runtime: Option<&OrbitRuntime>,
     ) -> CommandOut {
         match self {
             Self::List(args) => args.execute_without_runtime(global_root, workspace_selector),
             Self::Show(args) => args.execute_without_runtime(global_root),
-            Self::Enable(args) => args.execute_without_runtime(global_root),
-            Self::Disable(args) => args.execute_without_runtime(global_root),
+            Self::Enable(args) => args.execute_without_runtime(global_root, runtime),
+            Self::Disable(args) => args.execute_without_runtime(global_root, runtime),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
             Self::Init(args) => args.execute_without_runtime(global_root),
