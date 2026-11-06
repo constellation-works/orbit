@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::cycle::live_cycle_from_history;
-use super::resident_mandate_ended;
+use super::{resident_mandate_ended, resident_mandate_from_artifact};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskUpdateParams};
 
@@ -279,6 +279,15 @@ impl OrbitRuntime {
                 } else {
                     control.state
                 };
+                if from != ResidentControlState::Ended
+                    && params.action != ResidentControlAction::Stop
+                    && let Err(reason) = resident_mandate_from_artifact(self, &task_id)?
+                {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "resident_control_refused: `{}` does not apply to an invalid mandate (the mandate is not usable: {reason}) (task {task_id})",
+                        params.action.as_str()
+                    )));
+                }
                 let to = transition(params.action, from).map_err(|reason| {
                     OrbitError::PolicyDenied(format!(
                         "resident_control_refused: {reason} (task {task_id})"

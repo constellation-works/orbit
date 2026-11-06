@@ -169,6 +169,13 @@ narrows or restores firing under the existing authority; none widens it.
 | `release` | `taken_over` | Firing restored; due on the next tick |
 | `stop` | any but ended | Mandate ends; assignment moves to `review` once no cycle is live |
 
+An action that does not apply to the current state is refused and writes
+nothing. On an invalid mandate (`orbit resident show` reports
+`state: invalid`, for example a missing or unreadable
+`resident/mandate.json`), `pause`, `resume`, `wake`, `takeover` and
+`release` are refused; `stop` stays allowed from any but ended, so a broken
+mandate can be disposed of.
+
 Pause and stop do not cancel a live cycle: it keeps its frozen grant,
 checkpoints (or receives a synthesized checkpoint), and exits at its boundary.
 
