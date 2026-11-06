@@ -4,12 +4,13 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
     FileLockOptions, FileLockProbe, HeldFileLock, atomic_write_text, atomic_write_text_volatile,
     hold_exclusive_file_lock_options, hold_step, probe_file_lock, sync_parent_dir,
-    with_exclusive_file_lock, with_shared_file_lock,
+    with_exclusive_file_lock, with_shared_file_lock, with_shared_file_lock_options,
 };
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
@@ -202,6 +203,26 @@ impl TaskBundleStoreV2 {
             refuse_interrupted_commit(&bundle_dir)?;
             op()
         })
+    }
+
+    /// Wait up to `timeout` for this task's bundle writer to release its lock,
+    /// without holding the lock past the wait. Readers don't exclude each
+    /// other here and there is nothing to wait for when no writer holds it.
+    pub(crate) fn await_bundle_writer(
+        &self,
+        task_id: &str,
+        timeout: Duration,
+    ) -> Result<(), OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_shared_file_lock_options(
+            &bundle_lock_target(&bundle_dir),
+            "task artifact v2",
+            FileLockOptions {
+                timeout,
+                ..FileLockOptions::default()
+            },
+            || Ok(()),
+        )
     }
 
     /// The caller has durably reserved this ID for one action and input digest.

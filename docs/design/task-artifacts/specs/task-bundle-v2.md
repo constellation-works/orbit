@@ -353,11 +353,12 @@ intent from bytes:
 - A reader that assembles a **complete** bundle must hold the same lock in
   shared mode. It then observes only settled bundles, so a genuine mismatch
   still fails the read (`task_bundle_corrupt`) with no tolerance widened.
-- The lock is per bundle: one task's transition must never block, fail, or
-  delay a read of any other task.
+- The lock is per bundle: one task's transition must never block or fail a
+  read of any other task. A listing that scans the partition is the one bounded
+  exception: see the freshness probe below.
 - Reads of the **envelope alone** need no lock. `task.yaml` is renamed into
   place atomically, so a single file is always self-consistent; the index
-  freshness scan every listing performs stays lock-free.
+  freshness scan every listing performs reads envelopes lock-free.
 - The read lock is not the create/delete sentinel, which keys on the bundle
   directory. Readers never block a task's creation or removal, and those
   transient states stay governed by the existing skip tolerance
@@ -456,8 +457,12 @@ reading that scan propagate. A registry opened read-only never takes a repair
 ticket or writes freshness proofs: its fallback logs only at debug and leaves
 the writer's repair gate untouched. Writable readers still attempt repair.
 Index fields and tags are loaded in one SQLite snapshot; the freshness probe
-retries once before accepting a mismatch, because a writer may finish publishing
-between the snapshot and an envelope probe. Completed task creation and update
+retries before accepting a mismatch, because a writer may finish publishing
+between the snapshot and an envelope probe. A writer shows its envelope before it
+updates the index row, and a coordinated commit keeps that gap open across its
+deferred apply, so a writable probe first waits, bounded, for the mismatching
+bundle's lock. Only the same task mismatching again with no writer on it proves
+the row stale ([ORB-22425]). Completed task creation and update
 publish the generated row before returning, including history-only updates.
 A refused writable repair is recorded per process,
 registry and workspace against the envelope stamps of every registered task
@@ -532,6 +537,7 @@ describes open, landed, unavailable and abandoned cover handling.
 - [ORB-11205] — Bound task-list hydration and eliminate repeated dashboard bundle reads.
 - [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
 - [ORB-14181] — Report canonical dangling relations and bound failed task-index repair attempts.
+- [ORB-22425] — A freshness probe waits for a mismatching bundle's writer before it falls back to a workspace scan and rebuild.
 - [ORB-15856] — Validate child-of index freshness against canonical parent-target sets.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -365,7 +365,10 @@ fn lock_events_observed<T>(
     }
     impl<S: tracing::Subscriber, F: Fn(&BTreeMap<String, String>) + 'static> Layer<S> for Capture<F> {
         fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-            if event.metadata().target() != "orbit.common.fs.file_lock" {
+            if !matches!(
+                event.metadata().target(),
+                "orbit.common.fs.file_lock" | "orbit.store.task_query"
+            ) {
                 return;
             }
             let mut fields = BTreeMap::new();
@@ -386,6 +389,94 @@ fn lock_events_observed<T>(
 /// reader-performance assertion.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const WAITING_FOR_LOCK: &str = "still waiting for advisory file lock; a holder may be hung";
+const WAITING_FOR_WRITER: &str = "task index freshness waiting for a bundle writer";
+const INDEX_FALLBACK: &str = "task index fallback";
+
+/// [ORB-22425] A commit shows its envelope before its deferred apply updates
+/// the index row, with the partition already released. A listing in that window
+/// used to take the row for stale and scan and rebuild the whole workspace inside
+/// its shared section, holding every admission behind it for seconds. It waits
+/// for the bundle's writer instead, and still returns the decided state.
+#[test]
+fn a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the_index() {
+    let owner = Owner::open(1);
+    let admitted = owner.admit("listed");
+    let task_id = admitted.claim.task_id.clone();
+    let writer = owner.boundary_with(FileLockOptions {
+        timeout: HANDSHAKE_TIMEOUT,
+        warn_after: HANDSHAKE_TIMEOUT,
+        ..FileLockOptions::default()
+    });
+    let reader_tasks = TaskV2Store::with_commit_boundary(
+        TaskRegistryStore::open(&task_registry_path(owner.root.path())).expect("open registry"),
+        PARTITION.into(),
+        Arc::new(owner.boundary_with(FileLockOptions {
+            timeout: HANDSHAKE_TIMEOUT,
+            ..FileLockOptions::default()
+        })),
+    );
+    reader_tasks.list_tasks().expect("the index serves");
+
+    let (applying_tx, applying) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let committer = std::thread::spawn(move || {
+        slow_apply::set(move || {
+            applying_tx.send(()).expect("signal the slow apply");
+            release
+                .recv_timeout(HANDSHAKE_TIMEOUT)
+                .expect("release the apply after the listing reaches the bundle");
+        });
+        admitted.bind(&writer)
+    });
+    applying
+        .recv_timeout(HANDSHAKE_TIMEOUT)
+        .expect("the commit reaches its apply");
+
+    let (reached_tx, reached) = mpsc::channel();
+    let (listed_tx, listed) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let bundle_lock = format!("/.{task_id}.bundle.lock");
+        let (tasks, events) = lock_events_observed(
+            || reader_tasks.list_tasks(),
+            move |event| {
+                let message = event.get("message").map(String::as_str);
+                if message == Some(WAITING_FOR_WRITER)
+                    || (message == Some(WAITING_FOR_LOCK)
+                        && event
+                            .get("lock_path")
+                            .is_some_and(|path| path.ends_with(&bundle_lock)))
+                {
+                    // Either wait proves the listing met the held bundle.
+                    let _ = reached_tx.send(());
+                }
+            },
+        );
+        listed_tx
+            .send((tasks, events))
+            .expect("return the listing result");
+    });
+    reached
+        .recv_timeout(HANDSHAKE_TIMEOUT)
+        .expect("the listing meets the held bundle");
+    release_tx.send(()).expect("release the writer");
+    let (tasks, events) = listed
+        .recv_timeout(HANDSHAKE_TIMEOUT)
+        .expect("the listing completes after release");
+    reader.join().expect("reader thread");
+    committer.join().expect("committer thread");
+
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.get("message").map(String::as_str) == Some(INDEX_FALLBACK)),
+        "an in-flight commit is no reason to scan and rebuild the workspace: {events:?}"
+    );
+    assert_eq!(
+        tasks.expect("listing")[0].job_run_id.as_deref(),
+        Some("leaf-listed"),
+        "the listing returns the decided state"
+    );
+}
 
 /// [ORB-16389] Criterion: a claim commit's apply runs after its admission
 /// section has released the partition. While a slow apply holds the task's
