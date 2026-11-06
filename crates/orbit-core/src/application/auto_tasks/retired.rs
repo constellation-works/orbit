@@ -1,12 +1,12 @@
-//! Shipped auto-task defaults a routine replaced, and their retirement.
+//! Shipped auto-task defaults Orbit no longer seeds, and their retirement.
 //!
-//! A retired default keeps its last shipped template as provenance, the way
-//! a retired routine does: `orbit workspace sync` recognizes a seeded copy
+//! A retired auto-task keeps its last shipped template as provenance:
+//! `orbit workspace sync` recognizes a seeded copy
 //! by that template's body (operator settings, from the file or the settings
 //! table, do not count as an edit) and removes it with its settings entry.
 //! An operator-edited copy is not Orbit's, so managed reconciliation
-//! preserves it. Sync never enables the replacing routine: when the retired
-//! copy was enabled, it says so and names the routine to opt into.
+//! preserves it. When a copy is enabled, sync reports what supersedes it;
+//! this does not enable or configure a replacement routine.
 
 use std::fs;
 use std::path::Path;
