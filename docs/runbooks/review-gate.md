@@ -796,10 +796,12 @@ Identify the failed step from `orbit run show`, then act:
   `review_attempt_stale` (the reviewer ran past its attempt or the attempt
   was settled), `review_manifest_stale` (the owner holds another attempt's
   manifest), `stale_claim` (the owner released, failed, revoked or superseded
-  the claim), `claimed_review_bridge_refused` (another activity, task, path or
-  field), or `owner_route_unavailable` "could not reach this run's
-  coordinator" (no usable response; the run skips recovery and preserves release
-  evidence while the owner holds the task for an operator decision).
+  the claim), `claimed_review_bridge_refused` (another activity, path or
+  field), `claimed_owner_bridge_refused` (a `review-*` call naming another
+  task, refused before any review scope), or `owner_route_unavailable`
+  "could not reach this run's coordinator" (no usable response; the run skips
+  recovery and preserves release evidence while the owner holds the task for an
+  operator decision).
   Preserve the exact call and inspect the task, run, claim and review ledger
   before recovery. Do not replay a stale, expired, settled or cancelled
   attempt. A transport loss has an unknown outcome and must use existing

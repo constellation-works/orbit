@@ -387,8 +387,7 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
   (including their aliases). Task show and artifact get read any task in that
-  workspace, except another task's `review-*` artifact, which stays refused on
-  the remote route under the narrower reviewer, recovery or findings scope.
+  workspace, except another task's `review-*` artifact.
   A `review-*` call naming another task is refused with
   `claimed_owner_bridge_refused` before any activity-dependent scope: an
   ordinary `agent_implement` read of another task's `review-report.json` or
