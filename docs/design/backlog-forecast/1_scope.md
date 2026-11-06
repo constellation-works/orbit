@@ -105,10 +105,11 @@ read serves the newest stored forecast instead of recomputing it.
   through the same transaction, so it never replaces or bypasses the newest
   row and the hourly cadence calibration relies on is unchanged. The hourly
   refresh is the existing owner sweep-tick write; there is no second writer.
-- **Dashboard.** Analytics › Forecast shows the forecast's source and age
-  (`Stored 23 min ago` or `Live`) beside a Refresh control that sends
-  `refresh=1`. The Calibration card keeps the absolute latest stored time
-  and notes when its scores are the stored ones.
+- **Dashboard.** Analytics › Forecast's header shows the forecast's source and
+  age (`Stored 23 min ago` or `Live`) beside a Refresh control that sends
+  `refresh=1`. The Accuracy tab's Stored forecasts section, under Details,
+  keeps the absolute latest stored time and notes when its scores are the
+  stored ones.
 
 Residual correction [ORB-20673] counts one residual per distinct task as
 model version **16** [ORB-20728], applies to the full script as model
@@ -213,7 +214,8 @@ attempts.
   task-level rates, so versions compare on one population; each version
   keeps its own hour measure and exclusions. The per-forecast `residual`
   series still reads every task each forecast scored. Analytics › Forecast's
-  Calibration card names the population and shows the per-complexity rates.
+  Accuracy tab names the population and shows the per-complexity rates in
+  its Calibration detail section.
 
 Scheduled starts [ORB-19215] are model version **11**, admission factor revision
 **2**. Each pending task waits until its `not_before` instant before entering
@@ -231,7 +233,7 @@ from earlier model versions.
 - **Simulation.** `backlog_forecast/schedule.rs` seeds the in-progress tasks at t=0, then advances to the next completion, pilot deadline or arrival up to the 90-day horizon (100,000 events; past that the run counts as `simulation_truncated`). Each event walks the pending queue in dispatch order through the adapter's pass.
 - **Response.** `forecast` (and `if_approved`) add `effective_parallelism`, `critical_path_hours`, `wait_hours` (summed task-hours, `basis: "summed_task_hours"`, by first failing gate: `dependency`, `lock`, `reservation`, `footprint`, `capacity`), `completion_probability`, `drain_probability`, `not_expected_to_drain`, `horizon_hours`, `simulation_truncated`, `schedulable_subset` and `task_predictions` (start hours and rank, started and completion probability, `unforecastable` reason). An unforecastable task nulls the full totals; `schedulable_subset` carries the rest with its numerator and denominator. `coverage` adds `dependency_unforecastable` (with `dependency_unforecastable_reasons`), `unverifiable_dependencies` and `review_lock_overlaps`. Stored snapshots add each task's dependencies, footprint hash, unforecastable reason, start quantiles and completion probability; `task_predictions` is response-only.
 - **Scoring.** The top-level hit rates are the current model version's; `calibration.by_model_version` holds each version's own. With one factor revision per version, `by_factor_revision` is not added yet.
-- **Analytics › Forecast** shows the parallelism and critical-path tiles, drain and completion probabilities, the schedulable-subset note, a wait table, the predicted schedule in dispatch order (task titles linking to the task) and per-version calibration.
+- **Analytics › Forecast** shows effective parallelism and the critical path in the Time to drain info icon, drain and completion probabilities (that icon, and each task's Finishes column), the schedulable-subset note, a collapsed wait breakdown, the predicted schedule in dispatch order (task titles linking to the task) and per-version calibration on the Accuracy tab.
 - **Latency.** On dk-server-1, release build, a 200-task backlog (10% without context files, 10% directory selectors, every fifth depending on an earlier task, mixed priorities, 5 slots, 40 history deliveries) at 1000 iterations: HTTP p50 0.280 s, p95 0.310 s; simulation about 0.27 s and preparation about 6 ms; peak RSS +12.8 MB. At 400 tasks p95 is 1.21 s (pairwise passes grow quadratically), so 200 is the measured limit for the 1-second target.
 
 Interim limits until the remaining factors land: review lock holders are counted in coverage, not simulated (`assumptions.review_lock_holders: "not_modelled"`); arrivals and rework use historical donor locks (model 9, below); static eligibility (complexity, pilot, route, crew, OS and label gates), published resumes and leaf-occupancy lineage are not replayed (`static_eligibility: "not_modelled"`), and the census and expiry inputs are frozen at forecast time.
