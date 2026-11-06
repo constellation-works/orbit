@@ -8,8 +8,10 @@ use crate::Store;
 /// Newest fire and job-run rows whose in-place changes the token samples. A
 /// fire outcome or run transition rewrites the row of an in-flight or recent
 /// one, so the newest rows carry every change a status read can show; an
-/// older row rewritten in place stays hidden until the caller's own freshness
-/// bound expires.
+/// older row rewritten in place leaves the token unchanged, so it does not
+/// immediately invalidate a cached value. The change becomes visible on the
+/// next successful recomputation, including refresh-ahead when the caller uses
+/// it; the caller's freshness bound remains the fallback.
 const FINGERPRINT_ROW_WINDOW: i64 = 256;
 
 impl Store {
@@ -18,8 +20,10 @@ impl Store {
     /// routines) or an automation consumer is added or removed, or when a
     /// sampled row advances. Fire and job-run in-place updates are sampled
     /// only over the newest `FINGERPRINT_ROW_WINDOW` (256) rows named above,
-    /// so an older row rewritten in place leaves the token unchanged and the
-    /// change surfaces only when the caller's freshness bound expires.
+    /// so an older row rewritten in place leaves the token unchanged and does
+    /// not immediately invalidate cached values. The change becomes visible on
+    /// the next successful recomputation, including refresh-ahead when the
+    /// caller uses it; the caller's freshness bound remains the fallback.
     /// Unlike the database file's size or modification time it ignores the
     /// rest of the audit store, so unrelated audit traffic leaves it unchanged.
     pub fn routine_state_fingerprint(&self) -> Result<String, OrbitError> {
