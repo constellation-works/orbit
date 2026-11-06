@@ -373,11 +373,13 @@ def use_tree(tokens, index, prefix=()):
 
 
 failed = False
-for path in sorted((app / module).rglob("*.rs")):
+target = app / module
+paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
+for path in paths:
     rel = path.relative_to(app)
     if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
         continue
-    parts = [app.name, *rel.with_suffix("").parts]
+    parts = ([] if crate_root and module else [app.name]) + list(rel.with_suffix("").parts)
     if parts[-1] == "mod":
         parts.pop()
     source = path.read_text()
@@ -406,6 +408,20 @@ for path in sorted((app / module).rglob("*.rs")):
 sys.exit(1 if failed else 0)
 PY
 }
+
+# Config path primitives are below aliases and operation, which must not
+# depend on layered admission. The leaf may only use TOML and std.
+config_src="$repo_root/crates/orbit-config/src"
+for module in aliases.rs operation; do
+  if ! super_chains_into "$config_src" "$module" layering crate-root; then
+    echo "orbit-config ${module} must not name layering"
+    fail=1
+  fi
+done
+if rg -n '\b(crate|super|self)::|^[[:space:]]*(use|extern crate)[[:space:]]' "$config_src/config_document.rs"; then
+  echo "orbit-config config_document must remain a TOML/std leaf"
+  fail=1
+fi
 
 # Print every call in production code under application module `$2` (outside
 # the `|`-separated path prefixes `$5`, relative to `$1`) to an inherent

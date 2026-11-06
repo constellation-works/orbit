@@ -40,7 +40,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
-use crate::layering::{set_value_at_path, value_at_path};
+use crate::config_document;
 use crate::operation::{
     LEGACY_REVIEW_BEFORE_LANDING_KEY, LEGACY_REVIEW_BEFORE_PR_KEY, LEGACY_REVIEW_CREW_KEY,
     REVIEW_CREW_KEY, REVIEW_TIMING_KEY, ReviewTimingSetting, legacy_policy_before_pr,
@@ -139,7 +139,7 @@ pub fn deprecated_key_rewrites(
     Ok(REPLACEMENT_KEYS
         .iter()
         .filter_map(|key| {
-            let value = value_at_path(&translated, key)?;
+            let value = config_document::config_value_at_path(&translated, key)?;
             let value = match value {
                 toml::Value::Boolean(contained) if *key == WORKER_CONTAINMENT_KEY => {
                     let mode = if *contained {
@@ -151,7 +151,7 @@ pub fn deprecated_key_rewrites(
                 }
                 value => value.clone(),
             };
-            match value_at_path(original, key) {
+            match config_document::config_value_at_path(original, key) {
                 Some(written) if *written == value => None,
                 Some(toml::Value::Boolean(_)) if *key == WORKER_CONTAINMENT_KEY => {
                     Some((*key, value))
@@ -164,21 +164,23 @@ pub fn deprecated_key_rewrites(
 }
 
 fn rename(document: &mut toml::Value, legacy: &str, replacement: &str) {
-    if value_at_path(document, replacement).is_some() {
+    if config_document::config_value_at_path(document, replacement).is_some() {
         return;
     }
-    if let Some(value) = value_at_path(document, legacy).cloned() {
-        set_value_at_path(document, replacement, value);
+    if let Some(value) = config_document::config_value_at_path(document, legacy).cloned() {
+        config_document::set_config_value_at_path(document, replacement, value);
     }
 }
 
 fn translate_sweep_pools(document: &mut toml::Value, config_path: &Path) -> Result<(), OrbitError> {
-    if value_at_path(document, SWEEP_TASKS_CREWS_KEY).is_some() {
+    if config_document::config_value_at_path(document, SWEEP_TASKS_CREWS_KEY).is_some() {
         return Ok(());
     }
     let stated = LEGACY_SWEEP_CREWS_KEYS
         .iter()
-        .filter_map(|key| value_at_path(document, key).map(|value| (*key, value.clone())))
+        .filter_map(|key| {
+            config_document::config_value_at_path(document, key).map(|value| (*key, value.clone()))
+        })
         .collect::<Vec<_>>();
     let Some((_, first)) = stated.first() else {
         return Ok(());
@@ -196,7 +198,7 @@ fn translate_sweep_pools(document: &mut toml::Value, config_path: &Path) -> Resu
         )));
     }
     let first = first.clone();
-    set_value_at_path(document, SWEEP_TASKS_CREWS_KEY, first);
+    config_document::set_config_value_at_path(document, SWEEP_TASKS_CREWS_KEY, first);
     Ok(())
 }
 
@@ -228,7 +230,7 @@ fn translate_review_timing(
     config_path: &Path,
     purpose: Purpose,
 ) -> Result<(), OrbitError> {
-    if value_at_path(document, REVIEW_TIMING_KEY).is_some() {
+    if config_document::config_value_at_path(document, REVIEW_TIMING_KEY).is_some() {
         return Ok(());
     }
     let (stated_before_pr, stated_before_landing) = review_halves(document, config_path)?;
@@ -265,7 +267,7 @@ fn translate_review_timing(
     if purpose == Purpose::Load && !decided_here && inherited {
         return Ok(());
     }
-    set_value_at_path(
+    config_document::set_config_value_at_path(
         document,
         REVIEW_TIMING_KEY,
         toml::Value::String(timing.as_str().to_string()),
@@ -282,7 +284,7 @@ fn translate_worker_containment(
     else {
         return Ok(());
     };
-    let contained = match value_at_path(document, WORKER_CONTAINMENT_KEY) {
+    let contained = match config_document::config_value_at_path(document, WORKER_CONTAINMENT_KEY) {
         // A mode written as the new string wins over the deprecated switch.
         Some(toml::Value::String(_)) => return Ok(()),
         Some(toml::Value::Boolean(contained)) => *contained,
@@ -305,7 +307,7 @@ fn translate_worker_containment(
         (true, false) => "warn",
         (false, false) => "off",
     };
-    set_value_at_path(
+    config_document::set_config_value_at_path(
         document,
         WORKER_CONTAINMENT_KEY,
         toml::Value::String(mode.to_string()),
@@ -338,7 +340,7 @@ fn translate_shell_probe(
     lower: Option<&toml::Value>,
     config_path: &Path,
 ) -> Result<(), OrbitError> {
-    if value_at_path(document, SHELL_PROBE_KEY).is_some() {
+    if config_document::config_value_at_path(document, SHELL_PROBE_KEY).is_some() {
         return Ok(());
     }
     let (login_shell, interactive) = probe_halves(document, config_path)?;
@@ -357,7 +359,7 @@ fn translate_shell_probe(
         (true, false) => ShellProbeMode::Login,
         (true, true) => ShellProbeMode::Interactive,
     };
-    set_value_at_path(
+    config_document::set_config_value_at_path(
         document,
         SHELL_PROBE_KEY,
         toml::Value::String(mode.as_str().to_string()),
@@ -477,7 +479,7 @@ pub(crate) fn resolve_worker_containment(
 /// boolean.
 pub(crate) fn has_legacy_worker_containment(document: &toml::Value) -> bool {
     matches!(
-        value_at_path(document, WORKER_CONTAINMENT_KEY),
+        config_document::config_value_at_path(document, WORKER_CONTAINMENT_KEY),
         Some(toml::Value::Boolean(_))
     )
 }

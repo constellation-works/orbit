@@ -8,6 +8,7 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::aliases::translate_deprecated_keys;
+use crate::config_document;
 use crate::crew_pools::{TYPE_COMPLEXITY_CREWS_KEY, reject_unpoolable_crew_names_in_document};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -20,11 +21,9 @@ use crate::registry::{
 };
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
-use super::document::{
-    empty_document, merge_tables, parse_config_document, read_config_document, remove_value_at_path,
-};
+use super::document::{empty_document, merge_tables, parse_config_document, read_config_document};
 use super::provenance::{effective_values, source_for_crew_field};
-use super::{EffectiveConfig, WORKSPACE_REPLACE_ONLY_KEYS, set_value_at_path, value_at_path};
+use super::{EffectiveConfig, WORKSPACE_REPLACE_ONLY_KEYS};
 
 /// Load the layered config and attribute every value to the layer it came from.
 pub fn load_effective_config(roots: &ConfigRoots) -> Result<EffectiveConfig, OrbitError> {
@@ -218,13 +217,19 @@ fn load_layered_resolved_with_staged(
             if descriptor.key == TYPE_COMPLEXITY_CREWS_KEY {
                 continue;
             }
-            if let Some(value) = value_at_path(&workspace_document.value, descriptor.key) {
-                set_value_at_path(&mut merged, descriptor.key, value.clone());
+            if let Some(value) =
+                config_document::config_value_at_path(&workspace_document.value, descriptor.key)
+            {
+                config_document::set_config_value_at_path(
+                    &mut merged,
+                    descriptor.key,
+                    value.clone(),
+                );
             }
         }
         for key in WORKSPACE_REPLACE_ONLY_KEYS {
-            if value_at_path(&workspace_document.value, key).is_none() {
-                remove_value_at_path(&mut merged, key);
+            if config_document::config_value_at_path(&workspace_document.value, key).is_none() {
+                config_document::remove_config_value_at_path(&mut merged, key);
             }
         }
     }
@@ -386,7 +391,7 @@ pub(crate) fn reject_workspace_lease_intake(
     document: &toml::Value,
     path: &Path,
 ) -> Result<(), OrbitError> {
-    if value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_some() {
+    if config_document::config_value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_some() {
         return Err(OrbitError::InvalidInput(format!(
             "{LEASE_INTAKE_PEER_USER_KEY} is not a workspace setting: remove it from '{}'. It \
              names the OS user allowed on Orbit Web's lease intake socket, so it is read only \
@@ -396,7 +401,7 @@ pub(crate) fn reject_workspace_lease_intake(
         )));
     }
     let listener = LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.');
-    if value_at_path(document, listener).is_some() {
+    if config_document::config_value_at_path(document, listener).is_some() {
         return Err(OrbitError::InvalidInput(format!(
             "[{listener}] is not a workspace setting: remove it from '{}'. The lease listener \
              reads its settings only from the listener user's global config.toml",
@@ -420,7 +425,7 @@ pub(crate) fn reject_workspace_machine_table(
         return Err(OrbitError::InvalidInput("[assistance] is host-only: remove it from the workspace config.toml; only the global config.toml may grant outbound evidence, credentials and budgets".into()));
     }
     let table = GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.');
-    if value_at_path(document, table).is_none() {
+    if config_document::config_value_at_path(document, table).is_none() {
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(

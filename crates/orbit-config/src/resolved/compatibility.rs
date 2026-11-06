@@ -10,7 +10,7 @@ use orbit_types::workflow::activity_job::{
     retired_provider_id,
 };
 
-use crate::layering::value_at_path;
+use crate::config_document;
 use crate::raw::RawTaskSection;
 use crate::registry;
 
@@ -31,7 +31,7 @@ pub(super) fn reject_retired_backend_overrides(
             OrbitError::InvalidInput(format!("{RETIRED_BACKEND_ENV} is retired: {error}"))
         })?;
     }
-    let Some(value) = value_at_path(document, "runtime.backend") else {
+    let Some(value) = config_document::config_value_at_path(document, "runtime.backend") else {
         return Ok(());
     };
     let raw = value.as_str().ok_or_else(|| {
@@ -143,10 +143,14 @@ impl CompatibilityKeys {
 pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
     crate::unknown::warn_unknown_keys(document, config_path);
     CompatibilityKeys {
-        deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
-        retired_duel: value_at_path(document, "duel").is_some(),
-        retired_routines: value_at_path(document, "routines").is_some(),
-        retired_docs: value_at_path(document, "docs").is_some(),
+        deprecated_task_id_pattern: config_document::config_value_at_path(
+            document,
+            "knowledge.task_id_pattern",
+        )
+        .is_some(),
+        retired_duel: config_document::config_value_at_path(document, "duel").is_some(),
+        retired_routines: config_document::config_value_at_path(document, "routines").is_some(),
+        retired_docs: config_document::config_value_at_path(document, "docs").is_some(),
         removed_keys: removed_keys_present(document),
         deprecated_keys: deprecated_keys_present(document),
     }
@@ -162,8 +166,9 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
 /// with an explicit `orbit config set review.timing before_landing`.
 /// Invalid values fail load elsewhere, so they never warn here.
 fn warn_deprecated_review_timing_value(document: &toml::Value, config_path: &Path) {
-    let Some(raw) = value_at_path(document, crate::operation::REVIEW_TIMING_KEY)
-        .and_then(|value| value.as_str())
+    let Some(raw) =
+        config_document::config_value_at_path(document, crate::operation::REVIEW_TIMING_KEY)
+            .and_then(|value| value.as_str())
     else {
         return;
     };
@@ -284,7 +289,7 @@ fn keys_present(
 ) -> Vec<(&'static str, &'static str)> {
     keys.iter()
         .copied()
-        .filter(|(key, _)| value_at_path(document, key).is_some())
+        .filter(|(key, _)| config_document::config_value_at_path(document, key).is_some())
         .collect()
 }
 

@@ -48,6 +48,7 @@
 //! - `raw` — private serde schema for the parts of the document that are not
 //!   fixed registry keys (crew tables and retired-key migration guards).
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
+//! - `config_document` — pure TOML path access shared below admission.
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
 //! - `lock_modes` — the ordered `workflow.lock_modes` footprint lock-mode
@@ -81,6 +82,7 @@
 mod aliases;
 /// Host-only bounded decision-assistance configuration.
 pub mod assistance;
+mod config_document;
 mod crew;
 mod experiment_keys;
 mod human_crew_seed;

@@ -10,7 +10,7 @@ use super::keys::{
     SELECTIVE_MODE_KEY, SELECTIVE_PATHS_KEY, SELECTIVE_RISK_THRESHOLD_KEY,
     SELECTIVE_UNKNOWN_RISK_KEY,
 };
-use crate::layering::value_at_path;
+use crate::config_document;
 
 /// Parse `review.selective_before_landing.mode`.
 pub fn selective_mode_parse(raw: &str) -> Result<SelectiveBeforeLandingMode, OrbitError> {
@@ -78,7 +78,8 @@ pub(super) fn selective_threshold(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(value) = value_at_path(document, SELECTIVE_RISK_THRESHOLD_KEY) else {
+    let Some(value) = config_document::config_value_at_path(document, SELECTIVE_RISK_THRESHOLD_KEY)
+    else {
         return Ok(None);
     };
     let raw = match value {
