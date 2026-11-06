@@ -435,27 +435,85 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
   .script-card-head .operation-button, .script-card-head .operation-action-unavailable { margin-left: 0; }
 }
 
-/* Automation › Residents: the cycle routine, the new-mandate form and one
-   card per mandate with its authority, requests, controls and checkpoint. */
-.resident-routine {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 8px 12px; margin-bottom: 8px; border: 1px solid var(--border);
-  border-radius: 4px; background: var(--bg-elev);
+/* Automation › Residents: a toolbar (cycle routine, start), the start flow,
+   one row per mandate with its detail under the selected row, and ended
+   mandates behind a disclosure. */
+.resident-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
+  flex-wrap: wrap; padding: 2px 10px 10px;
 }
-.resident-routine-name { font: 600 12px/1.4 var(--font-mono); overflow-wrap: anywhere; }
-.resident-routine .operation-button, .resident-routine .operation-action-unavailable { margin-left: auto; }
-.resident-create, .resident-card {
-  padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border);
+.resident-toolbar .operation-button.primary { min-height: 30px; padding: 4px 14px; }
+.resident-routine { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.resident-routine-label { color: var(--fg-dim); font-size: 12px; }
+.resident-routine .info-hint { margin-left: 0; }
+.operation-button.resident-small { min-height: 0; padding: 2px 8px; font-size: 11px; }
+.resident-list { display: flex; flex-direction: column; min-width: 0; border-top: 1px solid var(--hair); }
+.resident-row {
+  display: grid; align-items: center; gap: 4px 16px; min-width: 0;
+  grid-template-columns: minmax(0, 2.6fr) 110px minmax(0, 1.3fr) minmax(0, .9fr) minmax(0, .9fr);
+  padding: 8px 10px; border-bottom: 1px solid var(--hair); font-size: 12px; cursor: pointer;
+}
+.resident-row:hover { background: var(--bg-hover); }
+.resident-row.selected { background: var(--bg-selected); }
+.resident-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.resident-list-head { cursor: default; padding-top: 4px; padding-bottom: 4px; color: var(--fg-mute); font-size: 11px; }
+.resident-list-head:hover { background: none; }
+.resident-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resident-row-goal { display: flex; align-items: baseline; gap: 8px; }
+.resident-goal { overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-size: 13px; }
+.resident-id { flex: none; color: var(--fg-mute); font: 11px/1.4 var(--font-mono); }
+.resident-row-activity, .resident-row-wake { color: var(--fg-dim); }
+.resident-row-needs { color: var(--fg-mute); }
+.resident-row-needs.needs { color: var(--warn-fg); font-weight: 600; }
+.resident-row.ended .resident-goal, .resident-row.ended > span { color: var(--fg-mute); }
+.resident-detail {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: 10px 12px 14px; border-bottom: 1px solid var(--hair); background: var(--bg-elev);
+}
+.resident-detail h4 { margin: 0 0 4px; font-size: 11px; color: var(--fg-dim); font-weight: 600; }
+.resident-disclosure h4 { margin-top: 10px; }
+.resident-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 24px; min-width: 0; }
+.resident-detail-actions { display: flex; flex-direction: column; gap: 8px; }
+.resident-requests { display: flex; flex-direction: column; gap: 6px; }
+.resident-request {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  padding: 8px 10px; border: 1px solid var(--warn-line); border-left: 2px solid var(--warn-fg); border-radius: 4px;
+}
+.resident-request-id { font: 600 11px/1.4 var(--font-mono); }
+.resident-request-text { font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+.resident-request .resident-actions { margin-left: auto; }
+.resident-quote { display: block; flex-basis: 100%; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.resident-actions, .resident-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.resident-actions .operation-button.primary { min-height: 0; padding: 4px 12px; }
+.resident-actions .operation-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.resident-composer { display: flex; flex-direction: column; gap: 4px; max-width: 640px; }
+.resident-composer .operation-button.primary { min-height: 0; padding: 4px 12px; }
+.resident-control input { flex: 1 1 220px; }
+.resident-disclosure > summary { cursor: pointer; color: var(--fg-dim); font-size: 12px; }
+.resident-ended > summary { padding: 0 10px; }
+.resident-ended { margin-top: 12px; }
+.resident-ended > .resident-list { margin-top: 6px; }
+.resident-empty { display: flex; justify-content: center; }
+.resident-none { margin: 0 0 8px; }
+.resident-start {
+  padding: 12px; margin-bottom: 12px; border: 1px solid var(--border);
   border-radius: 4px; background: var(--bg-elev); min-width: 0;
 }
-.resident-create > summary, .resident-authority > summary, .resident-detail > summary {
-  cursor: pointer; color: var(--fg-dim); font-size: 12px;
+.resident-start-title { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; }
+.resident-step {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 12px;
+  min-width: 0; margin: 0; padding: 8px 10px 10px; border: 1px solid var(--hair); border-radius: 4px;
 }
-.resident-create > summary { font-weight: 600; color: var(--fg); }
+.resident-step > legend { padding: 0 4px; color: var(--fg); font-size: 12px; font-weight: 600; }
+.resident-step > .resident-rights, .resident-step-note { grid-column: 1 / -1; }
+.resident-step-note { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-step-note.warn { color: var(--warn-fg); }
+.resident-start-status { flex: 1 1 auto; margin: 0; color: var(--fg-dim); font-size: 12px; }
 .resident-form {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px 12px; margin-top: 8px;
 }
+.resident-start.resident-form { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 .resident-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .resident-field-label, .resident-fact-label { color: var(--fg-dim); font-size: 11px; }
 .resident-field-hint { color: var(--fg-dim); font-size: 10px; }
@@ -464,36 +522,31 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
   min-width: 0; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px;
   background: var(--bg); color: var(--fg); font: 12px/1.4 var(--font-sans, inherit);
 }
-.resident-form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+.resident-form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .resident-rights { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 4px 6px; border: 1px solid var(--hair); border-radius: 4px; }
 .resident-rights legend { color: var(--fg-dim); font-size: 11px; padding: 0 4px; }
 .resident-right { display: inline-flex; align-items: center; gap: 4px; font: 11px/1.4 var(--font-mono); }
 .resident-authority-column { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .resident-authority-column > .operation-button, .resident-authority-column > .operation-action-unavailable { align-self: flex-start; }
-.resident-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.resident-id { font: 600 13px/1.4 var(--font-mono); }
-.resident-stalled-pill { color: var(--state-failed); }
-.resident-goal { margin: 6px 0 0; font-size: 13px; overflow-wrap: anywhere; }
-.resident-muted { margin: 4px 0 0; color: var(--fg-dim); font-size: 12px; }
-.resident-stalled { margin: 4px 0 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
-.resident-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin-top: 8px; }
+.resident-muted { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-stalled { margin: 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+.resident-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; }
 .resident-fact { display: contents; }
 .resident-fact-value { font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
-.resident-request {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
-  margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--priority-medium);
-}
-.resident-quote { display: block; flex-basis: 100%; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
-.resident-actions, .resident-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.resident-control { margin-top: 8px; }
-.resident-control input { flex: 1 1 220px; }
-.resident-authority, .resident-detail { margin-top: 8px; }
-.resident-detail h4 { margin: 12px 0 4px; font-size: 11px; color: var(--fg-dim); font-weight: 600; }
 .resident-history, .resident-detail ul { margin: 0; padding-left: 18px; font-size: 11px; }
 .resident-history li { overflow-wrap: anywhere; }
 .resident-history-head { font-family: var(--font-mono); }
-.resident-notes { margin: 6px 0 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 600px) {
-  .resident-facts { grid-template-columns: minmax(0, 1fr); gap: 1px; }
-  .resident-routine .operation-button, .resident-routine .operation-action-unavailable { margin-left: 0; }
+.resident-notes { margin: 0 0 6px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .resident-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "goal goal" "state needs" "activity wake";
+  }
+  .resident-list-head { display: none; }
+  .resident-row-goal { grid-area: goal; }
+  .resident-row-state { grid-area: state; }
+  .resident-row-needs { grid-area: needs; text-align: right; }
+  .resident-row-activity { grid-area: activity; }
+  .resident-row-wake { grid-area: wake; text-align: right; }
+  .resident-request .resident-actions { margin-left: 0; }
 }

@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const { dashboardFile } = await import(process.env.ORBIT_DASHBOARD_FIXTURE_MODULE || './dashboard_static.mjs');
 const fixture = `
 globalThis.EventSource = class { close() {} };
-globalThis.residentFixture = { writes: [], outcome: 'granted', refuse: false };
+globalThis.residentFixture = { writes: [], outcome: 'granted', refuse: false, refusePath: null };
 const mandate = {
   task_id: 'RESIDENT-1', state: 'active', effective_authority: { rights: ['dispatch'], workspaces: ['one'] },
   mandate: { goal: 'Keep the release green', crew: 'sol', cadence: { floor_minutes: 15, heartbeat_minutes: 60 }, exit_criteria: ['Release is green'] },
@@ -22,13 +22,17 @@ globalThis.fetch = async (input, options = {}) => {
   if (options.method === 'POST') {
     const body = JSON.parse(options.body);
     residentFixture.writes.push({ path: api, body });
-    if (residentFixture.refuse) return json({ error: 'Not authorized for this mandate' }, 403);
+    if (residentFixture.refuse || (residentFixture.refusePath && api.endsWith(residentFixture.refusePath))) return json({ error: 'Not authorized for this mandate' }, 403);
     if (api === '/api/residents') return json({ task_id: 'RESIDENT-NEW' });
     return json({ outcome: residentFixture.outcome, request: residentFixture.outcome.startsWith('unchanged') ? null : { id: 'DR-GRANT' }, narrowing_error: 'Deadline must be earlier' });
   }
   if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
-  if (api === '/api/residents') return json({ mandates: [mandate], count: 1, crews: ['sol'], default_crew: 'sol', capabilities: { resident_write: { authorized: true } } });
+  if (api === '/api/residents') return json({
+    mandates: [mandate], count: 1, crews: ['sol'], default_crew: 'sol',
+    routine: { name: 'resident-cycle', source: 'one', target: 'job:resident_cycle_pipeline', machine_name: 'owner', enabled: false },
+    capabilities: { resident_write: { authorized: true }, routine_toggle: { authorized: true } },
+  });
   if (api === '/api/tasks') return json({ items: [], total: 0 });
   return json({ items: [], total: 0 });
 };
@@ -50,29 +54,79 @@ export async function checkResidentForms(browser, evidence, { feedbackOnly = fal
   page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=one#operations/residents`);
-    const create = page.getByRole('form', { name: 'New resident mandate', exact: true });
-    await page.locator('.resident-create > summary').click();
+    const create = page.getByRole('form', { name: 'Start a resident', exact: true });
+    const feedbackText = () => page.locator('#resident-operation-feedback').innerText();
+    const openStart = async () => {
+      await page.getByRole('button', { name: 'Start a resident', exact: true }).click();
+      await create.waitFor();
+    };
+    const writesSince = (from) => page.evaluate(from => residentFixture.writes.slice(from).map(write => write.path), from);
     if (!feedbackOnly) {
+      await openStart();
       const tiers = await create.locator('select[name="complexity"] option').evaluateAll(nodes => nodes.map(node => node.value));
       await create.locator('[name="complexity"]').selectOption(tiers.at(-1));
       await page.screenshot({ path: path.join(evidence, 'resident-create-dark-1440.png') });
       assert.deepEqual(tiers, ['low', 'medium', 'hard', 'xhard'], 'Residents offers only canonical assessed API complexity tiers');
       for (const complexity of tiers) {
-        await page.locator('.resident-create').evaluate(node => { node.open = true; });
+        if (complexity !== tiers[0]) await openStart();
         await create.locator('[name="goal"]').fill(`Release mandate ${complexity}`);
         await create.locator('[name="exit_criteria"]').fill('Release is green');
         await create.locator('[name="complexity"]').selectOption(complexity);
-        await create.getByRole('button', { name: 'Create mandate', exact: true }).click();
+        await create.getByRole('button', { name: 'Start resident', exact: true }).click();
         await page.waitForFunction(level => residentFixture.writes.some(write => write.path === '/api/residents' && write.body.complexity === level), complexity);
-        await page.waitForFunction(() => document.getElementById('resident-operation-feedback').textContent.includes('Created mandate'));
-        await page.waitForFunction(() => !document.querySelector('.resident-create button').disabled);
+        await page.waitForFunction(() => document.getElementById('resident-operation-feedback').textContent.includes('Started RESIDENT-NEW'));
+        await create.waitFor({ state: 'detached' });
       }
-      await page.locator('.resident-create').evaluate(node => { node.open = true; });
+      // One flow: create, grant with the operator's words, then turn the
+      // routine on, in that order.
+      await openStart();
+      const from = await page.evaluate(() => residentFixture.writes.length);
+      await create.locator('[name="goal"]').fill('Release mandate with rights');
+      await create.locator('[name="start-dispatch"]').check();
+      await create.getByRole('button', { name: 'Start resident', exact: true }).click();
+      assert.equal(await create.locator('.resident-start-status').innerText(), 'Add your words authorizing these rights.', 'Rights without words write nothing');
+      assert.deepEqual(await writesSince(from), [], 'A refused draft creates nothing');
+      await create.locator('[name="quote"]').fill('Dispatch in one');
+      await create.getByRole('button', { name: 'Start resident', exact: true }).click();
+      await page.waitForFunction(() => document.getElementById('resident-operation-feedback').textContent.includes('Started RESIDENT-NEW: it may dispatch; the cycle routine is on.'));
+      assert.deepEqual(await writesSince(from), ['/api/residents', '/api/residents/RESIDENT-NEW/grant', '/api/routines/toggle'], 'Start flow sequences create, grant and routine');
+      await create.waitFor({ state: 'detached' });
+      const grantBody = await page.evaluate(() => residentFixture.writes.find(write => write.path.endsWith('/RESIDENT-NEW/grant')).body);
+      assert.deepEqual(grantBody, { add: ['dispatch'], workspaces: ['one'], quote: 'Dispatch in one' });
+      // A refused middle step names the step and what exists.
+      await page.evaluate(() => { residentFixture.refusePath = '/grant'; });
+      await openStart();
+      await create.locator('[name="goal"]').fill('Release mandate refused grant');
+      await create.locator('[name="start-merge"]').check();
+      await create.locator('[name="quote"]').fill('Merge in one');
+      await create.getByRole('button', { name: 'Start resident', exact: true }).click();
+      await page.waitForFunction(() => document.getElementById('resident-operation-feedback').textContent.includes('Step 2 of 3'));
+      await create.waitFor({ state: 'detached' });
+      assert.match(await feedbackText(), /Step 2 of 3, grant its rights, was refused: Not authorized for this mandate\. RESIDENT-NEW exists with no rights/);
+      await page.evaluate(() => { residentFixture.refusePath = null; });
+      await openStart();
       await create.locator('[name="complexity"]').selectOption('xhard');
       await page.setViewportSize({ width: 375, height: 812 });
       await create.locator('[name="complexity"]').scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(evidence, 'resident-create-dark-375.png') });
       await page.setViewportSize({ width: 1440, height: 1000 });
+      await create.getByRole('button', { name: 'Cancel starting a resident', exact: true }).click();
+    }
+    // Detail on demand: no detail form until the mandate is selected.
+    assert.equal(await page.locator('.resident-detail').count(), 0, 'No mandate detail before selection');
+    await page.locator('.resident-row[data-task="RESIDENT-1"]').click();
+    if (!feedbackOnly) {
+      // Reason only after choosing an action that needs one.
+      assert.equal(await page.locator('.resident-composer').count(), 0, 'No reason input before an action is chosen');
+      const from = await page.evaluate(() => residentFixture.writes.length);
+      await page.getByRole('button', { name: 'Choose Stop RESIDENT-1', exact: true }).click();
+      const stop = page.getByRole('form', { name: 'Stop RESIDENT-1', exact: true });
+      assert.equal(await stop.getByRole('button', { name: 'Stop RESIDENT-1', exact: true }).isDisabled(), true, 'Stop waits for a reason');
+      await stop.locator('[name="reason"]').fill('Goal met');
+      await stop.getByRole('button', { name: 'Stop RESIDENT-1', exact: true }).click();
+      await page.waitForFunction(from => residentFixture.writes.length > from, from);
+      assert.deepEqual(await page.evaluate(from => residentFixture.writes[from], from), { path: '/api/residents/RESIDENT-1/control', body: { action: 'stop', reason: 'Goal met' } });
+      await page.waitForFunction(() => !document.querySelector('.resident-composer'));
     }
     const authority = page.getByRole('form', { name: 'Authority for RESIDENT-1', exact: true });
     await page.locator('.resident-authority > summary').click();
