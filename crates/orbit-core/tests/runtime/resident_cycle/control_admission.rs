@@ -167,3 +167,56 @@ fn status_request_wake_between_observe_and_publication_reaches_the_admitted_cycl
     assert_eq!(finished["finalized"], true, "{finished}");
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
+
+#[test]
+fn invalid_mandate_refuses_control_except_stop_without_history() {
+    let fx = fixture();
+    let invalid = fx
+        .runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: broken - sol".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let shown = fx.runtime.show_resident_mandate(&invalid).unwrap();
+    assert_eq!(shown["state"], "invalid", "{shown}");
+
+    for action in ["pause", "resume", "wake", "takeover", "release"] {
+        let before = fx.runtime.get_task_history(&invalid).unwrap().len();
+        let refused = call(
+            &fx.runtime,
+            "orbit.resident.control",
+            json!({"task_id": invalid, "action": action,
+                   "reason": "An invalid mandate stays put"}),
+            McpCapability::Operator,
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("resident_control_refused"),
+            "{action}: refusal must name the control gate: {refused}"
+        );
+        assert!(
+            refused.contains("invalid"),
+            "{action}: refusal must name the invalid mandate state: {refused}"
+        );
+        let after = fx.runtime.get_task_history(&invalid).unwrap().len();
+        assert_eq!(
+            before, after,
+            "{action}: a refused control must write no history"
+        );
+    }
+
+    let stopped = call(
+        &fx.runtime,
+        "orbit.resident.control",
+        json!({"task_id": invalid, "action": "stop",
+               "reason": "Dispose of the broken mandate"}),
+        McpCapability::Operator,
+    )
+    .unwrap();
+    assert_eq!(stopped["state"], "ended", "{stopped}");
+    assert_eq!(stopped["handoff"], "review", "{stopped}");
+}
