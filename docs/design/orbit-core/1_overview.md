@@ -130,7 +130,7 @@ source scan, enforces the runtime direction.
 | Config loading and runtime assembly | `crates/orbit-core/src/composition/runtime.rs` | [ORB-10886] |
 | Context assembly | `crates/orbit-runtime/src/context/state.rs` | — |
 | Resolved-config consumption | `crates/orbit-runtime/src/builder.rs` | [ORB-10885], [ORB-10886] |
-| Config layering (owning crate) | `crates/orbit-config/src/` | [ORB-10885] |
+| Config layering and admission (owning crate); pure TOML path access is in its private `config_document` leaf below aliases and operation policy | `crates/orbit-config/src/` | [ORB-10885] |
 | Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |
 | Host identity + local workspace catalog | `crates/orbit-registry/src/` | — |
 | Tool dispatch and command-audit boundary | `crates/orbit-core/src/adapter/command/dispatch/` | [ORB-10886] |

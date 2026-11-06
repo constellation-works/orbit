@@ -3,7 +3,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 
 use super::keys::{LEGACY_REVIEW_MINUTES_KEY, REVIEW_MINUTES_KEY};
-use crate::layering::{set_value_at_path, value_at_path};
+use crate::config_document;
 use crate::registry::read_optional;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -23,9 +23,9 @@ pub(crate) fn translate_legacy_review_minutes(
         MAX_REVIEW_MINUTES,
     )?;
     if let Some(minutes) = minutes
-        && value_at_path(document, REVIEW_MINUTES_KEY).is_none()
+        && config_document::config_value_at_path(document, REVIEW_MINUTES_KEY).is_none()
     {
-        set_value_at_path(
+        config_document::set_config_value_at_path(
             document,
             REVIEW_MINUTES_KEY,
             toml::Value::Integer(i64::from(minutes)),

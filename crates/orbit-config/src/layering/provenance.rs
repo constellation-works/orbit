@@ -5,6 +5,7 @@ use std::path::Path;
 
 use orbit_types::identity::Crew;
 
+use crate::config_document;
 use crate::registry::ConfigSnapshot;
 use crate::resolved::{ResolvedConfig, crews_from_raw, default_crews};
 
@@ -13,7 +14,7 @@ use super::load::ConfigDocument;
 use super::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, DEFAULT_CREW_KEY,
     DEFAULT_PROVIDER_ENV, EffectiveConfigValue, ShadowReason, ShadowedConfigValue,
-    WORKSPACE_REPLACE_ONLY_KEYS, value_at_path,
+    WORKSPACE_REPLACE_ONLY_KEYS,
 };
 
 pub(super) fn effective_values(
@@ -29,7 +30,7 @@ pub(super) fn effective_values(
         .map(|(key, value)| {
             let source = source_for_key(key, global, workspace);
             let global_value = global.and_then(|document| {
-                value_at_path(&document.value, key)?;
+                config_document::config_value_at_path(&document.value, key)?;
                 if source.kind() == ConfigValueSourceKind::Global {
                     return Some(value.clone());
                 }
@@ -118,7 +119,7 @@ pub(super) fn effective_values(
             let key = format!("plugins.{namespace}.{field}");
             let source = source_for_key(&key, global, workspace);
             let global_value = global
-                .and_then(|document| value_at_path(&document.value, &key))
+                .and_then(|document| config_document::config_value_at_path(&document.value, &key))
                 .map(json_from_toml);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(&key, &source, global, workspace),
@@ -258,7 +259,7 @@ fn fallback_for_key(
         }
         ConfigValueSourceKind::Workspace => {
             if global
-                .and_then(|document| value_at_path(&document.value, key))
+                .and_then(|document| config_document::config_value_at_path(&document.value, key))
                 .is_some()
             {
                 global_value.map(|value| ConfigFallback {
@@ -343,7 +344,7 @@ fn shadowed_for_key(
     let Some(document) = global else {
         return Vec::new();
     };
-    let Some(value) = value_at_path(&document.value, key) else {
+    let Some(value) = config_document::config_value_at_path(&document.value, key) else {
         return Vec::new();
     };
     // Mirrors the order `source_for_key` refuses the global value in, so the
@@ -398,7 +399,7 @@ fn source_for_key(
     workspace: Option<&ConfigDocument>,
 ) -> ConfigValueSource {
     if let Some(document) = workspace
-        && value_at_path(&document.value, key).is_some()
+        && config_document::config_value_at_path(&document.value, key).is_some()
     {
         return file_source(ConfigValueSourceKind::Workspace, &document.path);
     }
@@ -406,7 +407,7 @@ fn source_for_key(
         return built_in_source();
     }
     if let Some(document) = global
-        && value_at_path(&document.value, key).is_some()
+        && config_document::config_value_at_path(&document.value, key).is_some()
     {
         return file_source(ConfigValueSourceKind::Global, &document.path);
     }

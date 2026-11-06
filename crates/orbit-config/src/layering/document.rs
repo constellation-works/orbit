@@ -61,14 +61,6 @@ pub(super) fn merge_tables(base: &mut toml::Value, overlay: &toml::Value) {
     }
 }
 
-pub(crate) fn value_at_path<'a>(document: &'a toml::Value, key: &str) -> Option<&'a toml::Value> {
-    let mut value = document;
-    for segment in key.split('.') {
-        value = value.as_table()?.get(segment)?;
-    }
-    Some(value)
-}
-
 pub(super) fn crew_entry<'a>(
     document: &'a toml::Value,
     name: &str,
@@ -79,44 +71,4 @@ pub(super) fn crew_entry<'a>(
         .as_table()?
         .get(name)?
         .as_table()
-}
-
-pub(crate) fn set_value_at_path(document: &mut toml::Value, key: &str, value: toml::Value) {
-    let segments = key.split('.').collect::<Vec<_>>();
-    let Some((last, ancestors)) = segments.split_last() else {
-        return;
-    };
-    let mut table = document.as_table_mut();
-    for segment in ancestors {
-        let Some(current) = table else {
-            return;
-        };
-        let entry = current
-            .entry((*segment).to_string())
-            .or_insert_with(empty_document);
-        table = entry.as_table_mut();
-    }
-    if let Some(table) = table {
-        table.insert((*last).to_string(), value);
-    }
-}
-
-pub(super) fn remove_value_at_path(document: &mut toml::Value, key: &str) {
-    let segments = key.split('.').collect::<Vec<_>>();
-    let Some((last, ancestors)) = segments.split_last() else {
-        return;
-    };
-    let mut value = document;
-    for segment in ancestors {
-        let Some(next) = value
-            .as_table_mut()
-            .and_then(|table| table.get_mut(*segment))
-        else {
-            return;
-        };
-        value = next;
-    }
-    if let Some(table) = value.as_table_mut() {
-        table.remove(*last);
-    }
 }
