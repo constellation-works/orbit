@@ -66,6 +66,10 @@ impl GovernedOperation {
 /// tool chokepoint checks it beside the write's own row.
 pub const TASK_GRANT_TOOLS_OPERATION_ID: &str = "orbit.task.grant_tools";
 
+/// The resident authority operation. An unidentified local CLI caller reaches
+/// it as an agent, so its widening becomes a request the human answers.
+pub const RESIDENT_GRANT_OPERATION_ID: &str = "orbit.resident.grant";
+
 /// Versioned routine-definition toggle exposed by the dashboard.
 pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     id: "routine.toggle",

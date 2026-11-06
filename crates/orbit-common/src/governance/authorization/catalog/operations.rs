@@ -13,7 +13,8 @@ use super::types::{
     DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, DASHBOARD_SCRIPT_GRANT,
     DASHBOARD_TASK_PILOT_ADMISSION, DASHBOARD_TASK_POST_DEPLOY, DASHBOARD_TASK_REQUEUE,
     DASHBOARD_TASK_SETTLE_MERGED, GovernedOperation, OperationSurface, PLUGIN_TOOL_AGENT_CALLABLE,
-    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, TASK_GRANT_TOOLS_OPERATION_ID,
+    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, RESIDENT_GRANT_OPERATION_ID,
+    TASK_GRANT_TOOLS_OPERATION_ID,
 };
 
 /// Every governed operation, declared exactly once.
@@ -184,7 +185,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     // only for an operator caller; any other caller's widening becomes a
     // resident_authority decision request a human must answer.
     GovernedOperation {
-        id: "orbit.resident.grant",
+        id: RESIDENT_GRANT_OPERATION_ID,
         surface: OperationSurface::Tool,
         allowed: &[
             McpCapability::Agent,

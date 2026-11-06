@@ -3,12 +3,12 @@
 
 use std::path::Path;
 
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, ModelAnswerCitation,
-    ModelAnswerEnablement, ModelCitedPrecedent, TaskStatus,
+    ModelAnswerEnablement, ModelCitedPrecedent, TaskArtifact, TaskStatus,
 };
 
 use crate::isolated_cli_fixture::Fixture;
@@ -1290,4 +1290,98 @@ fn attention_preserves_review_decisions_bound_to_nonempty_requirements() {
     );
     assert_eq!(attention["items"][0]["refs"]["decision_id"], request_id);
     assert_eq!(attention["items"][0]["next"]["tool"], "orbit.decision.show");
+}
+
+/// An unidentified CLI caller (no TTY, no agent declaration, no override) is
+/// not refused on `orbit resident grant`: its widening raises the
+/// `resident_authority` request the reference documents and changes no
+/// authority, and the operator override still applies a widening at once.
+#[test]
+fn resident_grant_from_an_unidentified_cli_caller_raises_a_request() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::resident_grant_from_an_unidentified_cli_caller_raises_a_request",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let task_id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        let id = runtime
+            .add_task(TaskAddParams {
+                title: "[orchestration]: resident grant fixture".into(),
+                tags: vec!["resident".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        let mandate = serde_json::json!({
+            "schema": "resident.mandate/v1",
+            "goal": "Exercise the grant request path",
+            "exit_criteria": ["The request is answered"],
+            "deadline": "2099-01-01T00:00:00Z",
+            "workspaces": [runtime.workspace_id().unwrap()],
+            "crew": "sol",
+            "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+        });
+        runtime
+            .update_task_as_human(
+                &id,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "resident/mandate.json",
+                        mandate.to_string(),
+                    )],
+                    ..Default::default()
+                },
+                "human:decision-fixture".into(),
+            )
+            .unwrap();
+        id
+    };
+
+    let requested = fixture.json(&[
+        "resident",
+        "grant",
+        &task_id,
+        "--add",
+        "merge",
+        "--quote",
+        "Merge reviewed release pull requests.",
+        "--json",
+    ]);
+    assert_eq!(requested["outcome"], "requested", "{requested}");
+    let held = |value: &serde_json::Value| value["authority"]["rights"].clone();
+    assert_eq!(
+        held(&requested),
+        serde_json::json!([]),
+        "a request grants nothing: {requested}"
+    );
+    let listed = fixture.json(&["decision", "list", "--gate", "resident_authority", "--json"]);
+    assert!(
+        listed.to_string().contains(&task_id),
+        "the request is open for the human: {listed}"
+    );
+
+    // The operator override still widens at once.
+    let granted = fixture
+        .command(&["resident", "grant", &task_id, "--add", "merge", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let granted: serde_json::Value = serde_json::from_slice(&granted).unwrap();
+    assert_eq!(granted["outcome"], "granted", "{granted}");
 }
