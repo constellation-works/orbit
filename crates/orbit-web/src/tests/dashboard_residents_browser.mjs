@@ -110,7 +110,23 @@ export async function checkResidentForms(browser, evidence, { feedbackOnly = fal
       await create.locator('[name="complexity"]').scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(evidence, 'resident-create-dark-375.png') });
       await page.setViewportSize({ width: 1440, height: 1000 });
+      // A background refresh spares the form being typed in.
+      await create.locator('[name="goal"]').fill('Draft kept across a refresh');
+      await create.locator('[name="goal"]').focus();
+      await page.evaluate(async () => { await (await import('/js/operations-residents.js')).fetchAndRenderResidents(); });
+      assert.equal(await create.locator('[name="goal"]').inputValue(), 'Draft kept across a refresh', 'A background refresh leaves the focused start form untouched');
+      assert.equal(await create.locator('[name="goal"]').evaluate(node => node === document.activeElement), true, 'Focus stays in the start form after a background refresh');
+      // Cancel closes the form at once, though focus is inside it.
       await create.getByRole('button', { name: 'Cancel starting a resident', exact: true }).click();
+      await create.waitFor({ state: 'detached', timeout: 1500 });
+      // Enter in the goal field submits like the button: the form is gone.
+      await openStart();
+      const enterFrom = await page.evaluate(() => residentFixture.writes.length);
+      await create.locator('[name="goal"]').fill('Release mandate via Enter');
+      await create.locator('[name="goal"]').press('Enter');
+      await page.waitForFunction(from => residentFixture.writes.length > from, enterFrom);
+      await create.waitFor({ state: 'detached', timeout: 1500 });
+      assert.equal(await page.locator('.resident-row[data-task="RESIDENT-1"]').count(), 1, 'The list is rendered after an Enter submit');
     }
     // Detail on demand: no detail form until the mandate is selected.
     assert.equal(await page.locator('.resident-detail').count(), 0, 'No mandate detail before selection');
@@ -127,6 +143,24 @@ export async function checkResidentForms(browser, evidence, { feedbackOnly = fal
       await page.waitForFunction(from => residentFixture.writes.length > from, from);
       assert.deepEqual(await page.evaluate(from => residentFixture.writes[from], from), { path: '/api/residents/RESIDENT-1/control', body: { action: 'stop', reason: 'Goal met' } });
       await page.waitForFunction(() => !document.querySelector('.resident-composer'));
+      // Cancel closes the composer at once, though focus is inside it.
+      await page.getByRole('button', { name: 'Choose Pause RESIDENT-1', exact: true }).click();
+      const pause = page.getByRole('form', { name: 'Pause RESIDENT-1', exact: true });
+      await pause.locator('[name="reason"]').fill('Draft reason');
+      await page.evaluate(async () => { await (await import('/js/operations-residents.js')).fetchAndRenderResidents(); });
+      assert.equal(await pause.locator('[name="reason"]').inputValue(), 'Draft reason', 'A background refresh leaves the focused composer untouched');
+      await pause.getByRole('button', { name: 'Cancel pause', exact: true }).click();
+      await pause.waitFor({ state: 'detached', timeout: 1500 });
+      // Enter in the reason field submits like the confirm button and closes
+      // the composer; typing afterwards raises no page error.
+      await page.getByRole('button', { name: 'Choose Pause RESIDENT-1', exact: true }).click();
+      const enterWrites = await page.evaluate(() => residentFixture.writes.length);
+      await pause.locator('[name="reason"]').fill('Pause via Enter');
+      await pause.locator('[name="reason"]').press('Enter');
+      await page.waitForFunction(from => residentFixture.writes.length > from, enterWrites);
+      await pause.waitFor({ state: 'detached', timeout: 1500 });
+      await page.keyboard.type('more');
+      assert.deepEqual(errors, [], 'No page error after an Enter-submitted composer');
     }
     const authority = page.getByRole('form', { name: 'Authority for RESIDENT-1', exact: true });
     await page.locator('.resident-authority > summary').click();
