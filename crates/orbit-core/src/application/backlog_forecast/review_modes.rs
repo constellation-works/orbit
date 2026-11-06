@@ -13,8 +13,8 @@ use orbit_types::workflow::{
 };
 use serde::Serialize;
 
-use super::super::{TaskJobPort, TaskReviewPort};
 use crate::OrbitRuntime;
+use crate::application::task::{TaskJobPort, TaskReviewPort};
 use crate::runtime::cost::InvocationSpend;
 
 /// Historical enforced layer, or the layer assumed for the next work.

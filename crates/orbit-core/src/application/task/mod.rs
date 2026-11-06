@@ -3,10 +3,12 @@
 mod add;
 mod artifact_export;
 mod automation_port;
-mod backlog_forecast;
-pub use backlog_forecast::BacklogForecastHistory;
+// Compatibility shim: the forecast lives above `workspace_auto`, but `lib.rs`
+// and `orbit-web` still name these at this path. Retiring it means re-pointing
+// them. `scripts/check-dependency-direction.sh` allows exactly these two lines.
+pub use crate::application::backlog_forecast::BacklogForecastHistory;
 #[cfg(feature = "test-support")]
-pub use backlog_forecast::COMPUTE_BUDGET_ENV;
+pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;
 pub(in crate::application) mod base_revision;
 mod baseline_hold;
 mod baseline_repair;
@@ -52,6 +54,7 @@ mod mutation_proposals;
 mod os_readout;
 mod params;
 mod paths;
+pub(in crate::application) use paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
@@ -67,6 +70,7 @@ mod retained_candidate;
 mod schedule;
 pub(crate) use schedule::schedule_hold_in;
 mod terminal_dates;
+pub(in crate::application) use terminal_dates::latest_status_entry_at;
 pub use terminal_dates::{DatedTerminalTask, TerminalTaskDates};
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;

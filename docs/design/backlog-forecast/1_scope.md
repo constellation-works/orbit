@@ -1,7 +1,7 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-05
 last_validated: 2026-11-01
 status: Draft
 stage: building
@@ -17,7 +17,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, and [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
-Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
+Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
 ## Shipped so far
 
