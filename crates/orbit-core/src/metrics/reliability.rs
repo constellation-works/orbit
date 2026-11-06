@@ -384,9 +384,17 @@ impl OrbitRuntime {
         self.pipeline_reliability_sharing_reads(window, &JobDefinitionReads::default())
     }
 
-    /// [`Self::pipeline_reliability`] for one workspace of a fleet read, taking
-    /// the job definition reads the whole request shares so each shared
-    /// definition file is read once per request, not once per workspace.
+    /// [`Self::pipeline_reliability`] for one workspace of a fleet read.
+    ///
+    /// The request shares `definition_reads` for its initial definition
+    /// snapshot, so shared definition files are listed and read once for that
+    /// snapshot. A matching warm role memo reuses parsed roles. On a cold or
+    /// invalidated memo miss, this workspace's catalog is loaded and parsed
+    /// independently. When the initial snapshot is readable and parsing
+    /// returns no diagnostics, a fresh definition snapshot is read after
+    /// parsing to verify the inputs did not change before memoizing. Catalogs
+    /// with diagnostics are not memoized, so their per-workspace parsing
+    /// repeats on later requests.
     pub fn pipeline_reliability_sharing_reads(
         &self,
         window: &ReliabilityWindow,
