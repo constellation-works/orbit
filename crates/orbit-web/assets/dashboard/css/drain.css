@@ -308,7 +308,6 @@
   display: flex; flex-direction: column; gap: 12px; margin: 0 -18px; padding: 16px 18px 18px;
   border-top: 1px solid var(--hair); background: var(--bg-well);
 }
-.drain-start-summary { margin: 0; color: var(--fg-soft); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .drain-start-held { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; }
 /* The Tasks dock's simple Start card: six window lengths in one row, and a
    footer that ends the card rather than sticking to the pane. */
