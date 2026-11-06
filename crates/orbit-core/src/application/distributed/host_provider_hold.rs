@@ -32,7 +32,7 @@ use orbit_types::workflow::{
     JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_account, failed_provider,
 };
 
-use super::auth_failures::{SCAN_LIMIT, clearing_at, host_of, run_at};
+use super::auth_failures::{SCAN_LIMIT, clearing_at, host_of};
 use crate::OrbitRuntime;
 use crate::application::contracts::{HostProviderHold, PULL_DRAIN_JOB, canonical_provider};
 use crate::runtime::task::provider_hold::base_backoff;
@@ -102,7 +102,7 @@ impl OrbitRuntime {
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .filter_map(|run| {
                 let (class, message) = provider_failure_step(&run)?;
-                let at = run_at(&run);
+                let at = run.recency_at();
                 (now < at + base_backoff(class)).then_some((run, class, message, at))
             })
             .collect::<Vec<_>>();

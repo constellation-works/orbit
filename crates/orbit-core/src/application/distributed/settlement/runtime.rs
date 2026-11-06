@@ -573,7 +573,7 @@ impl crate::OrbitRuntime {
             .stores()
             .jobs()
             .get_job_run(leaf)?
-            .map(|run| run.finished_at.or(run.started_at).unwrap_or(run.created_at)))
+            .map(|run| run.recency_at()))
     }
 
     /// `failed` plus every configured crew on the same provider account:

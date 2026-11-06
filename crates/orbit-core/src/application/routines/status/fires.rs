@@ -108,7 +108,7 @@ pub(super) fn fire_from_run(name: &str, source_workspace: &str, run: JobRun) -> 
             RoutineFireState::Failed
         }
     };
-    let updated = run.finished_at.or(run.started_at).unwrap_or(run.created_at);
+    let updated = run.recency_at();
     RoutineFireRecord {
         routine_name: name.to_string(),
         slot: run.created_at.to_rfc3339(),

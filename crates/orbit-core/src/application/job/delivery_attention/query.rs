@@ -135,7 +135,7 @@ impl OrbitRuntime {
             };
             if best
                 .as_ref()
-                .is_none_or(|current| history::run_at(newest) > history::run_at(current))
+                .is_none_or(|current| newest.recency_at() > current.recency_at())
             {
                 best = Some(newest.clone());
             }

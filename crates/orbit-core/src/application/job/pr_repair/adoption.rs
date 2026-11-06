@@ -64,7 +64,7 @@ use serde_json::{Value, json};
 use super::super::orphan_adoption::AdoptionAuthority;
 use super::super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
 use super::super::{RunOwnerLiveness, run_owner_liveness};
-use super::ledger::{OutOfRunStart, ledger_admits, run_recency};
+use super::ledger::{OutOfRunStart, ledger_admits};
 use crate::OrbitRuntime;
 use crate::runtime::run_input::carried_task_ids;
 
@@ -258,8 +258,9 @@ impl OrbitRuntime {
         drop(leaf_span);
         // Newest first, so a pass short of slots serves the freshest leaves.
         leaves.sort_by(|(left_task, left), (right_task, right)| {
-            run_recency(right)
-                .cmp(&run_recency(left))
+            right
+                .recency_at()
+                .cmp(&left.recency_at())
                 .then_with(|| left.run_id.cmp(&right.run_id))
                 .then_with(|| left_task.cmp(right_task))
         });

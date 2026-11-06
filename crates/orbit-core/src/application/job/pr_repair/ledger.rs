@@ -3,8 +3,7 @@ use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
-    JobRun, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix,
-    pr_auto_fix_attempts,
+    PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,11 +40,6 @@ pub(super) fn out_of_run_starts(
         .filter_map(|entry| serde_json::from_str::<OutOfRunStart>(entry.note.as_deref()?).ok())
         .filter(|start| start.pr_number == pr_number)
         .collect()
-}
-
-/// When a run last moved, as the store's recency order reads it.
-pub(super) fn run_recency(run: &JobRun) -> chrono::DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 /// `Err` with the skip when the pull request's ledger would not admit a

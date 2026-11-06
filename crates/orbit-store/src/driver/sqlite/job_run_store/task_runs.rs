@@ -75,10 +75,8 @@ impl Store {
         let steps = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
         for runs in result.values_mut() {
             runs.sort_by(|a, b| {
-                b.finished_at
-                    .or(b.started_at)
-                    .unwrap_or(b.created_at)
-                    .cmp(&a.finished_at.or(a.started_at).unwrap_or(a.created_at))
+                b.recency_at()
+                    .cmp(&a.recency_at())
                     .then_with(|| a.run_id.cmp(&b.run_id))
             });
             for run in runs {
