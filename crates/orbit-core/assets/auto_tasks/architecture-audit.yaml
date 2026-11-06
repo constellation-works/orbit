@@ -283,8 +283,10 @@ template:
       moves an exported item; `xhard` for a package extraction or a change
       touching more than about 100 files. A measurement task is `medium`.
     - **`context_files`.** Verified selectors for every definition, edge,
-      and call site that changes: `symbol:<path>#<name>:<kind>` for an
-      existing function or type edited in place, `file:`/`dir:` for moved,
+      and call site you found that changes (a starting footprint: the
+      implementer records behaviour-preserving callers found later instead
+      of stopping, per the Conventions block):
+      `symbol:<path>#<name>:<kind>` for an existing function or type edited in place, `file:`/`dir:` for moved,
       split or merged files and packages. For a split, merge, or
       move, also list the package manifests and lockfile, the documented
       architecture the filing cites (when one exists), the repository's
@@ -314,7 +316,8 @@ template:
       - The repository's own gate commands, discovered from its tracked
         files and agent guides, pass for the affected packages.
       - The execution summary lists every non-mechanical edit with its
-        reason.
+        reason, and every behaviour-preserving caller or companion edit
+        found beyond the task's listed footprint.
       - An extraction, merge, or move also reports the measured quantity
         its measurement task recorded, before and after, on the same host
         class.
@@ -333,8 +336,19 @@ template:
     > - Prefer re-export shims for old paths over rewriting every import in
     >   one change, so concurrent work keeps merging; name the shim's
     >   retirement as a follow-up.
-    > - An edge, caller, or consumer that this task does not list is a
-    >   stop-and-report, not a judgement call.
+    > - The listed edges, callers and consumers are the starting footprint
+    >   and evidence, not a fence. A caller or consumer the task does not
+    >   list, and any companion edit the stated outcome needs (the
+    >   documented architecture, the dependency-direction guard, a
+    >   re-export shim, an import path), stays in scope when it is
+    >   behaviour-preserving: update it in the same change per the
+    >   repository's agent guide and list it, with its reason, in the
+    >   execution summary. Stop and report instead when handling it needs a
+    >   decision this task does not make: a change to behaviour, to a public
+    >   API, to command or output shapes, or to a persisted format; a break
+    >   of a stable interface that is not named here; work beyond an
+    >   authority boundary; or an architectural requirement the task leaves
+    >   unresolved.
     > - No layout-only moves; this task exists to change the dependency
     >   structure, not the file layout.
 
