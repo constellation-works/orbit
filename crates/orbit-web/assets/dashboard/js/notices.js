@@ -6,8 +6,13 @@
 // post/close as `orbit.notice.post` / `orbit.notice.close`. Every title,
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
+//
+// The page is one list with an Open / Recently closed switch. A row scans as
+// severity, title, scope and age or expiry; its body opens from the row, and
+// Close asks for its reason only once chosen. Posting is a modal dialog with
+// title, severity and body up front.
 
-import { el, fetchJson, formatClock, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, onWorkspaceChange, postJson, requestPanel, syncNodes } from './common.js';
+import { bindTaskLink, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, makeRowDisclosure, onWorkspaceChange, postJson, relativeTime, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -140,150 +145,395 @@ export async function fetchAndRenderNoticeBanner({ shareRecent = false, read = n
   if (revision === getWorkspaceRevision()) renderNoticeBanner(payload);
 }
 
-function endedText(notice) {
-  if (text(notice?.ended_label)) return text(notice.ended_label);
-  if (notice?.status === "expired") return `expired at ${formatDateTime(text(notice.expires_at))}`;
-  if (notice?.status === "closed") return "closed";
-  return "";
-}
-
-function noticeRow(notice, canWrite, onClose) {
-  const now = Date.now();
-  const open = notice?.status === "open";
-  const facts = [
-    chip(text(notice.kind) || "notice", `notice-kind-${text(notice.kind)}`),
-    chip(text(notice.scope) || "workspace"),
-    chip(open ? "open" : text(notice.status)),
-  ];
-  if (notice?.linked_task?.id) facts.push(chip(`task ${text(notice.linked_task.id)}`));
-  if (Number(notice?.reports?.count) > 0) facts.push(chip(`${notice.reports.count} reports`));
-  const meta = open
-    ? [ageLabel(notice, now), expiryLabel(notice, now), `opened ${formatClock(text(notice.opened_at))}`].filter(Boolean).join(" · ")
-    : endedText(notice);
-  const children = [
-    el("div", { class: "notice-row-head" }, [
-      el("span", { class: "notice-title", text: text(notice.title) }),
-      ...facts,
-    ]),
-    el("div", { class: "notice-meta", text: meta }),
-  ];
-  if (text(notice.body)) {
-    children.push(el("p", { class: "notice-body", text: text(notice.body) }));
-  }
-  if (open && canWrite && typeof onClose === "function") {
-    const reason = el("input", { class: "notice-close-reason" });
-    reason.type = "text";
-    reason.placeholder = "Close reason";
-    reason.maxLength = 240;
-    reason.setAttribute("aria-label", `Close reason for ${text(notice.title)}`);
-    const button = el("button", { class: "action notice-close-btn", text: "Close", type: "button" });
-    button.addEventListener("click", () => onClose(notice, reason.value, button));
-    children.push(el("div", { class: "notice-close-row" }, [reason, button]));
-  }
-  const row = el("article", { class: `notice-row notice-${text(notice.kind)}${open ? "" : " notice-ended"}` }, children);
-  row.dataset.key = `notice-${text(notice.id)}`;
-  row.dataset.hash = JSON.stringify([notice.revision, notice.status, notice.title, notice.body, endedText(notice)]);
-  return row;
-}
-
 const OPERATOR_REQUIRED = "An operator session is required to post or close notices.";
-const PAGE_HINT = "Open fleet notices in the shown workspaces; notices closed or expired in the last 24 hours follow. Posting and closing use the same notice operations as the CLI. "
-  + OPERATOR_REQUIRED;
+const WORKSPACE_REQUIRED = "Select one workspace to post or close notices.";
+const PAGE_HINT = `Fleet notices in the shown workspaces: open ones, and those closed or expired in the last 24 hours. ${OPERATOR_REQUIRED}`;
+const SEVERITY_ORDER = ["incident", "maintenance", "info"];
 
-// Whether the Post form is open, and the payload last rendered so the Post
-// control can redraw without a read. A scope switch closes the form.
-let postOpen = false;
+// What the operator has done on this page. Rows are rebuilt from the last
+// payload, so opening a row, choosing Close or switching the list needs no read
+// and a refresh keeps them, a half-typed close reason included. A scope switch
+// starts over.
 let lastPayload = null;
+let shownList = "open";
+const openedNotices = new Set();
+let closing = null; // { id, draft, error, pending } for the row asking for its reason.
+
 onWorkspaceChange(() => {
-  postOpen = false;
   lastPayload = null;
+  shownList = "open";
+  openedNotices.clear();
+  closing = null;
+  const dialog = $("notices-post-dialog");
+  if (dialog?.open) dialog.close();
+  const recentCount = $("notices-recent-count");
+  if (recentCount) recentCount.textContent = "";
 });
 
-// The heading's info hint and Post control are built once into the static
-// header; later renders only update the control's state.
-function syncHeadControls(canWrite) {
-  const hintSlot = $("notices-hint-slot");
-  if (hintSlot && !hintSlot.firstChild) hintSlot.append(infoHint(PAGE_HINT));
-  const slot = $("notices-post-slot");
-  if (!slot) return;
-  let button = $("notices-post-toggle");
-  if (!button) {
-    button = el("button", { class: "action primary notice-post-toggle", text: "Post", type: "button", id: "notices-post-toggle" });
-    button.setAttribute("aria-controls", "notices-post-form");
-    button.addEventListener("click", () => {
-      postOpen = !postOpen;
-      if (lastPayload) renderNotices(lastPayload);
-      if (postOpen) document.querySelector("#notices-post-form .notice-post-title")?.focus();
-    });
-    slot.append(button);
-  }
-  button.disabled = !canWrite;
-  button.setAttribute("aria-expanded", String(postOpen && canWrite));
-  const reason = slot.querySelector(".info-hint");
-  if (!canWrite && !reason) slot.append(infoHint(OPERATOR_REQUIRED));
-  if (canWrite && reason) reason.remove();
+const noticesOf = (payload, list) => (Array.isArray(payload?.[list]) ? payload[list] : []);
+const canWriteNotices = (payload) => payload?.can_write === true && !isAggregateView();
+
+// Incidents first in either list; within a severity the server's order stands.
+function severityRank(notice) {
+  const rank = SEVERITY_ORDER.indexOf(text(notice?.kind));
+  return rank < 0 ? SEVERITY_ORDER.length : rank;
 }
 
-function postForm(canWrite, onPost) {
-  const form = el("form", { class: "notice-post-form" });
-  const title = el("input", { class: "notice-post-title" });
-  title.required = true;
-  title.maxLength = 120;
-  title.placeholder = "Title";
-  title.setAttribute("aria-label", "Notice title");
-  const body = el("textarea", { class: "notice-post-body" });
-  body.rows = 3;
-  body.placeholder = "Body (plain text)";
-  body.setAttribute("aria-label", "Notice body");
-  const kind = el("select", { class: "notice-post-kind" }, [
-    el("option", { text: "incident" }),
-    el("option", { text: "maintenance" }),
-    el("option", { text: "info" }),
-  ]);
-  kind.setAttribute("aria-label", "Notice kind");
-  const scope = el("select", { class: "notice-post-scope" }, [
-    el("option", { text: "workspace" }),
-    el("option", { text: "global" }),
-  ]);
-  scope.setAttribute("aria-label", "Notice scope");
-  const linked = el("input", { class: "notice-post-linked" });
-  linked.placeholder = "Linked task (optional)";
-  linked.setAttribute("aria-label", "Linked task");
-  const expires = el("input", { class: "notice-post-expires" });
-  expires.type = "number";
-  expires.min = "1";
-  expires.placeholder = "Expires in hours (optional)";
-  expires.setAttribute("aria-label", "Expires in hours");
-  const submit = el("button", { class: "action primary notice-post-submit", text: "Post notice", type: "submit" });
-  const feedback = el("p", { class: "notice-feedback", role: "status" });
-  if (!canWrite) {
-    submit.disabled = true;
-    feedback.textContent = OPERATOR_REQUIRED;
+function bySeverity(notices) {
+  return [...notices].sort((a, b) => severityRank(a) - severityRank(b));
+}
+
+// The row's one time: how soon an open notice lapses when that is within a day,
+// otherwise how old it is; for an ended notice, when it ended.
+function rowTime(notice, now) {
+  if (notice?.status !== "open") {
+    const ended = relativeTime(text(notice?.ended_at), now);
+    return `${notice?.status === "expired" ? "expired" : "closed"}${ended ? ` ${ended}` : ""}`;
   }
-  form.append(
-    title, body,
-    el("div", { class: "notice-form-row" }, [kind, scope, linked, expires, submit]),
-    feedback,
-  );
+  const expires = Date.parse(text(notice?.expires_at));
+  if (Number.isFinite(expires) && expires - now < 86_400_000) {
+    const lapse = relativeTime(text(notice.expires_at), now);
+    if (lapse) return `expires ${lapse}`;
+  }
+  return relativeTime(text(notice?.opened_at), now) || "";
+}
+
+function endedText(notice) {
+  if (notice?.status === "expired") return `expired at ${formatDateTime(text(notice.expires_at))}`;
+  if (text(notice?.ended_label)) return text(notice.ended_label);
+  return notice?.status === "closed" ? "closed" : "";
+}
+
+function factList(notice) {
+  const author = text(notice?.author?.class);
+  const facts = [`Opened ${formatDateTime(text(notice?.opened_at))}${author ? ` by ${author}` : ""}`];
+  if (notice?.status === "open") facts.push(`Expires ${formatDateTime(text(notice?.expires_at))}`);
+  // The first report is the post itself.
+  if (Number(notice?.reports?.count) > 1) facts.push(`${notice.reports.count} reports`);
+  const list = el("div", { class: "notice-facts" }, facts.map((fact) => el("span", { text: fact })));
+  const linked = text(notice?.linked_task?.id);
+  if (linked) {
+    const link = el("a", { text: `Task ${linked}` });
+    bindTaskLink(link, linked);
+    list.append(link);
+  }
+  return list;
+}
+
+function repaintNoticeList() {
+  if (lastPayload) paintNoticeList(lastPayload);
+}
+
+function focusRowControl(id, selector) {
+  for (const row of document.querySelectorAll("#notices-body .notice-row")) {
+    if (row.dataset.key === `notice-${id}`) row.querySelector(selector)?.focus();
+  }
+}
+
+// While a close is in flight the row waits for its answer: nothing here may
+// replace `closing`, or a refusal would have no row to report on.
+function toggleNotice(id) {
+  if (closing?.pending) return;
+  if (closing?.id === id) {
+    closing = null;
+    openedNotices.delete(id);
+  } else if (!openedNotices.delete(id)) {
+    openedNotices.add(id);
+  }
+  repaintNoticeList();
+}
+
+function chooseClose(id) {
+  if (closing?.pending) return;
+  closing = { id, draft: "", error: "", pending: false };
+  repaintNoticeList();
+  focusRowControl(id, ".notice-close-reason");
+  // Focus alone would stop at the input, leaving its actions below the fold.
+  document.activeElement?.closest?.(".notice-close-form")?.scrollIntoView({ block: "nearest" });
+}
+
+function cancelClose() {
+  if (closing?.pending) return;
+  const id = closing?.id;
+  closing = null;
+  repaintNoticeList();
+  focusRowControl(id, ".notice-close-open");
+}
+
+async function closeChosenNotice(id) {
+  const reason = closing.draft.trim();
+  if (!reason) {
+    closing.error = "Enter a reason.";
+    repaintNoticeList();
+    focusRowControl(id, ".notice-close-reason");
+    return;
+  }
+  closing.pending = true;
+  closing.error = "";
+  repaintNoticeList();
+  try {
+    await postJson(`/api/notices/${encodeURIComponent(id)}/close`, { reason });
+  } catch (error) {
+    if (closing?.id !== id) return; // The scope changed meanwhile.
+    closing.pending = false;
+    closing.error = String(error?.message || error);
+    repaintNoticeList();
+    focusRowControl(id, ".notice-close-reason");
+    return;
+  }
+  noticesRead = null;
+  closing = null;
+  openedNotices.delete(id);
+  await refreshNoticesAfterWrite();
+  // The closed row took the operator's focus with it.
+  (document.querySelector("#notices-body .notice-row-toggle") || $(`notices-tab-${shownList}`))?.focus();
+}
+
+// A failed re-read after a successful write leaves its error in the panel's
+// status note (`requestPanel`); the write itself stands.
+function refreshNoticesAfterWrite() {
+  return fetchAndRenderNotices().catch((error) => console.error(error));
+}
+
+function closeReasonForm(notice) {
+  const id = text(notice.id);
+  const reason = el("input", { class: "notice-close-reason", type: "text" });
+  reason.placeholder = "Why is this over?";
+  reason.maxLength = 240;
+  reason.required = true;
+  reason.value = closing.draft;
+  reason.setAttribute("aria-label", `Close reason for ${text(notice.title)}`);
+  reason.addEventListener("input", () => { closing.draft = reason.value; });
+  const submit = el("button", { class: "action save notice-close-submit", type: "submit", text: "Close notice" });
+  submit.disabled = closing.pending;
+  const cancel = el("button", { class: "action cancel notice-close-cancel", type: "button", text: "Cancel" });
+  cancel.disabled = closing.pending;
+  cancel.addEventListener("click", cancelClose);
+  const form = el("form", { class: "notice-close-form" }, [
+    reason,
+    el("span", { class: "notice-close-actions" }, [submit, cancel]),
+    closing.error ? el("p", { class: "notice-feedback", role: "alert", text: closing.error }) : null,
+  ]);
+  form.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      cancelClose();
+    }
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const payload = {
-      kind: kind.value,
-      title: title.value,
-      body: body.value || undefined,
-      scope: scope.value,
-      linked_task: linked.value.trim() || undefined,
-      expires_in_hours: expires.value ? Number(expires.value) : undefined,
-    };
-    onPost(payload, feedback, form);
+    if (closing?.id === id && !closing.pending) closeChosenNotice(id);
   });
-  form.id = "notices-post-form";
-  form.dataset.key = "notice-post-form";
-  form.dataset.hash = canWrite ? "write" : "read-only";
   return form;
 }
 
+function noticeDetail(notice, detailId, askingReason) {
+  const ended = notice?.status === "open" ? "" : endedText(notice);
+  return el("div", { id: detailId, class: "notice-detail" }, [
+    ended ? el("p", { class: "notice-ended-text", text: ended }) : null,
+    text(notice.body) ? el("p", { class: "notice-body", text: text(notice.body) }) : null,
+    factList(notice),
+    askingReason ? closeReasonForm(notice) : null,
+  ]);
+}
+
+function noticeRow(notice, canWrite, now) {
+  const id = text(notice.id);
+  const kind = text(notice.kind);
+  const isOpen = notice?.status === "open";
+  const askingReason = canWrite && isOpen && closing?.id === id;
+  const expanded = askingReason || openedNotices.has(id);
+  const detailId = `notice-detail-${id}`;
+  const when = rowTime(notice, now);
+  const toggle = el("button", { class: "notice-row-toggle" }, [
+    el("span", { class: "notice-title", text: text(notice.title) }),
+  ]);
+  const main = el("div", { class: "notice-row-main" }, [
+    el("span", { class: `notice-severity notice-severity-${kind}`, text: kind || "notice" }),
+    toggle,
+    el("span", { class: "notice-scope", text: text(notice.scope) || "workspace" }),
+    el("span", { class: "notice-when", text: when }),
+  ]);
+  makeRowDisclosure(main, toggle, {
+    expanded,
+    controls: expanded ? detailId : null,
+    onToggle: () => toggleNotice(id),
+  });
+  if (canWrite && isOpen && !askingReason) {
+    const close = el("button", { class: "notice-close-open", type: "button", text: "Close" });
+    close.setAttribute("aria-label", `Close ${text(notice.title)}`);
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      chooseClose(id);
+    });
+    main.append(close);
+  }
+  main.append(el("span", { class: "notice-chevron", "aria-hidden": "true" }));
+  const row = el("article", { class: `notice-row notice-${kind}${isOpen ? "" : " notice-ended"}${expanded ? " is-open" : ""}` }, [
+    main,
+    expanded ? noticeDetail(notice, detailId, askingReason) : null,
+  ]);
+  row.dataset.key = `notice-${id}`;
+  row.dataset.hash = JSON.stringify([
+    notice.revision, notice.status, notice.title, notice.body, notice.scope, kind, when, endedText(notice),
+    canWrite, expanded, askingReason, askingReason ? [closing.error, closing.pending] : null,
+  ]);
+  return row;
+}
+
+function syncListSwitch() {
+  for (const list of ["open", "recent"]) {
+    const tab = $(`notices-tab-${list}`);
+    if (!tab) continue;
+    const on = list === shownList;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+  }
+  $("notices-body")?.setAttribute("aria-labelledby", `notices-tab-${shownList}`);
+}
+
+function paintNoticeList(payload) {
+  const body = $("notices-body");
+  if (!body) return;
+  syncListSwitch();
+  const canWrite = canWriteNotices(payload);
+  const now = Date.now();
+  const rows = bySeverity(noticesOf(payload, shownList)).map((notice) => noticeRow(notice, canWrite, now));
+  if (!rows.length) {
+    const note = el("div", { class: "panel-placeholder", text: shownList === "open" ? "No open notices." : "Nothing closed in the last 24 hours." });
+    note.dataset.key = `notices-empty-${shownList}`;
+    note.dataset.hash = "empty";
+    rows.push(note);
+  }
+  syncNodes(body, rows);
+  enableRovingRows(body);
+}
+
+function showList(list) {
+  if (list === shownList) return;
+  shownList = list;
+  repaintNoticeList();
+}
+
+function wireListSwitch() {
+  const strip = $("notices-tabs");
+  if (!strip) return;
+  strip.addEventListener("click", (event) => {
+    const list = event.target?.closest?.("[data-list]")?.dataset.list;
+    if (list) showList(list);
+  });
+  strip.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "open"
+      : event.key === "End" ? "recent"
+      : shownList === "open" ? "recent" : "open";
+    showList(next);
+    $(`notices-tab-${next}`)?.focus();
+  });
+}
+
+function postOptionsSummary() {
+  const hours = $("notices-post-expires").value;
+  const linked = $("notices-post-linked").value.trim();
+  return [
+    $("notices-post-scope").value === "global" ? "Global" : "This workspace",
+    linked ? `task ${linked}` : "no task",
+    hours ? `expires in ${hours}h` : "default expiry",
+  ].join(" · ");
+}
+
+function wirePostDialog() {
+  const dialog = $("notices-post-dialog");
+  const form = $("notices-post-form");
+  if (!dialog || !form) return;
+  const feedback = $("notices-post-feedback");
+  const syncSummary = () => { $("notices-post-summary").textContent = postOptionsSummary(); };
+  let pending = false;
+  $("notices-post-toggle")?.addEventListener("click", () => {
+    feedback.textContent = "";
+    syncSummary();
+    if (!dialog.open) dialog.showModal();
+    $("notices-post-title").focus();
+  });
+  form.addEventListener("input", syncSummary);
+  // A rejected option folded away would otherwise stop the post with no message.
+  form.addEventListener("invalid", () => { $("notices-post-options").open = true; }, true);
+  // Cancel discards the draft; Escape only dismisses it.
+  $("notices-post-cancel").addEventListener("click", () => {
+    form.reset();
+    $("notices-post-options").open = false;
+    dialog.close();
+  });
+  window.addEventListener("hashchange", () => {
+    if (dialog.open && !window.location.hash.startsWith("#notices")) dialog.close();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (pending) return;
+    const input = {
+      kind: form.querySelector('input[name="notices-post-kind"]:checked')?.value,
+      title: $("notices-post-title").value,
+      body: $("notices-post-body").value || undefined,
+      scope: $("notices-post-scope").value,
+      linked_task: $("notices-post-linked").value.trim() || undefined,
+      expires_in_hours: $("notices-post-expires").value ? Number($("notices-post-expires").value) : undefined,
+    };
+    pending = true;
+    $("notices-post-submit").disabled = true;
+    feedback.textContent = "";
+    try {
+      await postJson("/api/notices", input);
+    } catch (error) {
+      feedback.textContent = String(error?.message || error);
+      return;
+    } finally {
+      pending = false;
+      $("notices-post-submit").disabled = false;
+    }
+    noticesRead = null;
+    form.reset();
+    $("notices-post-options").open = false;
+    dialog.close();
+    shownList = "open";
+    await refreshNoticesAfterWrite();
+  });
+}
+
+// The heading's info hint, the Post control, the list switch and the dialog are
+// static page furniture: wired once, before the first read so they answer even
+// when that read fails. Later renders only update the Post control's state.
+let noticesPageWired = false;
+
+function wireNoticesPage() {
+  if (noticesPageWired) return;
+  noticesPageWired = true;
+  $("notices-hint-slot")?.append(infoHint(PAGE_HINT));
+  const button = el("button", { class: "action save notice-post-toggle", text: "Post", type: "button", id: "notices-post-toggle" });
+  button.setAttribute("aria-haspopup", "dialog");
+  button.disabled = true;
+  $("notices-post-slot")?.append(button);
+  wireListSwitch();
+  wirePostDialog();
+}
+
+function syncPostControl(payload, canWrite) {
+  const slot = $("notices-post-slot");
+  const button = $("notices-post-toggle");
+  if (!slot || !button) return;
+  button.disabled = !canWrite;
+  const refusal = payload?.can_write === true ? WORKSPACE_REQUIRED : OPERATOR_REQUIRED;
+  const hint = slot.querySelector(".info-hint");
+  if (canWrite) hint?.remove();
+  else if (!hint) slot.append(infoHint(refusal));
+  else if (hint.textContent !== refusal) hint.replaceWith(infoHint(refusal));
+  const dialog = $("notices-post-dialog");
+  if (!canWrite && dialog?.open) dialog.close();
+}
+
 export async function fetchAndRenderNotices({ shareRecent = false } = {}) {
+  wireNoticesPage();
   const revision = getWorkspaceRevision();
   await requestPanel(
     "notices-body",
@@ -295,66 +545,16 @@ export async function fetchAndRenderNotices({ shareRecent = false } = {}) {
 }
 
 function renderNotices(payload) {
-  const body = $("notices-body");
-  if (!body) return;
+  if (!$("notices-body")) return;
   lastPayload = payload;
   renderNoticeBanner(payload);
-  const open = Array.isArray(payload?.open) ? payload.open : [];
-  const recent = Array.isArray(payload?.recent) ? payload.recent : [];
-  const canWrite = payload?.can_write === true && !isAggregateView();
+  const open = noticesOf(payload, "open");
   const count = $("notices-count");
   if (count) count.textContent = String(open.length);
-  if (!canWrite) postOpen = false;
-  syncHeadControls(canWrite);
-  const feedbackFor = () => body.querySelector(".notice-feedback");
-  const refresh = () => fetchAndRenderNotices().catch((error) => {
-    const feedback = feedbackFor();
-    if (feedback) feedback.textContent = String(error?.message || error);
-  });
-  const onPost = async (input, feedback, form) => {
-    try {
-      await postJson("/api/notices", input);
-      noticesRead = null;
-      form.reset();
-      postOpen = false;
-      await refresh();
-    } catch (error) {
-      feedback.textContent = String(error?.message || error);
-    }
-  };
-  const onClose = async (notice, reason, button) => {
-    if (!reason.trim()) return;
-    button.disabled = true;
-    try {
-      await postJson(`/api/notices/${encodeURIComponent(text(notice.id))}/close`, { reason: reason.trim() });
-      noticesRead = null;
-      await refresh();
-    } catch (error) {
-      button.disabled = false;
-      const feedback = feedbackFor();
-      if (feedback) feedback.textContent = String(error?.message || error);
-    }
-  };
-  const nodes = [];
-  if (!open.length) {
-    const note = el("div", { class: "panel-placeholder", text: "No open notices." });
-    note.dataset.key = "notices-open-empty";
-    note.dataset.hash = "empty";
-    nodes.push(note);
-  } else {
-    nodes.push(...open.map((notice) => noticeRow(notice, canWrite, onClose)));
-  }
-  // Notices that ended in the last day follow; with none, the section is absent.
-  if (recent.length) {
-    nodes.push(el("h3", { class: "notice-section-title", text: "Closed or expired in the last 24 hours" }));
-    nodes.push(...recent.map((notice) => noticeRow(notice, false, null)));
-  }
-  if (postOpen && canWrite) nodes.unshift(postForm(canWrite, onPost));
-  for (const node of nodes) {
-    if (!node.dataset.key) {
-      node.dataset.key = `notices-${nodes.indexOf(node)}`;
-      node.dataset.hash = node.textContent;
-    }
-  }
-  syncNodes(body, nodes);
+  const recentCount = $("notices-recent-count");
+  if (recentCount) recentCount.textContent = String(noticesOf(payload, "recent").length);
+  syncPostControl(payload, canWriteNotices(payload));
+  // A row asking for its reason that has since ended has nothing left to close.
+  if (closing && !closing.pending && !open.some((notice) => text(notice.id) === closing.id)) closing = null;
+  paintNoticeList(payload);
 }

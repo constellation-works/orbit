@@ -29,47 +29,189 @@
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
 .notices-layout { grid-template-columns: minmax(0, 1fr); }
-/* Heading row: title, open count and the page hint on the left, the Post
-   control on the right. The hint bubble spans the header. */
-#notices-panel > header { position: relative; }
+/* Heading row: title and the page hint on the left, the Post control on the
+   right. The hint bubble spans the header and may outgrow a short panel, so the
+   panel does not clip; the last row rounds its own hover to the panel's corner. */
+#notices-panel { overflow: visible; }
+#notices-panel > header { position: relative; border-bottom: 0; padding-bottom: 6px; }
+.notice-row:last-child > .notice-row-main:last-child { border-radius: 0 0 var(--radius-panel) var(--radius-panel); }
 .notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
 .notice-post-toggle { min-height: 32px; }
-/* One inset for the whole Notices column: the body takes the panel's 16px
-   horizontal inset (the same as the panel header), so section titles, the post
-   form's and cards' borders and the empty-state text all start on that edge;
-   content inside a bordered form or card sits one card padding (12px) further
-   in. */
-#notices-body { padding-inline: 16px; }
-#notices-body > .panel-placeholder { padding-inline: 0; }
-.notice-row {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin: 0 0 10px;
+/* The list switch sits on the panel's 16px inset. */
+.band-tabs.notices-tabs { margin: 0; padding: 0 16px 1px; }
+.notices-tabs .band-tab { min-height: 36px; }
+
+/* The list: flat rows split by a hairline, on the panel's own edges. */
+#notices-panel > .body { padding: 0; }
+.notice-row { border-bottom: 1px solid var(--hair); }
+.notice-row:last-child { border-bottom: 0; }
+/* Opening a row or switching the list rebuilds rows; that is not new data. */
+.notice-row.data-changed, .notice-row.data-new { animation: none; }
+.notice-row-main {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 72px 112px 52px 12px;
+  grid-template-areas: "severity title scope when close chevron";
+  align-items: center;
+  column-gap: 12px;
+  min-height: 44px;
+  padding: 0 16px;
+  cursor: pointer;
 }
-.notice-row-ended { opacity: 0.75; }
-.notice-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.notice-title { font-weight: 600; overflow-wrap: anywhere; }
-.notice-meta { color: var(--fg-mute); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
-.notice-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
-.notice-section-title { margin: 14px 0 8px; font-size: 13px; }
-.notice-post-form { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; }
-.notice-post-form input, .notice-post-form textarea, .notice-post-form select,
-.notice-close-reason {
-  background: var(--bg-control);
+.notice-row-main:hover { background: var(--bg-hover); }
+.notice-severity {
+  grid-area: severity;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--fg-mute);
+  text-transform: capitalize;
+}
+.notice-severity::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-disabled);
+}
+.notice-severity-incident { color: var(--state-failed); font-weight: 600; }
+.notice-severity-incident::before { background: var(--state-failed); }
+.notice-severity-maintenance { color: var(--state-pending); }
+.notice-severity-maintenance::before { background: var(--state-pending); }
+.notice-row-toggle { grid-area: title; display: block; width: 100%; min-width: 0; }
+.notice-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
+}
+.notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
+.notice-ended .notice-title { color: var(--fg-dim); font-weight: 400; }
+.notice-row.is-open .notice-title { white-space: normal; overflow-wrap: anywhere; padding: 4px 0; }
+.notice-scope { grid-area: scope; color: var(--fg-mute); font-size: 12px; }
+.notice-when {
+  grid-area: when;
+  color: var(--fg-mute);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+/* Close stays quiet until the row is under the pointer: a list to read, not a
+   column of buttons. */
+.notice-close-open {
+  grid-area: close;
+  justify-self: end;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.notice-row-main:hover .notice-close-open { color: var(--fg); }
+.notice-close-open:hover { border-color: var(--border); }
+.notice-close-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--fg); }
+.notice-chevron {
+  grid-area: chevron;
+  justify-self: end;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--fg-mute);
+  border-bottom: 1.5px solid var(--fg-mute);
+  transform: translateY(-2px) rotate(45deg);
+}
+.notice-row.is-open .notice-chevron { transform: translateY(2px) rotate(225deg); }
+
+/* The open notice lines up under the title. */
+.notice-detail { padding: 2px 16px 14px calc(16px + 104px + 12px); }
+.notice-body, .notice-ended-text { margin: 0 0 10px; max-width: 72ch; overflow-wrap: anywhere; }
+.notice-body { white-space: pre-wrap; line-height: 1.5; }
+.notice-ended-text { color: var(--fg-dim); }
+.notice-ended-text::first-letter { text-transform: uppercase; }
+.notice-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.notice-facts a { color: var(--accent); }
+.notice-close-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; max-width: 72ch; }
+.notice-close-actions { display: inline-flex; gap: 6px; }
+.notice-close-reason {
+  flex: 1 1 240px;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 8px;
+  background: var(--bg-control);
+  color: var(--fg);
   font: inherit;
 }
-.notice-post-title, .notice-post-body { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
-.notice-form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.notice-close-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.notice-close-reason { flex: 1 1 200px; }
-.notice-feedback { color: var(--fg-mute); font-size: 12px; }
+.notice-feedback { flex-basis: 100%; margin: 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+.notice-feedback:empty { display: none; }
+
+/* The post dialog, in the top layer like the task proposal dialog. */
+.notice-post {
+  box-sizing: border-box;
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.notice-post::backdrop { background: rgb(0 0 0 / 0.6); }
+.notice-post h3 { margin: 0 0 12px; font-size: 15px; }
+.notice-post form { display: grid; gap: 6px; min-width: 0; }
+.notice-post label, .notice-post legend, .notice-post summary { font-size: 12.5px; color: var(--fg-dim); }
+.notice-post input:not([type="radio"]), .notice-post textarea, .notice-post select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-control);
+  color: var(--fg);
+  font: inherit;
+}
+.notice-post textarea { resize: vertical; }
+.notice-post-severity { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; margin: 8px 0; padding: 0; border: 0; }
+.notice-post-severity legend { padding: 0; margin-bottom: 6px; }
+.notice-post-severity label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; color: var(--fg); cursor: pointer; }
+.notice-post-body { margin-bottom: 4px; }
+.notice-post-options summary { display: list-item; padding: 6px 0; line-height: 1.4; cursor: pointer; }
+#notices-post-summary { margin-left: 6px; color: var(--fg-mute); }
+.notice-post-options[open] #notices-post-summary { display: none; }
+.notice-post-option-fields { display: grid; gap: 6px; margin-top: 6px; }
+.notice-post-actions { display: flex; gap: 8px; margin-top: 8px; }
+
 @media (max-width: 760px) {
   .notice-banner { padding: 6px 12px; }
-  .notice-form-row > * { flex: 1 1 140px; }
+  /* A phone row is two lines: the facts, then the whole title. */
+  .notice-row-main {
+    grid-template-columns: auto minmax(0, 1fr) auto auto 12px;
+    grid-template-areas:
+      "severity scope when close chevron"
+      "title title title title title";
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 8px 12px;
+  }
+  .notice-title { white-space: normal; overflow-wrap: anywhere; }
+  .notice-row.is-open .notice-title { padding: 0; }
+  .notice-close-open { min-width: 44px; min-height: 36px; }
+  .band-tabs.notices-tabs { padding-inline: 12px; }
+  .notice-detail { padding: 2px 12px 14px; }
 }
