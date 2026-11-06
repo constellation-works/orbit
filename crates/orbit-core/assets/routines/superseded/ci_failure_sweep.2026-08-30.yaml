@@ -1,6 +1,6 @@
 # Superseded `ci_failure_sweep` default (shipped 2026-08-30 to 2026-09-04):
 # the description changed on 2026-09-04. Kept as a provenance shape only —
-# see `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+# see `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
