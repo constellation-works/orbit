@@ -181,9 +181,10 @@ pub struct AgentLoopSpec {
     /// that budget or changes what the step's success means.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete_continuation: Option<IncompleteContinuationPolicy>,
-    /// Bounded correction of a reply whose envelope says `success` and also
-    /// carries an `error` object, which the response parser rejects
-    /// [ORB-22426]. Absent, that reply fails the step. Present, the runner may
+    /// Bounded correction of a reply the response parser rejects, when its
+    /// envelope says `success` and also carries an `error` object [ORB-22426]
+    /// or a clean turn ended in prose with no envelope [ORB-22427]. Absent,
+    /// that reply fails the step. Present, the runner may
     /// start a fresh invocation with the same crew, tools and sandbox, inside
     /// the unspent part of this activity's wall-clock budget, and only a newly
     /// valid reply succeeds. Asset load admits it only on a read-only activity

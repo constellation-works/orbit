@@ -3,6 +3,10 @@
 //! gets a bounded fresh invocation, within its own wall-clock budget and under
 //! the same authority, and only a newly valid reply succeeds.
 //!
+//! [ORB-22427] So does a clean turn that ends in prose with no envelope. The
+//! prose never becomes a result, and a turn the provider itself ended abnormally
+//! keeps its own failure.
+//!
 //! The provider is a scripted `claude` that numbers its invocations and saves
 //! each prompt and argv.
 
@@ -361,7 +365,6 @@ fn other_failures_do_not_start_a_correction() {
             "a malformed error object",
             reply(r#"{"schemaVersion":1,"status":"success","result":{},"error":{"code":7}}"#),
         ),
-        ("prose without an envelope", reply(SIGNATURE)),
         (
             "prose that quotes the refusal in a failed reply",
             reply(&format!(
@@ -416,6 +419,210 @@ fn other_failures_do_not_start_a_correction() {
             outcome.message
         );
     }
+}
+
+const MISSING: &str = "stdout does not contain an Orbit response envelope";
+const PROSE: &str = "The retry budget lives in the supervisor.";
+
+/// What a clean Claude turn that answered in prose prints.
+fn prose_wrapper() -> String {
+    reply(&format!(
+        r#"{{"type":"result","subtype":"success","is_error":false,"result":"{PROSE}"}}"#
+    ))
+}
+
+#[test]
+fn a_prose_ending_without_a_policy_fails_with_the_missing_envelope_signature() {
+    let fixture = Fixture::new(&prose_wrapper(), &reply(VALID));
+    let outcome = fixture.dispatch(None, 30).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1, "no correction is started");
+    let message = outcome.message.as_deref().unwrap();
+    assert!(message.contains(MISSING), "{message}");
+    assert!(!message.contains("correction"), "{message}");
+}
+
+#[test]
+fn a_prose_ending_is_replaced_by_a_newly_valid_reply_under_the_same_authority() {
+    let later = r#"echo '{"schemaVersion":1,"status":"success","result":{"summary":"corrected"},"error":null}'"#;
+    let fixture = Fixture::new(&prose_wrapper(), later);
+    let Dispatched {
+        outcome,
+        sandbox_requests,
+    } = fixture.dispatch(admitted(1), 30);
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(fixture.invocations(), 2, "exactly one correction");
+    assert_eq!(
+        outcome.output["summary"], "corrected",
+        "the result is the new reply's, never read out of the prose"
+    );
+    assert_eq!(outcome.output["response_envelope_valid"], true);
+
+    let record = &outcome.output["response_correction"];
+    assert_eq!(record["rounds"], 1);
+    assert!(
+        record["original_error"].as_str().unwrap().contains(MISSING),
+        "{record}"
+    );
+    assert!(record["original_stdout_blob_ref"].is_string(), "{record}");
+
+    let first = fixture.envelope(1);
+    let second = fixture.envelope(2);
+    let correction = &second["input"]["response_correction"];
+    assert_eq!(correction["rejection"], "missing_envelope");
+    assert_eq!(correction["rejected_reply"], PROSE);
+    assert_eq!(correction["rejected_reply_truncated"], false);
+    assert!(
+        correction["parser_error"]
+            .as_str()
+            .unwrap()
+            .contains(MISSING),
+        "{correction}"
+    );
+    for key in ["instruction", "tools", "task", "model"] {
+        assert_eq!(first.get(key), second.get(key), "{key}");
+    }
+    assert_eq!(fixture.argv(1), fixture.argv(2), "provider argv");
+    assert_eq!(
+        sandbox_requests,
+        vec![("claude".to_string(), Some("reviewer".to_string())); 2],
+    );
+    let remaining = correction["remaining_budget_seconds"].as_u64().unwrap();
+    assert!(remaining < 30, "{remaining}");
+    assert_eq!(
+        outcome.output["effective_deadline_ms"],
+        json!(remaining * 1000),
+        "the correction's own kill deadline is the unspent budget"
+    );
+}
+
+#[test]
+fn repeated_prose_endings_stop_at_the_bound_and_keep_the_original_failure() {
+    let fixture = Fixture::new(&prose_wrapper(), &prose_wrapper());
+    let outcome = fixture.dispatch(admitted(2), 30).outcome;
+
+    assert!(!outcome.success, "prose earns no success");
+    assert_eq!(fixture.invocations(), 3, "two corrections, then stop");
+    let message = outcome.message.as_deref().unwrap();
+    assert!(
+        message.contains("after 2 response correction(s) (correction refused: rounds_exhausted)"),
+        "{message}"
+    );
+    let (_, original) = message
+        .split_once("original error before correction:")
+        .expect("the original failure is kept");
+    assert!(original.contains(MISSING), "{message}");
+    assert_eq!(outcome.output["response_envelope_valid"], false);
+    assert_eq!(outcome.output["response_correction"]["rounds"], 2);
+    assert!(
+        outcome.output.get("summary").is_none(),
+        "prose is no result"
+    );
+}
+
+#[test]
+fn a_spent_budget_refuses_correcting_a_prose_ending() {
+    let fixture = Fixture::new(&prose_wrapper(), &reply(VALID));
+    let policy = Some(ResponseCorrectionPolicy {
+        max_rounds: 1,
+        min_remaining_seconds: 30,
+    });
+    let outcome = fixture.dispatch(policy, 30).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1);
+    assert_eq!(
+        outcome.output["response_correction"]["refusal"],
+        "wall_clock_exhausted"
+    );
+    assert!(outcome.message.as_deref().unwrap().contains(MISSING));
+}
+
+#[test]
+fn a_turn_the_provider_ended_for_its_own_reason_is_not_a_correctable_omission() {
+    let prose = format!("echo '{PROSE}'");
+    let cases = [
+        ("a nonzero provider exit", format!("{prose}; exit 3"), "exited with code 3"),
+        (
+            "a provider authentication failure",
+            r#"echo '{"type":"result","is_error":true,"api_error_status":401,"result":"Failed to authenticate. API Error: 401 authentication_error"}'"#.to_string(),
+            "authenticate",
+        ),
+        (
+            "a provider usage limit",
+            r#"echo '{"type":"result","is_error":true,"result":"You\u0027ve hit your limit, resets 3pm"}'"#.to_string(),
+            "usage limit",
+        ),
+        (
+            "a provider capacity failure",
+            r#"echo '{"type":"result","is_error":true,"result":"Selected model is at capacity. Please try a different model."}'"#.to_string(),
+            "",
+        ),
+        (
+            "a provider policy refusal",
+            r#"echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"refusal","result":"I cannot help with that."}'"#.to_string(),
+            "refused the request",
+        ),
+        (
+            "a turn limit that exits zero",
+            r#"echo '{"type":"result","subtype":"error_max_turns","is_error":false,"terminal_reason":"max_turns","result":null}'"#.to_string(),
+            "",
+        ),
+        (
+            "an authentication failure only on stderr",
+            format!("{prose}; echo 'Failed to authenticate. API Error: 401 authentication_error' >&2"),
+            MISSING,
+        ),
+        (
+            "a usage limit only on stderr",
+            format!("{prose}; echo \"You've hit your limit, resets 3pm\" >&2"),
+            MISSING,
+        ),
+        ("an empty reply", "true".to_string(), MISSING),
+        (
+            "a capture truncated past its limit",
+            format!("head -c 2000000 /dev/zero | tr '\\0' x; echo; {prose}"),
+            MISSING,
+        ),
+        (
+            "a wrapper holding no answer",
+            r#"echo '{"type":"result","subtype":"success","is_error":false,"result":""}'"#.to_string(),
+            MISSING,
+        ),
+    ];
+    for (case, first, expected) in cases {
+        let fixture = Fixture::new(&first, &reply(VALID));
+        let outcome = fixture.dispatch(admitted(3), 30).outcome;
+        assert!(!outcome.success, "{case}: stays failed");
+        assert_eq!(fixture.invocations(), 1, "{case}: no correction");
+        assert!(
+            outcome.output.get("response_correction").is_none(),
+            "{case}: nothing was requested"
+        );
+        let message = outcome.message.as_deref().unwrap();
+        assert!(!message.contains("correction"), "{case}: {message}");
+        assert!(message.contains(expected), "{case}: {message}");
+    }
+}
+
+#[test]
+fn a_prose_ending_that_outlives_the_budget_stays_a_timeout() {
+    let fixture = Fixture::new(&format!("echo '{PROSE}'; exec sleep 60"), &reply(VALID));
+    let outcome = fixture.dispatch(admitted(1), 1).outcome;
+
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1);
+    assert_eq!(outcome.output["timed_out"], true);
+    assert!(
+        outcome
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("wall-clock timeout")
+    );
+    assert!(outcome.output.get("response_correction").is_none());
 }
 
 #[test]

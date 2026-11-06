@@ -7,7 +7,7 @@ pub(crate) use response::tool_calls_in_documents;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
 pub use response::{
     DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
-    ParsedStdout, is_success_carrying_error_violation,
+    ParsedStdout, is_missing_envelope_violation, is_success_carrying_error_violation,
 };
 pub use response::{
     provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,

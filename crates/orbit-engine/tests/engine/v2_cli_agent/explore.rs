@@ -64,6 +64,24 @@ impl orbit_engine::test_support::NullRuntimeHost for ExploreHost {
         self.offered
     }
 
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        _activity: &str,
+        disallow_list: &[String],
+    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+        Ok(orbit_engine::ResolvedActivityTools {
+            requested_tools: Vec::new(),
+            effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
+                disallow_list,
+                ["orbit.task.show", "orbit.task.update"],
+            ),
+            omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
+        })
+    }
+
     fn resolve_executor_sandbox(
         &self,
         _provider: &str,
@@ -156,6 +174,119 @@ fn stamped_toolsets(tools: Vec<String>, offered: bool) -> String {
     });
     assert!(outcome.unwrap().success);
     fs::read_to_string(toolsets).expect("the provider recorded its toolsets")
+}
+
+/// The shipped activity, on a scripted provider whose first invocation prints
+/// `first` and whose later ones print a valid envelope. Returns the outcome and
+/// each invocation's argv and execution envelope.
+fn dispatch_shipped_activity(
+    activity_name: &str,
+    asset: &str,
+    provider: Provider,
+    command: &str,
+    args: Vec<String>,
+    first: &str,
+) -> (DispatchOutcome, Vec<(String, Value)>) {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().display();
+    let fake = fake_cli(
+        command,
+        &format!(
+            "#!/bin/sh\nn=$(cat \"{state}/count\" 2>/dev/null || echo 0)\nn=$((n+1))\necho \"$n\" > \"{state}/count\"\ncat > \"{state}/prompt-$n\"\nprintf '%s\\n' \"$@\" > \"{state}/argv-$n\"\nif [ \"$n\" = 1 ]; then\n{first}\nelse\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{\"summary\":\"corrected\",\"paths_read\":[]}},\"error\":null}}'\nfi\n"
+        ),
+    )
+    .unwrap();
+    let asset = orbit_engine::load_activity_asset(asset).expect("the shipped activity loads");
+    let ActivityV2Spec::AgentLoop(mut spec) = asset.spec.spec.clone() else {
+        panic!("{activity_name} is an agent loop");
+    };
+    spec.provider = provider;
+    spec.model = None;
+    let run_id = "shipped-correction";
+    let (writer, _store) = build_writer(temp.path(), run_id).unwrap();
+    let host = ExploreHost {
+        cli: ScriptHost::new_with_args(fake.cli_path(), args),
+        offered: false,
+        sandbox: None,
+    };
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name,
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: asset.spec.fs_profile.as_deref(),
+        input: json!({ "prompt": "where is the retry budget enforced" }),
+        audit: writer,
+        run_id,
+        host: Some(&host),
+    })
+    .expect("the dispatch returns an outcome");
+    let count: usize = fs::read_to_string(temp.path().join("count"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let invocations = (1..=count)
+        .map(|n| {
+            let argv = fs::read_to_string(temp.path().join(format!("argv-{n}"))).unwrap();
+            let prompt = fs::read_to_string(temp.path().join(format!("prompt-{n}"))).unwrap();
+            let envelope = prompt.split_once("Execution envelope:\n").unwrap().1;
+            (argv, serde_json::from_str(envelope.trim()).unwrap())
+        })
+        .collect();
+    (outcome, invocations)
+}
+
+/// [ORB-22427] `jrun-20261106-0602-t2`: an explorer ended a clean turn in prose.
+#[test]
+fn an_explorer_that_ends_in_prose_gets_one_read_only_correction() {
+    let (outcome, invocations) = dispatch_shipped_activity(
+        EXPLORE_ACTIVITY,
+        include_str!("../../../../orbit-core/assets/activities/agent_explore.yaml"),
+        Provider::Codex,
+        "codex",
+        vec!["exec".into(), "--json".into()],
+        r#"echo '{"type":"item.completed","item":{"type":"agent_message","text":"It is in the supervisor."}}'; echo '{"type":"turn.completed"}'"#,
+    );
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["summary"], "corrected");
+    assert_eq!(invocations.len(), 2, "exactly one correction");
+    let (first_argv, first) = &invocations[0];
+    let (second_argv, second) = &invocations[1];
+    assert_eq!(
+        second["input"]["response_correction"]["rejected_reply"],
+        "It is in the supervisor."
+    );
+    assert_eq!(first_argv, second_argv, "same provider argv");
+    let argv: Vec<String> = second_argv.lines().map(str::to_string).collect();
+    assert_eq!(sandbox_mode(&argv), Some("read-only"));
+    assert_eq!(first["tools"], second["tools"], "same tool grant");
+    assert_eq!(
+        second["tools"],
+        json!(["orbit.task.show"]),
+        "the correction keeps the read-only grant"
+    );
+    assert_eq!(first["instruction"], second["instruction"]);
+}
+
+/// [ORB-22427] `jrun-20261103-0902-c1`: the same ending from a task pilot.
+#[test]
+fn a_task_pilot_that_ends_in_prose_gets_one_correction() {
+    let (outcome, invocations) = dispatch_shipped_activity(
+        "task_pilot",
+        include_str!("../../../../orbit-core/assets/activities/task_pilot.yaml"),
+        Provider::Claude,
+        "claude",
+        Vec::new(),
+        r#"echo '{"type":"result","subtype":"success","is_error":false,"result":"The task looks ready."}'"#,
+    );
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["summary"], "corrected");
+    assert_eq!(invocations.len(), 2, "exactly one correction");
+    assert_eq!(
+        invocations[1].1["input"]["response_correction"]["rejection"],
+        "missing_envelope"
+    );
 }
 
 #[test]
