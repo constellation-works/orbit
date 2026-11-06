@@ -1464,9 +1464,12 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
             }
             "bounded_redacted" => {
                 let secret = format!("ghp_{}", "a".repeat(36));
+                // NEUTRAL keeps this redaction case an immediate blocked
+                // refusal: it is not the all-explicit-success head whose
+                // lagging merge state landing re-polls [ORB-22350].
                 patch["statusCheckRollup"] = json!(
                     (0..40)
- .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"SUCCESS" }))
+ .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"NEUTRAL" }))
                         .collect::<Vec<_>>()
                 );
                 // Arbitrary raw payload must never enter persisted diagnostics.

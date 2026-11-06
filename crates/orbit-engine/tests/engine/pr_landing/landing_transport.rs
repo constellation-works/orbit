@@ -240,6 +240,75 @@ fn owner_landing_waits_for_a_policy_required_check_the_required_read_has_not_rep
     );
 }
 
+/// [ORB-22350] Every required check has passed and branch policy names
+/// nothing missing or pending, but the provider still reads BLOCKED for a
+/// few seconds after the last check goes green. Landing must re-poll the
+/// merge state within its existing budget instead of holding the handoff
+/// for good; a PR that stays BLOCKED still stops without merging.
+#[test]
+fn owner_landing_re_polls_a_blocked_merge_state_after_required_checks_pass() {
+    isolated(
+        "landing_transport::owner_landing_re_polls_a_blocked_merge_state_after_required_checks_pass",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
+                fs::write(fx.forge.join("blocked-lag"), "blocked").unwrap();
+                let blocked = fx.forge.join("blocked-lag");
+                let (outcome, waits) = land_with_wait(&host, 120, move |wait| {
+                    if wait == Duration::from_secs(30) {
+                        fs::remove_file(&blocked).unwrap();
+                    }
+                });
+
+                assert_eq!(waits, [30], "one normal check poll, no stop: {outcome:?}");
+                assert_eq!(
+                    outcome.expect("a merge state that refreshes within budget lands")["phase"],
+                    "landed"
+                );
+                assert_eq!(mutations(&fx), "merge\n");
+                assert_eq!(steps(&host), landed_steps());
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
+                fs::write(fx.forge.join("blocked-lag"), "blocked").unwrap();
+                let (outcome, waits) = land_with_wait(&host, 300, |_| {});
+
+                let error = outcome.expect_err("a persistently BLOCKED PR still stops");
+                assert!(
+                    matches!(
+                        error,
+                        OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::RequirementsUnsatisfied,
+                            ..
+                        }
+                    ),
+                    "the stop keeps delivery_requirements_unsatisfied: {error}"
+                );
+                assert_eq!(
+                    waits,
+                    [30, 30, 30, 30],
+                    "a bounded re-poll within the existing deadline, then the stop"
+                );
+                assert!(
+                    mutations(&fx).is_empty(),
+                    "branch protection is not bypassed"
+                );
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+                let evidence = host.updates.lock().unwrap()[0].evidence.clone();
+                assert!(
+                    evidence.contains("required reviews or checks are not satisfied"),
+                    "{evidence}"
+                );
+            });
+        },
+    );
+}
+
 fn steps(host: &AcceptedLanding) -> Vec<HandoffLandingStep> {
     host.updates
         .lock()
