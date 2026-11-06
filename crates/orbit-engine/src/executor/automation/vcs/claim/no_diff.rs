@@ -95,7 +95,12 @@ fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<
             report["decision"].as_str(),
             // [ORB-14791] A claimed `no-diff-expected` skip pins its run and
             // base; its verifier rechecks the owner's tag.
-            Some("verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected")
+            Some(
+                "verified_no_diff"
+                    | "verified_already_landed"
+                    | "verified_already_resolved"
+                    | "skipped_no_diff_expected",
+            )
         )
     {
         return Err(refused(
