@@ -276,3 +276,83 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
         },
     );
 }
+
+fn history_reads(trace: &[Value]) -> usize {
+    trace
+        .iter()
+        .filter(|event| event["span"]["name"] == "task_history_read")
+        .count()
+}
+
+/// ORB-22423: the completion trend read every candidate's history on every
+/// request. A repeat request reuses each clean read while the task's bundle
+/// is unchanged, and a public write to a task dates it from history again.
+#[test]
+fn completion_trend_rereads_only_tasks_written_since_the_last_request() {
+    isolated(
+        "metrics_terminal_dates::completion_trend_rereads_only_tasks_written_since_the_last_request",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let reconsidered = add_task(&fixture, TaskComplexity::Low, TaskStatus::Rejected);
+            close_at(
+                &fixture,
+                &reconsidered,
+                TaskStatus::Rejected,
+                now - Duration::hours(30),
+            );
+            let commented_at = now - Duration::hours(3);
+            let commented = complete_at(&fixture, commented_at);
+            let unreadable = done_without_transition(&fixture, now - Duration::hours(2));
+            std::fs::remove_file(task_events_path(&fixture, &unreadable)).unwrap();
+
+            let server = fixture.counted_task_server();
+            let path = format!("/api/diagnostics/completions?since=24h&{WS}");
+            let request = || {
+                let before = server.task_query_trace().len();
+                let body = json_ok(server.get(&path));
+                (body, history_reads(&server.task_query_trace()[before..]))
+            };
+
+            let (cold, reads) = request();
+            assert_eq!(reads, 3, "the first request reads each candidate");
+            assert_eq!(cold["current"]["done"]["total"], 1);
+            assert_eq!(cold["previous"]["rejected"], 1);
+            assert_eq!(cold["undated"]["done"]["total"], 1);
+
+            let (warm, reads) = request();
+            assert_eq!(
+                reads, 1,
+                "only the unreadable history is read again, so it stays undated"
+            );
+            for key in ["current", "previous", "undated", "previous_undated"] {
+                assert_eq!(warm[key], cold[key], "{key}");
+            }
+
+            // Reconsidering the rejection and rejecting again enters it anew
+            // now; a comment on the other task moves its log stamp, not its date.
+            for status in [TaskStatus::Backlog, TaskStatus::Rejected] {
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &reconsidered,
+                        TaskUpdateParams {
+                            status: Some(status),
+                            ..Default::default()
+                        },
+                        "fixture".into(),
+                    )
+                    .unwrap();
+            }
+            comment_on_task(&fixture, &commented);
+
+            let (written, reads) = request();
+            assert_eq!(reads, 3, "both written tasks and the unreadable one");
+            assert_eq!(written["previous"]["rejected"], 0);
+            assert_eq!(written["current"]["rejected"], 1, "rejected again just now");
+            assert_eq!(written["current"]["done"]["total"], 1);
+            assert_eq!(bucket_of(&written, commented_at)["done"]["total"], 1);
+            assert_eq!(written["undated"]["done"]["total"], 1);
+        },
+    );
+}

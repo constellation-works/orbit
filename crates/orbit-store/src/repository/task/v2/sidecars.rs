@@ -115,6 +115,35 @@ impl TaskV2Store {
         if !boundary.has_nothing_to_recover()? {
             return Ok(None);
         }
+        self.settled_history_stamp(id)
+    }
+
+    /// [`Self::task_history_stamp`] for each of `ids`, checking the
+    /// partition for a commit to recover once rather than per task. A task
+    /// is absent when nothing can vouch for its logs, and every task is when
+    /// there is no commit boundary or the partition has a commit to recover.
+    pub(crate) fn task_history_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut stamps = BTreeMap::new();
+        let Some(boundary) = &self.coordination else {
+            return Ok(stamps);
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(stamps);
+        }
+        for id in ids {
+            orbit_types::task::validate_orb_task_id(id)?;
+            if let Some(stamp) = self.settled_history_stamp(id)? {
+                stamps.insert(id.clone(), stamp);
+            }
+        }
+        Ok(stamps)
+    }
+
+    /// One task's log stamp once the partition is known to be settled.
+    fn settled_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
         let Some([events, comments]) = self.bundle_store.settled_log_paths(id)? else {
             return Ok(None);
         };

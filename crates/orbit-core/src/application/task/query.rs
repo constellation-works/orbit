@@ -266,6 +266,22 @@ impl OrbitRuntime {
             })
     }
 
+    /// [`Self::task_history_stamp`] for each listed task, in one pass; a
+    /// task is absent when nothing can vouch for its logs. A worker reads
+    /// through its owner, so it has none.
+    pub(crate) fn task_history_stamps(&self, ids: &[String]) -> BTreeMap<String, String> {
+        if self.worker_invocation().is_some() {
+            return BTreeMap::new();
+        }
+        self.stores()
+            .task_history()
+            .task_history_stamps(ids)
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "task history stamps unavailable");
+                BTreeMap::new()
+            })
+    }
+
     /// Evidence that each listed task's whole bundle is unchanged since an
     /// earlier stamp, taken without reading it; a task is absent when
     /// nothing can vouch for it. A worker reads through its owner, so it has
