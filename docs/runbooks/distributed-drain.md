@@ -1103,8 +1103,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   hold went, and `steps` lists the largest steps by their own time: `pending
   recovery`, a lock wait such as `.task-commit.lock wait` (the partition) or
   a bundle lock's, and the operation's `index freshness`, `index snapshot`,
-  `index query`, `envelope stamp write`, `index repair`, `bundle read`,
-  `envelope read` and `search docs read`. A claim mutation's admission
+  `index query`, `index writer wait`, `envelope stamp write`, `index repair`,
+  `bundle read`, `envelope read` and `search docs read`. A claim mutation's admission
   section splits into `claim receipt`, `claim authority`, `claim decision`
   and `claim commit`, and any commit into `commit intent`, `commit prepare`,
   `commit decision` (the SQLite transaction) and `commit apply` (the bundle

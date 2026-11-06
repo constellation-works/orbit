@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use super::envelope_cache;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
@@ -18,6 +19,30 @@ const INDEX_FRESHNESS_STEP: &str = "index freshness";
 const INDEX_SNAPSHOT_STEP: &str = "index snapshot";
 const ENVELOPE_STAMP_WRITE_STEP: &str = "envelope stamp write";
 const INDEX_REPAIR_STEP: &str = "index repair";
+const INDEX_WRITER_WAIT_STEP: &str = "index writer wait";
+
+/// Most freshness scans one read makes before it falls back to a bundle scan:
+/// the first, its confirmation, and one more when that finds another task
+/// mismatched, since a drain's commits overlap.
+const INDEX_FRESHNESS_ATTEMPTS: usize = 3;
+/// Longest one scan waits for a writer to publish a mismatching task's index
+/// row. A deferred commit apply takes milliseconds, and a scan of the workspace
+/// takes seconds.
+#[cfg(not(test))]
+const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(2);
+/// A test holds the writer on a channel, so the wait must outlast a loaded host.
+#[cfg(test)]
+const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(60);
+
+/// What one freshness scan found.
+enum IndexFreshness {
+    /// The index serves; these registered tasks' bundles are in flight.
+    Usable(Vec<String>),
+    /// The index holds a different set of tasks from the registry.
+    Incomplete,
+    /// This task's index row disagrees with its envelope.
+    Mismatch(String),
+}
 
 impl TaskV2Store {
     pub(crate) fn task_status_index(
@@ -189,25 +214,73 @@ impl TaskV2Store {
         .entered();
         hold_step(INDEX_FRESHNESS_STEP, || {
             // The index snapshot precedes the envelope probes. A writer can
-            // finish publishing between them, so confirm a mismatch once
-            // against a new snapshot before paying for a workspace-wide
-            // bundle scan.
-            for _ in 0..2 {
-                if let Some(unsettled) = self.validate_index_once(persist_proofs)? {
-                    orbit_common::tracing::debug!(
-                        target: "orbit.store.task_query",
-                        workspace_id = %self.workspace_id,
-                        path = "index",
-                        "task index freshness accepted",
-                    );
-                    return Ok(Some(unsettled));
+            // finish publishing between them, so confirm a mismatch against a
+            // new snapshot before paying for a workspace-wide bundle scan.
+            let mut awaited = None;
+            for _ in 0..INDEX_FRESHNESS_ATTEMPTS {
+                match self.validate_index_once(persist_proofs)? {
+                    IndexFreshness::Usable(unsettled) => {
+                        orbit_common::tracing::debug!(
+                            target: "orbit.store.task_query",
+                            workspace_id = %self.workspace_id,
+                            path = "index",
+                            "task index freshness accepted",
+                        );
+                        return Ok(Some(unsettled));
+                    }
+                    IndexFreshness::Incomplete => {}
+                    IndexFreshness::Mismatch(task_id) => {
+                        // The same task again means no writer was publishing
+                        // it: the row really is stale. Observation reads create
+                        // no lock files, so they only re-probe.
+                        if awaited.as_ref() == Some(&task_id) {
+                            return Ok(None);
+                        }
+                        if persist_proofs {
+                            self.await_in_flight_bundle_writer(&task_id);
+                        }
+                        awaited = Some(task_id);
+                    }
                 }
             }
             Ok(None)
         })
     }
 
-    fn validate_index_once(&self, persist_proofs: bool) -> Result<Option<Vec<String>>, OrbitError> {
+    /// Wait for the writer publishing `task_id`, if there is one.
+    ///
+    /// Envelope reads take no lock, and every writer shows its envelope before
+    /// it updates the index row, all under the bundle's exclusive lock: a
+    /// coordinated commit does so across its whole deferred apply, with the
+    /// partition already released. A read in that window would otherwise
+    /// conclude the index is stale, and scan and rebuild the whole workspace
+    /// under its shared partition section, with every admission queued behind
+    /// it. The scan would wait for this same lock too, so this wait is never
+    /// the longer one. It is bounded because the caller holds its section, and
+    /// a writer that outlasts it, or a lock that cannot be taken, leaves the
+    /// decision to the next probe.
+    fn await_in_flight_bundle_writer(&self, task_id: &str) {
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_query",
+            workspace_id = %self.workspace_id,
+            task_id,
+            "task index freshness waiting for a bundle writer",
+        );
+        if let Err(error) = hold_step(INDEX_WRITER_WAIT_STEP, || {
+            self.bundle_store
+                .await_bundle_writer(task_id, IN_FLIGHT_WRITER_WAIT)
+        }) {
+            orbit_common::tracing::debug!(
+                target: "orbit.store.task_query",
+                workspace_id = %self.workspace_id,
+                task_id,
+                %error,
+                "task index freshness did not wait out a bundle writer",
+            );
+        }
+    }
+
+    fn validate_index_once(&self, persist_proofs: bool) -> Result<IndexFreshness, OrbitError> {
         let snapshot = hold_step(INDEX_SNAPSHOT_STEP, || {
             self.registry.task_index_snapshot(&self.workspace_id)
         })?;
@@ -219,7 +292,7 @@ impl TaskV2Store {
             "task index snapshot loaded",
         );
         let Some(rows) = &snapshot.rows else {
-            return Ok(None);
+            return Ok(IndexFreshness::Incomplete);
         };
         self.envelope_cache.retain_registered(registered);
 
@@ -228,7 +301,7 @@ impl TaskV2Store {
         for row in rows {
             match self.settled_envelope_matches(row, &mut proofs)? {
                 Some(true) => {}
-                Some(false) => return Ok(None),
+                Some(false) => return Ok(IndexFreshness::Mismatch(row.task_id.clone())),
                 None => unsettled.push(row.task_id.clone()),
             }
         }
@@ -256,7 +329,7 @@ impl TaskV2Store {
                 ),
             }
         }
-        Ok(Some(unsettled))
+        Ok(IndexFreshness::Usable(unsettled))
     }
 
     /// Whether one registered task's envelope matches its index row, reusing
