@@ -163,8 +163,10 @@ against busywork.
 - the metrics headline ([2_design.md §9](../2_design.md#9-metrics-that-gate-widening)).
 
 JSON keys are `residents`, `open_escalations`, `decisions_awaiting_veto`, `top_pains`,
-`open_proposals`, `metrics`, `workspace` and `since`. Stalled means a dead cycle or a latest
-`incomplete` checkpoint. Veto candidates are reversible checkpoint decisions in the window without
+`open_proposals`, `metrics`, `workspace` and `since`. Stalled means an active mandate has had no
+checkpoint (or, before its first checkpoint, no checkpoint since task creation) for twice its
+heartbeat, or its last three checkpoints were all `incomplete`; paused and taken-over mandates are
+not marked stalled. Veto candidates are reversible checkpoint decisions in the window without
 an answer naming them in `reverses`. Top pains exclude resolved records and include retained
 occurrences plus occurrence/cycle/mandate counts; cost is minutes plus slot minutes. Open proposals
 are linked or pass-tagged tasks still `proposed`, including duplicates linked to pre-existing tasks.
