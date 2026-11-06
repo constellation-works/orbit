@@ -7,8 +7,9 @@
 // its default series drawn and sparse buckets hollow, the Reviewers provisional
 // banner, `accepts often` tag, unjudged row and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the header's scan line (stale beside its ranks,
-// then replaced by a newer scan), the empty state, and the 375px layout (ranking
-// scrolling in its own box, detail stacked below, 44px touch targets). The
+// then replaced by a newer scan), the empty state, and the layouts below 1800px
+// (the detail stacks under the ranking, which fits every column at 1440px; at
+// 375px the ranking scrolls in its own box, with 44px touch targets). The
 // Implementers regression measures document and active-pane overflow with a
 // selected radar at 1440, 1166 and 375, including after control changes, and
 // again with the radar and panel clips disabled, where the profile table would
@@ -296,8 +297,9 @@ try {
   });
 
   // Space between the disclosure's border box and the body's padding edge.
-  // Desktop keeps at least one gap for the detail column's trailing stretch
-  // row; a taller detail column may extend beyond the disclosure. A
+  // Beside the ranking (above 1800px) the detail column's trailing stretch row
+  // keeps at least one gap; a taller detail column may extend beyond the
+  // disclosure. Below 1800px the detail stacks under the ranking instead. A
   // panel track with no panel adds a second gap: the 16px desktop gap, or
   // the 12px gap used at the phone breakpoint.
   const disclosureTail = () => page.evaluate(() => {
@@ -310,9 +312,10 @@ try {
     const areas = style.gridTemplateAreas;
     const rowHeights = style.gridTemplateRows.split(/\s+/).filter(Boolean).map(value => parseFloat(value));
     const spaceAfterDisclosure = box.bottom - paddingBottom - how.bottom;
-    const phone = window.innerWidth <= 900;
+    // agents.css stacks the detail column below 1800px.
+    const stacked = window.innerWidth <= 1800;
     const detail = node.querySelector('.agents-detail')?.getBoundingClientRect();
-    const expectedSpace = phone ? 0 : Math.max(rowGap, (detail?.bottom ?? how.bottom) - how.bottom);
+    const expectedSpace = stacked ? 0 : Math.max(rowGap, (detail?.bottom ?? how.bottom) - how.bottom);
     return {
       width: window.innerWidth,
       areas,
@@ -324,7 +327,7 @@ try {
       zeroRows: rowHeights.filter(height => height < 1).length,
       rows: rowHeights.length,
       panelAreas: (areas.match(/panel/g) || []).length,
-      phone,
+      stacked,
     };
   });
 
@@ -344,8 +347,8 @@ try {
         areas: style.gridTemplateAreas,
         rowGap: parseFloat(style.rowGap),
         panelHeight: panelBox ? panelBox.height : 0,
-        // Below 900px the detail column stacks between the ranking and the panel.
-        panelGap: panelBox ? panelBox.top - (window.innerWidth <= 900 ? node.querySelector('.agents-detail') : node.querySelector('.agents-ranking')).getBoundingClientRect().bottom : null,
+        // Below 1800px (agents.css) the detail column stacks between the ranking and the panel.
+        panelGap: panelBox ? panelBox.top - (window.innerWidth <= 1800 ? node.querySelector('.agents-detail') : node.querySelector('.agents-ranking')).getBoundingClientRect().bottom : null,
         howGap: panelBox ? how.top - panelBox.bottom : null,
         rankingGap: bannerBox ? ranking.top - bannerBox.bottom : null,
         width: window.innerWidth,
@@ -642,8 +645,8 @@ try {
   const desktopRanking = await rankingVisibility();
   assert.deepEqual(desktopRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible without scrolling at 1440px: ${JSON.stringify(desktopRanking)}`);
   assert.equal(desktopRanking.scoreInsideEveryRow, true, 'every row shows its score at 1440px');
-  assert.equal(desktopRanking.pageOverflow, false, 'the reduced set of evidence columns fits or scrolls within the ranking at 1440px');
-  assert.equal(desktopRanking.cue, true, 'a scrolling ranking shows edge fades');
+  assert.equal(desktopRanking.pageOverflow, false, 'the page has no horizontal overflow at 1440px');
+  assert.equal(desktopRanking.scrolls, false, 'every ranking column fits the 1440px ranking without clipping or scrolling');
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-1440.png'), animations: 'disabled' });
   await body.locator('.agents-row', { hasText: 'costly' }).locator('button').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'costly');
