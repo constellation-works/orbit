@@ -542,32 +542,7 @@ export function renderAutoDrainStart(payload, reasons) {
   revealDockStart();
 }
 
-// "1h window · up to 5 in parallel · enforce", plus each opt-in that is on.
-function autoDrainStartSummary(payload) {
-  const capacity = payload.capacity || {};
-  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
-  const parallel = autoDrainConcurrencyValid() && autoDrainHostForm().concurrency
-    ? autoDrainHostForm().concurrency
-    : Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
-  const mode = payload.auto_concurrency?.configured_mode || "";
-  return [
-    `${autoDrainHostForm().duration} window`,
-    parallel ? `up to ${parallel} in parallel` : "runtime default parallelism",
-    mode ? (mode === "off" ? "no forecast" : mode) : "",
-    autoDrainHostForm().complete ? "marks done" : "",
-    autoDrainHostForm().approveProposed ? "approves proposals" : "",
-    autoDrainHostForm().autoFix ? "auto-fix on" : "",
-    autoDrainHostForm().review && !workspaceReviewTiming(payload) ? `adds ${autoDrainHostForm().review} review` : "",
-  ].filter(Boolean).join(" · ");
-}
-
 function autoDrainStartFoot(payload, form) {
-  const summary = el("p", { class: "drain-start-summary", text: autoDrainStartSummary(payload) });
-  const previous = form.syncConcurrency;
-  form.syncConcurrency = () => {
-    previous?.();
-    summary.textContent = autoDrainStartSummary(payload);
-  };
   const resources = throttledResources(payload.capacity);
   const held = resources.length
     ? el("p", { class: "drain-start-held" }, [
@@ -575,7 +550,7 @@ function autoDrainStartFoot(payload, form) {
       el("span", { text: `Starts now, but nothing is admitted until the ${throttleNames(resources)} throttle clears.` }),
     ])
     : null;
-  return el("div", { class: "drain-start-foot" }, [summary, held, drainFieldRefusal(autoDrainStartRefusal(payload)), autoDrainStartButton(payload, form)]);
+  return el("div", { class: "drain-start-foot" }, [held, drainFieldRefusal(autoDrainStartRefusal(payload)), autoDrainStartButton(payload, form)]);
 }
 
 // A panel poll paints the snapshot it already has. Opening the fleet card
