@@ -7,6 +7,7 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workflow::ResidentComment;
 use serde_json::{Value, json};
 
+use super::ResidentMandateState;
 use super::due::checkpoints;
 use crate::OrbitRuntime;
 
@@ -106,6 +107,11 @@ impl OrbitRuntime {
             resident["open_requests"] = json!(open);
             let stalled = self.resident_stall_of(&view, now)?.is_some();
             resident["stalled"] = json!(stalled);
+            // An ended mandate is no longer a resident and cannot take a veto.
+            // Its open escalations above stay: a person may still answer them.
+            if view.state().0 == ResidentMandateState::Ended {
+                continue;
+            }
             residents.push(resident);
             for comment in &comments {
                 if comment.at < start {
