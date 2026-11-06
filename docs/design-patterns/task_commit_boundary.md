@@ -254,6 +254,12 @@ therefore leaves the task's fields, status, history and artifacts unchanged,
 while a proposed task's separate approval write to `backlog` still stands
 and is named in the refusal.
 
+A record update whose only document change is attribution (`planned_by`,
+`implemented_by`) publishes it in the `update_task_history` commit, so a
+transition that names who did the work costs one bundle commit, and a refused
+transition leaves the attribution unwritten. Any other document change keeps
+its own commit ahead of the history write.
+
 ## When to reach for it
 
 - **Two storage technologies must publish one fact**, and one of them has no rollback for what

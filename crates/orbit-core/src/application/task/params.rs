@@ -60,6 +60,24 @@ pub(crate) struct TaskRecordUpdateParams {
 
 impl TaskRecordUpdateParams {
     pub(super) fn has_document_changes(&self) -> bool {
+        self.has_attribution_changes() || self.has_non_attribution_document_changes()
+    }
+
+    pub(super) fn has_attribution_changes(&self) -> bool {
+        self.planned_by.is_some() || self.implemented_by.is_some()
+    }
+
+    /// A write whose document change is only attribution publishes it in the
+    /// history commit: one durable commit, with no refused or half-applied
+    /// attribution ahead of a transition the store then refuses.
+    pub(super) fn attribution_joins_history_commit(&self) -> bool {
+        self.has_attribution_changes()
+            && self.has_history_changes()
+            && !self.has_non_attribution_document_changes()
+            && self.context_creation.is_empty()
+    }
+
+    fn has_non_attribution_document_changes(&self) -> bool {
         self.title.is_some()
             || self.description.is_some()
             || self.acceptance_criteria.is_some()
@@ -73,8 +91,6 @@ impl TaskRecordUpdateParams {
             || self.execution_summary.is_some()
             || self.context_files.is_some()
             || self.created_by.is_some()
-            || self.planned_by.is_some()
-            || self.implemented_by.is_some()
             || self.priority.is_some()
             || self.complexity.is_some()
             || self.task_type.is_some()
