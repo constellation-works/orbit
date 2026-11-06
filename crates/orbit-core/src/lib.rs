@@ -20,7 +20,9 @@
 //! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
 //! crate, which owns mechanisms and cannot import application or adapter
 //! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
-//! the kernel and implements the application port it calls back through.
+//! the kernel. The kernel reaches application methods only through
+//! [`runtime::ApplicationPort`]; [`composition`] implements that port with
+//! `CoreApplicationPort`.
 //!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
