@@ -1242,7 +1242,8 @@ try {
       running: card.querySelector('[data-stat="running"] dd')?.textContent,
       throttle: Boolean(document.querySelector('#auto-drain-panel .drain-throttle-line')),
       tab: document.getElementById('dock-tab-drain').textContent.trim(),
-      stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
+      stop: card.querySelector('.drain-stop-control .info-hint-text')?.textContent || '',
+      stopNote: card.querySelector('.drain-stop-note:not([hidden])')?.textContent || '',
     };
   });
   if (!/Host throttle/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
@@ -1250,6 +1251,63 @@ try {
   if (drainEvidence.workspace !== 'Workspace: 6 of 12 leaf slots in use' || drainEvidence.admitted !== '3' || drainEvidence.running !== '1') throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
   if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
+  if (drainEvidence.stopNote) throw new Error(`An available Stop control must not show permanent guidance: ${drainEvidence.stopNote}`);
+  const stopHint = page.locator('#auto-drain-panel .drain-stop-control > .info-hint');
+  const stopHintText = stopHint.locator('.info-hint-text');
+  const hintPresentation = () => stopHintText.evaluate(node => {
+    const style = getComputedStyle(node);
+    const bounds = node.getBoundingClientRect();
+    return { width: bounds.width, height: bounds.height, clipPath: style.clipPath };
+  });
+  await page.mouse.move(0, 0);
+  const closedHint = await hintPresentation();
+  if (closedHint.width > 1 || closedHint.height > 1 || closedHint.clipPath === 'none') {
+    throw new Error(`Stop help must stay visually hidden until the info hint opens: ${JSON.stringify(closedHint)}`);
+  }
+  await stopHint.hover();
+  const hoveredHint = await hintPresentation();
+  if (hoveredHint.width <= 1 || hoveredHint.height <= 1 || hoveredHint.clipPath !== 'none') {
+    throw new Error(`Stop help did not open on hover: ${JSON.stringify(hoveredHint)}`);
+  }
+  const hintFitsCard = async () => {
+    const [hintBounds, cardBounds] = await Promise.all([stopHintText.boundingBox(), page.locator('#auto-drain-panel').boundingBox()]);
+    return hintBounds && cardBounds && hintBounds.y >= cardBounds.y
+      && hintBounds.y + hintBounds.height <= cardBounds.y + cardBounds.height + 1;
+  };
+  if (!await hintFitsCard()) throw new Error('The hovered Stop help must stay inside the Drain card scroll area.');
+  await page.mouse.move(0, 0);
+  await stopHint.focus();
+  const focusedHint = await hintPresentation();
+  if (focusedHint.width <= 1 || focusedHint.height <= 1 || focusedHint.clipPath !== 'none'
+    || !await stopHint.evaluate(node => document.activeElement === node)) {
+    throw new Error(`Stop help did not open on keyboard focus: ${JSON.stringify(focusedHint)}`);
+  }
+  if (!await hintFitsCard()) throw new Error('The focused Stop help must stay inside the Drain card scroll area.');
+  const captureStopHint = async (width, label) => {
+    await page.setViewportSize({ width, height: width === 375 ? 1000 : 900 });
+    await setDock('drain');
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.mouse.move(0, 0);
+    await page.locator('#auto-drain-panel').screenshot({
+      path: path.join(evidence, `drain-stop-hint-dark-${label}-closed.jpg`), type: 'jpeg', quality: 82, animations: 'disabled',
+    });
+    const hint = page.locator('#auto-drain-panel .drain-stop-control > .info-hint');
+    await hint.focus();
+    const help = hint.locator('.info-hint-text');
+    const helpInViewport = await help.evaluate((node) => {
+      const bounds = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return document.activeElement === node.parentElement
+        && bounds.width > 1 && bounds.height > 1 && style.clipPath === 'none'
+        && bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+    });
+    if (!helpInViewport) throw new Error(`Stop help is clipped at ${label}px after keyboard focus.`);
+    await page.locator('#auto-drain-panel').screenshot({
+      path: path.join(evidence, `drain-stop-hint-dark-${label}-open.jpg`), type: 'jpeg', quality: 82, animations: 'disabled',
+    });
+  };
+  await captureStopHint(1280, 'desktop');
+  await captureStopHint(375, '375');
   fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness());

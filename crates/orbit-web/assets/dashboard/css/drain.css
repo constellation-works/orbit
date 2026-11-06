@@ -208,11 +208,22 @@
 
 /* The footer: the window's run and auto-concurrency, Stop, then its help. */
 .drain-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid var(--hair); }
-.drain-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.drain-foot-row { position: relative; --hint-left: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .drain-foot-meta { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; color: var(--fg-mute); font-size: 12px; }
 .drain-foot-meta a { font-family: var(--font-mono); font-size: 12px; }
 
-.drain-foot-row > .drain-stop { flex: 0 0 auto; margin-left: auto; }
+.drain-foot-row > .drain-stop-control { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.drain-stop-control > .drain-stop { flex: 0 0 auto; margin-left: 0; }
+.drain-stop-control > .info-hint { flex: 0 0 14px; margin-left: 0; }
+/* Make room above the footer while its bubble is open, keeping the whole
+   message in the scroll pane without covering the drain details. */
+.drain-foot-row:has(.drain-stop-control .info-hint:hover),
+.drain-foot-row:has(.drain-stop-control .info-hint:focus) { margin-top: 88px; }
+.drain-foot-row .drain-stop-control .info-hint:hover > .info-hint-text,
+.drain-foot-row .drain-stop-control .info-hint:focus > .info-hint-text {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
 .drain-stop-note { margin: 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 .drain-stop-note.disabled-reason { color: var(--warn-fg); }
 .drain-stop-note[hidden] { display: none; }
