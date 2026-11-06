@@ -656,9 +656,18 @@ a human commented on, or whose publication did not authenticate, for
 ## Retry a stopped owner landing
 
 A healthy accepted handoff can keep its native leaf binding while its owner landing
-stops on a provider gate. Inspect the owner's distributed claim panel, original stop,
-latest landing attempt and provider state. Do not resume or rebind the foreign leaf
-just to retry landing. Only a trusted operator may request a same-handoff retry:
+stops on a provider gate. A `BLOCKED` pull request with only running checks and no
+review refusal keeps polling within the landing job's existing check-wait budget;
+once the checks pass and the forge permits merging, that job lands without operator
+action. Running checks grant no merge authority, and the wait never extends the
+configured deadline. A review or administrative refusal still stops the job.
+
+After a stop or an exhausted wait budget, inspect the owner's distributed claim
+panel, original stop, latest landing attempt and provider state. `orbit.workflow.land`
+reports the recorded stop cause and the retry path while completion authority remains
+active; it reports an operator revoke only when that authority was revoked. Do not
+resume or rebind the foreign leaf just to retry landing. Only a trusted operator may
+request a same-handoff retry:
 
 ```bash
 orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \

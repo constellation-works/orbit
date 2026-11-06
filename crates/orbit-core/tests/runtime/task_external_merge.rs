@@ -609,7 +609,13 @@ impl Fixture {
                 "stop",
                 ClaimMutation::StopLanding {
                     handoff_id: handoff_id.clone(),
-                    reason: "the pull request's required checks are not green".into(),
+                    reason: json!({
+                        "schema_version": 1,
+                        "kind": "owner_landing_refusal",
+                        "reason": {"value": "the pull request's required checks are not green"},
+                        "observation": {"classification": {"value": "blocked"}},
+                    })
+                    .to_string(),
                     repairable: false,
                     requeue: false,
                 },
@@ -1247,6 +1253,34 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
                 .is_empty(),
             "a settled task does not settle twice"
         );
+    }
+}
+
+#[test]
+fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
+    for authority in [Authority::Stopped, Authority::Revoked] {
+        let fx = Fixture::new();
+        let handoff = fx.handed_off(4939, authority);
+        let before = fx.runtime.landing_attempts().unwrap();
+        let error = fx
+            .runtime
+            .land_task_pull_request(&handoff.task, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("task_landing_refused"), "{error}");
+        if authority == Authority::Stopped {
+            assert!(error.contains("required checks are not green"), "{error}");
+            assert!(error.contains("retry-handoff"), "{error}");
+            assert!(!error.contains("operator revoked"), "{error}");
+        } else {
+            assert!(error.contains("operator revoked"), "{error}");
+        }
+        assert_eq!(fx.runtime.landing_attempts().unwrap(), before);
+        assert_eq!(
+            fx.claim_phase(&handoff.claim_id),
+            ExecutionClaimPhase::HandedOff
+        );
+        assert_eq!(fx.status(&handoff.task), TaskStatus::Review);
     }
 }
 

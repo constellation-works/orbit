@@ -81,11 +81,8 @@ impl OrbitRuntime {
         let candidate = self
             .settlement_candidate(task, &carried)
             .map_err(|reason| landing_refused(id, reason))?;
-        if candidate.revoked.is_some() {
-            return Err(landing_refused(
-                id,
-                "an operator revoked its handoff's completion authority",
-            ));
+        if let Some(handoff) = &candidate.revoked {
+            return Err(landing_refused(id, handoff.handoff_landing_refusal()));
         }
         self.ensure_mutation_proposals_applied(&candidate.task)
             .map_err(|error| landing_refused(id, error))?;
