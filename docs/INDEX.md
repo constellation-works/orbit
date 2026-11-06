@@ -128,7 +128,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
-| [Script Steps](./design/script-steps/1_scope.md) | Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6) | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Apply ORB-19976's operator handoff so UX reviews consume routine results | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Evaluate the live experiment before default promotion | claude |
 

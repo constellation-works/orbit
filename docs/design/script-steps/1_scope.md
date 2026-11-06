@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 stage: building
-next: "Phases 1 to 5 landed ([ORB-19983], [ORB-19985], [ORB-20866], [ORB-21297], [ORB-21298], [ORB-21299], [ORB-21301]); an explicit raise surface for script_grant requests is not yet filed; macOS network waits for contained descendants (phase 6)"
+next: "File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled)"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1 to 5 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
+Status: building; phases 1 to 5 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
@@ -103,7 +103,7 @@ bullet was rechecked at `d10fae79b`).
   `machine.worker_cpu_quota` is optional, and systemd may accept `CPUQuota=` without
   enforcing it when the CPU controller is not delegated. Under `warn` or `off`, a
   script may therefore run without worker-scope resource limits. macOS has no cgroup,
-  so workers there run uncontained; a tracked-tree watchdog is filed as [ORB-19251].
+  so workers there run uncontained; a tracked-tree watchdog was filed as [ORB-19251] and has since landed.
 - **Operator grants with a tamper-evident witness.** Plugin grants are host-local
   (SQLite `plugin_store`) and checked against a witness file under
   `~/.orbit/plugins/.grants/<ns>.json` that no agent or plugin profile can write
@@ -563,11 +563,11 @@ reports the profile and these gaps in its `script-sandbox` row.
 
 **macOS gaps, stated.**
 
-- **No memory or task limits.** There is no cgroup. A script inherits whatever the
-  worker has; [ORB-19251]'s tracked-tree watchdog would cover the script's tree too.
+- **No kernel memory or task limits.** There is no cgroup. A script inherits whatever the
+  worker has; under `warn` the worker's [ORB-19251] watchdog applies to its tracked tree.
   Only `RLIMIT_CPU` and `RLIMIT_NOFILE` apply. `strict` containment refuses every
-  script step on macOS (before the profile is probed) until ORB-19251 decides whether
-  the watchdog counts as containment.
+  script step on macOS (before the profile is probed), because the watchdog is not kernel
+  containment.
 - **Timeout escape.** Without a pid namespace, a descendant that calls `setsid`
   escapes the process-group kill. It stays under the Seatbelt profile, confined to the
   granted paths and with no network, but it can keep writing there after the step
@@ -890,7 +890,7 @@ a binary that can't enforce its grant.
 |---|---|---|
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
-| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (macOS launches uncontained without a warning); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (on macOS a worker runs an in-worker watchdog instead, [ORB-19251], which is not kernel containment); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
 
 Host keys, not workspace keys. Each grant's limits must sit at or below them. Output-file
 caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
@@ -1128,8 +1128,8 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - **The cwd tree is readable.** A script can read every file of the worktree or
   workspace root. That is narrower than the agent profile but wider than "only its
   inputs". A `cwd: none` mode is open question 5.
-- **macOS is weaker.** It has no memory or task limits, timeout descendants can escape
-  through `setsid`, it has no network modes, and TCC adds a second permission system
+- **macOS is weaker.** It has no kernel memory or task limits (the [ORB-19251] watchdog is
+  best-effort), timeout descendants can escape through `setsid`, it has no network modes, and TCC adds a second permission system
   (§3, §9.5).
 - **Secrets in env are visible to the whole tree.** Any process the script starts can
   read the passed variables. Redaction covers Orbit's logs, not what the script does
@@ -1191,7 +1191,9 @@ A script that rewrites itself during a run changes nothing for that run (§2,
    off-site part of use case A.
 6. **Later.** Each of these is filed only when needed: a grant-time `prepare` (fetch)
    phase, plugin-store roots, routine `script:` sugar, and macOS network once
-   [ORB-19251] contains descendants.
+   a containment mechanism covers escaped descendants. [ORB-19251] landed as a tracked-tree
+   watchdog, which does not find a `setsid` escapee, so that trigger is not met and phase 6
+   stays unfiled.
 
 ## Open questions
 
@@ -1265,7 +1267,6 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
 - [ORB-21298] — phase 3 part (macOS): the `macos-sandbox-script-v1` profile, `RLIMIT_CPU` and `RLIMIT_NOFILE` on both platforms, grant-time and pre-spawn root probes with TCC reporting, nested-sandbox refusal, `strict` refusing on macOS, and the doctor `script-sandbox` row.
 - [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
-- [ORB-21178] — filed the remaining phases of this doc.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and
