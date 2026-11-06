@@ -500,6 +500,44 @@ await fetchAndRenderExperiments();
 assert.equal(experimentsBody.querySelector('.ex-readout-error'), null, 'a successful retry clears the failure');
 assert.equal(experimentsBody.querySelectorAll('.ex-arm-cost').length, 2, 'a successful retry draws the result');
 
+// A failed refresh keeps the prior readout and gives each rendered tab its
+// own notice and Retry control. Each control must be able to refresh it.
+const failedRefresh = {
+  ok: false,
+  status: 504,
+  headers: { get: () => null },
+  text: async () => JSON.stringify({ error: 'readout refresh timed out' }),
+};
+readoutResponses.push(failedRefresh);
+await fetchAndRenderExperiments();
+const resultNotice = experimentsBody.querySelector('#ex-panel-result .ex-readout-notice');
+const trustNotice = experimentsBody.querySelector('#ex-panel-trust .ex-readout-notice');
+assert.ok(resultNotice, 'a failed refresh keeps a notice in Result');
+assert.ok(trustNotice, 'a failed refresh keeps a notice in Trust');
+assert.notEqual(resultNotice, trustNotice, 'Result and Trust own separate notice nodes');
+for (const [panel, notice] of [['Result', resultNotice], ['Trust', trustNotice]]) {
+  assert.match(notice.textContent, /Showing the last readout/, `${panel} explains that the prior readout is shown`);
+  const staleRetry = notice.querySelector('button.ex-readout-retry');
+  assert.ok(staleRetry && !staleRetry.disabled, `${panel} has an enabled Retry`);
+}
+assert.notEqual(resultNotice.querySelector('button.ex-readout-retry'), trustNotice.querySelector('button.ex-readout-retry'), 'Result and Trust own separate Retry controls');
+assert.equal(experimentsBody.querySelectorAll('.ex-arm-cost').length, 2, 'the prior readout stays visible during a failed refresh');
+readoutResponses.push(jsonResponse(readout));
+resultNotice.querySelector('button.ex-readout-retry').dispatch('click');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('#ex-panel-result .ex-readout-notice'), null, 'Result Retry clears its stale notice on success');
+assert.equal(experimentsBody.querySelector('#ex-panel-trust .ex-readout-notice'), null, 'Trust Retry state clears after the same successful refresh');
+
+readoutResponses.push(failedRefresh);
+await fetchAndRenderExperiments();
+const trustRetry = experimentsBody.querySelector('#ex-panel-trust .ex-readout-retry');
+assert.ok(trustRetry && !trustRetry.disabled, 'Trust has its own enabled Retry after another failed refresh');
+readoutResponses.push(jsonResponse(readout));
+trustRetry.dispatch('click');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('#ex-panel-result .ex-readout-notice'), null, 'Trust Retry clears the stale notice on success');
+assert.equal(experimentsBody.querySelector('#ex-panel-trust .ex-readout-notice'), null, 'Trust Retry clears its own notice on success');
+
 // Exercise the shipped listeners and list renderer, including the visit fence
 // when a destination read completes after leaving and returning to that scope.
 setExperimentId(null);
@@ -613,9 +651,16 @@ async function checkCumulativeTooltipBounds() {
   `;
   let currentExperiment = experiment;
   let currentReadout = readout;
+  let readoutFailuresRemaining = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://fixture');
     if (url.pathname.startsWith('/api/diagnostics/experiments/')) {
+      if (url.pathname.endsWith('/readout') && readoutFailuresRemaining > 0) {
+        readoutFailuresRemaining -= 1;
+        res.writeHead(504, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'readout refresh timed out' }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(url.pathname.endsWith('/readout') ? currentReadout : currentExperiment));
       return;
@@ -655,6 +700,22 @@ async function checkCumulativeTooltipBounds() {
         await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&case=${width}-${scenario}#analytics/experiments/exp-intraday`);
         await page.waitForFunction(() => window.fixtureReady);
         assert.equal(await page.locator('.ex-cum-col').count(), 3);
+        if (scenario === 'short') {
+          readoutFailuresRemaining = 1;
+          await page.evaluate(async () => (await import('/static/js/experiments.js')).fetchAndRenderExperiments());
+          await page.locator('#ex-panel-result .ex-readout-notice').waitFor();
+          assert.match(await page.locator('#ex-panel-result .ex-readout-notice').textContent(), /Showing the last readout/);
+          assert.match(await page.locator('#ex-panel-trust .ex-readout-notice').textContent(), /Showing the last readout/);
+          assert.equal(await page.locator('#ex-panel-result .ex-readout-retry').isEnabled(), true);
+          assert.equal(await page.locator('#ex-panel-trust .ex-readout-retry').isEnabled(), true);
+          await page.waitForTimeout(250);
+          await page.screenshot({ path: path.join(evidence, `experiments-stale-result-dark-${width}.png`) });
+          await page.locator('#ex-tab-trust').click();
+          await page.screenshot({ path: path.join(evidence, `experiments-stale-trust-dark-${width}.png`) });
+          await page.locator('#ex-tab-result').click();
+          await page.evaluate(async () => (await import('/static/js/experiments.js')).fetchAndRenderExperiments());
+          await page.locator('#ex-panel-result .ex-readout-notice').waitFor({ state: 'detached' });
+        }
         if (scenario === 'short') {
           if (!suffix) {
             assert.deepEqual(await page.locator('.ex-arm-cost').allTextContents(), [
