@@ -8,9 +8,9 @@
 //! | `string` (with or without `enum`) | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
 //! | `integer` / `number` | `--kebab-case <N>`, parsed and sent as a JSON number; a `number` must be finite |
 //! | `boolean` | `--kebab-case` (true), or `--kebab-case=<true\|false>` |
-//! | `array` of scalars | `--kebab-case <VALUE>`, repeat once per element |
-//! | `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
-//! | named in `cli.positional` | the same value as a positional argument, in manifest order, alongside its ordinary `--kebab-case` flag |
+//! | `array` of `string` / `integer` / `number` | `--kebab-case <VALUE>`, repeat once per element |
+//! | `object`, any other `array` (objects, booleans, untyped items), or an untyped property | `--kebab-case-json '<JSON>'` |
+//! | named in `cli.positional` | the same value as a positional argument, in manifest order, alongside its ordinary `--kebab-case` flag; a JSON-shaped property keeps only its `--kebab-case-json` flag and has no positional form |
 //!
 //! `--input` / `--input-file` are always accepted and always win: a call
 //! that passes either sends exactly that payload, so the long tail a flag
