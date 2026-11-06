@@ -103,6 +103,37 @@
         "## Rules and command surfaces",
         "## What this sweep owns"
       ],
+      "digest": "975073150c9752a3f19043566784219ff94abef8b664c5aba0df91fd92c11b4e",
+      "revision": "4792aeb072018b7b7630c4b6924ff538b7402c11",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 20160
+        },
+        "tags": [
+          "architecture-audit",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Layering: documented, or inferred",
+        "## Lenses and bars",
+        "## Pass A — structure metrics, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What this sweep owns"
+      ],
       "digest": "a3058f2258d3b6e1037ffbd27a507bd3f2c7700d8bf90bc984d8c37c3ff07c9e",
       "revision": "db16b243746de9f0d4f9455ec3562f41b4bd60b6",
       "settings": {
@@ -555,6 +586,36 @@
       ],
       "digest": "644d52ce4a6c23a8ad169bbd68207b661d621ceefca0c347952e8659b328b480",
       "revision": "5e8901eefa96265b9f1ecd7a5662713cf3455bd6",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
+      "digest": "fd506956a6824ee5150e15609030632cff3d86a4df3d584bb33ed3febf7e16d9",
+      "revision": "22b2f6c270e63191a2da67346d18a7655d59b595",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -3381,6 +3442,31 @@
     }
   ],
   "pilot-block-patterns": [
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "0e68b3d92f6850273b4f09322104f0908b56240138ec195131c4e8c38af3f4c9",
+      "revision": "598067a51d1521fae64ca5daa24822f7d7c27420",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
     {
       "comments": [
         "## 1. Windows",
