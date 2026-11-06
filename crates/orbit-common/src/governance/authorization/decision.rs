@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use super::caller::{CallerCapabilities, CallerProvenance, CapabilityResolution};
-use super::catalog::{GovernedOperation, PLUGIN_TOOL_READ_ONLY};
+use super::catalog::{GovernedOperation, PLUGIN_TOOL_READ_ONLY, RESIDENT_GRANT_OPERATION_ID};
 use super::env::OPERATOR_OVERRIDE_ENV;
 
 /// A refused governed operation.
@@ -39,6 +39,16 @@ impl AuthorizationDenial {
     fn remedy(&self) -> String {
         if self.operation.id == PLUGIN_TOOL_READ_ONLY.id {
             return "This read-only tool needs a named caller. Use the local CLI or an MCP session granted the agent capability.".to_string();
+        }
+        if self.operation.id == RESIDENT_GRANT_OPERATION_ID {
+            // The operator override would apply a widening at once as the
+            // operator. Point at the safe path: a quoted request the human
+            // answers. The request path never needs the override.
+            return "To ask the human for a wider authority, run `orbit resident grant <task id> \
+                    --add <right> --quote \"<the human's words>\"` from the CLI or an MCP session \
+                    that names its agent: Orbit raises a `resident_authority` request and changes \
+                    no authority until the human answers it with `orbit decision answer`."
+                .to_string();
         }
         match self.resolution {
             CapabilityResolution::ProcessEnvelope => format!(

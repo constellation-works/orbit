@@ -119,7 +119,7 @@ orbit resident grant <task id> --add dispatch --add promote --add-workspace orbi
 
 ### From any other caller
 
-A widening from an agent, an MCP session, or any caller that is not the operator on this host changes nothing. It must carry `--quote` with the human's words, verbatim, up to 2000 characters:
+A widening from an agent, an MCP session, a shell that no terminal or declaration identifies, or any caller that is not the operator on this host changes nothing. It needs no operator override; do not set `ORBIT_OPERATOR`, which would apply the widening at once as the operator. It must carry `--quote` with the human's words, verbatim, up to 2000 characters:
 
 ```bash
 orbit resident grant <task id> --add merge --quote "Merge reviewed release pull requests in orbit."
