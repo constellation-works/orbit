@@ -283,7 +283,7 @@ impl crate::OrbitRuntime {
         self.stores().tasks().resolve_execution_claims()
     }
 
-    /// Retain a task-branch CI receipt or defer it under a protecting claim.
+    /// Retain a CI receipt or defer it under a protecting claim.
     ///
     /// The store checks the current claim inside the same boundary that queues
     /// or retains the receipt. Settlement writes receipts still deferred.

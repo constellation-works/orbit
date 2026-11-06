@@ -2,6 +2,8 @@
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 #[path = "ci_failure_goldens/archive.rs"]
 mod archive;
+#[path = "ci_failure_goldens/claimed_repair_owners.rs"]
+mod claimed_repair_owners;
 #[path = "support/git.rs"]
 mod git_test_support;
 orbit_common::isolate_test_process!();
@@ -1573,9 +1575,6 @@ fn protecting_branch_claim(
     owner_id: &str,
 ) -> orbit_store::contracts::ExecutionClaim {
     use orbit_engine::TaskAutomationUpdate;
-    use orbit_store::contracts::{
-        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
-    };
     use orbit_types::task::TaskStatus;
     let claim_id = format!("claim-{owner_id}");
     let request_id = format!("request-{owner_id}");
@@ -1596,6 +1595,20 @@ fn protecting_branch_claim(
             },
         )
         .unwrap();
+    insert_protecting_claim(runtime, owner_id)
+}
+/// Insert the follower's claim row, leaving the owner's status alone.
+fn insert_protecting_claim(
+    runtime: &OrbitRuntime,
+    owner_id: &str,
+) -> orbit_store::contracts::ExecutionClaim {
+    use orbit_store::contracts::{
+        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    };
+    let claim_id = format!("claim-{owner_id}");
+    let request_id = format!("request-{owner_id}");
+    let claiming_run = "jrun-follower-claim";
+    let machine_id = "follower-mac";
     let claim = ExecutionClaim {
         claim_id: claim_id.clone(),
         task_id: owner_id.to_string(),
@@ -1889,6 +1902,7 @@ fn ci_failure_branch_receipt_retains_after_settlement_precedes_insertion() {
             artifact_path: path.clone(),
             content,
             claiming_run_id: Some(observed.claim.run_context.run_id.clone()),
+            comment: None,
             applied: false,
         };
         release_claim(

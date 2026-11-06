@@ -423,7 +423,9 @@ Coverage appears in `repair_assessments` and `skipped_existing` as
 `covered_by_repair`, with the owner, source provenance and evidence references.
 Filing retains an idempotent `ci-repair-observations/<digest>.json` receipt on the
 completed owner without changing its meaning or lifecycle, creating another
-repair task, or sending it to pilot/implementation admission. Unavailable,
+repair task, or sending it to pilot/implementation admission. While an execution
+claim protects the owner, this receipt and an open compiler owner's observation
+are listed in `deferred_attribution` and land when the claim settles. Unavailable,
 contradictory and over-budget assessments instead report `unresolved` with a
 bounded reason and leave ordinary proposed filing and pilot checks available.
 There is no extra incident store, scheduler, automatic revalidation command or

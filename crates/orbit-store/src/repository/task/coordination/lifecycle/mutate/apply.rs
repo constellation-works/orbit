@@ -832,6 +832,7 @@ impl TaskCommitBoundary {
                 .filter(|_| !auth.operator)
                 .map(|run| (claim.claim_id.clone(), run)),
             census: None,
+            observation_comments: Vec::new(),
         };
         effects
             .replacements
