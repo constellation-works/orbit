@@ -146,7 +146,14 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
     if (getWorkspaceRevision() !== revision) return;
     view.payload = payload;
     renderForecast();
-  }, COUNT);
+  }, COUNT).catch((error) => {
+    // A route-missing 404 is a permanent capability message, so it should not
+    // leave controls for a forecast endpoint this host does not provide.
+    if (error.routeMissing && getWorkspaceRevision() === revision && requestScope === scope) {
+      syncNodes($(BODY), []);
+    }
+    throw error;
+  });
   // Any view can load slowly or fail, so keep its recovery controls available.
   if (viewChanged) renderViewControls();
   if (!refresh) return pending;
