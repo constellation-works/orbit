@@ -65,8 +65,11 @@ task registry database plus its WAL, and reads a change token over the routine
 fire, cursor, pause, job-run and automation-consumer rows of the shared audit database; sampled changes invalidate
 the next read, including definition toggles, pauses and recorded runs. Fire and
 job-run in-place updates are sampled only over the newest 256 rows: an older row
-rewritten in place leaves the token unchanged, so that change surfaces only when
-the five-second freshness bound expires. The
+rewritten in place leaves the token unchanged, so it does not immediately
+invalidate the cached payload. The changed row becomes visible on the next
+successful recomputation, which may replace the payload through refresh-ahead
+before the five-second freshness bound expires; expiry remains the fallback
+that forces a recomputation. The
 audit database's own file stamp is not part of the key: unrelated audit rows
 share that file and would otherwise force a full recompute on every poll. A still-fresh hit
 three seconds old or more starts one background recompute while the entry is
