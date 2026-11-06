@@ -528,11 +528,10 @@ function render() {
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
+      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
     if (scorecard.status === "ok") {
       const notes = [
-        `The ${units} ${scorecard.unit} shown are in ${windowLabel()}.`,
         `Rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked.`,
       ];
       if (ranking.some((row) => row.unjudged)) notes.push("unjudged rows are listed last, without a score.");
@@ -656,7 +655,10 @@ function stripNode() {
     const label = [swatch, el("span", { text: segment.label }), el("span", { class: "agents-strip-count", text: String(segment.count) })];
     let entry;
     if (segment.key === "not_scored") {
-      entry = el("span", { class: "agents-strip-entry", title: reasons.length ? `Not scored: ${reasons.join(", ")}` : "Nothing went unscored" }, label);
+      entry = el("span", { class: "agents-strip-entry", title: reasons.length ? `Not scored: ${reasons.join(", ")}` : "Nothing went unscored" }, [
+        ...label,
+        ...(reasons.length ? [el("span", { class: "visually-hidden", text: reasons.join(" · ") })] : []),
+      ]);
     } else {
       entry = el("a", { class: "agents-strip-entry" }, label);
       entry.href = roleHref(segment.key);
