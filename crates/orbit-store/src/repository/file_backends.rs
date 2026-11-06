@@ -509,6 +509,13 @@ impl TaskHistoryStoreBackend for TaskV2Store {
         self.task_history_stamp(id)
     }
 
+    fn task_history_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
+        self.task_history_stamps(ids)
+    }
+
     fn task_bundle_stamps(
         &self,
         ids: &[String],

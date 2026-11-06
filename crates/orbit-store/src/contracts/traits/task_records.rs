@@ -23,6 +23,14 @@ pub trait TaskHistoryStoreBackend: Send + Sync {
     fn task_history_stamp(&self, _id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
+    /// [`Self::task_history_stamp`] for each listed task, in one pass. A
+    /// task is absent when this backend cannot vouch for its logs.
+    fn task_history_stamps(
+        &self,
+        _ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
+        Ok(Default::default())
+    }
     /// Evidence that each listed task's whole bundle is unchanged, taken
     /// without reading it: equal stamps mean a whole-bundle read would
     /// return, or fail, as it did when the earlier stamp was taken, with the
