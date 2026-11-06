@@ -587,7 +587,7 @@ deduplicated by exact tool name as in the Rust deserializer, and
 `skip_if_unchanged.ref` uses the bundled base-branch placeholder after workspace
 rendering (including the historical
 hardcoded `agent-main`). Each history entry also
-records its source integration commit, the original settings and body tags,
+records its source revision, the original settings and body tags,
 and its `#` lines. The original tags, crew and complexity distinguish body
 edits from upstream changes; tag removal, clearing a shipped crew or complexity,
 and added notes remain body edits. A historical copy's shipped `crew: system`, retired with the system lane [ORB-15663], is an upstream change: migration drops it rather than carrying it into the settings table, so the template draws from its complexity pool; an explicit settings-table crew still wins. Existing settings-table overrides take
@@ -603,9 +603,12 @@ with the current body, including tags or a previously absent complexity.
 After landing changes to bundled defaults, run
 `python3 scripts/update-auto-task-body-history.py` (requires PyYAML) and commit
 the resulting history with the next asset change or release preparation.
-The script scans first-parent integration history, recomputes existing records
-from their source revisions (or saved source fixtures in shallow clones), and
-never records uncommitted asset edits. It also regenerates the CLI history
+The script scans first-parent history, including each parent's first-parent
+history at a merge head, recomputes existing records from their source revisions
+(or saved source fixtures in shallow clones), and never records uncommitted
+asset edits. An existing pre-squash revision stays recorded when its body also
+appears in that history; an available draft with an unlanded body is removed.
+It also regenerates the CLI history
 source fixtures; commit both generated files together. Run
 `python3 scripts/update-auto-task-body-history.py --check` to verify the history
 and fixtures without changing them. This check requires full Git history and

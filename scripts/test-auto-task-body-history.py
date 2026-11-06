@@ -101,18 +101,22 @@ template:
         self.git("commit", "-qm", "Draft body")
         draft = self.git("rev-parse", "HEAD").strip()
         draft_raw = self.git("show", f"{draft}:{(ASSETS / 'example.yaml').as_posix()}")
+        self.run_generator()
+        draft_record = next(r for r in json.loads(self.history.read_text())["example"]
+                            if r["revision"] == draft)
+        self.history.unlink()
+        self.sources.unlink()
         self.git("checkout", "-q", branch)
         # Seed the draft as if it had been recorded as a shipped body.
         self.run_generator()
         history = json.loads(self.history.read_text())
-        history["example"].append({
-            "digest": "0" * 64, "revision": draft,
-            "settings": history["example"][0]["settings"], "comments": [],
-        })
+        history["example"].append(draft_record)
+        history["example"].sort(key=lambda item: (item["digest"], item["revision"]))
         sources = json.loads(self.sources.read_text())
         sources["example"][draft] = draft_raw
         self.history.write_text(json.dumps(history, indent=2, sort_keys=True) + "\n")
         self.sources.write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n")
+        self.assertIn("stale", self.run_generator("--check", code=1).stderr)
         # Supersede the landed body; the draft must be dropped, the landed
         # body must remain recognised in history and sources.
         self.successor()
@@ -125,6 +129,52 @@ template:
         sources = json.loads(self.sources.read_text())
         self.assertNotIn(draft, sources["example"])
         self.assertIn(self.original, sources["example"])
+        self.run_generator("--check")
+
+    def test_merge_base_into_task_branch_preserves_base_history(self):
+        branch = self.git("branch", "--show-current").strip()
+        self.git("checkout", "-qb", "task")
+        (self.root / "task.txt").write_text("Unrelated task\n")
+        self.git("add", "task.txt")
+        self.git("commit", "-qm", "Task change")
+        self.git("checkout", "-q", branch)
+        self.successor()
+        self.git("add", str(ASSETS / "example.yaml"))
+        self.git("commit", "-qm", "Base body change")
+        self.run_generator()
+        self.git("add", ".")
+        self.git("commit", "-qm", "Record base history")
+        self.asset.write_text(self.asset.read_text().replace("Successor body", "Latest body"))
+        self.git("add", str(ASSETS / "example.yaml"))
+        self.git("commit", "-qm", "Another base body change")
+        self.run_generator()
+        self.git("add", ".")
+        self.git("commit", "-qm", "Record successor")
+        self.run_generator("--check")
+        self.git("checkout", "-q", "task")
+        self.git("merge", "--no-ff", "-qm", "Merge base", branch)
+        self.run_generator("--check")
+
+    def test_available_presquash_record_with_landed_body_remains_stable(self):
+        branch = self.git("branch", "--show-current").strip()
+        self.git("checkout", "-qb", "draft")
+        self.successor()
+        self.git("add", str(ASSETS / "example.yaml"))
+        self.git("commit", "-qm", "Draft successor")
+        draft = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "-q", branch)
+        self.git("merge", "--squash", "draft")
+        self.git("commit", "-qm", "Land successor")
+        self.run_generator()
+        history = json.loads(self.history.read_text())
+        sources = json.loads(self.sources.read_text())
+        landed = self.git("rev-parse", "HEAD").strip()
+        for entry in history["example"]:
+            if entry["revision"] == landed:
+                entry["revision"] = draft
+        sources["example"][draft] = sources["example"].pop(landed)
+        self.history.write_text(json.dumps(history, indent=2, sort_keys=True) + "\n")
+        self.sources.write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n")
         self.run_generator("--check")
 
     def test_corrupt_source_fixture_fails_without_writing(self):

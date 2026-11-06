@@ -111,6 +111,7 @@ def main():
         parser.exit(1, "body history check requires full Git history; fetch with --unshallow\n")
     history = json.loads(OUTPUT.read_text()) if OUTPUT.exists() else {}
     sources = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
+    parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
     snapshots = {}
     names = set(history) | {asset.stem for asset in (ROOT / ASSETS).glob("*.yaml")}
     for name in sorted(names):
@@ -120,17 +121,32 @@ def main():
         snapshots[name] = {}
         current_path = ROOT / path
         current = record(current_path.read_text(), "") if current_path.exists() else None
-        # Only integration commits are trusted; uncommitted edits never gain provenance.
-        revisions = git("log", "--first-parent", "--format=%H", "HEAD", "--", path).splitlines()
+        # Include each side's first-parent history at a merge head. In a PR
+        # that merges its base, HEAD's first parent is the task branch, not
+        # the integration branch. Prefer the parents to the synthetic merge
+        # commit when selecting provenance for an identical body.
+        starts = parents if len(parents) > 1 else []
+        revisions = []
+        for start in [*reversed(starts), "HEAD"]:
+            revisions.extend(git("log", "--first-parent", "--format=%H", start, "--", path).splitlines())
+        revisions = list(dict.fromkeys(revisions))
         landed = set(revisions)
-        # A recorded revision that is a known commit but not on the asset's
-        # first-parent history never landed (e.g. a pre-squash draft), so it
-        # must not be retained as a shipped body. Unavailable revisions are
-        # retained below via their source fixture, as in a shallow checkout.
-        candidates = [
-            old["revision"] for old in history.get(name, [])
-            if old["revision"] in landed or not commit_available(old["revision"])
-        ] + revisions
+        # Reject available draft bodies absent from these histories. Retain
+        # unavailable revisions via their fixture, as in a shallow checkout.
+        landed_bodies = [record(raw, revision) for revision in revisions
+                         if (raw := source(path, revision))]
+        candidates = []
+        for old in history.get(name, []):
+            revision = old["revision"]
+            raw = source(path, revision)
+            # An older record may name a pre-squash commit whose same body
+            # did land under another SHA. Keep its stable provenance even if
+            # the draft object happens to exist in this checkout.
+            if (revision in landed or raw is None
+                    or (raw and any(same_body(record(raw, revision), body)
+                                    for body in landed_bodies))):
+                candidates.append(revision)
+        candidates += revisions
         for revision in candidates:
             raw = source(path, revision)
             if raw == "":
