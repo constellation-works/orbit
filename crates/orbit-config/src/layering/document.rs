@@ -5,7 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
-use crate::store::read_config_file;
+use crate::config_io::read_config_file;
 
 use super::load::ConfigDocument;
 

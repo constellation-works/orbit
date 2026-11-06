@@ -18,4 +18,3 @@ mod persistence;
 mod validation;
 
 pub use persistence::{ConfigScope, ConfigStore, WorkspaceInitMode};
-pub(crate) use persistence::{read_config_file, validated_config_store_path};
