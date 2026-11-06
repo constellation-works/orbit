@@ -46,6 +46,13 @@ directly. Application and adapter methods are inherent on the wrapper.
 `orbit_core::runtime` re-exports the kernel crate, so `orbit_core::runtime::…`
 paths still resolve.
 
+At the crate level, `orbit-core` reaches `orbit-policy` only in tests:
+integration fixtures drive `PolicyEngine` directly, while shipped code reaches
+policy through `orbit-runtime` (which keeps its own production
+`orbit-runtime` → `orbit-policy` edge) and `orbit-tools`.
+`scripts/check-dependency-direction.sh` enforces the dev-only edge and rejects
+a normal, build, or target-normal `orbit-core` → `orbit-policy` edge.
+
 ## 1. Motivation
 
 After [ORB-10016] extracted CLI-facing commands, Core still had a two-way

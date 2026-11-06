@@ -115,8 +115,10 @@ allowed_dev_only_deps() {
       ;;
     orbit-core)
       # Core's own integration tests enable its `test-support` feature to
-      # substitute the detached pipeline worker; no other crate is reached.
-      echo "orbit-core"
+      # substitute the detached pipeline worker, and its integration tests
+      # reach orbit-policy directly; production code reaches policy through
+      # orbit-runtime (and orbit-tools), never directly.
+      echo "orbit-core orbit-policy"
       ;;
     *)
       echo ""

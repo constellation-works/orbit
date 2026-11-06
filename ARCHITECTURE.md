@@ -147,6 +147,14 @@ It also enables Runtime's `test-support` feature, which exposes the kernel's
 test-only seams (the transition read hook, the Git scan hook and the
 ancestry peer anchor) to Core's unit tests.
 
+Core also holds a dev-only edge to `orbit-policy` for the integration tests
+that drive `PolicyEngine` directly; shipped code reaches policy through
+`orbit-runtime` (and `orbit-tools`), never directly. The
+dependency-direction guard enforces this edge: a normal, build, or
+target-normal `orbit-core` → `orbit-policy` edge fails the guard. This says
+nothing about the kernel's own production `orbit-runtime` → `orbit-policy`
+edge, which stays legal.
+
 Runtime's dev-only edge to itself enables its `test-support` feature for its
 own unit tests, which also enable Engine's `test-support` feature for its
 null runtime host.
