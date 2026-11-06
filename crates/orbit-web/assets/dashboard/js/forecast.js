@@ -148,8 +148,10 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
     renderForecast();
   }, COUNT).catch((error) => {
     // A route-missing 404 is a permanent capability message, so it should not
-    // leave controls for a forecast endpoint this host does not provide.
-    if (error.routeMissing && getWorkspaceRevision() === revision && requestScope === scope) {
+    // leave controls for a forecast endpoint this host does not provide. A poll
+    // or Refresh after a good read keeps its figures: the note already says they
+    // are stale, and clearing them would leave that note over an empty panel.
+    if (error.routeMissing && !view.payload && getWorkspaceRevision() === revision && requestScope === scope) {
       syncNodes($(BODY), []);
     }
     throw error;
