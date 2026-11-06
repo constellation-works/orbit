@@ -1,9 +1,9 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-04
-status: Accepted
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 feature: finding-verification
 doc_role: design
 type: design
@@ -211,7 +211,9 @@ These surfaces enforce it:
   with the stored status kept for the check. Retyping or retagging a chore
   into a finding in the same write is held, retyping a finding into a
   non-finding is honoured, and editing a confirmed finding's material in the
-  same write needs a verdict for the new material.
+  same write needs a verdict for the new material. The guarded start verifies
+  the normalized resulting material before any task fields or history are
+  written [ORB-20390].
 - Workflow entry and pull admission, through `pilot_admission_hold_in`. The
   hold ranks ahead of the other admission holds.
 - `list_backlog_tasks`, which excludes the task with reason
@@ -335,5 +337,6 @@ recorded rejection succeeds without a second write.
 - ORB-17833 — enforcing and hardening the inspection proof with required checkpoints.
 - ORB-19409 — the five-level severity scale shared with regression links.
 - ORB-19635 — the task-pilot and implementer default rejection routes.
+- ORB-20390 — verified normalized finding material on the guarded-start route.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,7 +1,7 @@
 schema_version: 2
 contract: orbit-mcp-v1
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 
 source_of_truth:
   exposed_tool_list:
@@ -57,7 +57,7 @@ authorization:
   status: destination per-caller authorization is removed; server-selected session capabilities are enforced
   v1_rule: SSH reaches the remote process; it serves agent authority by default and operator authority when its server argv includes --operator
   enforcement_owner: orbit-core for server-selected session capabilities
-  capability_filtering: true # Direct MCP tools/list filters governed tools by caller authority; Core still authorizes each call
+  capability_filtering: true # Direct MCP tools/list filters governed tools by caller authority [ORB-19444]; Core still authorizes each call
 
 tool_definitions:
   metadata:

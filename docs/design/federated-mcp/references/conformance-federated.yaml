@@ -2,7 +2,7 @@ schema_version: 2
 contract: orbit-mcp-federated
 feature_status: Draft
 last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_validated: 2026-11-05
 
 source_of_truth:
   design: docs/design/federated-mcp/2_design.md

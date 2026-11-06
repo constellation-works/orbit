@@ -1,9 +1,9 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-11-01
-last_validated: 2026-11-01
-status: Draft
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 feature: mcp-bridge
 doc_role: design
 type: design
@@ -170,17 +170,17 @@ the listener closes a connection unless its first byte is `{`. This check runs
 before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body
 ([ORB-12929] closed that browser-originated request path).
 rmcp's stream transport caps one incoming line at 16 MiB (`DEFAULT_MAX_LINE_LENGTH`
-in rmcp 3.8). A longer line is discarded and logged while the connection stays
+in rmcp 3.8) [ORB-21031]. A longer line is discarded and logged while the connection stays
 open. The listener adds a stricter guard beneath rmcp: it fails the read and
 closes the session once a single message exceeds 8 MiB
 (`DEFAULT_MAX_MCP_MESSAGE_BYTES`), so an unauthenticated peer cannot grow a message
 past that bound, and rmcp's discard path is never reached on this listener. The
 pollable Unix stdio handover pump enforces the same 16 MiB line limit before
 buffering or tracking a complete line; an oversized line closes that stdio
-session, even if its newline has not arrived. The non-pollable stdio pump
+session, even if its newline has not arrived [ORB-21044]. The non-pollable stdio pump
 (`pump_plain_lines`) enforces the same 16 MiB line limit and likewise closes
 the session on overflow, even if its newline has not arrived, rather than
-discarding the line so reading can continue.
+discarding the line so reading can continue [ORB-21371].
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
@@ -230,6 +230,17 @@ Each definition contains a schema and an `McpToolScope`. Scope controls only
 whether the server injects and resolves a workspace selector. It does not encode
 caller capability, placement, or authorization.
 
+Role and toolset selection filters the surface before listing and dispatch.
+`--role` or `machine.mcp.role` selects the base toolsets; `--toolset` or
+`machine.mcp.toolsets` adds to that selection. A local server with neither a
+role nor extra toolsets keeps the pre-role default surface; a direct SSH route
+with no selection still serves every toolset for caller-side filtering
+[ORB-20234] [ORB-21263]. Direct `tools/list` also hides governed tools
+the session's caller authority cannot use, while Core continues to authorize
+each call [ORB-19444]. Roles limit the MCP surface and never grant authority;
+a call outside the selected toolsets returns `toolset_not_enabled`. The role
+contract is in [federated-mcp's MCP roles spec](../federated-mcp/specs/mcp-roles.md).
+
 The concrete server classifies known tools before opening a runtime. Known global
 tools use Core's global in-process seam; known workspace tools use the resolved
 runtime seam. Unknown and unadvertised raw names use the global seam and return
@@ -245,6 +256,8 @@ unmatched names point to `orbit tool list` or MCP `tools/list` instead. These
 hints register no aliases and preserve the not-found code, original requested
 name and audit failure classification.
 [ORB-18559] implemented these recovery hints.
+MCP not-found refusals for missing tasks and job runs include a next-step tool
+or field without changing their stable error code [ORB-21937].
 
 The adapter-owned UI
 presentation entrypoints are a separate wrapper: opening the control center or
@@ -314,5 +327,12 @@ contract to source and focused tests. The important behavioral gates are:
 - [ORB-15800] added SSH connection reuse for direct and federated sessions.
 - [ORB-17223] excluded removed checkouts from workspace discovery.
 - [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+- [ORB-19444] corrected the conformance contract for caller-filtered `tools/list`.
+- [ORB-20234] added opt-in MCP toolsets and the structured refusal for disabled sets.
+- [ORB-21031] aligned the MCP design with rmcp's 16 MiB incoming-line limit.
+- [ORB-21044] closed pollable stdio sessions on oversized input lines.
+- [ORB-21263] added named MCP roles over toolset selections.
+- [ORB-21371] closed non-pollable stdio sessions on oversized input lines.
+- [ORB-21937] added next-step guidance to MCP task and run not-found refusals.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

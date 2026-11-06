@@ -1,9 +1,9 @@
 ---
 title: Finding Verification — Overview
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-04
-status: Accepted
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 stage: shipped
 next: "—"
 feature: finding-verification
@@ -73,6 +73,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 | State trigger (`finding_unverified`) | [observation.rs](../../../crates/orbit-core/src/application/automation/members/member_host/observation.rs) | [ORB-15662] |
 | Seeded routine (disabled) | [finding_verification.yaml](../../../crates/orbit-core/assets/routines/finding_verification.yaml) | [ORB-15662] |
 | Admission hold | [pilot/admission.rs](../../../crates/orbit-core/src/application/task/pilot/admission.rs) | [ORB-15662] |
+| Guarded start checks normalized finding material before writes | [transitions/start.rs](../../../crates/orbit-core/src/application/task/transitions/start.rs) | [ORB-20390] |
 | Pilot `finding_invalid` result and its rejection | [task_pilot.yaml](../../../crates/orbit-core/assets/activities/task_pilot.yaml), [pilot/apply/task.rs](../../../crates/orbit-core/src/application/task/pilot/apply/task.rs) | [ORB-19635] |
 | Implementer `finding-invalid.json` report | [commit/finding_invalid.rs](../../../crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs) | [ORB-19635] |
 
@@ -83,5 +84,6 @@ first is far cheaper, and it gives the operator the evidence either way.
 - [ORB-15760] — made the verification gate an opt-in workspace setting, off by default.
 - [ORB-19635] — made the task pilot and the implementer the default rejection
   routes, recording the same verdict with its `source`.
+- [ORB-20390] — verified normalized resulting finding material before a guarded start writes.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

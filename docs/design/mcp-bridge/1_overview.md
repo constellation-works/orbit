@@ -1,9 +1,9 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-11-04
-status: Draft
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 stage: shipped
 next: "—"
 feature: mcp-bridge
@@ -123,6 +123,7 @@ authorization decision [ORB-12564]. `caller_ip` is likewise observational.
 | Server composition and server-local runtime selection | `orbit-cli` | [ORB-17094] made local server modes honor the selected Orbit root |
 | Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with the session envelope composed by `orbit-mcp`) | [ORB-12564] replaced destination caller policy with argv authority |
 | Canonical builtin tool definitions | `orbit-tools` | [ORB-18559] added policy-filtered recovery hints without aliases |
+| MCP role and toolset surface selection | `orbit-mcp` and `orbit-cli` | [ORB-20234] added opt-in toolsets; [ORB-21263] grouped toolsets into roles |
 | HTTP UI and its own local-forward SSH connection | `orbit-web` | Separate from MCP |
 
 `orbit-web` is a separate application surface. Its HTTP tunnel is not an MCP
@@ -156,7 +157,8 @@ response
 with live descriptors for the accepting machine and configured destinations.
 [ORB-11015] implemented selector routing, [ORB-11016] registered federated serve,
 and [ORB-14449] added task-ID prefix routing. These are shipped extensions to
-direct v1; the document's Draft status does not mean they await implementation.
+direct v1. Tool discovery also applies the selected role and toolset surface,
+while Core independently enforces caller authority [ORB-20234] [ORB-21263].
 
 The executable contract and validation map live in
 [`references/conformance-v1.yaml`](./references/conformance-v1.yaml). Detailed
@@ -176,5 +178,7 @@ request flow is in [`2_design.md`](./2_design.md), future work in
 - [ORB-17094] made local MCP server modes honor root selection.
 - [ORB-17223] excluded removed checkouts from workspace discovery.
 - [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+- [ORB-20234] moved selected MCP tools into opt-in toolsets.
+- [ORB-21263] grouped MCP toolsets into selectable roles.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

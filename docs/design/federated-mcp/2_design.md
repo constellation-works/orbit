@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-05
+last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -16,13 +16,13 @@ related_artifacts: [ORB-21171, ORB-14449, ORB-14448, ORB-11184, ORB-11044, ORB-1
 
 # Federated MCP — Design
 
-This document describes the federated MCP surface. Current v1 behavior — one chosen destination, byte-transparent direct SSH stdio, no Orbit process relaying onward — remains [mcp-bridge 2_design.md](../mcp-bridge/2_design.md) and is unchanged by `--mode remote`. The federated mux is a separate `--mode federated` server: list in [ORB-11014], routing in [ORB-11015].
+This document describes the federated MCP surface. Current v1 behavior — one chosen destination, byte-transparent direct SSH stdio, no Orbit process relaying onward — remains [mcp-bridge 2_design.md](../mcp-bridge/2_design.md) and is unchanged by `--mode remote`. The federated mux is a separate `--mode federated` server [ORB-11016]: list in [ORB-11014], routing in [ORB-11015]. The workspace policy came from [ORB-11008], was made implementable in [ORB-11009], reviewed in [ORB-11010], and sequenced for delivery by [ORB-11011].
 
 The prescriptive invariants live in [specs/federated-workspace-mcp.md](./specs/federated-workspace-mcp.md). This file explains how those pieces fit.
 
 ## 1. Operator-configured remotes, implicit local destination
 
-The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry; a missing file or an empty `hosts` list is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright. The mux does not:
+The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry [ORB-11044]; a missing file or an empty `hosts` list is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright [ORB-11013]. The mux does not:
 
 - grow host-registry into a fleet inventory;
 - auto-discover the owner checkout of a repository;
@@ -33,13 +33,13 @@ Direct SSH stdio to one chosen host remains the v1 remote path and is unchanged 
 
 ## 2. Host-qualified selector
 
-Every workspace-scoped federated call that supplies a workspace selector carries a **structured, caller-uninterpreted** host-qualified selector. Encoding `hm_<id>/ws_*` is normative. The token is addressing data. Callers copy the `selector` field from federated `orbit_workspace_list`; they must not parse it, construct it from `host_id`, or concatenate remembered identifiers. The gateway must not reinterpret it against its own local catalog. An id-only call to an id-routed task tool is the exception: it routes by task-id prefix to the host that holds the task.
+Every workspace-scoped federated call that supplies a workspace selector carries a **structured, caller-uninterpreted** host-qualified selector [ORB-11017]. Encoding `hm_<id>/ws_*` is normative. The token is addressing data. Callers copy the `selector` field from federated `orbit_workspace_list`; they must not parse it, construct it from `host_id`, or concatenate remembered identifiers. The gateway must not reinterpret it against its own local catalog. An id-only call to an id-routed task tool is the exception: it routes by task-id prefix to the host that holds the task.
 
 The stable key is `machine_id` (`hm_…`), not renameable `host_id`. Example form: `hm_<id>/ws_orbit`. A display host name such as `orbit-linux/ws_orbit` is not a valid selector.
 
-A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. The one exception is a named **fan-out read** (§6.1): a call to it without a host-qualified selector reads every in-scope destination instead. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
+A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. The shipped config, selector and routing-error contract is tracked by [ORB-11013]. The one exception is a named **fan-out read** (§6.1): a call to it without a host-qualified selector reads every in-scope destination instead. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
 
-Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. The v1 id-only default for `orbit.task.show` does not apply in this namespace. Instead, an id-only call to an id-routed task tool routes by task-id prefix to the host that holds it ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). A call that carries a selector is routed by that selector. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
+Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. The v1 id-only default for `orbit.task.show` does not apply in this namespace. Instead, an id-only call to an id-routed task tool routes by task-id prefix to the host that holds it ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). A call that carries a selector is routed by that selector. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. V1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the default v1 `tools/list` snapshot stay unchanged.
 
 ## 3. Capabilities mapped onto owner and replica
 
@@ -48,7 +48,7 @@ This feature does not invent a second ownership model. Host-registry already dis
 - **owner checkout** — local checkout whose logical `owner_machine_id` equals this machine;
 - **replica checkout** — local checkout that names another machine as the logical owner.
 
-**The destination's local catalog role determines capability class.** List advertisement is a hint and may lag destination Core. Destination Core refusal is the correctness boundary; the gateway is not a second authorization layer.
+**The destination's local catalog role determines capability class** [ORB-11012]. List advertisement is a hint and may lag destination Core. Destination Core refusal is the correctness boundary; the gateway is not a second authorization layer.
 
 | Catalog role | Classes held | Meaning |
 |---|---|---|
@@ -62,7 +62,7 @@ A destination Core that does not hold a class **refuses** tools of that class wi
 Tool class is assigned by what the tool does, not by a per-tool registry field:
 
 - task issuance, coordination-store writes, and task reads (`orbit_task_add`, `orbit.task.update`, `orbit.task.list`, `orbit.task.show`, …) → `control_plane`
-- fleet notices (`orbit.notice.post`, `orbit.notice.close`, and the workspace-scoped `orbit.notice.list` / `orbit.notice.show` reads) → `control_plane`: a notice lives in its home workspace's owner store, so a replica refuses with `capability_refused` and the gateway never redirects to the owner. The workspace-less `orbit.notice.list` is aggregated by the caller instead — one owner-local aggregate read (`all: true`) per owner machine, merged, deduplicated by id, ordered, then limited once, with each unreachable owner reported as `degraded` ([fleet-notices notice-federation](../fleet-notices/specs/notice-federation.md)).
+- fleet notices (`orbit.notice.post`, `orbit.notice.close`, and the workspace-scoped `orbit.notice.list` / `orbit.notice.show` reads) → `control_plane`: a notice lives in its home workspace's owner store, so a replica refuses with `capability_refused` and the gateway never redirects to the owner. The workspace-less `orbit.notice.list` is aggregated by the caller instead — one owner-local aggregate read (`all: true`) per owner machine, merged, deduplicated by id, ordered, then limited once, with each unreachable owner reported as `degraded` ([fleet-notices notice-federation](../fleet-notices/specs/notice-federation.md) [ORB-21214]).
 - anything touching runs, logs, or scheduler state → `execute`
 - discovery / list tools (`orbit_workspace_list`, …) → unclassified, not subject to `capability_refused`
 - the operator attention feed (`orbit.attention`) → unclassified: each destination derives only the kinds its checkout role is authoritative for (an owner its task-level kinds, every host its own runs and health), so it is answerable everywhere and never refused with `capability_refused` ([operator-attention attention-federation](../operator-attention/specs/attention-federation.md#authority-per-host))
@@ -154,6 +154,11 @@ A single control-plane per repository is an operator configuration responsibilit
 
 v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mcp-bridge. The mux is an explicit exception to v1 "byte-transparent / no Orbit process relays onward", **for the federated namespace only**. Automatic owner discovery, replication, relays-as-product, and fleet placement stay out. See [mcp-bridge 3_vision.md §5](../mcp-bridge/3_vision.md).
 
+Role and toolset selection is applied at the mux, filtering the same MCP
+surface on every local and remote destination. It limits what is listed and
+dispatched; it does not grant caller authority or change the destination's
+checkout capability checks [ORB-21263]. See the [MCP roles spec](./specs/mcp-roles.md).
+
 ## 9. Concerns & Honest Limitations
 
 - v1 `--mode remote` is unchanged. Federated list and routing live only in `--mode federated`.
@@ -187,5 +192,6 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
 - [ORB-21214] — fleet-notice tools classified `control_plane`; workspace-less notice list aggregated per owner
 - [ORB-21171] — named `orbit.attention` the fan-out read: unclassified, candidate reads to every destination, merged once
+- [ORB-21263] — filtered the federated MCP surface through a shared role and toolset selection
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
