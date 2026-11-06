@@ -317,10 +317,28 @@ template:
     - **Description.** It contains **Outcome**; **Evidence** (paths with line
       numbers at the pinned SHA, reference counts, the copies side by side or
       the rule cited, and the routes checked for a dead-code candidate); **Scope
-      and non-goals**; the behavioural-difference table for duplication; a line
-      saying **Owner sign-off required** when the change alters a public
-      surface the repository's documents mark as stable; and the
+      and non-goals**; the behavioural-difference table for duplication; the
+      **Stable-surface approval** section below when it applies; and the
       **Conventions** block below, copied verbatim.
+    - **Stable-surface approval.** A change that keeps the Conventions block's
+      behaviour-preserving rule needs no approval: never invent a sign-off
+      for it. Only a change to a public surface the repository's documents
+      mark as stable (breaking changes needing an owner's sign-off) does. An
+      implementer cannot obtain that approval, so settle it before the task
+      is filed, and record one of two states in the description:
+      - **Owner approval recorded**: who granted it, where (task comment,
+        document or decision record) and the exact surface and change it
+        covers. State the authorized change as the Outcome; every criterion
+        then proves that change and its behaviour.
+      - **Owner decision required before implementation**: a section opening
+        the description, naming the surface, the change it would authorize and
+        the question for the owner. Keep the stable-surface change out of the
+        Outcome, scope and criteria, so it stays unauthorized, and write the
+        criteria as they would read once the owner approves. The task stays
+        `proposed` until the owner records the decision in a comment.
+      Acceptance criteria prove the authorized change; none may require
+      obtaining, recording or confirming sign-off, because a non-interactive
+      implementer cannot satisfy it.
     - **Compatibility retirement** also gives the evidence for each Pass C
       condition, quotes the documented support window and its source, and names
       exactly which command-line, API, configuration or persisted shape
@@ -353,7 +371,8 @@ template:
     >   a stop-and-report, not a judgement call.
     > - No layout-only moves. Narrow visibility in code you touch.
 
-    Tasks land in `proposed`. Do not approve them.
+    Tasks land in `proposed`. Do not approve them; a task that records an
+    owner decision as required stays `proposed` until the owner answers.
 
     ## Handoff
 
@@ -381,7 +400,7 @@ template:
   - The reviewed area was chosen by the recorded churn score with conflicted areas skipped, and every non-test line in it was read.
   - Every filed finding clears its lens bar; duplication findings list each behavioural difference between copies with a resolution.
   - Open and rejected `code-health` coverage was checked first; findings touching in-flight tasks were deferred, not filed or chained.
-  - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria.
+  - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria; a change to a documented-stable surface records either the owner's approval or a pending owner decision, and no filed criterion asks the implementer to obtain sign-off.
   - The artifact `code-health.json` is attached to this task and the execution summary maps every candidate and finding to a disposition; a run with no findings above the bars succeeds with that evidence.
   task_type: chore
   tags:
