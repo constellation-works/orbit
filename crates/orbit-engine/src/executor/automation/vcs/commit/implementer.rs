@@ -26,6 +26,7 @@ pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
     output: &Value,
 ) -> Result<(), OrbitError> {
     let claimed = input.get("claimed").and_then(Value::as_bool) == Some(true);
+    let mut already_resolved = false;
     if let Some(declared) =
         AlreadyResolved::from_output(output).map_err(OrbitError::InvalidInput)?
     {
@@ -36,8 +37,15 @@ pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
             )));
         }
         declared.admit().map_err(OrbitError::InvalidInput)?;
+        already_resolved = true;
     }
+    // ORB-22407: a claimed already-resolved outcome is evidence the commit
+    // step can settle through its already-resolved checkpoint — the named
+    // selectors replay on the base during claimed validation — so it needs
+    // no clean-tree report beside it. A summary alone remains refused, as
+    // before: it names no check that could show the base resolves the task.
     if !claimed
+        || already_resolved
         || output
             .get("no_diff_artifacts")
             .and_then(Value::as_array)

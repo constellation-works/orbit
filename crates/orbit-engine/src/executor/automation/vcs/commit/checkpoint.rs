@@ -11,6 +11,7 @@ use crate::context::RuntimeHost;
 use super::super::super::input::input_string_field;
 use super::super::git::{git_command_success, git_output};
 use super::already_landed::{self, AlreadyLanded};
+use super::already_resolved;
 use super::clean_tree::Verifier;
 use super::no_diff::{self, NoDiff};
 use super::tagged_no_diff;
@@ -61,7 +62,7 @@ pub(in crate::executor::automation::vcs) fn verified_clean_tree_checkpoint(
     input.get("already_landed_checkpoint").filter(|checkpoint| {
         matches!(
             checkpoint.get("decision").and_then(Value::as_str),
-            Some(already_landed::DECISION | no_diff::DECISION)
+            Some(already_landed::DECISION | no_diff::DECISION | already_resolved::DECISION)
         )
     })
 }
@@ -82,6 +83,12 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
             [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
             _ => Err(OrbitError::PolicyDenied(
                 "a no-diff-expected checkpoint covers exactly one task".into(),
+            )),
+        },
+        Some(already_resolved::DECISION) => match tasks {
+            [task] => already_resolved::verify_handoff(task, workspace_path, checkpoint),
+            _ => Err(OrbitError::PolicyDenied(
+                "an already-resolved checkpoint covers exactly one task".into(),
             )),
         },
         _ => AlreadyLanded::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
@@ -123,6 +130,9 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
         }
         Some(tagged_no_diff::DECISION) => {
             tagged_no_diff::verify_handoff_at_revision(task, checkpoint)
+        }
+        Some(already_resolved::DECISION) => {
+            already_resolved::verify_handoff_at_revision(task, checkpoint)
         }
         _ => Err(OrbitError::PolicyDenied(
             "a NoDiff handoff requires a verified clean-tree checkpoint".into(),

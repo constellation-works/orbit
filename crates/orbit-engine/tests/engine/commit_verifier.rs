@@ -1572,6 +1572,96 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
     );
 }
 
+/// A claimed leaf whose implementer found the base already resolves the
+/// task, and carried that evidence in its output instead of a clean-tree
+/// report, settles through both claimed pipelines' commit steps instead of
+/// failing with an empty stage [ORB-22407]. The settled outcome names the
+/// implementer's evidence. A claimed leaf with no implementer evidence at
+/// all is still refused.
+fn claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let head = git_head(repo);
+
+    let claimed_host = |repo: &Path| {
+        let mut host = VerifierHost::new(repo, fixture_task());
+        host.worker = Some(orbit_types::tool::WorkerInvocation {
+            owner_machine_id: "owner".into(),
+            owner_workspace_id: "ws_owner".into(),
+            owner_destination: "owner/ws_owner".into(),
+            task_id: TASK_ID.into(),
+            claim_id: "claim-verifier".into(),
+            execution: orbit_types::task::ExecutionLocation {
+                machine_id: "follower".into(),
+                machine_name: None,
+            },
+            bound_run_id: RUN_ID.into(),
+        });
+        host
+    };
+
+    for pipeline_asset in [
+        "task_claimed_local_pipeline.yaml",
+        "task_claimed_pr_pipeline.yaml",
+    ] {
+        let host = claimed_host(repo);
+        let mut input = pipeline_commit_step_input(pipeline_asset, repo, &head);
+        input["implementation"] = json!({
+            "execution_summary": "Outcome: success\n\nThe defect is already fixed on the pinned base; no change is required.",
+            "already_resolved": {
+                "selectors": ["cargo test -p orbit-engine --test commit_verifier"]
+            },
+        });
+        let result = action(&host, &input).unwrap_or_else(|error| {
+            panic!("{pipeline_asset} claimed empty candidate must settle, got: {error}")
+        });
+        assert_eq!(result["decision"], "verified_already_resolved", "{result}");
+        assert_eq!(result["committed"], false, "{result}");
+        assert_eq!(result["skipped_no_diff_expected"], true, "{result}");
+        assert_eq!(result["task_id"], TASK_ID, "{result}");
+        assert_eq!(result["base_sha"], head, "{result}");
+        assert_eq!(
+            result["already_resolved_evidence"]["selectors"],
+            json!(["cargo test -p orbit-engine --test commit_verifier"]),
+            "{result}"
+        );
+        assert!(
+            result["already_resolved_evidence"]["execution_summary"]
+                .as_str()
+                .is_some_and(|summary| summary.contains("already fixed")),
+            "{result}"
+        );
+        assert_eq!(git_head(repo), head);
+        assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
+    }
+
+    // A summary alone names no check that could show the base resolves the
+    // task, so it is not evidence: the empty stage is still refused.
+    let host = claimed_host(repo);
+    let mut input = pipeline_commit_step_input("task_claimed_local_pipeline.yaml", repo, &head);
+    input["implementation"] = json!({
+        "execution_summary": "Outcome: success\n\nVerified the change already exists on the base.",
+    });
+    let error =
+        action(&host, &input).expect_err("a claimed summary without selectors must be refused");
+    assert!(
+        error.to_string().contains("nothing to commit"),
+        "expected empty stage refusal, got: {error}"
+    );
+
+    // No implementer evidence at all: the empty stage is still refused.
+    let host = claimed_host(repo);
+    let input = pipeline_commit_step_input("task_claimed_local_pipeline.yaml", repo, &head);
+    let error = action(&host, &input)
+        .expect_err("a claimed empty candidate without implementer evidence must be refused");
+    assert!(
+        error.to_string().contains("nothing to commit"),
+        "expected empty stage refusal, got: {error}"
+    );
+    assert_eq!(git_head(repo), head);
+}
+
 /// Plant a nested repository at `sub/` whose own config runs a clean filter
 /// that creates `marker`, as a sandboxed agent can inside its worktree.
 fn plant_filtering_nested_repo(repo: &Path, marker: &Path) -> PathBuf {
@@ -1773,6 +1863,10 @@ fn commit_evidence_contracts_3() {
             (
                 "clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence",
                 clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
+            ),
+            (
+                "claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved",
+                claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved,
             ),
         ]);
     });
