@@ -18,7 +18,7 @@ use orbit_common::process::shell::quote_posix_arg;
 use orbit_common::test_env::{assert_child_test_passed, run_child_test};
 use tempfile::TempDir;
 
-use super::super::source::fetch_origin_branch;
+use super::super::fetch_origin_branch;
 
 /// Set in the re-executed child to the directory holding the stub `git`.
 const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_FETCH_DIR";
@@ -26,7 +26,7 @@ const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_FETCH_DIR";
 #[test]
 fn hung_origin_fetch_releases_the_fetch_lock_within_its_deadline() {
     const TEST: &str = concat!(
-        "application::task::pilot::tests::source::",
+        "application::task::pilot::source::tests::source::",
         "hung_origin_fetch_releases_the_fetch_lock_within_its_deadline"
     );
     if let Some(stub_dir) = std::env::var_os(STUB_DIR_VAR) {
