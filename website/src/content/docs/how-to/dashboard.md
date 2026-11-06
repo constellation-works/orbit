@@ -963,8 +963,8 @@ machine.
 ### Forecast
 
 Open **Forecast** to see how long the backlog takes to drain and what it
-costs. It reads the selected workspace's **backlog** and **in-progress**
-tasks; review, blocked, and someday tasks are left out. Every figure is a
+costs. It reads the selected workspace's **backlog**, **in-progress** and
+**blocked** tasks; review and someday tasks are left out. Every figure is a
 range: **p50** (as likely over as under) and **p90** (nine times in ten it
 finishes under). The view changes nothing.
 
@@ -978,90 +978,163 @@ times on as many parallel runs as the auto-drain admits: the running
 window's limit, else the default of 5. An in-progress task counts only what
 it has left.
 
-The page reads top to bottom: the answer, the tasks, the data gaps, and
-calibration, with the detail collapsed underneath.
+The section has three tabs, each with its own address: **Forecast**
+(`#analytics/forecast`), **Accuracy** (`#analytics/forecast/accuracy`) and
+**Data gaps** (`#analytics/forecast/data-gaps`). Switching tabs does not
+refetch. The **Data gaps** tab label carries a count of the coverage checks
+that report gaps.
 
-- The answer card gives **Time to drain** and **Cost** as p50 (large) and
-  p90, and the cost line says how many tasks have costed history. A smaller
-  row gives **Tokens**, effective parallelism, and the critical path (the
-  longest dependency chain). A quantile reads `—` when its measure is
-  unavailable. Missing simulated totals sort after known totals; p50 or p90
-  is unavailable if its rank falls among those missing totals.
-- With proposed tasks waiting, **If proposed work is approved** gives the
-  drain time if they were all approved and how much it changes, with their
-  cost and tokens. When that proposed forecast cannot include regression
-  follow-up, it shows the baseline instead. One warning names why and says
-  that baseline excludes unsupported regression follow-up work.
-- When regression follow-up work can't be estimated for the current backlog,
-  the figures show the baseline without it and one warning line says why,
-  with a link to the data gaps. That is still the only warning when the
-  proposed forecast is unavailable as well.
-- The **History** select chooses the finished tasks sampled. The default is
-  the last 30 days, reaching further back when those hold fewer than 50
-  finished tasks, so a quiet month still forecasts. **Last 200** and **Last
-  500** sample that many of the newest finished tasks, whatever their age;
-  **90d** samples 90 days. **How this forecast is made** names how many
-  tasks were sampled and since when. More tasks means older behavior.
-- **No arrivals**, the default, assumes nothing new is filed. The line under
-  the figures shows how many tasks were filed a day over the last week
-  (auto-tasks, sweeps, other filings) and how many were done, so you can see
-  how far that assumption is off. **With arrivals** adds new tasks at that
-  rate, drawing each arrival from all finished deliveries in the lookback.
-  If a sampled arrival lacks tokens or cost, that simulation's total for
-  that measure is unavailable; it never counts as free. Time to drain and
-  the other measure remain available independently. This also applies to
-  the if-approved totals. With arrivals off, initial tasks redraw missing
-  tokens or cost from their history pool's recorded values; with none, that
-  measure is unavailable.
-- **Tasks** lists each open task in dispatch order with its complexity and
-  review mode, status, when it starts, its work hours and cost, and how
-  often it finishes. A sentence under it names only the gates that held work
-  back; **Wait breakdown by gate** lists every gate.
-- **Data gaps** shows only the checks that found tasks forecast on thin
-  evidence, such as unassessed tasks, thin crew history, models without
-  token prices, runs without a cost, no history at all, or deliveries in the
-  arrival history pool missing tokens or cost. The full checklist, with what
-  each check means, is in **How this forecast is made**, beside the **By
-  complexity** table of each complexity's work hours, cost, and tokens and
-  how many tasks sampled their own crew's history, their complexity's, or
-  every task's.
+**Forecast tab.** The header says **Stored** and how old the forecast is when
+the default view comes from the newest stored forecast, or **Live** when it
+was computed for this read; the time it was computed is on hover. **Refresh**
+recomputes the forecast live.
 
-**Calibration** checks earlier forecasts. While **Forecast** is open on its
-defaults, one forecast an hour is kept. As each task finishes, its actual
-time, cost, and tokens are compared with its own p50 and p90, so per-task
-scores accrue as work lands. The scoring rules change by model version, and
-the whole drain is scored once its forecast settles. Before model version 9,
-that is once no task is pending and at least one is done or abandoned. From
-model version 9 on, it is 90 days after the forecast, even if its initial
-tasks finished sooner, so regression follow-ups filed in that window are
-counted. Removed or re-scoped tasks, and done tasks with no agent run after
-the forecast, are left out and counted; a forecast with any left-out task is
-not scored as a whole. Before model version 5, rejected and archived tasks are
-left out the same way. From model version 5 they count as abandoned: they
-never deliver, so their hours are not scored, but the spend they made after
-the forecast still counts toward its token and cost totals. A settled forecast
-with an abandoned task is scored as not drained, so it has no time-to-drain
-actual. Unfinished work has none either. A forecast that is well calibrated
-has about half of actuals under p50 and nine in ten under p90: the bars mark
-those targets and turn amber when a share is off. **Stored forecasts** lists
-every kept forecast against what happened. A new workspace needs a few days
-of finished work before there are per-task scores, and a forecast from model
-version 9 on gets its whole-drain score 90 days after it was made.
+The **History** select chooses the finished tasks sampled. The default is the
+last 30 days, reaching further back when those hold fewer than 50 finished
+tasks, so a quiet month still forecasts. **Last 200** and **Last 500** sample
+that many of the newest finished tasks, whatever their age; **90d** samples
+90 days. Changing it refetches. **How this forecast is made**, on the
+Accuracy tab, names how many tasks were sampled and since when. More tasks
+means older behavior.
 
-**Residuals** sits under calibration: one bar per stored forecast of how
-far actuals ran from the forecast p50. Forecast bias and quantiles are
-corrected from these scored residuals. The **Work hours** | **Cost** |
-**Tokens** switch chooses the measure, opening on **Work hours**. Each bar
-is the median across that forecast's finished tasks of ln(actual ÷ forecast
-p50), captioned `ln(actual ÷ p50) · over the line = ran over the forecast`:
-zero is a hit on the p50, about +0.69 is twice the forecast and −0.69 is
-half, so bars over the line ran over the forecast. **Whole-backlog time to
-drain** is a second series that appears once a forecast settles, up to 90
-days later. Bars from earlier model versions are muted, since their
-quantiles differ. With nothing scored yet the card says **No scored
-residuals yet**; per measure it says **No task work hours residuals scored
-yet** (and the matching cost and tokens wordings), and the drain series says
-**No whole-backlog drain time scored yet**.
+The **Scenario** switch chooses which tasks the figures forecast:
+
+- **Current backlog**, the default, assumes no new tasks arrive.
+- **With N proposed** forecasts the same tasks with the N proposed tasks
+  approved. It is disabled when nothing is proposed. Its **Time to drain**
+  info icon gives the change at p50 against the current backlog.
+- **With new arrivals** adds new tasks at the recent rate, drawing each
+  arrival from all finished deliveries in the lookback. It refetches.
+
+The info icon beside the switch states the arrivals assumption, with the last
+seven days' filing rate (auto-tasks, sweeps, other filings) and the done rate,
+so you can see how far that assumption is off. Without new arrivals, initial
+tasks redraw missing tokens or cost from their history pool's recorded
+values; with none, that measure is unavailable. If a sampled
+arrival lacks tokens or cost, that simulation's total for that measure is
+unavailable; it never counts as free. Time to drain and the other measure
+remain available independently. This also applies to the with-proposed
+totals.
+
+Three tiles show the totals: **Time to drain**, **Cost** and **Tokens**, each
+as one `p50 – p90` range. A missing percentile reads **unknown**, and a total
+with neither reads **Unknown**; a missing total is never zero. Missing
+simulated totals sort after known totals, so p50 or p90 is unavailable when
+its rank falls among them. Each tile's info icon gives the reason a total is
+incomplete: no costed or priced history, a percentile beyond the 90-day
+horizon, tasks that cannot all be scheduled, or the unavailable reason. They
+also hold:
+
+- **Time to drain**: the share of simulated runs that drain within the 90-day
+  horizon, the share in which every initial task finishes, the average count
+  of initial tasks left unfinished, effective parallelism (occupied slots
+  averaged over the drain) and the critical path (the longest dependency
+  chain). Under **With new arrivals** it also holds the if-approved figures.
+- **Cost**: how many tasks have costed history, as `k of n tasks costed`.
+
+When some tasks depend on work the drain cannot start, the full totals are
+withheld and a note gives the drain, cost and tokens of the schedulable
+subset, with its numerator and denominator.
+
+When the regression-adjusted forecast is unavailable, the totals show its
+pre-regression baseline, labelled, and one warning line says why, with a
+**Why** link that opens Data gaps. With **With N proposed**, the warning names
+that scenario's reason and says its baseline excludes unsupported regression
+follow-up work. A **With new arrivals** simulation that reaches a bound
+withholds its totals: they read **No forecast**, and the line points back to
+Current backlog.
+
+**Tasks** lists the in-progress tasks, then the backlog in dispatch order, the
+first 50 when there are more. Each row gives its title (linked to the task),
+status, start (p50 – p90, or running for an in-progress task), work hours,
+cost and how often it finishes, which is amber below 100%. A cost or token range resting on few measured deliveries
+is tagged **thin**. A task that cannot be forecast says why in place of its
+start. The row's info icon gives its complexity and review mode, its start
+order, its token range and the cost and token samples behind it.
+
+**Wait breakdown**, collapsed under the table, sums waiting task-hours (p50 –
+p90) by the first gate each waiting task fails: scheduled time, dependencies,
+file locks, surface reservations, unknown footprint, capacity and returns.
+Hours add up across tasks, so they can exceed the time to drain. Each gate's
+meaning is behind its info icon.
+
+**Data gaps tab.** The tab opens with one sentence on where the figures stand
+and why. Below it, only the coverage checks that are not zero appear, in two
+cards: **This backlog**, and **History** for checks on delivery history, such
+as history with unknown review, unreadable review checkpoints, and arrival
+history missing tokens or cost.
+Each card line shows its count, and its definition is behind an info icon.
+The tab header says how many other checks are clear.
+
+**Details**, collapsed, holds the note on any unavailable forecast with its
+evidence, a partial review-history note when historical review checkpoints
+could not be read, and the **Coverage checklist**. The checklist lists every
+check with its count and definition, then notes how arrivals are sampled and
+how many tasks in review are not forecast.
+
+**Accuracy tab.** The **Calibration** card checks earlier forecasts. While
+**Forecast** is open on its defaults, one forecast an hour is kept. As each
+task finishes, its actual time, cost and tokens are compared with its own p50
+and p90, so per-task scores accrue as work lands. The card's table shows, for
+task hours, task cost, task tokens and the whole backlog, the share of actuals
+under p50 and under p90 and how many were scored. A well-calibrated forecast
+has about half of actuals under p50 and nine in ten under p90; a share more
+than five points off its target is amber. Under the table is the newest
+earlier model's task-hour score, when there is one. With no stored forecast,
+the card says calibration appears once a stored forecast's tasks start
+finishing.
+
+The scoring rules change by model version, and the whole drain is scored once
+its forecast settles. Before model version 9, that is once no task is pending
+and at least one is done or abandoned. From model version 9 on, it is 90 days
+after the forecast, even if its initial tasks finished sooner, so regression
+follow-ups filed in that window are counted. Removed or re-scoped tasks, and
+done tasks with no agent run after the forecast, are left out and counted; a
+forecast with any left-out task is not scored as a whole. Before model version
+5, rejected and archived tasks are left out the same way. From model version 5
+they count as abandoned: they never deliver, so their hours are not scored,
+but the spend they made after the forecast still counts toward its token and
+cost totals. A settled forecast with an abandoned task is scored as not
+drained, so it has no time-to-drain actual. Unfinished work has none either.
+A new workspace needs a few days of finished work before there are per-task
+scores, and a forecast from model version 9 on gets its whole-drain score 90
+days after it was made.
+
+**Actual vs forecast** comes next. It charts one bar per stored forecast of how
+far actuals ran from the forecast p50, oldest first. Its switch chooses
+**Work hours**, **Cost** or **Tokens**, opening on **Work hours**. Each bar is
+the median across that forecast's finished tasks of ln(actual ÷ p50): zero is
+a hit on the p50, about +0.69 is twice the forecast and −0.69 is half. Bars
+above the zero line ran over the forecast, and bars below came in under it;
+the legend reads **Ran over** and **Came in under**. Earlier model versions
+are muted and split off, since their quantiles differ. A second chart shows
+**Whole-backlog time to drain**, which appears once a forecast settles, up to
+90 days later. Forecast bias and quantiles are corrected from these scored
+residuals. With nothing scored yet the card says **No scored residuals yet**;
+per measure it says **No task work hours residuals scored yet** (and the
+matching cost and tokens wordings), and the drain series says **No
+whole-backlog drain time scored yet**.
+
+Below the cards, three sections are collapsed under **Details**:
+
+- **Calibration detail** names the task population: each task counts once,
+  from its first stored forecast taken before work started. It gives hit rates
+  by complexity, and the adjusted whole-backlog totals and the pre-regression
+  baseline, each with drain-time, cost and token bars against their targets
+  and their own scored counts. Baseline predictions are compared against the
+  same observed totals, including regression follow-ups. A settlement line
+  gives the scored counts and how many forecasts are settled or not drained.
+- **Stored forecasts** lists every kept forecast against what happened, newest
+  first and ten to a page: model version, done of total, what was left out, the
+  forecast p50 – p90 against the actual drain, cost and tokens, and whether
+  each is pending, settled or scored. Above the table are the latest stored
+  time, with `scored when stored` when the default view is served from a stored
+  forecast, and the earlier model versions' hit rates.
+- **How this forecast is made** names the backlog, in-progress and blocked
+  counts, the deliveries sampled and since when, and the iteration count and
+  leaf-run ceiling with its source. It gives the sampling and admission rules,
+  the **By complexity** table of each complexity's work hours, cost and tokens,
+  and the calibration settlement rules.
 
 ### Cost
 
