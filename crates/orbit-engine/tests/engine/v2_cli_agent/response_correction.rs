@@ -682,3 +682,68 @@ fn only_a_read_only_activity_may_declare_response_correction() {
         assert!(error.contains(expected), "{expected}: {error}");
     }
 }
+
+// [ORB-22448] These coordination writes used to pass admission even though a
+// correction repeats the entire activity under the same tool grant.
+fn assert_coordination_mutations_refused(deny_mode: bool) {
+    for yaml in [
+        include_str!("../../../../orbit-core/assets/activities/agent_explore.yaml"),
+        include_str!("../../../../orbit-core/assets/activities/task_pilot.yaml"),
+    ] {
+        orbit_engine::load_activity_asset(yaml).expect("the shipped activity remains admissible");
+        let mut registry = orbit_tools::ToolRegistry::new();
+        registry.register_builtins();
+        let mut tools: Vec<_> = registry
+            .schemas()
+            .into_iter()
+            .filter(|schema| {
+                schema.name.starts_with("orbit.")
+                    && registry.execution_kind(&schema.name)
+                        == Some(orbit_tools::ToolExecutionKind::Mutating)
+            })
+            .map(|schema| schema.name)
+            .collect();
+        tools.sort();
+        assert!(
+            !tools.is_empty(),
+            "the registry supplies the mutation surface"
+        );
+        for tool in &tools {
+            let mut asset: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+            let spec = asset["spec"].as_mapping_mut().unwrap();
+            let deny_key = serde_yaml::Value::from("tool_disallow_list");
+            if deny_mode {
+                spec.get_mut(&deny_key)
+                    .unwrap()
+                    .as_sequence_mut()
+                    .unwrap()
+                    .retain(|entry| entry.as_str() != Some(tool.as_str()));
+            } else {
+                spec.remove(&deny_key);
+                spec.insert(
+                    serde_yaml::Value::from("tools"),
+                    serde_yaml::to_value([tool]).unwrap(),
+                );
+            }
+            let yaml = serde_yaml::to_string(&asset).unwrap();
+            let error = orbit_engine::load_activity_asset(&yaml)
+                .err()
+                .unwrap_or_else(|| {
+                    panic!("coordination write {tool} was admitted (deny={deny_mode})")
+                })
+                .to_string();
+            assert!(error.contains("response_correction"), "{error}");
+            assert!(error.contains(tool.as_str()), "{tool}: {error}");
+        }
+    }
+}
+
+#[test]
+fn coordination_mutations_are_refused_in_allow_mode() {
+    assert_coordination_mutations_refused(false);
+}
+
+#[test]
+fn coordination_mutations_are_refused_in_deny_mode() {
+    assert_coordination_mutations_refused(true);
+}

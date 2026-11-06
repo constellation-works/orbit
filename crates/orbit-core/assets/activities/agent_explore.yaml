@@ -135,12 +135,43 @@ spec:
       complete result this activity asks for, checked against what you can still
       inspect; if you cannot stand behind it, `"status":"failed"` saying why.
   tool_disallow_list:
+    - orbit.decision.digest
+    - orbit.decision.raise
+    - orbit.decision.submit
+    - orbit.drain.claim.bind
+    - orbit.drain.claim.settle
+    - orbit.evolution.add
+    - orbit.experiment.abandon
+    - orbit.experiment.assign
+    - orbit.experiment.clone
+    - orbit.experiment.conclude
+    - orbit.experiment.create
+    - orbit.experiment.pause
+    - orbit.experiment.resume
+    - orbit.experiment.reweight
+    - orbit.experiment.start
+    - orbit.experiment.update
+    - orbit.lease.expand
+    - orbit.lease.list
+    - orbit.lease.release
+    - orbit.lease.renew
+    - orbit.lease.request
+    - orbit.lease.show
+    - orbit.notice.close
+    - orbit.notice.post
+    - orbit.resident.checkpoint
+    - orbit.resident.control
+    - orbit.resident.grant
+    - orbit.resident.relay
+    - orbit.task.block_triage
+    - orbit.visual.capture
     - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update
     - orbit.command.exec
     - orbit.pipeline.invoke
+    - orbit.pipeline.wait
     - orbit.routine.control
     - orbit.workflow.auto
     - orbit.workflow.run.resume

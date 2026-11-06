@@ -187,9 +187,11 @@ pub struct AgentLoopSpec {
     /// that reply fails the step. Present, the runner may
     /// start a fresh invocation with the same crew, tools and sandbox, inside
     /// the unspent part of this activity's wall-clock budget, and only a newly
-    /// valid reply succeeds. Asset load admits it only on a read-only activity
-    /// ([`validate_response_correction_activity`]), so a repeated invocation
-    /// cannot repeat a mutation.
+    /// valid reply succeeds. Asset load requires the read-only filesystem
+    /// profile and denies the built-in Orbit mutation tools, including writes
+    /// to coordination state outside the worktree
+    /// ([`validate_response_correction_activity`]), so those mutations cannot
+    /// be repeated by a correction.
     ///
     /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity
     #[serde(default, skip_serializing_if = "Option::is_none")]
