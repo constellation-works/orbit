@@ -130,7 +130,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_config::store::validated_config_store_path",
+          "orbit_config::config_io::validated_config_store_path",
           "ReturnValue",
           "path-injection",
           "manual",
@@ -266,7 +266,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_config::store::config_store_path_is_contained",
+          "orbit_config::config_io::config_store_path_is_contained",
           "Argument[0]",
           "true",
           "path-injection",

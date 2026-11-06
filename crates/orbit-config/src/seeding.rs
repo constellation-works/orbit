@@ -248,7 +248,7 @@ pub fn load_workspace_seeding_policies(
     let mut auto_tasks: Option<RawSeedingPolicy> = None;
     let mut sources = [None, None];
     for path in &layers {
-        let Some(raw) = crate::store::read_config_file(path)? else {
+        let Some(raw) = crate::config_io::read_config_file(path)? else {
             continue;
         };
         let document: toml::Value = toml::from_str(&raw).map_err(|error| {

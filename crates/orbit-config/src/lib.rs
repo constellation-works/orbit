@@ -49,6 +49,8 @@
 //!   fixed registry keys (crew tables and retired-key migration guards).
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `config_document` — pure TOML path access shared below admission.
+//! - `config_io` — no-follow `config.toml` reads and path admission, below
+//!   loading, diagnostics and the store.
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
 //! - `lock_modes` — the ordered `workflow.lock_modes` footprint lock-mode
@@ -75,14 +77,16 @@
 //! - `tag_instructions` — trusted tag instructions and activity corpus mappings.
 //! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
 //! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
-//! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
-//!   refuses to replace a file changed since the store read it.
+//! - `store` — comment-preserving [`ConfigStore`] edits, the per-file write lock
+//!   and an atomic save that refuses to replace a file changed since the store
+//!   read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod aliases;
 /// Host-only bounded decision-assistance configuration.
 pub mod assistance;
 mod config_document;
+mod config_io;
 mod crew;
 mod experiment_keys;
 mod human_crew_seed;

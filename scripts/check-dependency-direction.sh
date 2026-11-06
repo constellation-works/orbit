@@ -426,6 +426,34 @@ if [ -f "$config_src/config_document.rs" ] && rg -n '\b(crate|super|self)::|^[[:
   fail=1
 fi
 
+# [ORB-22315] File reads and path admission live in the config_io leaf, below
+# loading and diagnostics and below the mutable ConfigStore those modules must
+# not reach. The crate-root re-exports of the store's types count as the same
+# edge. The leaf itself uses only std and orbit-common: no sibling module and no
+# TOML or serde parsing.
+config_store_names='store|ConfigStore|ConfigScope|WorkspaceInitMode'
+for module in layering plugin_enablement.rs unknown.rs seeding.rs; do
+  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" "$config_store_names" crate-root; then
+    echo "orbit-config ${module} must not name the store; read through config_io"
+    fail=1
+  fi
+done
+if [ -e "$config_src/resolved/compatibility.rs" ] && ! super_chains_into "$config_src" resolved/compatibility.rs store crate-root; then
+  echo "orbit-config resolved/compatibility must read through config_io, not the store"
+  fail=1
+fi
+if [ -f "$config_src/config_io.rs" ]; then
+  if rg -n '\b(crate|super|self|toml|toml_edit|serde)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_io.rs"; then
+    echo "orbit-config config_io must remain a std/orbit-common leaf"
+    fail=1
+  fi
+  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_io.rs" |
+    grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common)::|:use[[:space:]]+(std|orbit_common)::'; then
+    echo "orbit-config config_io must remain a std/orbit-common leaf"
+    fail=1
+  fi
+fi
+
 # Print every call in production code under application module `$2` (outside
 # the `|`-separated path prefixes `$5`, relative to `$1`) to an inherent
 # `OrbitRuntime` method that an `impl OrbitRuntime` block under one of the

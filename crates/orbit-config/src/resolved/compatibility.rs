@@ -268,7 +268,7 @@ pub fn compatibility_config_keys_present(document: &toml::Value) -> Vec<Compatib
 pub fn compatibility_config_keys_at(
     path: &Path,
 ) -> Result<Vec<CompatibilityConfigKey>, OrbitError> {
-    let Some(raw) = crate::store::read_config_file(path)? else {
+    let Some(raw) = crate::config_io::read_config_file(path)? else {
         return Ok(Vec::new());
     };
     if raw.trim().is_empty() {

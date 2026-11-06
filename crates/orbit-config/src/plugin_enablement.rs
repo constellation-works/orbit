@@ -24,7 +24,7 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::store::{read_config_file, validated_config_store_path};
+use crate::config_io::{read_config_file, validated_config_store_path};
 
 /// The reserved workspace table that holds per-plugin toggles.
 pub const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
