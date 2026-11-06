@@ -1556,23 +1556,42 @@ for how a job uses a granted workspace script.
 workspace:
 
 - The **Cycle routine** row shows whether the workspace's resident cycle
-  routine is enabled, with **Enable** or **Disable**. Without it, no cycle
-  wakes a mandate.
-- **New mandate** is a form with the `resident.mandate/v1` fields. **Create
-  mandate** files the `resident`-tagged task and its `resident/mandate.json` in
-  one step. A draft Orbit refuses (for example an empty goal, more than 8 exit
-  criteria, a heartbeat below the floor or an unknown crew) shows Orbit's
-  message and creates nothing.
-- Each mandate card shows its state, a stalled flag, the effective rights and
-  workspaces, the deadline, crew, cadence, open requests and the live cycle.
-  **Authority history and latest checkpoint** lists every grant and narrowing
-  and the last checkpoint's wake digest.
-- **Pause**, **Resume**, **Wake for status**, **Takeover**, **Release** and
-  **Stop** run `orbit resident control`, with the reason you type. **Relay**
-  sends a direction, like `orbit resident relay`.
-- **Widen or narrow authority** adds or removes rights and workspaces. A
-  widening needs your words in **Quote**. Open requests that another caller
-  raised show **Grant** and **Reject**.
+  routine is on or off, with **Turn on** or **Turn off**. Without it, no cycle
+  wakes a mandate. When the workspace has no resident cycle routine loaded, the
+  row says **No cycle routine** instead.
+- **Start a resident** opens a flow whose button is **Start resident**. It has
+  three steps: **1 · What it should do** (goal, exit criteria and what to
+  watch), **2 · What it may do** (rights, workspaces and **Your words**, which
+  are required when you pick a right; with no rights the resident only
+  observes) and **3 · When it runs** (cadence, deadline, crew, continuity and
+  complexity). The flow makes up to three separate writes, in order: it creates
+  the `resident`-tagged task and its `resident/mandate.json`, grants the
+  rights you picked with your words, and turns the cycle routine on when it is
+  off. A draft Orbit refuses (for example an empty goal, more than 8 exit
+  criteria, a heartbeat below the floor or an unknown crew) creates nothing. If
+  a later step is refused, the message names the step (for example "Step 2 of
+  3, grant its rights, was refused") with Orbit's reason and says what already
+  exists: a mandate whose grant failed observes only until you grant it from
+  its detail, and one whose routine toggle failed will not wake until you turn
+  the routine on from the **Cycle routine** row.
+- Each mandate is one row with its goal, state, last activity, next wake and
+  what needs you (open requests, an invalid mandate or a stall). Mandates that
+  need you sort first. Select a row to open its detail under it; select it
+  again to close it. Ended mandates sit behind an **Ended (n)** disclosure
+  below the list.
+- The detail lists open authority requests another caller raised, with their
+  answer buttons (**Grant** and **Reject** for a rights request), then the
+  controls the mandate's state allows, then a grid with the mandate's facts
+  (effective rights and workspaces, crew, cadence, deadline, live cycle) and
+  its latest checkpoint. **Exit criteria and history** lists the exit criteria,
+  every grant and narrowing, and the last control.
+- **Wake for status**, **Resume** and **Release** run at once. **Pause**,
+  **Takeover** and **Stop** run `orbit resident control`, and **Relay** sends a
+  direction like `orbit resident relay`: choosing one of them asks for the
+  reason (or, for **Relay**, the direction) and the action stays disabled
+  until you type one. The reason is kept in the mandate's history.
+- **Change authority** adds or removes rights and workspaces, and can shorten
+  the deadline. A widening needs your words in **Quote**.
 
 Every write needs an [operator session](#authorization) and is audited like
 the matching CLI command. A widening from the dashboard is recorded as your
