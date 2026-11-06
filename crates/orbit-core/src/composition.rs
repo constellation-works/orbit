@@ -1,5 +1,7 @@
 //! Composition root joining resolved configuration, the runtime kernel, and adapters.
 
+mod application_port;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use orbit_store::Store;
 pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
+use self::application_port::APPLICATION_PORT;
 use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
 use crate::application::workspace_product_profile::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
@@ -27,10 +30,10 @@ pub use crate::bootstrap::workspace_authority::{
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    APPLICATION_PORT, HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots,
-    RuntimeConfigLoader, RuntimeKernel, WorkspaceRootHint, WorkspaceRuntimeBinding,
-    resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint, resolve_global_root,
-    resolve_initialize_roots, resolve_initialize_roots_with_hint,
+    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, RuntimeConfigLoader,
+    RuntimeKernel, WorkspaceRootHint, WorkspaceRuntimeBinding, resolve_bootstrap_roots,
+    resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
+    resolve_initialize_roots_with_hint,
 };
 
 impl OrbitRuntime {

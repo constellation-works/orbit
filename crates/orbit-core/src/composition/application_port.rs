@@ -16,12 +16,12 @@ use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::Value;
 
-use super::OrbitRuntime;
+use crate::runtime::OrbitRuntime;
 
 /// The application operations every kernel this crate builds calls back into.
-pub(crate) static APPLICATION_PORT: CoreApplicationPort = CoreApplicationPort;
+pub(super) static APPLICATION_PORT: CoreApplicationPort = CoreApplicationPort;
 
-pub(crate) struct CoreApplicationPort;
+pub(super) struct CoreApplicationPort;
 
 impl ApplicationPort for CoreApplicationPort {
     fn get_task(&self, kernel: &RuntimeKernel, id: &str) -> Result<Task, OrbitError> {
