@@ -28,6 +28,23 @@ use super::drains::{
 
 const MAX_READINESS_LIMIT: usize = 500;
 
+/// Host-wide facts one fleet read fetches once and hands to every workspace's
+/// row. A fact that could not be read is absent, and each row reads its own and
+/// reports its own failure.
+#[derive(Default)]
+pub struct FleetReadinessFacts {
+    status_index: Option<BTreeMap<String, TaskStatus>>,
+}
+
+/// How much of the readiness snapshot its reader consumes.
+#[derive(Clone, Copy)]
+enum ReadinessDepth<'a> {
+    Full,
+    /// A fleet row: admission facts only, without the claim, approval and
+    /// validation diagnostics a row does not report.
+    FleetRow(&'a FleetReadinessFacts),
+}
+
 /// Explain the same snapshot that auto-drain uses without performing its
 /// stale-run reconciliation. This is deliberately an observation API: it
 /// neither reserves work nor creates a pipeline run, and its answer can go
@@ -38,6 +55,24 @@ pub fn explain_workspace_auto_readiness(
     max_active_leaf_runs: Option<u32>,
     limit: usize,
     allowed_crews: &[String],
+) -> Result<Value, OrbitError> {
+    readiness_snapshot(
+        runtime,
+        task_ids,
+        max_active_leaf_runs,
+        limit,
+        allowed_crews,
+        ReadinessDepth::Full,
+    )
+}
+
+fn readiness_snapshot(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    max_active_leaf_runs: Option<u32>,
+    limit: usize,
+    allowed_crews: &[String],
+    depth: ReadinessDepth<'_>,
 ) -> Result<Value, OrbitError> {
     let snapshot = runtime.admission_policy_snapshot();
     let runtime = &snapshot;
@@ -127,6 +162,10 @@ pub fn explain_workspace_auto_readiness(
             .filter(|_| active_drain.is_some())
             .or(pull_state.as_ref())
             .map(|state| state.crew_env_unset.as_slice()),
+        match depth {
+            ReadinessDepth::Full => None,
+            ReadinessDepth::FleetRow(facts) => facts.status_index.as_ref(),
+        },
     )
     .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
     let live_leaves = read_live_leaf_runs(runtime)?;
@@ -227,7 +266,11 @@ pub fn explain_workspace_auto_readiness(
         pending.len() > examined.len() && selection.selected.len() < free_slots;
     let admitted = selection.selected.iter().cloned().collect::<BTreeSet<_>>();
     // [ORB-15514] A held footprint a follower's claim holds names that claim.
-    let claim_holders = ClaimHolders::read(runtime);
+    // Claims only annotate a wait with its holder; they never change its reason.
+    let claim_holders = match depth {
+        ReadinessDepth::Full => ClaimHolders::read(runtime),
+        ReadinessDepth::FleetRow(_) => ClaimHolders::default(),
+    };
     let occupancy = read_leaf_occupancy(
         runtime,
         &live_leaves
@@ -319,15 +362,18 @@ pub fn explain_workspace_auto_readiness(
 
     // [ORB-14117] The status drain's proposed-task approvals, when it was
     // started with `--approve-proposed`.
-    let approvals = readiness_approvals(
-        runtime,
-        status_run_id,
-        active_drain
-            .as_ref()
-            .map(|drain| &drain.input)
-            .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
-        &snapshot.task_lookup,
-    )?;
+    let approvals = match depth {
+        ReadinessDepth::Full => readiness_approvals(
+            runtime,
+            status_run_id,
+            active_drain
+                .as_ref()
+                .map(|drain| &drain.input)
+                .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
+            &snapshot.task_lookup,
+        )?,
+        ReadinessDepth::FleetRow(_) => Value::Null,
+    };
 
     // [ORB-14880] Build budget inspection is advisory: an invalid setting or
     // unreadable slots file must not fail readiness.
@@ -598,6 +644,37 @@ impl OrbitRuntime {
         snapshot["replica"] = json!(self.replica_owner_machine().is_some());
         snapshot["validation_env_warning"] = json!(self.readiness_validation_env_warning());
         Ok(snapshot)
+    }
+
+    /// The registry-global facts one fleet read shares across its workspaces.
+    #[must_use]
+    pub fn fleet_readiness_facts(&self) -> FleetReadinessFacts {
+        // A replica's own reads hide task statuses, and that says nothing
+        // about the other workspaces this fact would serve.
+        let status_index = self
+            .coordination_task_reads_visible()
+            .then(|| self.task_status_index().ok())
+            .flatten();
+        FleetReadinessFacts { status_index }
+    }
+
+    /// The readiness snapshot a fleet row summarizes: the same admission
+    /// decisions and holds as [`Self::workspace_auto_readiness`] over the
+    /// default listing, without the diagnostics a row does not report
+    /// (`approvals` is null; `blocking_claims`, `replica` and
+    /// `validation_env_warning` are absent). Read-only like that snapshot.
+    pub fn workspace_fleet_readiness(
+        &self,
+        facts: &FleetReadinessFacts,
+    ) -> Result<Value, OrbitError> {
+        readiness_snapshot(
+            self,
+            &[],
+            None,
+            MAX_READINESS_LIMIT,
+            &[],
+            ReadinessDepth::FleetRow(facts),
+        )
     }
 
     /// The workspace's drain phase as readiness reports it (`draining`,

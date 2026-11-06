@@ -8,12 +8,13 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use orbit_core::{FleetReadinessFacts, JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -81,8 +82,9 @@ const MAX_AGGREGATE_FAN_OUT: usize = 8;
 
 /// Run `work(index)` for every index in `0..count` on up to
 /// [`MAX_AGGREGATE_FAN_OUT`] scoped threads, returning the results in
-/// index order. A panicking worker re-raises in the caller, exactly as the
-/// serial loop would.
+/// index order. Each thread takes the next unclaimed index, so one slow
+/// workspace delays no other. A panicking worker re-raises in the caller,
+/// exactly as the serial loop would.
 fn fan_out<T>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T>
 where
     T: Send,
@@ -95,22 +97,31 @@ where
         .unwrap_or(4)
         .min(MAX_AGGREGATE_FAN_OUT)
         .min(count);
-    let chunk = count.div_ceil(workers);
+    let next_index = AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for start in (0..count).step_by(chunk) {
-            let end = (start + chunk).min(count);
-            let work = &work;
-            handles.push(scope.spawn(move || (start..end).map(work).collect::<Vec<_>>()));
-        }
+        let handles = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut claimed = Vec::new();
+                    loop {
+                        let index = next_index.fetch_add(1, Ordering::Relaxed);
+                        if index >= count {
+                            return claimed;
+                        }
+                        claimed.push((index, work(index)));
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
         let mut results = Vec::with_capacity(count);
         for handle in handles {
             match handle.join() {
-                Ok(chunk_results) => results.extend(chunk_results),
+                Ok(claimed) => results.extend(claimed),
                 Err(payload) => std::panic::resume_unwind(payload),
             }
         }
-        results
+        results.sort_unstable_by_key(|(index, _)| *index);
+        results.into_iter().map(|(_, result)| result).collect()
     })
 }
 
@@ -121,10 +132,18 @@ pub(super) async fn list_fleet_drains(State(state): State<DashboardState>) -> Re
     match blocking("fleet drains", move || {
         let pinned = state.pin();
         let entries = pinned.entries();
+        // Every workspace here shares one task registry, so the first runtime
+        // that opens reads its global facts for all of them.
+        let facts = entries
+            .iter()
+            .filter(|entry| entry.active)
+            .find_map(|entry| pinned.runtime_for(&entry.id).ok())
+            .map(|runtime| runtime.fleet_readiness_facts())
+            .unwrap_or_default();
         // One readiness snapshot per workspace, computed concurrently: the
         // row order stays the pinned entries' order.
         let items = fan_out(entries.len(), |index| {
-            fleet_drain_row(&pinned, &entries[index])
+            fleet_drain_row(&pinned, &entries[index], &facts)
         });
         Ok::<_, orbit_core::OrbitError>(json!({"items": items}))
     })
@@ -135,7 +154,11 @@ pub(super) async fn list_fleet_drains(State(state): State<DashboardState>) -> Re
     }
 }
 
-fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
+fn fleet_drain_row(
+    pinned: &Pinned,
+    entry: &crate::state::WsEntry,
+    facts: &FleetReadinessFacts,
+) -> Value {
     let mut row = json!({
         "workspace_id": entry.id,
         "workspace_name": entry.name,
@@ -155,7 +178,7 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
         pinned
             .runtime_for(&entry.id)
             .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
-            .and_then(|runtime| runtime.workspace_auto_readiness(&[], None, 500, &[]))
+            .and_then(|runtime| runtime.workspace_fleet_readiness(facts))
     } else {
         row["error"] = json!("workspace is unavailable");
         return row;

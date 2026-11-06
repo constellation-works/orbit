@@ -468,8 +468,8 @@ impl OrbitRuntime {
         &self,
         task: &Task,
         pools: &CrewPools,
+        gate: &ProviderLimitGate,
     ) -> Result<Option<String>, OrbitError> {
-        let gate = self.provider_limit_gate(Utc::now());
         if gate.is_empty() {
             return Ok(None);
         }
@@ -479,7 +479,7 @@ impl OrbitRuntime {
                 task,
                 pools,
                 hold.as_ref(),
-                &gate,
+                gate,
                 &candidates,
                 &source,
             )? {

@@ -314,6 +314,135 @@ fn fleet_drains_preserves_hosts_health_for_ten_workspaces() {
     );
 }
 
+/// A fleet row skips diagnostics and shares one status read, so its admission
+/// decisions must stay those of the workspace's own readiness, including a
+/// dependency held in another workspace of the shared registry (ORB-22421).
+#[test]
+fn fleet_drains_rows_match_workspace_readiness_across_workspaces() {
+    isolated(
+        "aggregate_pages::fleet_drains_rows_match_workspace_readiness_across_workspaces",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::write(global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture\"\n").unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let alpha = OrbitRuntime::from_roots(&global, &alpha_orbit)
+                .unwrap()
+                .with_actor(ActorIdentity::human("fixture"));
+            let bravo = OrbitRuntime::from_roots(&global, &bravo_orbit)
+                .unwrap()
+                .with_actor(ActorIdentity::human("fixture"));
+            let ready_task = |title: &str, repo: &Path, dependencies| {
+                let file = format!("{}.rs", title.replace(' ', "_"));
+                std::fs::write(repo.join(&file), "fixture").unwrap();
+                TaskAddParams {
+                    title: title.into(),
+                    description: "Fleet readiness fixture".into(),
+                    acceptance_criteria: vec!["The work is visible".into()],
+                    plan: "Fixture plan".into(),
+                    context_files: vec![format!("file:{file}")],
+                    complexity: orbit_core::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    dependencies,
+                    ..Default::default()
+                }
+            };
+            let blocker = bravo
+                .add_task(ready_task("Blocker", &bravo_repo, Vec::new()))
+                .unwrap();
+            alpha
+                .add_task(ready_task(
+                    "Dependent",
+                    &alpha_repo,
+                    vec![blocker.id.clone()],
+                ))
+                .unwrap();
+            let drain = seed_run(
+                &alpha,
+                "jrun-fleet-read-only",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let assert_rows_match_readiness = |payload: &serde_json::Value| {
+                for row in payload["items"].as_array().unwrap() {
+                    let id = row["workspace_id"].as_str().unwrap();
+                    let readiness = json_ok(
+                        server.get(&format!("/api/workflows/auto/readiness?workspace={id}")),
+                    );
+                    let tasks = readiness["tasks"].as_array().unwrap();
+                    assert_eq!(
+                        row["eligible_count"],
+                        tasks.iter().filter(|task| task["eligible"] == true).count(),
+                        "{id}: {payload:#} {readiness:#}"
+                    );
+                    assert_eq!(row["drain_phase"], readiness["capacity"]["drain_phase"]);
+                    assert_eq!(row["slots_used"], readiness["capacity"]["active_leaf_runs"]);
+                }
+            };
+
+            let blocked = json_ok(server.get("/api/fleet/drains"));
+            assert_rows_match_readiness(&blocked);
+            let alpha_row = &blocked["items"][0];
+            assert_eq!(alpha_row["workspace_id"], "alpha");
+            assert_eq!(alpha_row["eligible_count"], 0, "{blocked:#}");
+            assert_eq!(
+                alpha_row["top_wait_reason"], "unmet_dependency",
+                "{blocked:#}"
+            );
+            assert_eq!(blocked["items"][1]["eligible_count"], 1, "{blocked:#}");
+
+            // No read cache stands between the dependency's change and the row.
+            for status in [TaskStatus::InProgress, TaskStatus::Review, TaskStatus::Done] {
+                bravo
+                    .update_task_as_human(
+                        &blocker.id,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(status),
+                            execution_summary: Some("Fixture work finished".into()),
+                            ..Default::default()
+                        },
+                        "test operator".into(),
+                    )
+                    .unwrap();
+            }
+            let released = json_ok(server.get("/api/fleet/drains"));
+            assert_rows_match_readiness(&released);
+            assert_eq!(released["items"][0]["eligible_count"], 1, "{released:#}");
+            assert_eq!(released["items"][1]["eligible_count"], 0, "{released:#}");
+
+            // The read reserved nothing and reconciled nothing.
+            assert_eq!(
+                json_ok(server.get("/api/fleet/drains")),
+                released,
+                "an unchanged store reads back identically"
+            );
+            assert_eq!(
+                alpha
+                    .sqlite_store()
+                    .unwrap()
+                    .get_job_run_for_workspace(&alpha.workspace_id().unwrap(), &drain.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                JobRunState::Running
+            );
+        },
+    );
+}
+
 /// Regression guard for the aggregates' concurrent per-workspace fan-out:
 /// fleet rows stay in registry order and the merged task page is identical
 /// across repeated polls of one unchanged store state.
