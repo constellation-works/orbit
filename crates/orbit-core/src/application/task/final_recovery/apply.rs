@@ -26,7 +26,7 @@ use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
 use super::{FINAL_RECOVERY_REQUEUED_EVENT, FINAL_RECOVERY_RESUMED_EVENT};
 use crate::OrbitRuntime;
-use crate::application::task::{TaskJobPort, TaskRecords};
+use crate::application::task::{TaskJobPort, TaskPrecedentDecisionPort, TaskRecords};
 
 const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
@@ -716,7 +716,7 @@ impl OrbitRuntime {
                 },
             ))
         })?;
-        self.note_open_precedent_decision(&request);
+        self.enqueue_open_decision_for_precedent(&request);
         Ok(())
     }
 }

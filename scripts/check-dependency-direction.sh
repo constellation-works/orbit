@@ -284,9 +284,12 @@ fi
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|automation|job|review|distributed|admission|workspace_auto|pull_drain|sweep_filing'
-if rg -n "crate::application::(${app_modules})\\b|\\bsuper::super\\b" \
+# [ORB-22313] The precedent-assistance records keep contracts below their
+# consumer and the assistance grants that consumer reads.
+contracts_higher="${app_modules}|precedent_decision|assistance"
+if rg -n "crate::application::(${contracts_higher})\\b|\\bsuper::super\\b|\\bsuper::(precedent_decision|assistance)\\b" \
   "$app_src/contracts" -g '*.rs' ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${app_modules})\\b" \
+  rg -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
     "$app_src/contracts" -g '*.rs'; then
   echo "orbit-core application contracts must not import the application modules"
   fail=1
@@ -686,6 +689,23 @@ if rg -n "crate::application::(${job_upper_modules})\\b" \
   fail=1
 fi
 
+# [ORB-22313] `task < precedent_decision` is a pairwise direction beside the
+# order below: the consumer applies task answers and reads task requests, so
+# task reaches it only through `task::TaskPrecedentDecisionPort`, and the digest
+# names its records from contracts. A path, a grouped tree, a `super::` chain or
+# a call to an inherent method it defines (names derived, so port methods use
+# distinct names) is a reintroduced edge; `task/backlog_forecast/` has no
+# exemption here.
+if rg -n 'crate::application::precedent_decision\b' \
+  "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U 'crate::application::\{[^}]*\bprecedent_decision\b' \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" task precedent_decision '' '' ||
+  ! super_chains_into "$app_src" task precedent_decision; then
+  echo "orbit-core task must reach precedent_decision through task::TaskPrecedentDecisionPort and name its records from contracts"
+  fail=1
+fi
+
 # [ORB-17939] Above `job`, each module names only the modules below it in
 # `automation < review < distributed < pull_drain < admission <
 # workspace_auto < sweep_filing`. The cut edges go through ports the lower
@@ -726,7 +746,7 @@ guard_upper_layer pull_drain 'admission|workspace_auto|sweep_filing' ''
 guard_upper_layer admission 'workspace_auto|sweep_filing' 'read_live_leaf_runs'
 guard_upper_layer workspace_auto 'sweep_filing' ''
 
-shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery'
+shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery|PrecedentAssistState|PrecedentAssistOutcomeSource|PrecedentAssistOutcome|PrecedentAssistDemotion|PrecedentAssistEnd|PrecedentAssistEnablement'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \

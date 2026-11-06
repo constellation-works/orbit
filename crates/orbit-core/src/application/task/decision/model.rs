@@ -31,7 +31,7 @@ use super::super::TaskRecordUpdateParams;
 use super::super::params::TaskUpdateParams;
 use super::answering::{decision_comment, ensure_request_answerable};
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 /// What one applied model answer wrote: the answered request and the review
 /// request raised beside it, each as it then reads.
@@ -345,7 +345,7 @@ impl OrbitRuntime {
                         ..Default::default()
                     },
                 )?;
-                self.note_precedent_assist_review(&original, false);
+                self.record_model_answer_review_outcome(&original, false);
                 Ok(())
             }
             MODEL_ANSWER_VETO => {
@@ -369,7 +369,7 @@ impl OrbitRuntime {
                     actor_label.to_string(),
                 )?;
                 self.reopen_automation_answer(&original, actor_label)?;
-                self.note_precedent_assist_review(&original, true);
+                self.record_model_answer_review_outcome(&original, true);
                 Ok(())
             }
             other => Err(OrbitError::decision_refused(
