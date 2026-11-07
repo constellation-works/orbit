@@ -291,13 +291,6 @@ app_modules='task|automation|job|review|distributed|admission|workspace_auto|bac
 # [ORB-22623] So do the clock settings and schedule display state, below
 # `routines` and `auto_tasks`.
 contracts_higher="${app_modules}|precedent_decision|assistance|routines|auto_tasks"
-if rg -n "crate::application::(${contracts_higher})\\b|\\bsuper::super\\b|\\bsuper::(precedent_decision|assistance|routines|auto_tasks)\\b" \
-  "$app_src/contracts" -g '*.rs' ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
-    "$app_src/contracts" -g '*.rs'; then
-  echo "orbit-core application contracts must not import the application modules"
-  fail=1
-fi
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application` and names one of the
@@ -412,6 +405,17 @@ for path in paths:
 sys.exit(1 if failed else 0)
 PY
 }
+
+# Resolve relative use trees at each file's module depth: grouped and multiline
+# imports into higher modules count, while imports within contracts stay legal.
+if rg -n "crate::application::(${contracts_higher})\\b" \
+  "$app_src/contracts" -g '*.rs' ||
+  rg -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
+    "$app_src/contracts" -g '*.rs' ||
+  ! super_chains_into "$app_src" contracts "$contracts_higher"; then
+  echo "orbit-core application contracts must not import the application modules"
+  fail=1
+fi
 
 # Config path primitives are below aliases and operation, which must not
 # depend on layered admission. The leaf may only use TOML and std.
