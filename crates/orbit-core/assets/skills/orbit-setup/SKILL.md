@@ -40,6 +40,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
 | Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
+| Enable or disable a scheduled routine as an operator, verify it, or tell an enabled routine apart from a host-local pause or the host clock | [Automation — Turning the scheduler on](references/automation.md#turning-the-scheduler-on); [Observe and control](references/automation.md#observe-and-control) |
 | Scheduled execution | [Automation](references/automation.md), including [UX rules checks](references/automation.md#ux-rules-checks) |
 | Configure task-pilot eligibility or freshness, inspect readiness, or request a later assessment | [Automation — Tuning task-pilot](references/automation.md#tuning-which-tasks-task-pilot-prepares); [Orchestration — task-pilot](../orbit-orchestrate/references/orchestration.md) |
 | Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
@@ -92,8 +93,9 @@ live state. Check long-lived MCP and service processes, not only active jobs.
 Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
-Seeded schedules are disabled until deliberately enabled (except
-`crew-performance-refresh`, which is seeded enabled and no-ops while
-`workflow.crew_performance` is `off`); preserve existing schedule and
-enablement choices on an established host. Shared repositories
+Seeded schedules are disabled until an operator deliberately enables them, except
+two shipped defaults that are seeded enabled when the seeding policy selects
+them: the `crew-performance-refresh` routine (it no-ops while
+`workflow.crew_performance` is `off`) and the `host-health` auto-task. Preserve
+existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.
