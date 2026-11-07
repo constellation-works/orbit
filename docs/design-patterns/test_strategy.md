@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-06
+last_validated: 2026-11-07
 ---
 # Boundary-First Testing
 
@@ -467,6 +467,76 @@ report pre-Check queue and awaited-job queue within elapsed separately; and keep
 as uncertainty, never zero. Note which runs executed the self-tests. This measurement
 and any live infrastructure or cost decision are operator-owned, not requirements of
 this leaf, and no local figure above claims the 400-second budget is restored.
+
+A sixteenth pass (ORB-22610) profiled the full-scope build, archive and test path after the
+2026-11-07 audit (21 executed PR Checks in the latest 24 completed PR runs, nearest-rank p90
+521 s, median 316 s, maximum 730 s). It found no software reduction that beats the
+measurement spread, so **no workflow, script, manifest or test changed**. The profile and the
+remaining decision are recorded here.
+
+Conditions: base `543335a7e`, the full selection (`--workspace --lib --bins --tests
+--examples` under `with-test-build-lint.sh`), CI's incremental-off, debug-0 and strip
+settings, the compiler-object cache off, Rust 1.98.1 and nextest 0.9.136. Dependencies were
+warm, all 86 workspace units were cleaned before each trial, and trials ran in sequence. The
+fixture was pinned to two physical cores with their SMT siblings (CPUs 0, 1, 16 and 17 of a
+shared 32-thread Ryzen AI MAX+ 395, load average 6–13), the shape of a hosted 4-vCPU runner.
+Earlier passes pinned four physical cores, so their walls are not comparable.
+
+| Sequential arm (4 threads, Cargo `-j4` unless noted) | Wall times (s) |
+|---|---|
+| Unchanged control | 176.1, 183.5, 169.3, 177.1, 185.7 (median 177.1, spread 16.5) |
+| `-C codegen-units=16` on workspace members | 184.0, 195.8 |
+| `-C codegen-units=64` on workspace members | 178.5 |
+| Parallel frontend (`-Zthreads=4`, bootstrap) | 184.3, 202.3 |
+| Cargo `-j6` | 184.4 |
+| Same build, 8 threads (CPUs 0–3, 16–19), `-j8` | 137.5, 134.7 |
+
+The build is bound by one dependency chain, not by CPU. In the 169.3 s control,
+`orbit-types` (0–15 s), `orbit-common`, `orbit-store`, `orbit-engine` and the `orbit-core`
+library (52–99 s) each start when the previous crate's metadata exists. The `orbit-core`
+unit-test harness (64 s) follows that library, and the build ends with it. Between about 60
+and 90 s only 1.5–2.3 of four slots were busy, while 26 units waited on `orbit-core`. In the
+library's single-threaded frontend, `-Ztime-passes` measured borrow checking at 8.5 s, type
+checking 7.2 s, crate metadata 6.9 s, the monomorphization walk 5.2 s, all lints including
+Clippy 2.3 s and macro expansion 1.1 s. Raising proc-macro optimization therefore has nothing
+to recover. Cargo's JSON shows each workspace unit built once, so there is no duplicate
+compile to remove. The four zero-test library harnesses (`orbit-agent`, `orbit-auth`,
+`orbit-policy`, `orbit-search`) cost 1.4 s of CPU together. Doubling the threads saves about
+23% (41 s), which is the size of the larger-runner lever.
+
+The archive reuses the build. Over two runs each, it took 3.9–4.9 s at nextest's default
+`--zstd-level 0` and 2.8–3.2 s at level 1, and the pack took 7.0–8.1 s. The 618 MB transfer
+was identical either way, and a third level-1 run took 14.4 s altogether, so there is no
+robust saving in the codec.
+
+On the test side, the hosted logs of full PR run 42341361073 give 5,623 slot-seconds over
+3,805 passing rows. Each partition's Summary is close to its summed time divided by six
+slots (partition 2: 871 slot-seconds, 145.6 s), so no single test sets a partition's wall.
+Alone on the fixture, two rows ran at about 1% CPU and matched their hosted time.
+`events::change_stream_notices_other_process_writes_and_resumes_after_reconnect` (50.2 s
+locally, 52.3 s hosted) waits on the change stream's production cadences: 2 s scans, 5 s
+host samples and the 15 s drain recheck.
+`origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress`
+(51.3 s, 52.2 s) waits on the production 15 s remote timeout and 25 s fetch-lock hold limit.
+Shortening either would need a new test-only timing seam in production code. It would save
+at most about 8 s of one partition's wall, less than the hosted spread between partitions
+(94–146 s in that run), so both stay as leads. A local full run under profile `ci` (eight
+threads on CPUs 0–7) passed 3,804 tests and skipped 58.
+
+The remaining lever is an operator decision: a larger `Test build` runner, which this lane
+may not change. A structural alternative is to shorten the `orbit-types` → `orbit-core`
+chain, or start the `orbit-core` harness before its own library finishes. The twelfth pass
+measured no wall gain from removing that crate's self dev-dependency, and splitting
+`orbit-core` is a separate design task. The hosted per-unit `test-build-timings` artifacts
+could not be read here (no authenticated artifact download on this lane), so whether the
+hosted 220–288 s full list-builds have the same shape is still an inference. The p90 after
+merge is the operator's measurement under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff): the latest 20
+completed `pull_request` `ci.yml` runs with `python3 scripts/ci-p90.py --limit 20
+--budget-seconds 400`. Report the full Check job wall time; executed, failed, skipped,
+cancelled and missing runs separately; the queue before Check and the awaited jobs' queue
+within it separately; and cache, scope and CPU strata. This pass claims no change to the
+400-second p90.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
