@@ -7,7 +7,8 @@
 //! any admission. Order per pass: a trusted terminal receipt the declared
 //! contract accepts, then expiry, then a held result, then an outstanding
 //! reservation, which only admission resolves, then a
-//! held definition or unmet readiness, then new admission.
+//! held definition or unmet readiness, then new admission, which may settle
+//! the step on a reused accepted result instead of binding a task.
 
 use orbit_types::workflow::{AutoTaskReceipt, AutoTaskStepRecord, AutoTaskStepStatus, ParkedWait};
 
@@ -151,6 +152,24 @@ pub(super) fn run_auto_task_step(
             reason,
             &observation,
         ),
+        AutoTaskAdmission::Reused(receipt) => {
+            record.diagnostic = Some(format!(
+                "reused the accepted result of task {} completed {}",
+                receipt.task_id,
+                receipt
+                    .result
+                    .as_ref()
+                    .map_or(receipt.settled_at, |result| result.completed_at)
+                    .to_rfc3339()
+            ));
+            record.task_id = Some(receipt.task_id.clone());
+            record.minted = false;
+            record.receipt = Some(*receipt);
+            record.status = AutoTaskStepStatus::Done;
+            record.settled_at = Some(observation.now);
+            checkpoint(ctx, &step.id, &record)?;
+            Ok(settled_outcome(step, &record))
+        }
         AutoTaskAdmission::Expired(reason) => {
             record.status = AutoTaskStepStatus::Timeout;
             record.settled_at = Some(observation.now);

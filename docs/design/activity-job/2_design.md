@@ -1815,8 +1815,8 @@ refuses auto-task jobs; detached submission is required.
 A step with `require_result` is accepted only on a receipt validated against owner
 records and a granted workspace adapter, revalidated for exact source and age before
 a later step mints ([auto-task steps](./specs/auto-task-step.md#phase-3-as-built)).
-Raw task `done` never supplies it. Historical reuse is incomplete: `reuse_when` never
-matches. [ORB-20397] (someday) consumes accepted-result history for condition facts;
+Raw task `done` never supplies it. `reuse_when` judges the definition's latest accepted
+result, which settles the step only after the same revalidation ([ORB-22649]). [ORB-20397] (someday) consumes accepted-result history for condition facts;
 [ORB-20166] (someday) owns disabled release-readiness composition examples. No live
 readiness configuration, provider work or release is authorized by these primitives.
 
@@ -2098,6 +2098,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - [ORB-21837] — Continue typed incomplete implementations within the original activity budget.
 - [ORB-21876] — Leave a run with an unfinished cancellation request to its canceller during reconciliation.
 - [ORB-22422] — Bound repeated fleet reliability query latency.
+- [ORB-22649] — Add historical result reuse to auto-task job steps.
 - [T20260420-0510-2] — add the Groundhog v1 activity runner.
 - [T20260423-0447] — restore usable `orbit run duel` read-only surfaces after duel workflow retirement.
 - [T20260505-22] — rewrite Claude's `--debug-file` static arg at dispatch time so the log lands at a sandbox-allowed absolute path.

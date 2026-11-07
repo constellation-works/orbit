@@ -286,6 +286,82 @@ fn frozen_contract(
     Ok((contract, frozen.digest.clone()))
 }
 
+/// Revalidate a historical accepted result that a step's `reuse_when` matched,
+/// as if this execution had bound its task: the same contract and definition
+/// digest, this execution's pinned revision, the contract's maximum age, a
+/// creation receipt minted for the same inputs, unchanged completion and
+/// evidence, and the adapter's verdict now. Returns the receipt the step
+/// settles on, or why the result does not apply, in which case the step
+/// mints fresh evidence.
+pub(super) fn reused_result(
+    runtime: &OrbitRuntime,
+    step: &StepContext,
+    record: &AutoTaskStepRecord,
+    candidate: &AutoTaskCompletionReceipt,
+    now: DateTime<Utc>,
+) -> Result<AutoTaskCompletionReceipt, String> {
+    let name = &step.checked.auto_task;
+    let definition = step
+        .minting_definition(runtime, now)
+        .map_err(|error| format!("auto-task `{name}`: {error}"))?
+        .ok_or_else(|| format!("auto-task `{name}` did not resolve"))?;
+    let contract = declared_contract(name, step.checked.require_result.as_deref(), &definition)?
+        .ok_or("the step declares no completion contract, so no accepted result applies")?;
+    let frozen = step
+        .checkpoint
+        .frozen_targets
+        .get(name)
+        .ok_or_else(|| format!("auto-task `{name}` was not frozen"))?;
+    if candidate.definition != *name || candidate.status != AutoTaskResultStatus::Passed {
+        return Err(format!(
+            "the accepted result is a {} result for `{}`",
+            candidate.status.as_str(),
+            candidate.definition
+        ));
+    }
+    if candidate.contract != contract.contract {
+        return Err(format!(
+            "the accepted result is for contract `{}`",
+            candidate.contract
+        ));
+    }
+    if candidate.definition_digest != frozen.digest {
+        return Err("the accepted result is for a different definition digest".to_string());
+    }
+    if step.checkpoint.source_revision.as_deref() != Some(candidate.revision.as_str()) {
+        return Err(format!(
+            "the accepted result covers revision {}, not the pinned one",
+            candidate.revision
+        ));
+    }
+    let age = now - candidate.completed_at;
+    if age > Duration::minutes(i64::from(contract.max_age_minutes)) {
+        return Err(format!(
+            "the accepted result from {} is older than the {} minute limit",
+            candidate.completed_at.to_rfc3339(),
+            contract.max_age_minutes
+        ));
+    }
+    if age < Duration::zero() {
+        return Err("the accepted result is dated in the future".to_string());
+    }
+    let task = runtime
+        .get_task(&candidate.task_id)
+        .map_err(|error| format!("task {} is unreadable: {error}", candidate.task_id))?;
+    let revalidated =
+        validate_completion(runtime, step, &step.checked, record, &contract, &task, now)?;
+    if revalidated.completed_at != candidate.completed_at
+        || revalidated.run_id != candidate.run_id
+        || revalidated.evidence != candidate.evidence
+    {
+        return Err(format!(
+            "task {} is no longer the completion its accepted result recorded",
+            candidate.task_id
+        ));
+    }
+    Ok(revalidated)
+}
+
 /// Judge the bound task's completion and put the outcome on the observation:
 /// an accepted receipt carries the typed result, anything else holds the step.
 /// Runs the adapter, so only the engine's own pass calls this; the admission

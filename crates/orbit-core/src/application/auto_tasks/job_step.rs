@@ -1,7 +1,8 @@
 //! Auto-task job steps on the owner (ORB-20158;
 //! `docs/design/activity-job/specs/auto-task-step.md` §2-§5): freeze an
 //! admitted execution, observe one step pass deterministically, admit its one
-//! keyed task under the auto-task admission fence, record its checkpoints and
+//! keyed task under the auto-task admission fence (or settle it on a
+//! revalidated accepted result its `reuse_when` matches), record its checkpoints and
 //! park the run, and recheck a minted child before it starts.
 //!
 //! Observation writes no task or run state; judging a completion against its
@@ -297,6 +298,34 @@ fn admit_step_fenced(
         completion::prior_proof_hold(runtime, &step, now, completion::ProofDepth::Adapter)
     {
         return Ok(AutoTaskAdmission::Held(hold));
+    }
+    // Reuse comes before binding or minting. A matched result is revalidated
+    // like a bound one; one that no longer applies leaves the step to mint
+    // fresh evidence, while an undecidable match holds.
+    match reuse_verdict(runtime, &step, now)? {
+        ReuseVerdict::NoMatch => {}
+        ReuseVerdict::Held(hold) => return Ok(AutoTaskAdmission::Held(hold)),
+        ReuseVerdict::Matched(candidate) => {
+            match completion::reused_result(runtime, &step, &record, &candidate, now) {
+                Ok(result) => {
+                    return Ok(AutoTaskAdmission::Reused(Box::new(AutoTaskReceipt {
+                        task_id: result.task_id.clone(),
+                        task_status: "done".into(),
+                        accepted: true,
+                        settled_at: result.completed_at,
+                        observed_at: now,
+                        result: Some(result),
+                    })));
+                }
+                Err(why) => tracing::info!(
+                    run_id,
+                    step_id,
+                    task_id = %candidate.task_id,
+                    %why,
+                    "reuse_when matched an accepted result that does not apply; minting fresh"
+                ),
+            }
+        }
     }
     let Some(definition) = step.minting_definition(runtime, now)? else {
         return Ok(AutoTaskAdmission::Held(format!(
@@ -683,4 +712,4 @@ pub(super) fn serde_name<T: serde::Serialize>(value: &T) -> String {
         .unwrap_or_default()
 }
 
-use super::step_observation::{StepContext, observe_with};
+use super::step_observation::{ReuseVerdict, StepContext, observe_with, reuse_verdict};

@@ -251,7 +251,8 @@ Completion contracts and accepted-result history ([ORB-20165]) are shipped.
 Readiness triggers still lack two reads: `board.empty` as a condition field (the
 condition `board` above exposes only per-bucket `empty`) and literal
 `auto_tasks['name']` accepted-completion reads ([ORB-20397]), plus the disabled
-composition ([ORB-20166]) and historical `reuse_when` matching; those remain someday.
+composition ([ORB-20166]); those remain someday. Historical `reuse_when` matching is
+shipped in job steps ([ORB-22649]).
 
 Rules:
 
@@ -1455,5 +1456,6 @@ Daniel's answers, folded into the sections named:
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.
 - [ORB-19206] — orbit-office orchestration that relayed the watched-folder intake requirements for use case D.
+- [ORB-22649] — shipped historical `reuse_when` matching in auto-task job steps.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

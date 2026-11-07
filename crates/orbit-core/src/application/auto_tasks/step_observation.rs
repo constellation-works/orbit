@@ -4,15 +4,16 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{
-    CheckedAutoTaskStep, ConditionCarrier, ConditionEvaluator, JobWaitFacts, StepFacts, Truth,
-    auto_task_step_deadline, check_job_waits,
+    CheckedAutoTaskStep, ConditionCarrier, ConditionEvaluator, JobWaitFacts, ResultFacts,
+    StepFacts, Truth, auto_task_step_deadline, check_job_waits,
 };
 use orbit_common::OrbitError;
 use orbit_engine::{AutoTaskObservation, AutoTaskReadiness};
 use orbit_types::workflow::automation::ConditionScope;
 use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskRunCheckpoint, AutoTaskSchedule, AutoTaskStepRecord,
-    AutoTaskStepStatus, JobRunState, JobV2, JobV2Step, JobV2StepBody, PipelineState,
+    AutoTaskAcceptedHistory, AutoTaskCompletionReceipt, AutoTaskDefinition, AutoTaskRunCheckpoint,
+    AutoTaskSchedule, AutoTaskStepRecord, AutoTaskStepStatus, JobRunState, JobV2, JobV2Step,
+    JobV2StepBody, PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -440,7 +441,67 @@ fn wait_facts(
             .iter()
             .map(|id| (id.clone(), step.step_facts(id)))
             .collect(),
+        result: None,
     })
+}
+
+/// What a step's `reuse_when` makes of its definition's latest accepted
+/// result.
+pub(super) enum ReuseVerdict {
+    /// No `reuse_when`, no accepted result, or the predicate is false: the
+    /// step binds or mints as usual.
+    NoMatch,
+    /// The predicate holds for this receipt. The caller still revalidates it
+    /// against this execution before the step may settle on it.
+    Matched(Box<AutoTaskCompletionReceipt>),
+    /// The history is unreadable or the predicate is unknown, so whether a
+    /// reusable result exists cannot be decided: the step holds instead of
+    /// minting.
+    Held(String),
+}
+
+/// Judge `reuse_when` against the definition's latest accepted result. A
+/// definition with none is missing, never unreadable, and an unreadable
+/// history never reads as missing.
+pub(super) fn reuse_verdict(
+    runtime: &OrbitRuntime,
+    step: &StepContext,
+    now: DateTime<Utc>,
+) -> Result<ReuseVerdict, OrbitError> {
+    let Some(expression) = step.checked.reuse_when.as_ref() else {
+        return Ok(ReuseVerdict::NoMatch);
+    };
+    let name = &step.checked.auto_task;
+    let receipt = match runtime.auto_task_accepted_history(name) {
+        AutoTaskAcceptedHistory::Missing => return Ok(ReuseVerdict::NoMatch),
+        AutoTaskAcceptedHistory::Unreadable(why) => {
+            return Ok(ReuseVerdict::Held(format!(
+                "reuse_when cannot judge auto-task `{name}`'s accepted results, which are \
+                 unreadable: {why}; nothing is minted"
+            )));
+        }
+        AutoTaskAcceptedHistory::Latest(receipt) => receipt,
+    };
+    let mut facts = wait_facts(runtime, step, now)?;
+    facts.result = Some(ResultFacts {
+        status: receipt.status.as_str().to_string(),
+        revision: Some(receipt.revision.clone()),
+        completed_at: receipt.completed_at,
+        contract: receipt.contract.clone(),
+        definition_digest: receipt.definition_digest.clone(),
+        task_id: receipt.task_id.clone(),
+        run_id: Some(receipt.run_id.clone()),
+    });
+    Ok(
+        match ConditionEvaluator::for_job_wait(&facts).truth(expression, None) {
+            Truth::True => ReuseVerdict::Matched(receipt),
+            Truth::False => ReuseVerdict::NoMatch,
+            Truth::Unknown(why) => ReuseVerdict::Held(format!(
+                "reuse_when `{}` is unknown: {why}; nothing is minted",
+                expression.source
+            )),
+        },
+    )
 }
 
 /// The observation cadence while a frozen step waits.
