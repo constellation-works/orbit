@@ -20,6 +20,11 @@ fn stop(fx: &Fixture, id: &str) -> Value {
 
 #[test]
 fn attaching_a_valid_mandate_activates_a_proposed_assignment() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::assignment_lifecycle::attaching_a_valid_mandate_activates_a_proposed_assignment",
+    ) {
+        return;
+    }
     let fx = fixture();
     let attach = |id: &str, body: &str| {
         let scratch = fx.repo.join(".orbit/tmp");
@@ -79,6 +84,11 @@ fn attaching_a_valid_mandate_activates_a_proposed_assignment() {
 
 #[test]
 fn a_cycle_activates_an_assignment_attached_before_core_owned_its_status() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::assignment_lifecycle::a_cycle_activates_an_assignment_attached_before_core_owned_its_status",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);
@@ -89,6 +99,11 @@ fn a_cycle_activates_an_assignment_attached_before_core_owned_its_status() {
 
 #[test]
 fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::assignment_lifecycle::a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);
@@ -155,6 +170,11 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
 
 #[test]
 fn a_handoff_whose_finalize_never_ran_settles_instead_of_starting_a_cycle() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::assignment_lifecycle::a_handoff_whose_finalize_never_ran_settles_instead_of_starting_a_cycle",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);
@@ -177,6 +197,11 @@ fn a_handoff_whose_finalize_never_ran_settles_instead_of_starting_a_cycle() {
 
 #[test]
 fn a_stop_settles_an_assignment_from_any_open_status() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::assignment_lifecycle::a_stop_settles_an_assignment_from_any_open_status",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);

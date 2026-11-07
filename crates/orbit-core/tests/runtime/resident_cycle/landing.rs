@@ -228,6 +228,11 @@ fn action_rows(fx: &Fixture, mandate: &str, tool: &str) -> Vec<ResidentActionRow
 
 #[test]
 fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call",
+    ) {
+        return;
+    }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
     let (mandate, run) = live_cycle(&mut fx, &forge, &["merge"]);
@@ -255,6 +260,11 @@ fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
 
 #[test]
 fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review",
+    ) {
+        return;
+    }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
     let (mandate, run) = live_cycle(&mut fx, &forge, &["merge"]);
@@ -290,6 +300,11 @@ fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
 
 #[test]
 fn landing_needs_the_merge_right_and_a_cycle() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::landing_needs_the_merge_right_and_a_cycle",
+    ) {
+        return;
+    }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
     let (_, run) = live_cycle(&mut fx, &forge, &["dispatch"]);
@@ -311,6 +326,11 @@ fn landing_needs_the_merge_right_and_a_cycle() {
 
 #[test]
 fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again",
+    ) {
+        return;
+    }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
     let (_, run) = live_cycle(&mut fx, &forge, &["merge"]);
@@ -331,6 +351,11 @@ fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again
 
 #[test]
 fn a_cycle_cannot_call_a_task_done_while_its_pull_request_is_open() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::a_cycle_cannot_call_a_task_done_while_its_pull_request_is_open",
+    ) {
+        return;
+    }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
     let (_, run) = live_cycle(&mut fx, &forge, &["merge"]);
@@ -379,6 +404,11 @@ fn a_cycle_cannot_call_a_task_done_while_its_pull_request_is_open() {
 #[cfg(unix)]
 #[test]
 fn the_github_forge_tells_a_refused_merge_from_an_unknown_outcome() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::the_github_forge_tells_a_refused_merge_from_an_unknown_outcome",
+    ) {
+        return;
+    }
     use orbit_core::runtime::task_pr_forge::GhTaskPrForge;
     use std::os::unix::fs::PermissionsExt;
 

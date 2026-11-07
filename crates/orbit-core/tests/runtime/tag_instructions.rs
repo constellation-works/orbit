@@ -127,21 +127,37 @@ fn summary(instructions: &[TagInstruction]) -> Vec<(String, TagInstructionSource
         .collect()
 }
 
-fn tagged_tasks_receive_shipped_defaults_and_untagged_ones_nothing() {
-    let fx = Fixture::new("");
-    fx.commit("README.md", "fixture\n");
-    let tagged = fx.task(&["UI", "No-Diff-Expected", "ui"]);
-    let run = fx.run(&tagged, None);
+fn configured_mappings_normalize_dedupe_order_and_skip_untagged_tasks() {
+    // Fixture-only tags and explicit role files exercise normalization,
+    // deduplication, ordering and configured role routing.
+    let fx = Fixture::new(
+        "[workflow.tag_instructions.zeta]\n\
+         implement = \"docs/zeta-implement.md\"\n\
+         review = \"docs/zeta-review.md\"\n\
+         recovery = false\n\
+         \n\
+         [workflow.tag_instructions.alpha]\n\
+         implement = \"docs/alpha-implement.md\"\n\
+         review = false\n\
+         recovery = \"docs/alpha-recovery.md\"\n",
+    );
+    fx.commit("docs/alpha-implement.md", "alpha implement\n");
+    fx.commit("docs/alpha-recovery.md", "alpha recovery\n");
+    fx.commit("docs/zeta-implement.md", "zeta implement\n");
+    let base = fx.commit("docs/zeta-review.md", "zeta review\n");
+    let tagged = fx.task(&["Zeta", "alpha", "ALPHA", "zeta"]);
+    let run = fx.run(&tagged, Some(&base));
+    let workspace = |path: &str| TagInstructionSource::Workspace {
+        path: path.to_string(),
+        revision: base.clone(),
+    };
 
     let implement = fx.instructions(&run, "agent_implement", &tagged).unwrap();
     assert_eq!(
         summary(&implement),
         vec![
-            (
-                "no-diff-expected".to_string(),
-                TagInstructionSource::Default
-            ),
-            ("ui".to_string(), TagInstructionSource::Default),
+            ("alpha".to_string(), workspace("docs/alpha-implement.md")),
+            ("zeta".to_string(), workspace("docs/zeta-implement.md")),
         ],
         "tags match case-insensitively, apply once each and in sorted order"
     );
@@ -150,14 +166,16 @@ fn tagged_tasks_receive_shipped_defaults_and_untagged_ones_nothing() {
         .unwrap();
     assert_eq!(
         summary(&review),
-        vec![("ui".to_string(), TagInstructionSource::Default)],
-        "reviewers receive the ui screenshot check, and no-diff-expected ships no review text"
+        vec![("zeta".to_string(), workspace("docs/zeta-review.md"))],
+        "review receives only the role this fixture maps, and a disabled role adds nothing"
     );
-    assert!(
-        fx.instructions(&run, "step_failure_recovery", &tagged)
-            .unwrap()
-            .is_empty(),
-        "no default addresses recovery"
+    let recovery = fx
+        .instructions(&run, "step_failure_recovery", &tagged)
+        .unwrap();
+    assert_eq!(
+        summary(&recovery),
+        vec![("alpha".to_string(), workspace("docs/alpha-recovery.md"))],
+        "recovery receives only the role this fixture maps"
     );
     assert!(
         fx.instructions(&run, "agent_plan", &tagged)
@@ -167,7 +185,7 @@ fn tagged_tasks_receive_shipped_defaults_and_untagged_ones_nothing() {
     );
 
     let untagged = fx.task(&[]);
-    let run = fx.run(&untagged, None);
+    let run = fx.run(&untagged, Some(&base));
     assert!(
         fx.instructions(&run, "agent_implement", &untagged)
             .unwrap()
@@ -388,7 +406,7 @@ fn the_run_record_lists_the_instructions_each_dispatch_received() {
 
 crate::scenario_table!(
     tag_instructions,
-    tagged_tasks_receive_shipped_defaults_and_untagged_ones_nothing,
+    configured_mappings_normalize_dedupe_order_and_skip_untagged_tasks,
     workspace_files_replace_defaults_and_are_read_at_the_base_revision,
     an_oversized_instruction_file_is_refused_by_name,
     the_run_record_lists_the_instructions_each_dispatch_received,

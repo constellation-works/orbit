@@ -343,6 +343,11 @@ fn routine() -> RoutineDefinition {
 
 #[test]
 fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -485,6 +490,11 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
 
 #[test]
 fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_cycle_reaches_only_its_granted_rights_and_workspaces",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -599,6 +609,11 @@ fn leaf_diagnostics(fx: &Fixture, run_id: &str) -> String {
 /// is its own run, so it does not inherit the cycle's run binding.
 #[test]
 fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused",
+    ) {
+        return;
+    }
     let fx = fixture();
     orbit_core::bootstrap::init::init_workspace_at_root(
         &fx.global,
@@ -744,6 +759,11 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
 /// Restoring lint is context maintenance, not a resident read (ORB-21580).
 #[test]
 fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::restoring_lint_refuses_resident_cycles_without_partial_context_writes",
+    ) {
+        return;
+    }
     let fx = fixture();
     let named = fx.task("Restore named context");
     let swept = fx.task("Restore swept context");
@@ -900,6 +920,11 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
 
 #[test]
 fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -965,6 +990,11 @@ fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_i
 
 #[test]
 fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_killed_cycle_is_recovered_without_repeating_its_completed_actions",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -1040,6 +1070,11 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
 
 #[test]
 fn a_status_request_wake_survives_later_wakes_until_the_next_cycle() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_status_request_wake_survives_later_wakes_until_the_next_cycle",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -1116,6 +1151,11 @@ fn a_status_request_wake_survives_later_wakes_until_the_next_cycle() {
 
 #[test]
 fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -1204,6 +1244,11 @@ fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_
 
 #[test]
 fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -1264,6 +1309,11 @@ fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
 
 #[test]
 fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 4");
     let mandate = fx.mandate(&watched);
@@ -1349,6 +1399,11 @@ fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_ru
 #[test]
 fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref()
  {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx
         .runtime
@@ -1542,6 +1597,11 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
 #[cfg(unix)]
 #[test]
 fn continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired",
+    ) {
+        return;
+    }
     use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset};
     use orbit_types::resource::ExecutorResource;
     use orbit_types::workflow::ExecutorDef;
@@ -1773,6 +1833,11 @@ PY
 
 #[test]
 fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 5");
     let mandate = fx.mandate(&watched);
@@ -1949,6 +2014,11 @@ fn dispatch_resumed_cycle_with_fake_codex(
 #[cfg(unix)]
 #[test]
 fn resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt",
+    ) {
+        return;
+    }
     let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
         "conv-live",
         r#"
@@ -1972,6 +2042,11 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
 #[cfg(unix)]
 #[test]
 fn resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun",
+    ) {
+        return;
+    }
     let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
         "conv-live",
         r#"
@@ -1989,6 +2064,11 @@ sys.exit(1)
 /// recorded model must name that crew, not the assignment task's own field.
 #[test]
 fn a_cycle_run_records_the_mandate_crew_that_runs() {
+    if !super::dispatch_admission::isolated(
+        "resident_cycle::a_cycle_run_records_the_mandate_crew_that_runs",
+    ) {
+        return;
+    }
     let fx = fixture();
     let watched = fx.task("Ship scribe v2 slice 5");
     let mandate = fx.mandate(&watched);

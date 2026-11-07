@@ -33,6 +33,11 @@ fn seed_global(global: &Path) {
 
 #[test]
 fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox() {
+    if !super::dispatch_admission::isolated(
+        "sandbox_off::explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox",
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
         .expect("isolated runtime roots");
     let global = dir.path().join("global");

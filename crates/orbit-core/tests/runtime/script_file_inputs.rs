@@ -146,6 +146,11 @@ fn assert_recorded_inputs(fixture: &Fixture, record: &ScriptExecutionRecord) {
 
 #[test]
 fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
+    if !super::dispatch_admission::isolated(
+        "script_file_inputs::declared_inputs_are_read_only_at_in_and_recorded_with_their_digests",
+    ) {
+        return;
+    }
     let fixture = fixture(ALL_INPUTS);
     let input = json!({
         "brief": "docs/brief.txt",
@@ -213,6 +218,11 @@ fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
 
 #[test]
 fn a_missing_or_out_of_bounds_input_refuses_before_spawn_naming_it() {
+    if !super::dispatch_admission::isolated(
+        "script_file_inputs::a_missing_or_out_of_bounds_input_refuses_before_spawn_naming_it",
+    ) {
+        return;
+    }
     let fixture = fixture(ALL_INPUTS);
     let outside = fixture._root.path().join("outside.txt");
     std::fs::write(&outside, "outside\n").unwrap();
@@ -258,6 +268,11 @@ fn a_missing_or_out_of_bounds_input_refuses_before_spawn_naming_it() {
 
 #[test]
 fn an_input_from_an_ungranted_root_refuses_naming_it() {
+    if !super::dispatch_admission::isolated(
+        "script_file_inputs::an_input_from_an_ungranted_root_refuses_naming_it",
+    ) {
+        return;
+    }
     let fixture = fixture("      - {from: \"{{ input.path }}\", as: elsewhere}\n");
     let elsewhere = fixture._root.path().join("home");
     let run = RuntimeHost::run_script_step(
