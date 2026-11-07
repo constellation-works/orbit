@@ -1481,9 +1481,10 @@ the longer fields.
 The toolbar filters routine names, job targets, and descriptions. The Active
 and Paused groups paginate independently, with up to three routines on each
 page. The Paused group starts collapsed; open it to find paused routines.
-Typing a filter opens Paused to show matching routines. Close an open trigger
-editor before filtering or changing pages; these controls stay disabled while
-the editor is open.
+Typing a filter opens Paused to show matching routines. The filter and paging
+controls are disabled only while a trigger editor is on screen; close the
+editor first. An open editor whose routine is on another page or filtered out
+does not disable them, so you can page or filter back to it.
 
 A **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
