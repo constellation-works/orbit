@@ -40,11 +40,14 @@ publishing task prose to a remote is an operator decision. `orbit workspace
 sync` adds the routine to existing workspaces disabled and preserves locally
 modified routines.
 
-After reviewing your publication binding and unattended credentials, set
-`enabled: true` in `.orbit/routines/task_publication.yaml`. Check it with
-`orbit routine list`. It runs Sunday at 04:47 host-local time (`47 4 * * 0`),
-skips missed runs and forbids overlaps. Replicas report it as owner-only and
-never fire it.
+After reviewing your publication binding and unattended credentials, an operator
+enables the routine with `orbit routine enable task-publication-<workspace>`,
+copying the name from `orbit routine list`. The command is operator-only: an agent
+session is refused, and the change is audited. Do not hand-edit `enabled` in
+`.orbit/routines/task_publication.yaml` instead, because that skips the operator
+check and the audit row. Check it with `orbit routine list`. It runs Sunday at
+04:47 host-local time (`47 4 * * 0`), skips missed runs and forbids overlaps.
+Replicas report it as owner-only and never fire it.
 
 The target `job:task_publication_pipeline` runs the deterministic
 `task_publication` activity for its own workspace. You can run it immediately:
