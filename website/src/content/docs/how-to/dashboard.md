@@ -140,7 +140,7 @@ with a live drain, then the registry default (the workspace containing the
 server's current directory when available), then the first active workspace.
 Choosing **All workspaces** in the picker is remembered too.
 
-The rail's **Drain** item shows a selected workspace's live drain from any view.
+In a window 1000px wide or narrower, the rail's **Drain** item shows a selected workspace's live drain from any view. Wider than that, the item is hidden; the Tasks dock's Drain tab beside the list shows the drain on the Tasks view instead.
 Under **All workspaces** it counts live workspace/host pairs across registered
 hosts, for example **2 live**, and a workspace registered on two hosts counts
 twice. Open it under **All workspaces** to see the fleet drains,
@@ -169,7 +169,7 @@ prove that a particular task or run succeeded.
 | Rail | Shows |
 |---|---|
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
-| **Drain** | The Tasks dock's Drain tab, at every width. On a narrow window it replaces the task list and lets you start and stop a window by touch. While a drain runs, the rail item shows its state on every view. |
+| **Drain** | Shown only at 1000px and narrower. Above that width the Tasks dock's Drain tab sits beside the list instead. On a narrow window the item opens the Drain tab in place of the task list, where you start and stop a window by touch. While a drain runs, the item shows its state on every view. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
@@ -554,8 +554,9 @@ The **Drain** tab in the Tasks dock contains the auto-drain card and
 **Start a window**: a time-bounded [delivery window](../continuous-delivery/)
 that ships approved backlog tasks in parallel. Select one active workspace to
 start a window. On a replica checkout, Start pulls work from its owner without
-leaving Tasks. The rail's **Drain** item opens this tab, or the fleet overview in
-**All workspaces** mode. On a narrow window the dock takes the place of the task
+leaving Tasks. At 1000px and narrower the rail's **Drain** item opens this tab, or
+the fleet overview in **All workspaces** mode. On a narrow window the dock takes
+the place of the task
 list, and **Back to tasks** returns to it.
 
 Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the

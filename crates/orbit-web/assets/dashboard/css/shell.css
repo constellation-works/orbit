@@ -100,6 +100,12 @@
 .rail .tab.active .rail-ico { color: var(--accent); }
 
 .rail .rail-drain { text-decoration: none; }
+/* Above the dock breakpoint the Tasks dock sits beside the list and already
+   holds Drain, so the rail item is withdrawn. It stays in the DOM, and its
+   reading still paints while hidden. */
+@media (min-width: 1001px) {
+  .rail .rail-drain { display: none; }
+}
 /* The live reading: a dot and words, tinted by state. */
 .rail-drain-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--state-running); }
 .rail-drain-state[hidden] { display: none; }
