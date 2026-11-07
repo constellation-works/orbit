@@ -31,14 +31,16 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         ])
         .assert()
         .success();
-    fs::OpenOptions::new()
-        .append(true)
-        .open(fixture.home.join(".orbit/config.toml"))
-        .unwrap()
-        .write_all(
-            b"\n[machine.auto_concurrency]\nadmit_cpu_percent = 89\nadmit_memory_percent = 74\n",
-        )
-        .unwrap();
+    for (key, value) in [
+        ("machine.auto_concurrency.admit_cpu_percent", "89"),
+        ("machine.auto_concurrency.admit_memory_percent", "74"),
+    ] {
+        fixture
+            .orbit()
+            .args(["config", "set", key, value, "--global"])
+            .assert()
+            .success();
+    }
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
             .unwrap();

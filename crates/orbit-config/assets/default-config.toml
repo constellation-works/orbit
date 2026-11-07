@@ -19,10 +19,6 @@ pass = [
 [execution.codex]
 sandbox = "danger-full-access"
 
-[machine.auto_concurrency]
-# Admit delivery work only while its forecast fits this host's CPU and memory.
-mode = "enforce"
-
 [experiments]
 enabled = true
 

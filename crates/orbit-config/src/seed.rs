@@ -218,6 +218,34 @@ pub fn seed_default_config(
     Ok(true)
 }
 
+/// Machine-scope settings a newly created machine identity starts with, as
+/// `(key, TOML value, comment)`. They are written beside the identity, in the
+/// global `config.toml` that alone may hold `[machine]`, never into the
+/// config template: a template seeded under an explicit `--root` can later
+/// load as a workspace config, which refuses `[machine]`.
+const NEW_MACHINE_DEFAULTS: &[(&str, &str, &str)] = &[(
+    "machine.auto_concurrency.mode",
+    "\"enforce\"",
+    "Admit delivery work only while its forecast fits this host.",
+)];
+
+/// Seed the machine-scope defaults a new machine starts with
+/// (`machine.auto_concurrency.mode = "enforce"`) that `store`, the global
+/// config of a machine whose identity is being created, does not already set.
+/// The caller saves.
+pub fn seed_new_machine_defaults(store: &mut ConfigStore) -> Result<bool, OrbitError> {
+    if store.scope() != ConfigScope::Global {
+        return Err(OrbitError::InvalidInput(
+            "machine defaults are written only to the global config.toml".to_string(),
+        ));
+    }
+    let mut changed = false;
+    for (key, value, comment) in NEW_MACHINE_DEFAULTS {
+        changed |= store.seed_missing_value(key, value, comment)?;
+    }
+    Ok(changed)
+}
+
 /// Seed missing workspace review choices for its registered delivery route.
 ///
 /// Uses enabled crews from the effective config after global bootstrap, never

@@ -1489,8 +1489,9 @@ muse-spark@high`; `failure_recovery` from `luna, haiku, muse-spark, grok`; `auto
 opus@medium`; `baseline_red_repair` from `terra, sonnet, muse-wonder, grok`. A pool left empty
 is omitted, except `final_recovery`, written as `[]` (off). Editing
 `workflow.*_complexity_crews` later does not move those purpose pools; to move system
-work, edit its `workflow.purpose_crews.<purpose>` pool directly. The same seed sets
-`machine.auto_concurrency.mode = "enforce"`, `experiments.enabled = true`,
+work, edit its `workflow.purpose_crews.<purpose>` pool directly. Creating this machine's
+identity also sets `machine.auto_concurrency.mode = "enforce"` (an existing machine keeps
+its mode), and the seed sets `experiments.enabled = true`,
 `workflow.crew_selection = "static"`, `workflow.mid_run_steering.enabled = true`,
 `workflow.task_pilot_freshness.material_fields = ["description", "criteria"]` and
 `workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`. With no supported

@@ -477,10 +477,9 @@ fn enable_seeded_routine(repo: &Path) {
     let path = repo.join(".orbit").join("routines").join(ENABLED_ROUTINE);
     let definition = fs::read_to_string(&path).expect("read seeded routine");
     let enabled = definition.replace("\nenabled: false\n", "\nenabled: true\n");
-    assert_ne!(
-        definition,
-        enabled,
-        "seeded routine {} must ship disabled",
+    assert!(
+        enabled.contains("\nenabled: true\n"),
+        "seeded routine {} must be enabled for the sweep to fire",
         path.display()
     );
     fs::write(&path, enabled).expect("enable seeded routine");

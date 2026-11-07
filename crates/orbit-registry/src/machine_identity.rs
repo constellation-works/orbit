@@ -200,7 +200,8 @@ pub fn ensure_machine_identity(
     })
 }
 
-/// Record `identity` in the global `config.toml`, preserving every other key
+/// Record `identity` in the global `config.toml`, with the machine defaults a
+/// new machine starts from (an operator-set value wins), preserving every other key
 /// and every hand-written comment. The store reparses the staged document, so
 /// a value that would not round-trip fails before mutation. The read and save
 /// run under the config write lock, so a concurrent `orbit config` write is
@@ -213,6 +214,7 @@ fn write_machine_identity(
     ConfigStore::with_write_lock(&path, || {
         let mut store = ConfigStore::open(ConfigScope::Global, path.clone())?;
         store.set_machine_identity(&identity.id, &identity.name, &identity.task_prefix)?;
+        orbit_config::seed_new_machine_defaults(&mut store)?;
         store.save()
     })
 }

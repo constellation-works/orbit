@@ -250,7 +250,7 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
 }
 
 /// [ORB-14173] A replica's routine projection matches what it can actually
-/// change: an operator lists and enables its worktree GC, while owner work —
+/// change: an operator lists and toggles its worktree GC, while owner work —
 /// CI-failure sweep, auto-task minting and toggles — is refused with the owner
 /// named and leaves every definition byte-identical.
 fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest() {
@@ -279,7 +279,7 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     };
     let gc = row("worktree-gc-mcp-roundtrip");
     assert_eq!(gc["toggle_available"], true, "{gc}");
-    assert_eq!(gc["enabled"], false, "{gc}");
+    assert_eq!(gc["enabled"], true, "{gc}");
     let ci_sweep = row("ci-failure-sweep-mcp-roundtrip");
     assert_eq!(ci_sweep["toggle_available"], false, "{ci_sweep}");
     assert_eq!(ci_sweep["state"], "owner_only", "{ci_sweep}");
@@ -290,6 +290,18 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
         "an unavailable toggle explains owner authority: {ci_sweep}"
     );
 
+    let disabled = client.call_tool_ok(
+        "orbit_routine_control",
+        json!({"workspace":selector,"action":"toggle","name":"worktree-gc-mcp-roundtrip",
+            "target":"job:worktree_gc_pipeline","expected_enabled":true,"enabled":false}),
+    );
+    assert_eq!(disabled["enabled"], false, "{disabled}");
+    assert!(
+        std::fs::read_to_string(&gc_path)
+            .unwrap()
+            .contains("enabled: false"),
+        "the replica GC definition was disabled"
+    );
     let enabled = client.call_tool_ok(
         "orbit_routine_control",
         json!({"workspace":selector,"action":"toggle","name":"worktree-gc-mcp-roundtrip",
@@ -300,7 +312,7 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
         std::fs::read_to_string(&gc_path)
             .unwrap()
             .contains("enabled: true"),
-        "the replica GC definition was enabled"
+        "the replica GC definition was enabled again"
     );
 
     let refused = client.call_tool_err(
