@@ -1561,7 +1561,12 @@ reads pilot warning holds only.
   per head or run and is recorded in the task history (`final_recovery_resumed`,
   `final_recovery_ci_rerun`, `final_recovery_requeued`). Resume, CI rerun and requeue share the
   one `FinalRecoveryRequeueBound` (2 per 24 hours), and an unreadable count refuses. A refused
-  step escalates, with the refusal in the comment.
+  step escalates, with the refusal in the comment. For a head with failed required checks,
+  `rerun_ci` polls every 5 seconds for workflows still `in_progress` on that exact head,
+  for at most 120 seconds before requesting any reruns. Completed failed workflows are
+  rerun together once no workflow remains in progress. Expiry refuses with the last
+  observed workflow names, run IDs and `in_progress` state; a head with neither a failed
+  nor an in-progress workflow is refused immediately.
 - **A deterministic recheck.** The backstop tick settles, with no agent, a blocked task whose pull
   request merged outside Orbit (it follows the merge to `done`), whose failing required check is
   green on the base again, or whose infrastructure block cleared, and appends a
