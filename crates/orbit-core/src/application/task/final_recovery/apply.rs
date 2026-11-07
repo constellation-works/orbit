@@ -14,7 +14,7 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
-use super::super::helpers::SYSTEM_ACTOR_LABEL;
+use super::super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use super::super::legacy_decisions;
 use super::super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
 use super::super::resolves::pending_resolves_history;
@@ -229,22 +229,9 @@ impl OrbitRuntime {
         task_id: &str,
         run_id: &str,
     ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
-        let typed = self
-            .get_task_history(task_id)?
-            .into_iter()
-            .rev()
-            .find_map(|entry| match entry.decision {
-                Some(TaskDecision::FinalRecovery {
-                    run_id: recorded,
-                    outcome,
-                    ..
-                }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => {
-                    Some(FinalRecoveryOutcome::from(outcome))
-                }
-                _ => None,
-            });
-        if typed.is_some() {
-            return Ok(typed);
+        let history = self.get_task_history(task_id)?;
+        if let Some(outcome) = helpers::authoritative_final_recovery_outcome(&history, run_id) {
+            return Ok(Some(FinalRecoveryOutcome::from(outcome.clone())));
         }
         Ok(legacy_decisions::final_recovery_outcome(
             &self.get_task_comments(task_id)?,

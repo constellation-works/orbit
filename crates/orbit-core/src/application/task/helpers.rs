@@ -1,7 +1,9 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    RecordedFinalRecovery, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 
 use crate::application::contracts::CreationCrewAssignment;
 use crate::context::resolve_write_actor_label;
@@ -9,6 +11,24 @@ use crate::context::resolve_write_actor_label;
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 
 pub(crate) use orbit_types::identity::is_automation_actor;
+
+/// Latest typed final-recovery outcome in vector order recorded by Orbit for `run_id`.
+pub(super) fn authoritative_final_recovery_outcome<'a>(
+    history: &'a [TaskHistoryEntry],
+    run_id: &str,
+) -> Option<&'a RecordedFinalRecovery> {
+    history
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.decision {
+            Some(TaskDecision::FinalRecovery {
+                run_id: recorded,
+                outcome,
+                ..
+            }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => Some(outcome),
+            _ => None,
+        })
+}
 
 /// Provenance for the crew a task was assigned when it was created, or when an
 /// operator cleared the field and the pools chose again [ORB-12717]. Updates
