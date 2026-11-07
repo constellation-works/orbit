@@ -588,6 +588,31 @@ spec:
     `dir:` or `symbol:` selectors for files the implementation will create,
     modify or delete as a substantive part of the change.
 
+    - Task-directed oldest-first batches: within the bounded footprint lookup
+      authority above, reconcile every predecessor source the task's selection
+      contract requires before declaring the batch verified. Enumerate the
+      required history (including all required statuses and any omitted list
+      pages), read the relevant summaries or artifacts in full, and establish
+      each eligible path's latest recorded validation date across that history.
+      Use the contract's fallback only when complete history contains no
+      validation for that path; an unread source is not evidence of absence.
+      Apply the contract's release-forced inclusions, then oldest-date ordering,
+      path tie-breaks and batch cap. In `assessment_rationale`, record history
+      coverage and each chosen path's latest date and source, distinguishing
+      forced inclusions from age-ranked picks. Never invent dates or call a
+      sampled subset the verified oldest batch, and never defer reconciliation
+      that could change the batch to a worker whose footprint is already locked.
+      Missing, unreadable, truncated or deliberately unreconciled required
+      history leaves the footprint unestablished, even when some dates and
+      selectors are known. Keep an assessed complexity for identifiable work;
+      name the unread or unreconciled sources and remaining lookup in
+      `evidence_gaps` and a `utility_warnings` object with
+      `holds_promotion: true`. Describe it explicitly as unread footprint
+      evidence, with the source IDs or artifact paths and the reconciliation
+      needed before re-piloting. Do not present provisional selectors as a
+      verified batch. This grants no unrelated-task reads, task or definition
+      writes, worker footprint widening, or exception to existing source,
+      workspace and stale-assessment checks.
     - Granularity: declare `symbol:<path>#<name>:<kind>` for each existing
       source symbol the change modifies or deletes, so Orbit can learn which
       symbols changes and regressions concentrate in; a `symbol:` still locks
