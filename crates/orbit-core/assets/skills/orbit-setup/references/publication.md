@@ -183,8 +183,12 @@ task prose to a remote is an operator decision: review the bound repository,
 credentials and attachment policy before enabling it. `orbit workspace sync`
 adds it to existing workspaces disabled and preserves locally modified routines.
 
-Enable it by setting `enabled: true` in
-`.orbit/routines/task_publication.yaml`, then check `orbit routine list`.
+An operator enables it with `orbit routine enable task-publication-<workspace>`,
+copying the name from `orbit routine list`; add `--workspace <name>` when running
+from another checkout. The command is operator-only: an agent session is refused,
+and the change is audited. Do not hand-edit `enabled` in
+`.orbit/routines/task_publication.yaml` instead, because that skips the operator
+check and the audit row. Then check `orbit routine list`.
 
 The schedule is Sunday at 04:47 host-local time (`47 4 * * 0`), with
 `missed_run: skip` and `overlap: forbid`. It targets
