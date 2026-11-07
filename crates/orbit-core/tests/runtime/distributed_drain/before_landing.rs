@@ -527,6 +527,65 @@ fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
     }
 }
 
+fn claimed_selection_does_not_inherit_an_independent_receipt() {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME};
+    use orbit_types::workflow::REVIEW_SELECTION_ARTIFACT;
+
+    let mut leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\ntiming = \"off\"\nselective_before_landing.mode = \"enforce\"\nselective_before_landing.paths = [\"src/f0.rs\"]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n"
+        ),
+        "",
+    );
+    leaf.gate_input["before_landing"] = json!(true);
+    let first = leaf.admit_review();
+    assert_eq!(first["selective_receipt"]["result"], "required");
+    std::fs::write(leaf.pair.follower_repo.join("src/f0.rs"), "fn work() {}\n").unwrap();
+    std::fs::write(
+        leaf.pair.follower_repo.join("src/other.rs"),
+        "fn other() {}\n",
+    )
+    .unwrap();
+    git(&leaf.pair.follower_repo, &["add", "src"]);
+    git(&leaf.pair.follower_repo, &["commit", "-q", "-m", "Revise"]);
+    let same = leaf.admit_review();
+    assert_eq!(same["selective_receipt"]["result"], "required");
+
+    // Seed the persistent receipt as an earlier independent delivery. The
+    // claimed admission reads the owner bundle through its real binding.
+    let owner = &leaf.pair.wire.owner;
+    let registry = TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap();
+    let bundle = registry
+        .canonical_task_bundle_path(&owner.workspace_id().unwrap(), &leaf.task)
+        .unwrap();
+    let manifest_path = bundle
+        .join("artifacts")
+        .join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+    let mut manifest: ArtifactManifestV2 =
+        serde_yaml::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    let file = manifest
+        .files
+        .iter_mut()
+        .find(|file| file.path == REVIEW_SELECTION_ARTIFACT)
+        .unwrap();
+    let mut receipt: Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("artifacts").join(&file.blob)).unwrap())
+            .unwrap();
+    receipt["run_id"] = json!("independent-earlier-delivery");
+    let content = serde_json::to_vec(&receipt).unwrap();
+    file.sha256 = orbit_common::security::release::sha256_hex(&content);
+    file.blob = format!("files/fixture-selection-{}.json", file.sha256);
+    file.size_bytes = content.len() as u64;
+    std::fs::write(bundle.join("artifacts").join(&file.blob), content).unwrap();
+    std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    let fresh = leaf.admit_review();
+    assert_eq!(
+        fresh["selective_receipt"]["result"], "not_required",
+        "an unrelated claimed delivery does not inherit selection"
+    );
+}
+
 /// The claimed skip carries selection evidence without claiming a review
 /// certificate, and owner verification still checks the light-delivery tag.
 fn a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance() {
@@ -675,6 +734,7 @@ crate::scenario_table!(
     a_review_pool_owner_captures_one_reviewer_crew_per_claim,
     a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands,
     selective_observation_and_nonmatch_follow_a_certified_claimed_repair,
+    claimed_selection_does_not_inherit_an_independent_receipt,
     a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance,
     a_claimed_observation_gap_keeps_delivery_non_enforcing,
     probe_diagnostics_name_selective_observation_not_before_pr_review

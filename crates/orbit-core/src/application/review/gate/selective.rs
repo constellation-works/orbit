@@ -77,12 +77,15 @@ fn evaluate_and_persist(
     {
         return Ok(prior.clone());
     }
-    let previously_selected = prior.as_ref().is_some_and(|prior| {
+    let previously_selected = if let Some(prior) = &prior {
         prior.workspace_id == receipt_workspace_id
             && prior.task_ids == context.task_ids
             && prior.mode == SelectiveBeforeLandingMode::Enforce
             && prior.result == SelectiveReviewResult::Required
-    });
+            && context.contains_run_in_lineage(runtime, &prior.run_id)?
+    } else {
+        false
+    };
 
     let mut inputs = SelectiveEvaluationInputs {
         previously_selected,
@@ -207,8 +210,7 @@ fn evaluate_and_persist(
 }
 
 /// The lineage's stored receipt, when one was persisted for the first
-/// task. A malformed receipt is ignored as evidence (selection is
-/// re-evaluated), never trusted.
+/// task. A malformed receipt fails closed and is preserved for recovery.
 fn prior_receipt(
     runtime: &OrbitRuntime,
     context: &GateContext,

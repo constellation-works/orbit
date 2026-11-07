@@ -712,6 +712,41 @@ fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwri
     }
 }
 
+fn owner_fulfilment_refuses_colliding_persisted_paths_before_running() {
+    for (first, second) in [
+        ("evidence/x.json", "evidence/x.log.json"),
+        ("evidence/x", "evidence/x.json"),
+    ] {
+        let (fixture, mut hold) = held(Stub::Clean, CODEQL);
+        configure_job(&fixture, 1, None);
+        hold.requirements[0].artifact = first.into();
+        let mut other = hold.requirements[0].clone();
+        other.artifact = second.into();
+        hold.requirements.push(other);
+        seed_persisted_hold(&fixture, &hold);
+        let run = fixture.runtime.submit_pipeline_run(
+            REVIEW_EVIDENCE_FULFILMENT_JOB,
+            json!({"task_id": fixture.task_id, "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit)}),
+            None, Some("system"),
+        ).unwrap();
+        execute(&fixture, &run.run_id);
+        let output = &fixture
+            .runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline["fulfil"];
+        assert_eq!(output["reason"], "artifact_not_allowed", "{output}");
+        for path in [first, second, "evidence/x.log.json"] {
+            assert!(
+                artifact(&fixture, path).is_none(),
+                "no evidence written at {path}"
+            );
+        }
+        assert_still_held(&fixture, "colliding paths");
+    }
+}
+
 fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
@@ -1026,6 +1061,7 @@ crate::scenario_table!(
     an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason,
     a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair,
     owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review,
+    owner_fulfilment_refuses_colliding_persisted_paths_before_running,
     fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times,
     a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review,
     a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason
