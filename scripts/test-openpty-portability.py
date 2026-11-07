@@ -55,6 +55,42 @@ class OpenptyPortabilityTests(unittest.TestCase):
             libc::openpty(a,b,c,ptr::addr_of_mut!(term), (&size as *const _ as *mut _));
         }'''}, 0)
 
+    def test_leading_absolute_paths(self):
+        immutable = (
+            "::std::ptr::null()",
+            "(::std::ptr::null())",
+            "::core::ptr::null()",
+            "(::core::ptr::null())",
+            "::std::ptr::addr_of!(value)",
+            "(::std::ptr::addr_of!(value))",
+        )
+        for bad in immutable:
+            for position in (3, 4):
+                with self.subTest(bad=bad, position=position):
+                    args = ["a", "b", "c", "::std::ptr::null_mut()", "::std::ptr::null_mut()"]
+                    args[position] = bad
+                    source = "fn fixture() {\n libc::openpty(\n " + ",\n ".join(args) + ",\n );\n}"
+                    result = self.check_tree({"lib.rs": source}, 1)
+                    self.assertIn(
+                        f"crates/example/src/lib.rs:{position + 3}: immutable openpty argument: {bad}",
+                        result.stderr,
+                    )
+
+        mutable = (
+            "::std::ptr::null_mut()",
+            "(::std::ptr::null_mut())",
+            "::core::ptr::null_mut()",
+            "::std::ptr::addr_of_mut!(value)",
+            "(::std::ptr::addr_of_mut!(value))",
+        )
+        for good in mutable:
+            for position in (3, 4):
+                with self.subTest(good=good, position=position):
+                    args = ["a", "b", "c", "::std::ptr::null_mut()", "::std::ptr::null_mut()"]
+                    args[position] = good
+                    source = "fn fixture() {\n libc::openpty(\n " + ",\n ".join(args) + ",\n );\n}"
+                    self.check_tree({"lib.rs": source}, 0)
+
     def test_macos_reachability(self):
         call = "fn f() { libc::openpty(a,b,c,d,&dimensions); }"
         self.check_tree({"lib.rs": '#[cfg(target_os = "linux")]\n' + call}, 0)

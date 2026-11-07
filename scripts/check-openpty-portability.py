@@ -45,6 +45,8 @@ def immutable(values):
         return casts[-1] == "const"
     if values[:1] == ["&"]:
         return values[1:2] != ["mut"] and values[1:3] != ["raw", "mut"]
+    if values[:2] == [":", ":"]:
+        values = values[2:]
     for prefix in (["ptr", ":", ":"], ["std", ":", ":", "ptr", ":", ":"],
                    ["core", ":", ":", "ptr", ":", ":"]):
         if values[:len(prefix)] == prefix:
