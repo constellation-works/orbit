@@ -124,7 +124,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials) | claude |
 | [Decision Assistance](./design/decision-assistance/1_scope.md) | Review precedent-decision consumer; slices ORB-21091..21097 proposed; old rollout parked | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
-| [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
+| [Experiments](./design/experiments/1_scope.md) | Remove explorer tooling (ORB-20383); the horizon decision-channel step remains unfiled | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
@@ -182,7 +182,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
-| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
 ### Parked (3)
 
