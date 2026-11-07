@@ -526,6 +526,143 @@ policy denies: `terminate` (the default) ends the invocation, while
 `continue` returns the denial to the agent as a structured tool error
 and lets it proceed.
 
+### Bounded continuation
+
+`incomplete_continuation` lets an implementer that reports unfinished work
+run again in the same activity instead of failing the step. It is optional.
+Without it, a declared `implementation_incomplete` failure fails the step
+like any other declared failure:
+
+```yaml
+spec:
+  type: agent_loop
+  description: Implement one assigned task.
+  instruction: "Implement the task and report any unfinished work."
+  wall_clock_timeout_seconds: 10800
+  incomplete_continuation:
+    max_rounds: 2
+    min_remaining_seconds: 900
+```
+
+- `max_rounds` (required) is the most continuation invocations one step
+  dispatch may start after its first. `0` admits none.
+- `min_remaining_seconds` (required) is the unspent wall-clock budget, in
+  seconds, a continuation needs before it starts. A smaller remainder keeps
+  the declared failure.
+
+A continuation starts only when the first invocation ends with the typed
+`implementation_incomplete` signal and nothing else fails. The agent's
+envelope must be well formed and carry:
+
+- `schemaVersion: 1` and `status: "failed"`.
+- `error.code: "implementation_incomplete"` with a non-empty `error.message`.
+- `result.remaining_work`: one to 32 non-empty strings, each at most 2,000
+  bytes.
+- No `result.blocker`. A declared blocker is a legitimate stop, so it is
+  never continued.
+
+The process must also exit cleanly. A provider authentication, refusal or
+usage-limit failure, or a timeout, is not continued.
+
+The first invocation runs under the activity's `wall_clock_timeout_seconds`.
+Each continuation gets only the seconds that remain of that budget, so a
+continuation never extends it. A continuation is refused, and the declared
+failure stands, when `max_rounds` continuations have already started, when
+the remainder is below `min_remaining_seconds`, or when the task record is
+terminal or cannot be read. A continuation needs the step's task record, so
+an activity without a task cannot continue.
+
+Each continuation is a fresh invocation in the same worktree, with the same
+crew, tool grant and sandbox. It receives the remaining work list, its round
+number and the seconds left as input. Orbit commits nothing. The step
+succeeds only when a continuation itself completes.
+
+If the step fails after one or more continuations, its message gives the
+continuation count, the refusal reason when the bounds stopped a further
+continuation (`rounds_exhausted`, `wall_clock_exhausted`, `task_terminal` or
+`task_unavailable`), and the original error. The worktree keeps the partial
+candidate. The shipped `agent_implement` activity declares
+this policy: up to two continuations, each started only while 15 minutes of
+its three-hour budget remain.
+
+### Response correction
+
+`response_correction` gives a read-only activity one fresh invocation when
+the response parser rejects its reply. It answers a different failure from
+`incomplete_continuation`. That policy acts on a well-formed declaration of
+unfinished work. This one acts on a reply the parser does not accept, and a
+rejected reply counts for nothing until a new one parses. It is optional.
+Without it, a rejected reply fails the step.
+
+```yaml
+spec:
+  type: agent_loop
+  description: Review one named task without changing it.
+  instruction: "Review the named task and return the result envelope."
+  require_response_envelope: true
+  fsProfile: reviewer
+  wall_clock_timeout_seconds: 1800
+  tools:
+    - orbit.search
+    - orbit.task.show
+  response_correction:
+    max_rounds: 1
+    min_remaining_seconds: 30
+```
+
+- `max_rounds` (required) is the most correction invocations one step
+  dispatch may start after its first. `0` admits none.
+- `min_remaining_seconds` (required) is the unspent wall-clock budget, in
+  seconds, a correction needs before it starts. A smaller remainder keeps
+  the rejected reply's failure.
+
+A correction starts only when the rejection is the step's only failure. The
+rejection is one of:
+
+- `contradictory_reply`: the envelope says `status: "success"` and also
+  carries an `error` object.
+- `missing_envelope`: the turn ended in prose with no envelope, and the
+  output was not truncated.
+- `structured_output_retry_exhausted`: Claude's structured-output retries ran
+  out before it produced a valid result.
+
+A reply is not corrected when its process failed for another reason: a
+timeout, a provider authentication, refusal or usage-limit failure, or an
+envelope that says `failed`. Those fail the step as they would without the
+policy. The rejected reply goes back to the correction as data, bounded and
+redacted, with its rejection kind and the parser's error. The step succeeds
+only if the correction's own reply parses.
+
+A correction is another run of the whole activity, so any write it made
+would repeat. Asset load therefore refuses the policy unless all of these
+hold:
+
+- `require_response_envelope: true`, so something reads the reply.
+- `fsProfile: reviewer`, the read-only [filesystem profile](../policy-format/).
+- The activity's own tool declaration grants no built-in mutating Orbit tool.
+  With `tools`, a mutating tool is granted when it is listed there, including
+  through a wildcard entry. With `tool_disallow_list`, a mutating tool is
+  granted unless it is listed.
+  Mutating tools include `orbit.task.update`, `orbit.task.artifact.put`,
+  `orbit.friction.add` and `orbit.command.exec`. See
+  [agent tool lists](#agent-tool-lists).
+- The activity does not also declare `incomplete_continuation`. Declare at
+  most one of the two policies.
+- The retired `trustedHostExecution` key is not set. Asset load refuses the
+  combination.
+
+Corrections share the first invocation's `wall_clock_timeout_seconds` with
+the rest of the step. Each correction gets only the remainder. A correction
+is refused when `max_rounds` corrections have started or the remainder is
+below `min_remaining_seconds`. A correction keeps the same crew, tool grant,
+sandbox and worktree as the first invocation.
+
+If the step fails after one or more corrections, its message gives the
+correction count, the refusal reason when the bounds stopped a further
+correction (`rounds_exhausted` or `wall_clock_exhausted`), and the first
+rejection's error. The shipped `task_pilot` activity declares one correction
+with a 30-second minimum remainder, inside a 30-minute budget.
+
 ## Deterministic local shell
 
 The `local_shell` deterministic action runs one local command as a job
