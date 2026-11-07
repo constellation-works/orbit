@@ -293,11 +293,12 @@ app_modules='task|automation|job|review|distributed|admission|workspace_auto|bac
 contracts_higher="${app_modules}|precedent_decision|assistance|routines|auto_tasks"
 
 # Print every `super::` path or use-tree in production code under application module
-# `$2` that climbs out of it to `application` and names one of the
-# `|`-separated modules `$3`; exit nonzero when one is found. With `$4` set to
-# `crate-root`, `$1` is any layer under the crate source and the modules are
-# crate-root modules: a `super::` chain counts when it climbs out to the crate
-# root, and a `crate::` path or use-tree counts too [ORB-22005].
+# `$2` that climbs out of it to `application`, or past it to the crate root and back
+# down through `application`, and names one of the `|`-separated modules `$3`; exit
+# nonzero when one is found. With `$4` set to `crate-root`, `$1` is any layer under
+# the crate source and the modules are crate-root modules: a `super::` chain counts
+# when it climbs out to the crate root, and a `crate::` path or use-tree counts too
+# [ORB-22005].
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import pathlib
@@ -395,8 +396,18 @@ for path in paths:
             if segments[0] == "crate":
                 named = len(segments) > 1 and segments[1] in upper
             else:
-                named = (parts[: len(parts) - ups] == climb_target
-                         and ups < len(segments) and segments[ups] in upper)
+                # Resolve the chain from this file's module depth [ORB-22674]. It
+                # names an upper module when it lands on the climb target and an
+                # `upper` module follows, or when it climbs past the target to the
+                # crate root and descends `application::<upper>`. A landing inside
+                # a module, such as `application::task::distributed`, names none.
+                climbed = parts[: max(len(parts) - ups, 0)]
+                resolved = [*climbed, *segments[ups:]]
+                depth = len(climb_target)
+                named = (len(climbed) <= depth
+                         and resolved[:depth] == climb_target
+                         and len(resolved) > depth
+                         and resolved[depth] in upper)
             if named:
                 number = source.count("\n", 0, start) + 1
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
