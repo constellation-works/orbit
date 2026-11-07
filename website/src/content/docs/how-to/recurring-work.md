@@ -173,7 +173,7 @@ Turn one on with its switch in **Automation → Routines**, or set
 this checkout on this machine. Start with worktree GC, and turn on the ship
 sweep last (see [Ship unattended](#ship-unattended)).
 
-![Automation → Routines: the next hour's fires on a timeline, then each routine with its switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group paged at three routines per page, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 
 ```bash
 orbit routine list            # enabled, paused, next due, last fire

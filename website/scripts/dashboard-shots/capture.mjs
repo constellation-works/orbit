@@ -321,7 +321,9 @@ drainThrottled = false;
 // Automation: the workspace's routines and whether each will fire.
 await page.locator('button.tab[data-tab="operations"]').click();
 await settle();
-await shot("dashboard-automation", [page.locator(".topbar"), page.locator("#routines-panel"), page.locator("#meta-text")], 24);
+await tall(1100, async () => {
+  await shot("dashboard-automation", [page.locator(".topbar"), page.locator("#routines-panel"), page.locator("#meta-text")], 24);
+});
 
 if (selection !== "--fixture-core") await runDetailShot();
 
