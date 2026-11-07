@@ -4,7 +4,7 @@
 //! and reconciliation serializes migrations and manifests with runtime edits.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
@@ -928,4 +928,171 @@ fn sync_enables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_af
     reinit_workspace(&global, &workspace);
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
     assert!(!listed_enabled(&runtime, "host-health"));
+}
+
+/// A fresh managed skill install writes every file under `assets/skills`, and
+/// every relative link in the installed skill trees resolves [ORB-22531].
+/// The install manifest silently dropped five shipped references that other
+/// shipped pages link to, so this guards the install boundary rather than
+/// pinning prose.
+#[test]
+fn fresh_skill_install_writes_every_shipped_reference_and_resolves_links() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, _workspace) = seeded_host(dir.path());
+    let skills_root = global.join("skills");
+
+    let assets_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let mut shipped = Vec::new();
+    collect_tree_files(&assets_root, &assets_root, &mut shipped);
+    assert!(
+        !shipped.is_empty(),
+        "skill assets must exist under {}",
+        assets_root.display()
+    );
+    let missing: Vec<String> = shipped
+        .iter()
+        .filter(|relative| !skills_root.join(relative).is_file())
+        .map(|relative| relative.display().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "a fresh skill install dropped shipped references [ORB-22531]: {missing:?}"
+    );
+    for required in [
+        "orbit/references/attention.md",
+        "orbit-setup/references/applications.md",
+        "orbit-setup/references/browser-checks.md",
+        "orbit-setup/references/macos.md",
+        "orbit-setup/references/providers.md",
+    ] {
+        assert!(
+            skills_root.join(required).is_file(),
+            "a fresh skill install must write {required} [ORB-22531]"
+        );
+    }
+
+    let mut dangling = Vec::new();
+    let mut checked = 0;
+    for skill_id in ["orbit", "orbit-orchestrate", "orbit-setup"] {
+        let tree = skills_root.join(skill_id);
+        let mut pages = Vec::new();
+        collect_tree_files(&tree, &tree, &mut pages);
+        pages.sort();
+        for page in pages {
+            if page.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let absolute = tree.join(&page);
+            let body = std::fs::read_to_string(&absolute).expect("installed skill page");
+            for target in markdown_link_targets(&body) {
+                let Some(resolved) = resolve_skill_link(&absolute, target) else {
+                    continue;
+                };
+                checked += 1;
+                if !resolved.is_file() {
+                    dangling.push(format!("{} -> {target}", absolute.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "installed skill trees must contain relative links to check"
+    );
+    assert!(
+        dangling.is_empty(),
+        "installed skill trees carry dangling relative links [ORB-22531]: {dangling:?}"
+    );
+}
+
+/// Every regular file under `dir`, relative to `base`.
+fn collect_tree_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read skill tree") {
+        let path = entry.expect("skill tree entry").path();
+        if path.is_dir() {
+            collect_tree_files(&path, base, out);
+        } else if path.is_file() {
+            out.push(
+                path.strip_prefix(base)
+                    .expect("skill tree under base")
+                    .to_path_buf(),
+            );
+        }
+    }
+}
+
+/// The destinations of inline Markdown links in `body`, ignoring fenced code
+/// blocks and inline code spans that may quote link syntax.
+fn markdown_link_targets(body: &str) -> Vec<&str> {
+    let mut targets = Vec::new();
+    let mut in_fence = false;
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        // Keep the prose between backticks; a quoted `[text](target)`
+        // example is not a link the reader can follow.
+        for (index, span) in line.split('`').enumerate() {
+            if index % 2 == 1 {
+                continue;
+            }
+            let mut rest = span;
+            while let Some(open) = rest.find("](") {
+                let after = &rest[open + 2..];
+                let Some(close) = after.find(')') else {
+                    break;
+                };
+                targets.push(after[..close].trim());
+                rest = &after[close + 1..];
+            }
+        }
+    }
+    targets
+}
+
+/// Resolve a Markdown link against the installed page that carries it.
+/// Returns `None` for same-page anchors, external URLs and templates.
+fn resolve_skill_link(page: &Path, target: &str) -> Option<PathBuf> {
+    let target = target
+        .strip_prefix('<')
+        .and_then(|inner| inner.strip_suffix('>'))
+        .unwrap_or(target)
+        .trim();
+    if target.is_empty() || target.starts_with('#') {
+        return None;
+    }
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+    {
+        return None;
+    }
+    if target.contains('{') || target.contains('$') {
+        return None;
+    }
+    let file = target.split('#').next().expect("anchor split").trim();
+    if file.is_empty() {
+        return None;
+    }
+    let mut resolved = PathBuf::new();
+    for component in page
+        .parent()
+        .expect("skill page directory")
+        .join(file)
+        .components()
+    {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    Some(resolved)
 }

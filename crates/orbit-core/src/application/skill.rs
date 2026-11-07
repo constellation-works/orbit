@@ -28,11 +28,15 @@ pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
 /// References load on demand and may link across the bundled skill trees. The
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 35] = [
+pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 40] = [
     // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
         include_str!("../../assets/skills/orbit/SKILL.md"),
+    ),
+    (
+        "orbit/references/attention.md",
+        include_str!("../../assets/skills/orbit/references/attention.md"),
     ),
     (
         "orbit/references/task-execution.md",
@@ -125,6 +129,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 35] = [
         include_str!("../../assets/skills/orbit-setup/references/first-run.md"),
     ),
     (
+        "orbit-setup/references/providers.md",
+        include_str!("../../assets/skills/orbit-setup/references/providers.md"),
+    ),
+    (
         "orbit-setup/references/workspace-tuning.md",
         include_str!("../../assets/skills/orbit-setup/references/workspace-tuning.md"),
     ),
@@ -141,6 +149,14 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 35] = [
         include_str!("../../assets/skills/orbit-setup/references/windows-wsl2.md"),
     ),
     (
+        "orbit-setup/references/macos.md",
+        include_str!("../../assets/skills/orbit-setup/references/macos.md"),
+    ),
+    (
+        "orbit-setup/references/browser-checks.md",
+        include_str!("../../assets/skills/orbit-setup/references/browser-checks.md"),
+    ),
+    (
         "orbit-setup/references/automation.md",
         include_str!("../../assets/skills/orbit-setup/references/automation.md"),
     ),
@@ -151,6 +167,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 35] = [
     (
         "orbit-setup/references/plugins.md",
         include_str!("../../assets/skills/orbit-setup/references/plugins.md"),
+    ),
+    (
+        "orbit-setup/references/applications.md",
+        include_str!("../../assets/skills/orbit-setup/references/applications.md"),
     ),
     (
         "orbit-setup/references/remote-access.md",
