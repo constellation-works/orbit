@@ -10,9 +10,7 @@ use serde_json::{Value, json};
 use super::super::auto_effort::{AUTO_EFFORT_ESCALATION, PILOT_ROUND, REPAIR_ROUND};
 use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
-use super::super::{
-    EXPLORE_BRIEF_REQUESTED, EXPLORE_BRIEF_TASK_IDS, OPERATOR_TOOL_CANDIDATES, member_ready,
-};
+use super::super::{OPERATOR_TOOL_CANDIDATES, member_ready};
 use super::input::{PreparedEcho, PreparedTask, Record};
 use super::{Applied, detail, settled};
 
@@ -194,21 +192,12 @@ impl Report<'_> {
                     .filter(|outcome| outcome["outcome"] == "invalid")
                     .filter_map(|outcome| outcome["error"].as_str())
                     .collect::<Vec<_>>();
-                // The repair pilot returns a brief again for a task that
-                // requested one, at the original source revision.
-                let brief_requested = self.tasks.iter().any(|task| {
-                    task.fields.task_id.get() == Some(task_id)
-                        && task.raw[EXPLORE_BRIEF_REQUESTED] == json!(true)
-                });
                 let mut partition = json!({
                     "partition_index": partition_index,
                     "task_ids": [task_id],
                     "validation_errors": errors,
                     "source_revision": self.source.map(|source| source.source_revision.as_str()),
                 });
-                if brief_requested {
-                    partition[EXPLORE_BRIEF_TASK_IDS] = json!([task_id]);
-                }
                 if let Some(escalation) = escalation {
                     partition[AUTO_EFFORT_ESCALATION] = escalation.clone();
                 }

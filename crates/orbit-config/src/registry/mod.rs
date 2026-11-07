@@ -191,7 +191,7 @@ pub use keys::{
 pub(crate) use settings::resolve_percent;
 pub use settings::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
-    ExploreBriefSettings, MachineSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings,
+    MachineSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings,
     RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };
 pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};

@@ -263,11 +263,9 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
-    /// What an implement dispatch did with the task's explore brief, emitted
-    /// once per dispatch of an activity that declares an
-    /// `explore_brief_instruction`, before the subprocess starts, whatever
-    /// the outcome (`absent` included). The brief itself is not recorded:
-    /// its hash and revision identify it.
+    /// What an implement dispatch did with the task's explore brief. No
+    /// longer emitted: the explore brief was removed [ORB-22805], and the
+    /// variant stays so earlier audit rows still parse.
     ExploreBriefApplied {
         /// The pipeline step that dispatched the activity.
         step_id: String,

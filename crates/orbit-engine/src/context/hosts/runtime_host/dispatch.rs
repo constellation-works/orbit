@@ -196,24 +196,6 @@ macro_rules! dispatch_methods {
             activity_name: &str,
         ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError>;
 
-        /// What `activity_name` of `run_id` does with the explore brief of the
-        /// task its `input` names: the outcome its audit row records and, for
-        /// a `fresh` or `drifted` brief with delivery on, the task context's
-        /// `explore_brief` value.
-        ///
-        /// The engine asks only for an activity that declares an
-        /// `explore_brief_instruction`. The host checks the stored brief's
-        /// currency against the task's material first and its code drift
-        /// against the run's base second; it fails closed to an undelivered
-        /// outcome and never refuses the dispatch. `None` when the input names
-        /// no single task.
-        fn explore_brief_for_activity(
-            &self,
-            run_id: &str,
-            activity_name: &str,
-            input: &Value,
-        ) -> Option<ExploreBriefAdmission>;
-
         /// The `fleet_notices` brief `activity_name` of `run_id` adds to its
         /// task context: the bounded block marked `untrusted_data` and the
         /// `id@revision` of each notice it carries. The engine asks only

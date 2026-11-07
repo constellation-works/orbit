@@ -149,27 +149,6 @@ impl Default for NoticeSettings {
     }
 }
 
-/// Admitted `workflow.explore_brief.*`: whether the task pilot is asked for
-/// explore briefs, which tasks request one, and whether a stored brief
-/// reaches the implementer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExploreBriefSettings {
-    /// `workflow.explore_brief.enabled` (default `false`).
-    pub enabled: bool,
-    /// `workflow.explore_brief.tags` (default empty: every piloted task).
-    pub tags: Vec<String>,
-    /// `workflow.explore_brief.deliver` (default `true`).
-    pub deliver: bool,
-}
-
-impl ExploreBriefSettings {
-    /// Whether a task carrying `task_tags` requests a brief.
-    pub fn requested_for(&self, task_tags: &[String]) -> bool {
-        self.enabled
-            && (self.tags.is_empty() || self.tags.iter().any(|tag| task_tags.contains(tag)))
-    }
-}
-
 /// Which document an admission sees: a layered load (both files merged, or
 /// one effective layer), or one file read alone, whose cross-layer
 /// references the layered load checks instead.
@@ -627,15 +606,6 @@ impl ConfigSnapshot {
             brief_max_items: self.notice_brief_max_items,
             brief_body_chars: self.notice_brief_body_chars,
             brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
-        }
-    }
-
-    /// The admitted `workflow.explore_brief.*` settings.
-    pub fn explore_brief(&self) -> ExploreBriefSettings {
-        ExploreBriefSettings {
-            enabled: self.workflow_explore_brief_enabled,
-            tags: self.workflow_explore_brief_tags.clone(),
-            deliver: self.workflow_explore_brief_deliver,
         }
     }
 

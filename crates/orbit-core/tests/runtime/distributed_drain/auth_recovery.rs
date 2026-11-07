@@ -81,7 +81,6 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         instruction: "Return a success envelope.".into(),
         steering_instruction: None,
         regression_risk_instruction: None,
-        explore_brief_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: vec![],

@@ -436,8 +436,8 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
 
 - **Paths.** `visual/<mock-name>/<side>.<ext>`, where `<mock-name>` is the mock's artifact
   name without `mocks/` and the extension, and `side` is `capture`, `side-by-side` or
-  `recapture`. The `visual/` prefix is reserved for the system writer, as
-  `explore-brief.json` is: an agent or operator write to it is refused.
+  `recapture`. The `visual/` prefix is reserved for the system writer: an agent or operator
+  write to it is refused.
 - **Size.** Each image must stay under the 1 MiB artifact limit
   ([task artifacts §5a](../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)).
   Viewport captures of the dashboard are well under it (the ORB-19304 shots were 57–192 KB as

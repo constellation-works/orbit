@@ -7,7 +7,7 @@ owner: claude
 status: Draft
 feature: fleet-notices
 tags: [fleet-notices, spec, security]
-related_features: [fleet-notices, mid-run-steering, explore-brief, operator-attention, user-interface]
+related_features: [fleet-notices, mid-run-steering, operator-attention, user-interface]
 related_artifacts: [ORB-21207, ORB-21164]
 last_updated: 2026-11-02
 ---
@@ -34,7 +34,7 @@ instruction exist so that seeing a notice informs the agent and cannot redirect 
 ### Which activities
 
 An activity opts in by declaring a `notice_instruction` in its catalog YAML, the way an activity
-declares `explore_brief_instruction` or `regression_risk_instruction` today
+declares `regression_risk_instruction` today
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`). Slice 2
 adds it to the task-bound agent activities `agent_implement`, `agent_review_repair`,
 `review_reconciliation_review`, `final_recovery` and `task_pilot`; the slice confirms each is a

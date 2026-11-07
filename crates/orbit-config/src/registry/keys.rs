@@ -233,7 +233,16 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.crew_ladder.min_grade_coverage",
         CREW_LADDER_REMOVED_NOTE,
     ),
+    // [ORB-22805] The explore brief was removed on 2026-11-07. Each key loads,
+    // warns and is ignored; code-health-sweep deletes these entries after
+    // 2026-12-07, when they become ordinary unknown settings.
+    ("workflow.explore_brief.enabled", EXPLORE_BRIEF_REMOVED_NOTE),
+    ("workflow.explore_brief.tags", EXPLORE_BRIEF_REMOVED_NOTE),
+    ("workflow.explore_brief.deliver", EXPLORE_BRIEF_REMOVED_NOTE),
 ];
+
+const EXPLORE_BRIEF_REMOVED_NOTE: &str = "ignored: the task pilot's explore brief was removed; \
+     delete the [workflow.explore_brief] table. This key stops being recognised after 2026-12-07";
 
 const CREW_LADDER_REMOVED_NOTE: &str = "ignored: the crew ladder and its standing shadow trials \
      were removed; route each tier with workflow.<tier>_complexity_crews and delete the \

@@ -39,8 +39,7 @@ pub struct ActivityV2 {
 /// `type: agent_loop|deterministic`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // Boxing the agent spec would churn every reader that matches it for a size
-// heuristic; the additive optional `explore_brief_instruction` makes this
-// enum cross that threshold.
+// heuristic.
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityV2Spec {
@@ -65,13 +64,6 @@ pub struct AgentLoopSpec {
     /// or with nothing marked, the rendered instruction is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression_risk_instruction: Option<String>,
-    /// How the agent uses the task context's `explore_brief`, the task
-    /// pilot's map of the change, appended to the instruction only when the
-    /// host delivers a brief for this prompt. Declaring it is what asks the
-    /// host for a brief and records the outcome; only `agent_implement`
-    /// declares it, so review and recovery never receive one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explore_brief_instruction: Option<String>,
     /// How the agent must treat the task context's `fleet_notices` block,
     /// appended to the instruction only when the host delivers one for this
     /// prompt. Declaring it is what asks the host for open notices; absent,

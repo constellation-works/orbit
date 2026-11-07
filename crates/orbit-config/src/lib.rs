@@ -179,7 +179,7 @@ pub use provider_limit::{
 };
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
-    ConfigSection, ConfigSnapshot, ExperimentSettings, ExploreBriefSettings, LeaseListenerSettings,
+    ConfigSection, ConfigSnapshot, ExperimentSettings, LeaseListenerSettings,
     LeaseListenerTlsSettings, MachineSettings, MidRunSteeringSettings, NoticeKindHours,
     NoticeSettings, RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
     admit_config_key, admit_settable_config_key, config_key_options,

@@ -35,8 +35,8 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
-    CommentLogMark, DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun,
-    JobRunStartOutcome, JobRunState, NamespaceProbe, TagInstruction,
+    CommentLogMark, DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome,
+    JobRunState, NamespaceProbe, TagInstruction,
 };
 use serde_json::Value;
 
@@ -737,15 +737,6 @@ impl RuntimeHost for OrbitRuntime {
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         agent::tag_instructions_for_activity(self, run_id, activity_name, input)
-    }
-
-    fn explore_brief_for_activity(
-        &self,
-        run_id: &str,
-        _activity_name: &str,
-        input: &Value,
-    ) -> Option<ExploreBriefAdmission> {
-        task_context::explore_brief_for_agent_input(self, run_id, input)
     }
 
     fn notices_for_agent_input(

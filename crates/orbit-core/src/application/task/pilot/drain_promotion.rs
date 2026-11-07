@@ -737,7 +737,6 @@ fn certified_snapshot(task: &Task) -> PreparedTaskSnapshot {
         history_len: None,
         validation_tool_warnings: Vec::new(),
         context_creation_identity: None,
-        explore_brief_requested: false,
         pilot_mode: Default::default(),
     }
 }
@@ -770,7 +769,6 @@ fn certified_validated_task(
         pilot_run_id: Some(pilot_run_id),
         pilot_crew: None,
         pilot_auto_crew: None,
-        explore_brief: None,
     }
 }
 

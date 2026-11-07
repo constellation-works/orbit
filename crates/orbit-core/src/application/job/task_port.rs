@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
@@ -306,14 +305,6 @@ impl TaskJobPort for OrbitRuntime {
     ) -> Result<String, OrbitError> {
         self.submit_resume_run(source_run_id, actor, claim_token)
             .map(|invoke| invoke.run_id)
-    }
-
-    fn claimed_leaf_explore_brief(&self) -> Result<Option<CapturedExploreBrief>, OrbitError> {
-        self.current_claimed_leaf().map(|leaf| {
-            leaf.admission
-                .receipt
-                .and_then(|receipt| receipt.explore_brief)
-        })
     }
 
     fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
