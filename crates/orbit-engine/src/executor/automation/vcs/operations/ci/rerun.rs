@@ -1,6 +1,7 @@
 //! Authenticate the complete set affected by a workflow-wide failed-jobs retry.
-use super::super::completion_deadline::Deadline;
-use super::{
+use super::super::super::completion_deadline::Deadline;
+use super::super::{
+    DEFAULT_TIMEOUT_MS,
     input::{number, required_string, same, text},
     prerequisite::{self, api, complete_list, unreadable},
     recovery_log,
@@ -11,7 +12,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
 /// A plan is evidence, not authority: the host must reserve it before sending.
-pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
     let pr = required_string(input, "pr")?;
@@ -19,7 +22,7 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
     let branch = required_string(input, "head_branch")?;
     let base = required_string(input, "base_branch")?;
     let accepted = required_string(input, "accepted_base")?;
-    if !super::input::valid_expected_remote_sha(Some(accepted)) {
+    if !super::super::input::valid_expected_remote_sha(Some(accepted)) {
         return Err(unreadable("accepted retry base revision"));
     }
     let run_id = number(input, "run_id", unreadable)?;
@@ -232,7 +235,7 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         let [step] = failed_steps.as_slice() else {
             return Err(unreadable("ambiguous root failure"));
         };
-        let signature = super::super::super::ci::log_signature::error_signature(
+        let signature = super::super::super::super::ci::log_signature::error_signature(
             &log.text,
             text(step, "name", unreadable)?,
         );
@@ -255,9 +258,12 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
                 "dependency authentication needs a complete producer command, not selected failure regions",
             ));
         }
-        dependencies.push(super::dependency_record::authenticate_dependency_record(
-            deadline, workspace, &snapshot, &run, job, &failed, accepted, &path, &source, &log.text,
-        )?);
+        dependencies.push(
+            super::super::dependency_record::authenticate_dependency_record(
+                deadline, workspace, &snapshot, &run, job, &failed, accepted, &path, &source,
+                &log.text,
+            )?,
+        );
         logs.push(json!({"job_id":job["id"],"log":log.text,"proof":log.proof}));
     }
     let mut covered = root_ids.clone();
@@ -319,4 +325,102 @@ fn conclusion_authenticated(roots: &[CiRerunRoot], job_id: u64, job: &Value) -> 
                 && root.classification == "transient"
                 && root.signature == format!("concluded {conclusion}")
         })
+}
+
+/// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
+/// failure at most once, and a retried request could queue a second rerun.
+pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    let run_id = required_string(input, "run_id")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    if !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS workflow run id '{run_id}'"
+        )));
+    }
+    if let Some(expected) = input.get("plan") {
+        let plan: orbit_types::workflow::CiRerunPlan = serde_json::from_value(expected.clone())
+            .map_err(|_| super::super::prerequisite::unreadable("CI retry reservation"))?;
+        if plan.run_id.to_string() != run_id {
+            return Err(super::super::prerequisite::unreadable(
+                "CI retry action run",
+            ));
+        }
+        let refreshed = ci_rerun_plan(
+            &json!({"workspace_path":workspace_path,"pr":plan.pr_number,"head_sha":plan.head_sha,"head_branch":plan.head_branch,"base_branch":plan.base_branch,"accepted_base":plan.accepted_base,"run_id":plan.run_id,"roots":plan.roots,"deadline_ms":input["deadline_ms"]}),
+        )?;
+        let refreshed: orbit_types::workflow::CiRerunPlan =
+            serde_json::from_value(refreshed["plan"].clone())
+                .map_err(|_| super::super::prerequisite::unreadable("refreshed CI retry plan"))?;
+        if refreshed != plan {
+            return Err(super::super::prerequisite::unreadable(
+                "CI retry authorization changed before send",
+            ));
+        }
+    }
+    let deadline = input
+        .get("prerequisite")
+        .or_else(|| input.get("plan"))
+        .map(|_| super::super::super::completion_deadline::Deadline::from_input(input))
+        .transpose()?;
+    if let Some(deadline) = deadline {
+        deadline.remaining()?;
+    }
+    if let Some(evidence) = input.get("prerequisite") {
+        let expected: orbit_types::workflow::PrInfrastructureEvidence =
+            serde_json::from_value(evidence.clone())
+                .map_err(|_| super::super::prerequisite::unreadable("rerun reservation"))?;
+        if expected.run_id.to_string() != run_id {
+            return Err(super::super::prerequisite::unreadable("rerun run identity"));
+        }
+        let observed = super::super::prerequisite::observe(
+            &json!({"workspace_path":workspace_path,"evidence":expected,"deadline_ms":input["deadline_ms"]}),
+        )?;
+        if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
+            || observed["status"] != "completed"
+            || observed["conclusion"] != "failure"
+        {
+            return Err(super::super::prerequisite::unreadable(
+                "attempt advanced before mutation",
+            ));
+        }
+        let refreshed = super::super::prerequisite::evidence(
+            &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch,"deadline_ms":input["deadline_ms"]}),
+        )?;
+        let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
+            serde_json::from_value(refreshed["evidence"].clone())
+                .map_err(|_| super::super::prerequisite::unreadable("refreshed prerequisite"))?;
+        if refreshed != expected {
+            return Err(super::super::prerequisite::unreadable(
+                "evidence changed before mutation",
+            ));
+        }
+    }
+    let timeout_ms = match deadline {
+        Some(deadline) => deadline.remaining()?,
+        None => DEFAULT_TIMEOUT_MS,
+    };
+    let result = super::super::process::run_vcs_process(
+        "gh",
+        vec![
+            "run".to_string(),
+            "rerun".to_string(),
+            run_id.to_string(),
+            "--failed".to_string(),
+        ],
+        Some(Path::new(workspace_path)),
+        timeout_ms,
+    )?;
+    if input.get("prerequisite").is_some()
+        && !result.success
+        && !result.timed_out
+        && ["(HTTP 401)", "(HTTP 403)"]
+            .iter()
+            .any(|status| result.stderr.trim_end().ends_with(status))
+    {
+        return Ok(json!({"refusal":"credential_or_permission","diagnostic":result.stderr}));
+    }
+    let result = super::super::process::succeeded(result, "workflow rerun")?;
+    Ok(json!({ "stdout": result.stdout, "stderr": result.stderr }))
 }
