@@ -154,6 +154,10 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
   background: var(--bg-elev); overflow: hidden;
 }
 .operation-group:last-child { margin-bottom: 0; }
+/* The Active and Paused groups sit inside #routine-list-groups, so the rule above zeroes
+   the last one's bottom margin. A plugin-off or owner-only group after the catalogue
+   takes the 12px gap from its top instead. */
+#routines-body > .routine-catalogue + .operation-group { margin-top: 12px; }
 .operation-group-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap;
   padding: 9px 12px; border-bottom: 1px solid var(--hair);
