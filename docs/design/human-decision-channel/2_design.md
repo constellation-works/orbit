@@ -115,7 +115,7 @@ per request:
   refused before the request is consumed. The answer records the same
   `TaskDecision::PilotAdmission` history entry a verdict comment records, against
   the hold's `operation_id`, so `operator_resolution`
-  (`crates/orbit-core/src/application/task/pilot/admission.rs`) accepts it
+  (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`) accepts it
   unchanged.
 - **Agent request** ([ORB-20736], `orbit.decision.raise`): an agent puts a multiple-choice question
   on a task assigned to a human crew. It carries two to four plain answers `1`..`4` (one-line

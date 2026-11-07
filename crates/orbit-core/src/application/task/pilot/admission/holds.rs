@@ -6,9 +6,9 @@ use orbit_types::task::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::finding_verification::UnverifiedFindingHold;
+use super::super::super::finding_verification::UnverifiedFindingHold;
 
-use super::admission::{criteria_digest, host_operational_material, validation_material};
+use super::backlog::{criteria_digest, host_operational_material, validation_material};
 
 /// A finding in the latest applied assessment that requires an operator decision.
 pub(crate) enum PilotAdmissionHold {

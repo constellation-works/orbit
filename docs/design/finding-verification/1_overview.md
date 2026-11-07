@@ -72,9 +72,9 @@ first is far cheaper, and it gives the operator the evidence either way.
 | Verifier activity | [verify_finding.yaml](../../../crates/orbit-core/assets/activities/verify_finding.yaml) | [ORB-15662] |
 | State trigger (`finding_unverified`) | [observation.rs](../../../crates/orbit-core/src/application/automation/members/member_host/observation.rs) | [ORB-15662] |
 | Seeded routine (disabled) | [finding_verification.yaml](../../../crates/orbit-core/assets/routines/finding_verification.yaml) | [ORB-15662] |
-| Admission hold | [pilot/admission.rs](../../../crates/orbit-core/src/application/task/pilot/admission.rs) | [ORB-15662] |
+| Admission hold | [pilot/admission/backlog.rs](../../../crates/orbit-core/src/application/task/pilot/admission/backlog.rs) | [ORB-15662] |
 | Guarded start checks normalized finding material before writes | [transitions/start.rs](../../../crates/orbit-core/src/application/task/transitions/start.rs) | [ORB-20390] |
-| Pilot `finding_invalid` result and its rejection | [task_pilot.yaml](../../../crates/orbit-core/assets/activities/task_pilot.yaml), [pilot/apply/task.rs](../../../crates/orbit-core/src/application/task/pilot/apply/task.rs) | [ORB-19635] |
+| Pilot `finding_invalid` result and its rejection | [task_pilot.yaml](../../../crates/orbit-core/assets/activities/task_pilot.yaml), [pilot/apply/invalid_finding.rs](../../../crates/orbit-core/src/application/task/pilot/apply/invalid_finding.rs) | [ORB-19635] |
 | Implementer `finding-invalid.json` report | [commit/finding_invalid.rs](../../../crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs) | [ORB-19635] |
 
 ## Task References
