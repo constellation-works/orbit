@@ -274,7 +274,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             if auto_fix.is_some() {
                 BlockedCheckWait::AutoFix
             } else {
-                BlockedCheckWait::Owner(&[])
+                BlockedCheckWait::Completion
             },
             &mut self.unreported,
             (max_wait_seconds > 0).then_some(completion_deadline_ms),
