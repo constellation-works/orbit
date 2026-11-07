@@ -937,9 +937,10 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
 
-      # Each public pinned download allows at most three attempts in one 60s
-      # budget. Attempt diagnostics and backoff remain part of the test gate's
-      # elapsed time (including failed setup and post actions).
+      # Each public pinned download retries transient responses until its 60s
+      # deadline is spent; there is no fixed attempt count. Attempt diagnostics
+      # and backoff remain part of the test gate's elapsed time (including
+      # failed setup and post actions).
       - name: Install cargo-nextest
         run: |
           set -euo pipefail
