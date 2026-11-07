@@ -213,7 +213,7 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 /// Decide whether a sensitive-named env value is eligible for substitution
 /// by [`redact_sensitive_env_text`].
 ///
-/// A value is eligible when, after trim, it is at least 4 characters and is
+/// A value is eligible when, after trim, it is at least 4 bytes and is
 /// not one of the small compatibility set of ordinary words (`user`, `true`,
 /// `false`, `none`, `null`, `root`, `main`, `test`, `prod`, `local`, `auto`).
 /// This keeps those known prose/sentinel values readable while allowing
