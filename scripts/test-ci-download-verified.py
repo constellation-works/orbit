@@ -209,6 +209,44 @@ finally:
 '''
 
 
+# Deadline-boundary launcher: executes the public helper's stdin unchanged
+# with a virtual monotonic clock and mocked transport. The first completed
+# response is 504 after 0.05s, backoff consumes 1s, and the second completed
+# response is configurable (404 for the boundary, 504 for the exhausted
+# case) after 0.1s. Logging the completed 404 advances the clock by
+# FINAL_LOG_SECONDS, modelling process completion/observation overhead that
+# carries interpretation across the total deadline without claiming the
+# transfer exceeded its max-time. No network, real wait, or synthetic load.
+BOUNDARY_PYTHON = r'''
+import builtins, os, subprocess, sys, time
+from unittest.mock import patch
+source = sys.stdin.read()
+sys.argv = ["-", *sys.argv[2:]]
+second_http = os.environ.get("BOUNDARY_SECOND_HTTP", "404")
+clock = [0.0]
+calls = [0]
+def transport(command, **kwargs):
+    calls[0] += 1
+    if calls[0] == 1:
+        clock[0] += 0.05
+        return subprocess.CompletedProcess(command, 22, b"504")
+    clock[0] += 0.1
+    return subprocess.CompletedProcess(command, 22, second_http.encode())
+def sleep(seconds):
+    clock[0] += seconds
+real_print = builtins.print
+def print_with_delay(*args, **kwargs):
+    real_print(*args, **kwargs)
+    if args and "http='404'" in str(args[0]):
+        clock[0] += float(os.environ.get("FINAL_LOG_SECONDS", "0"))
+with patch.object(time, "monotonic", lambda: clock[0]), \
+        patch.object(time, "sleep", sleep), \
+        patch.object(subprocess, "run", transport), \
+        patch.object(builtins, "print", print_with_delay):
+    exec(compile(source, "ci-download-verified.sh:stdin", "exec"), {"__name__": "__main__"})
+'''
+
+
 def response(exit_code=0, http="200", body=BODY, **extra):
     row = {"exit": exit_code, "http": http, **extra}
     if body is not None:
@@ -495,6 +533,49 @@ class VerifiedDownloadTests(unittest.TestCase):
                               result.stderr)
                 self.assertFalse(self.destination.exists())
                 self.assert_clean()
+
+    def test_final_permanent_response_at_deadline_stays_permanent(self):
+        # A conclusive 404 following a 504 stays permanent even when
+        # observation/logging carries processing across the total deadline.
+        # Budget stays 1.4s for every case: the boundary and the exhausted
+        # transient case share one deadline, extended for neither.
+        launcher_dir = self.root / "boundary-bin"
+        launcher_dir.mkdir()
+        launcher = launcher_dir / "python3"
+        launcher.write_text(f"#!{sys.executable}\n" + BOUNDARY_PYTHON)
+        launcher.chmod(0o755)
+        digest = hashlib.sha256(BODY).hexdigest()
+
+        def run_boundary(*, second_http, final_log_seconds, name):
+            destination = self.root / f"boundary-{second_http}-{name}"
+            env = dict(os.environ, PATH=f"{launcher_dir}:{os.environ['PATH']}",
+                       BOUNDARY_SECOND_HTTP=second_http,
+                       FINAL_LOG_SECONDS=final_log_seconds)
+            env.pop("ORBIT_CI_DOWNLOAD_FAKE_CLOCK", None)
+            return run_step([str(HELPER), URL, digest, str(destination),
+                             "--budget-seconds", "1.4"],
+                            env=env, text=True,
+                            step=f"boundary {second_http} log={final_log_seconds} {name}")
+
+        # Control: the same completed 404 comfortably inside the budget.
+        result = run_boundary(second_http="404", final_log_seconds="0", name="control")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("curl_exit=22 http='404'", result.stderr)
+        self.assertIn("ci-download: outcome=failed class=permanent attempts=2",
+                      result.stderr)
+        # Boundary: the same completed 404 observed across the deadline.
+        result = run_boundary(second_http="404", final_log_seconds="0.26", name="deadline")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("curl_exit=22 http='404'", result.stderr)
+        self.assertIn("ci-download: outcome=failed class=permanent attempts=2",
+                      result.stderr)
+        self.assertNotIn("class=transient", result.stderr)
+        # The exhausted transient budget at the same deadline stays transient.
+        result = run_boundary(second_http="504", final_log_seconds="0", name="exhausted")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ci-download: outcome=failed class=transient attempts=2",
+                      result.stderr)
+        self.assert_clean()
 
     def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
         for row in (response(6, "000"), response(stall=True)):
