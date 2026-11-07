@@ -13,6 +13,9 @@ use orbit_core::{
 };
 use serde_json::{Value, json};
 
+#[path = "auto_task_shared_completion.rs"]
+mod shared_completion;
+
 const READINESS: &str = "\
 schemaVersion: 3
 kind: Job

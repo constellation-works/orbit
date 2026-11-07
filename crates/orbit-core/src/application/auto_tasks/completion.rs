@@ -445,7 +445,8 @@ fn trusted_identity(
         .get_task_history(&task.id)
         .map_err(|error| format!("task {} history is unreadable: {error}", task.id))?;
     // The creation receipt, not the agent-writable tag, ties the task to this
-    // definition, source and step.
+    // definition and source. Only the minting step owns that reservation key;
+    // a compatible consumer binds the same task with its own independent key.
     let invocation = super::job_step::creation_receipt(&history).ok_or_else(|| {
         format!(
             "task {} has no creation receipt for this execution",
@@ -459,7 +460,7 @@ fn trusted_identity(
         Some(&source_revision),
     );
     if invocation.auto_task != checked.auto_task
-        || invocation.action_key != record.action_key
+        || (record.minted && invocation.action_key != record.action_key)
         || invocation.input_digest != record.input_digest
         || invocation.input_digest != expected_digest
     {
@@ -756,7 +757,7 @@ fn run_adapter(
         workspace_path: None,
         timeout_seconds: None,
     };
-    let ran = match run_script_step(runtime, &request) {
+    let ran = match run_completion_adapter(runtime, &request) {
         ScriptStepRun::Ran(ran) => ran,
         ScriptStepRun::Refused { code, message, .. } => {
             return Err(unavailable(format!("was refused ({code}): {message}")));
@@ -781,6 +782,14 @@ fn run_adapter(
         return Err(unavailable("answered about something else".to_string()));
     }
     Ok((verdict, ran.record.digest))
+}
+
+fn run_completion_adapter(runtime: &OrbitRuntime, request: &ScriptStepRequest) -> ScriptStepRun {
+    #[cfg(feature = "test-support")]
+    if let Some(ran) = super::completion_test_support::completion_adapter_run(request) {
+        return ran;
+    }
+    run_script_step(runtime, request)
 }
 
 /// The instructions a contract adds to a task it mints: what the owner will
