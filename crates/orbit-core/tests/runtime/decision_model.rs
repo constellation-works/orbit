@@ -183,7 +183,6 @@ fn corpus_appends(fx: &Fixture, task: &str) -> Vec<Value> {
         .collect()
 }
 
-#[test]
 fn model_answer_records_citation_raises_one_review_and_is_never_a_human_answer() {
     let fx = Fixture::new();
     let (task, request) = fx.raised(["routine", "reversible"]);
@@ -292,7 +291,6 @@ fn model_answer_records_citation_raises_one_review_and_is_never_a_human_answer()
     assert_eq!(fx.runtime.get_task(&task).unwrap().status, TaskStatus::Done);
 }
 
-#[test]
 fn model_answer_is_refused_for_non_self_answerable_tiers() {
     let fx = Fixture::new();
     let (task, request) = fx.raised(["routine", "irreversible"]);
@@ -357,7 +355,6 @@ fn model_answer_is_refused_for_non_self_answerable_tiers() {
     );
 }
 
-#[test]
 fn confirm_marks_the_model_answer_confirmed_and_appends_the_confirming_human() {
     let fx = Fixture::new();
     let (task, request) = fx.raised(["routine", "reversible"]);
@@ -415,7 +412,6 @@ fn confirm_marks_the_model_answer_confirmed_and_appends_the_confirming_human() {
     );
 }
 
-#[test]
 fn veto_reopens_the_original_request_and_restores_the_previous_status() {
     let fx = Fixture::new();
     let (task, request) = fx.raised(["routine", "reversible"]);
@@ -470,7 +466,6 @@ fn veto_reopens_the_original_request_and_restores_the_previous_status() {
     assert_eq!(appends[0]["chosen"], "2");
 }
 
-#[test]
 fn reversing_a_model_answer_reopens_it_and_retires_its_review() {
     let fx = Fixture::new();
     let (task, request) = fx.raised(["routine", "reversible"]);
@@ -503,3 +498,12 @@ fn reversing_a_model_answer_reopens_it_and_retires_its_review() {
         Some(DecisionRefusalCode::RequestSuperseded)
     );
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    model_answer_records_citation_raises_one_review_and_is_never_a_human_answer,
+    model_answer_is_refused_for_non_self_answerable_tiers,
+    confirm_marks_the_model_answer_confirmed_and_appends_the_confirming_human,
+    veto_reopens_the_original_request_and_restores_the_previous_status,
+    reversing_a_model_answer_reopens_it_and_retires_its_review,
+);

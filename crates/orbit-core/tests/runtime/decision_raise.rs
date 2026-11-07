@@ -110,7 +110,6 @@ fn raise_input(task: &str, question: &str) -> Value {
     json!({"task_id": task, "question": question, "options": options(), "topic": "pricing/sign-off"})
 }
 
-#[test]
 fn raised_decision_risk_and_category_are_stored_and_exposed() {
     let fx = Fixture::new();
     let task = fx.task("Risk decision", "dk");
@@ -155,7 +154,6 @@ fn raised_decision_risk_and_category_are_stored_and_exposed() {
     assert_eq!(omitted["answers"][0]["risk_tier"], "unknown");
 }
 
-#[test]
 fn equivalent_questions_are_deduplicated_only_within_their_task() {
     let fx = Fixture::new();
     let first = fx.task("First decision", "dk");
@@ -235,7 +233,6 @@ fn equivalent_questions_are_deduplicated_only_within_their_task() {
     }
 }
 
-#[test]
 fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
     let fx = Fixture::new();
     let decision = fx.task("Sign off the price", "dk");
@@ -369,7 +366,6 @@ fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
         .expect_err("already answered");
 }
 
-#[test]
 fn concurrent_raises_for_distinct_tasks_do_not_deadlock_on_bundle_locks() {
     use std::sync::{Arc, Barrier};
 
@@ -418,7 +414,6 @@ fn concurrent_raises_for_distinct_tasks_do_not_deadlock_on_bundle_locks() {
     );
 }
 
-#[test]
 fn concurrent_same_question_raises_on_one_task_deduplicate() {
     use std::sync::{Arc, Barrier};
 
@@ -463,7 +458,6 @@ fn concurrent_same_question_raises_on_one_task_deduplicate() {
 /// Regression (ORB-21414): the `options` schema once advertised a bare array,
 /// so an agent sent strings that only the typed parser refused. Entries must
 /// be objects, and the refusal says so.
-#[test]
 fn string_options_are_refused_as_non_object_entries() {
     let fx = Fixture::new();
     let human = fx.task("Human work", "dk");
@@ -492,7 +486,6 @@ fn string_options_are_refused_as_non_object_entries() {
     );
 }
 
-#[test]
 fn raising_is_refused_for_bad_input_agent_crews_and_past_the_caps() {
     let fx = Fixture::new();
 
@@ -612,3 +605,14 @@ fn raising_is_refused_for_bad_input_agent_crews_and_past_the_caps() {
     fx.raise("muse", raise_input(&tasks[20], "Question 20?"))
         .unwrap();
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    raised_decision_risk_and_category_are_stored_and_exposed,
+    equivalent_questions_are_deduplicated_only_within_their_task,
+    an_agent_raises_a_decision_and_only_the_operator_answers_it,
+    concurrent_raises_for_distinct_tasks_do_not_deadlock_on_bundle_locks,
+    concurrent_same_question_raises_on_one_task_deduplicate,
+    string_options_are_refused_as_non_object_entries,
+    raising_is_refused_for_bad_input_agent_crews_and_past_the_caps,
+);
