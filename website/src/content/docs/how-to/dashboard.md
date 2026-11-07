@@ -220,8 +220,9 @@ notices](../fleet-notices/).
 
 ## Tasks
 
-Search by ID or title, or filter by status. Done, Rejected, Archived,
-Someday, All, and Not ready are under **More**. Press Enter on a full task ID
+Search by ID or title, or filter by status. My work, Waiting on you,
+Done, Rejected, Archived, Someday, All, Not ready, and Pilot warnings are
+under **More**. Press Enter on a full task ID
 to open it even when the filter, page, or selected workspace hides it.
 **New task** proposes a task.
 
