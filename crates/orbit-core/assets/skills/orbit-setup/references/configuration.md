@@ -1282,7 +1282,11 @@ retain their crew/model score, with effort shown as descriptive execution usage.
 A pool entry can leave the effort to each draw instead of fixing it:
 `<crew>@auto`, or `<crew>@auto:100` in a weighted pool. At admission the draw
 resolves the entry through the crew's ordered effort bands and runs at the
-resolved `<crew>@<effort>`; runs and records never show `@auto` itself.
+resolved reference. The run's crew identity is that resolved reference:
+`<crew>@<effort>`, or the bare crew when the crew's configured effort applies
+and names none. The resolution record keeps the pool entry:
+`auto_effort.requested` is `<crew>@auto`, and the draw's source note still
+contains `<crew>@auto` (see Verify below).
 
 **Where `@auto` is allowed.** Only these pools accept it:
 
@@ -1389,12 +1393,18 @@ the policy is admitted, not that any draw has used it:
    refuse it by design.
 3. Treat a live rollout as proven only by a recorded resolution. After a
    real draw, inspect it (`orbit run show --json` for a run, or the task's
-   recorded crew selection): the implementer's crew selection carries the
-   resolution record (`requested`, `resolved`, `policy`, `basis` of `band`,
-   `fallback` or `escalation`, the matching band index, `explored`, and the
-   `signal`), and a frozen activity draw or admitted reviewer carries the
-   same record with a source ending in the resolved effort. Until such a
-   record exists, report the feature as configured, not rolled out.
+   recorded crew selection). The implementer's crew selection stores the
+   resolution record under `auto_effort`: `requested` (`<crew>@auto`),
+   `resolved`, `policy`, `basis` (`band`, `fallback` or `escalation`), `band`,
+   `explored` and `signal`. `band` is the zero-based index of the matching
+   band and is present only for basis `band`. The draw's source note reads
+   `auto effort <crew>@auto -> <resolved> (<basis>)`, where basis is `band N`
+   (N is the one-based band), `configured effort` or `pilot escalation`. An
+   explored draw reads `auto effort <crew>@auto -> <resolved> (explored;
+   policy <policy> by <basis>)`. A pilot partition draw appends this note to
+   its `source`, and an admitted reviewer appends it to its `crew_source`.
+   Until such a record exists, report the feature as configured, not rolled
+   out.
 
 
 ```toml
