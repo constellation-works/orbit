@@ -196,7 +196,9 @@ orbit task publication restore \
   --confirm
 ```
 
-It refuses a destination that already has tasks, and it never renumbers or
+Add `--branch` when the workspace published to a branch other than `main`,
+and `--commit` to restore an exact snapshot instead of the branch tip. Restore
+refuses a destination that already has tasks, and it never renumbers or
 partly replaces anything. `orbit task publication inspect` takes the same
 flags without `--confirm` and shows a snapshot without adopting it. To move
 tasks to a different machine identity, use `orbit task export` and
