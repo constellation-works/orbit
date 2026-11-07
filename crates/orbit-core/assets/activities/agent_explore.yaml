@@ -72,7 +72,7 @@ spec:
             type: integer
           rejection:
             type: string
-            enum: [contradictory_reply, missing_envelope]
+            enum: [contradictory_reply, missing_envelope, structured_output_retry_exhausted]
           rejected_reply:
             type: string
           rejected_reply_truncated:
