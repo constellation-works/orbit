@@ -1,8 +1,8 @@
 //! Tier-normalised implementer scores through the public runtime and HTTP API.
 
 use chrono::{Duration, Utc};
-use orbit_core::CrewPerformanceType;
 use orbit_core::TaskStatus;
+use orbit_core::TaskTypeDefinition;
 use orbit_core::application::agents::{
     AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
 };
@@ -415,7 +415,7 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
                     );
                 }
             }
-            let types = vec![CrewPerformanceType {
+            let types = vec![TaskTypeDefinition {
                 name: "review".into(),
                 tags: vec!["audit-work".into()],
                 paths: Vec::new(),
@@ -600,7 +600,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
             // The by-type cells share the exclusion: a type that matches
             // only on no-diff-expected has no counted task, and the
             // late-tagged task keeps the type its attempt was admitted with.
-            let types = vec![CrewPerformanceType {
+            let types = vec![TaskTypeDefinition {
                 name: "review".into(),
                 tags: vec!["no-diff-expected".into()],
                 paths: Vec::new(),

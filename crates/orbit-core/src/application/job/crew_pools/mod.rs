@@ -16,13 +16,6 @@
 //! under the task's existing automatic source. Activity, review and verifier
 //! pools use the same helper through `draw_crew_pool`, after their
 //! existing membership filters, and carry each member's draw provenance.
-//! `workflow.crew_performance` multiplies the creation, re-rate and
-//! admission draws by each crew's performance factor from the persisted
-//! snapshot through the same seam; it never re-draws an assigned crew by
-//! itself, and activity draws take no performance factor. `shadow_absolute`
-//! and `shadow_comparative` compute and record that factor with
-//! `applied: false` and leave the tickets on the weights the draw would
-//! use with the mode off; pressure still applies.
 //! `workflow.type_complexity_crews` gives a task type its own pool per tier
 //! ([`task_type`]), drawn wherever the complexity pool would be, behind an
 //! explicit crew and a purpose pool, under the same filters and weights.

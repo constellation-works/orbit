@@ -84,7 +84,7 @@ pub(super) async fn agent_by_type(
         Ok(selection) => selection,
         Err(error) => return error_response(error),
     };
-    let types = runtime.crew_performance_types().to_vec();
+    let types = runtime.task_types().to_vec();
     match facts(&state, runtime).await {
         Ok(served) => (
             served.age_header(),

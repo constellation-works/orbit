@@ -91,18 +91,6 @@ impl AgentQuery {
         }
     }
 
-    /// A time window's start, for reports that read no scan. A count window
-    /// is refused: the delivery attempts it counts come from the scan.
-    pub(super) fn time_since(&self) -> Result<DateTime<Utc>, OrbitError> {
-        match self.span {
-            WindowSpan::Hours(hours) => Ok(Utc::now() - chrono::Duration::hours(hours)),
-            WindowSpan::Attempts(_) => Err(OrbitError::InvalidInput(format!(
-                "window {} counts delivery attempts, which this report does not read: use 1h, 24h, 7d, 30d, 90d or all",
-                self.requested
-            ))),
-        }
-    }
-
     /// The selection and scan facts every response carries.
     pub(super) fn header(
         &self,

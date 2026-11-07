@@ -48,7 +48,7 @@ use super::resolve::{
 };
 use super::snapshot::AdmissionScope;
 use crate::crew_auto_effort::AutoEffortBand;
-use crate::crew_performance::CrewPerformanceType;
+use crate::crew_task_types::TaskTypeDefinition;
 use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;
 use crate::operation;

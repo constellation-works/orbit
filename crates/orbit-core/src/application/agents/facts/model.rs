@@ -408,7 +408,7 @@ pub struct AgentFacts {
     /// Lines added plus deleted from the experiment outcome's landed diff rows.
     pub(in crate::application::agents) landed_lines: BTreeMap<String, u64>,
     /// The configured task types used for comparable diff sizes.
-    pub(in crate::application::agents) performance_types: Vec<orbit_config::CrewPerformanceType>,
+    pub(in crate::application::agents) performance_types: Vec<orbit_config::TaskTypeDefinition>,
     /// Each pilot assessment of a scanned done task, graded.
     pub(in crate::application::agents) pilots: Vec<Graded>,
 }

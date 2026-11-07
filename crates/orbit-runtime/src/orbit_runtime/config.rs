@@ -276,20 +276,10 @@ impl RuntimeKernel {
         self.context.settings().review_skip_tags().as_map()
     }
 
-    /// `workflow.crew_performance_types` as admitted: the implementer
-    /// scorecard's task-type lens.
-    pub fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
-        self.context.settings().crew_performance_types()
-    }
-
-    /// `workflow.crew_performance` as admitted.
-    pub fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
-        self.context.settings().crew_performance()
-    }
-
-    /// `workflow.crew_performance_window_days` as admitted.
-    pub fn crew_performance_window_days(&self) -> u32 {
-        self.context.settings().crew_performance_window_days()
+    /// `workflow.task_types` as admitted: the ordered task types type pools
+    /// route by and the implementer scorecard's by-type lens.
+    pub fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {
+        self.context.settings().task_types()
     }
 
     /// The resolved `[operation]` review preferences (layered over the

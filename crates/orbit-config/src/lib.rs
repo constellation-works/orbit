@@ -62,8 +62,8 @@
 //!   entries owner admission applies to selector overlaps.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
-//! - `crew::performance` — the ordered `workflow.crew_performance_types` list
-//!   and the one task-type classification the scorecard and draw share.
+//! - `crew::task_types` — the ordered `workflow.task_types` list and the one
+//!   task-type classification type-pool routing and the scorecard share.
 //! - `crew::ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
 //!   first, and its standing-trial settings.
 //! - `crew::pools` — weighted pool grammar and admission.
@@ -119,8 +119,8 @@ mod visual_review;
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
 use crew::{
-    auto_effort as crew_auto_effort, ladder as crew_ladder, performance as crew_performance,
-    pools as crew_pools,
+    auto_effort as crew_auto_effort, ladder as crew_ladder, pools as crew_pools,
+    task_types as crew_task_types,
 };
 
 use std::io::Read;
@@ -144,17 +144,13 @@ pub use crew_ladder::{
     CREW_LADDER_RUNGS_KEY, CREW_LADDER_TIERS_KEY, CREW_LADDER_WEIGHT_SCALE, CrewLadderMode,
     CrewLadderSettings,
 };
-pub use crew_performance::{
-    CREW_PERFORMANCE_CAP_KEY, CREW_PERFORMANCE_KEY, CREW_PERFORMANCE_STRENGTH_KEY,
-    CREW_PERFORMANCE_TYPES_KEY, CREW_PERFORMANCE_WINDOW_DAYS_KEY, CrewPerformanceMode,
-    CrewPerformancePolicy, CrewPerformanceType, DEFAULT_CREW_PERFORMANCE_CAP,
-    DEFAULT_CREW_PERFORMANCE_STRENGTH, DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS, OTHER_TYPE,
-    classify_task_type, crew_performance_types_hash,
-};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
     TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
     type_complexity_crews_key,
+};
+pub use crew_task_types::{
+    LEGACY_TASK_TYPES_KEY, OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type,
 };
 pub use experiment_keys::ExperimentConfigKey;
 pub use human_crew_seed::{

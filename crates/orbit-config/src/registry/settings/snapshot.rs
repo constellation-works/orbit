@@ -178,7 +178,7 @@ pub(crate) enum AdmissionScope {
     /// The merged or effective document.
     Layered,
     /// One file alone: `workflow.type_complexity_crews` may name a type the
-    /// other layer's `workflow.crew_performance_types` defines.
+    /// other layer's `workflow.task_types` defines.
     File,
 }
 
@@ -227,8 +227,7 @@ impl ConfigSnapshot {
         }
         crate::crew_pools::admit_type_complexity_crews(
             &mut self.workflow_type_complexity_crews,
-            (scope == AdmissionScope::Layered)
-                .then_some(self.workflow_crew_performance_types.as_slice()),
+            (scope == AdmissionScope::Layered).then_some(self.workflow_task_types.as_slice()),
             crews,
             match auto {
                 AutoEntries::Admitted(bands) => bands,

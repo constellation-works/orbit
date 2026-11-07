@@ -2,8 +2,7 @@
 
 How scheduled work happens, and what to turn on. A fresh workspace carries the
 defaults selected by its [seeding policy](configuration.md#seeding-policy).
-Scheduled work requires a host clock and enabled definitions; the seeded
-`crew-performance-refresh` exception below no-ops while crew performance is off.
+Scheduled work requires a host clock and enabled definitions.
 This is the reference for opting in deliberately.
 
 ## The chain
@@ -114,11 +113,9 @@ deleted.
 `orbit workspace init` seeds the routines selected by `seeding.routines`
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
-to change that selection and reconcile an existing workspace. Every routine default starts disabled
-except `crew-performance-refresh`, which is seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The `host-health` auto-task is
-the one shipped auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of
-the two starts enabled only when the seeding policy selects it. The cron routines
+to change that selection and reconcile an existing workspace. Every routine default starts
+disabled. The `host-health` auto-task is the one shipped auto-task seeded enabled
+([Auto-tasks](auto-tasks.md)), and only when the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot`, `finding-verification`, `pilot-warning-triage` and `resident-cycle`
 are state-triggered and additionally resolve this host's
@@ -136,7 +133,6 @@ on this host.
 | `evolution-pass` | Mondays 05:17 host-local | `evolution_pass_pipeline` | Disabled by default; ranks capability gaps above every `[resident.evolution]` threshold, drafts at most `max_proposals` design tasks, attaches cycle/cost evidence and links records. A read-only agent drafts; deterministic application creates only `proposed` tasks. Never approves, promotes or builds. Inspect the manager view with `orbit resident digest --json`. |
 | `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
-| `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
@@ -191,35 +187,6 @@ orbit run show <run-id>
 
 The script must report `grant state: granted`. The routine's recent fires show
 the run ID; `orbit run show` reports its result counts and filing-step output.
-
-### Crew performance snapshot
-
-A crew draw must never run the scorecard scan, so the by-type cell matrix is
-persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)`
-cell with its raw score, sample count, crew mean and shrunk score, plus the
-evidence window, a hash of the type list, and `computed_at`. The seeded
-`crew-performance-refresh` routine runs hourly (`cron: "23 * * * *"`, target
-`job:crew_performance_refresh_pipeline`) to rebuild it atomically. Run it on
-demand with:
-
-```bash
-orbit run job crew_performance_refresh_pipeline
-```
-
-While `workflow.crew_performance` is `off` (the default) the refresh writes no
-snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly
-routine still records a job run). `off` is the only mode that skips the scan;
-`absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build
-snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`).
-
-A stored snapshot is usable only while fresh: a reader gets the typed reason
-`missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a
-different `workflow.crew_performance_types` list) otherwise; performance-weighted
-draws treat any unusable reason as factor 1.
-
-Verify the snapshot with `orbit run readiness`: the output prints one line for
-the snapshot (its computed time, window, type list or the unusable reason), and
-`orbit run readiness --json` carries the same details under `crew_performance`.
 
 ## Built in: final recovery of blocked tasks
 

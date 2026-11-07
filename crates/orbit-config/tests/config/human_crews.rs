@@ -79,7 +79,7 @@ fn human_crew_is_refused_wherever_an_agent_is_drawn() {
         ),
         (
             "workflow.type_complexity_crews.ui.low",
-            "[workflow]\ndefault_crew = \"sol\"\n\n[[workflow.crew_performance_types]]\nname = \"ui\"\n\
+            "[workflow]\ndefault_crew = \"sol\"\n\n[[workflow.task_types]]\nname = \"ui\"\n\
              tags = [\"ui\"]\n\n[workflow.type_complexity_crews.ui]\nlow = [\"dk\"]\n",
         ),
     ] {

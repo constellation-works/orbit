@@ -150,7 +150,7 @@ pub(in crate::application::agents) fn scan(
         pilots,
         regressions,
         landed_lines,
-        performance_types: runtime.crew_performance_types().to_vec(),
+        performance_types: runtime.task_types().to_vec(),
     })
 }
 

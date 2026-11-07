@@ -80,7 +80,7 @@ impl PurposeCrewPools {
 pub const TYPE_COMPLEXITY_CREWS_KEY: &str = "workflow.type_complexity_crews";
 
 /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools: per
-/// `workflow.crew_performance_types` type, one optional pool per complexity
+/// `workflow.task_types` type, one optional pool per complexity
 /// tier. A configured pool replaces `workflow.<tier>_complexity_crews` for a
 /// task classified to that type; every other draw keeps the complexity pool.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -145,7 +145,7 @@ pub fn type_complexity_crews_key(task_type: &str, tier: TaskComplexity) -> Strin
 }
 
 /// Admit `workflow.type_complexity_crews` in place against the crew registry
-/// and the admitted `workflow.crew_performance_types`.
+/// and the admitted `workflow.task_types`.
 ///
 /// Every pool must name only known, enabled crews, hold at least one entry,
 /// and give each entry a positive weight; tiers are `low`, `medium`, `hard`
@@ -155,7 +155,7 @@ pub fn type_complexity_crews_key(task_type: &str, tier: TaskComplexity) -> Strin
 /// the other layer. Each pool is rewritten in its canonical form.
 pub(crate) fn admit_type_complexity_crews(
     table: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    known_types: Option<&[crate::CrewPerformanceType]>,
+    known_types: Option<&[crate::TaskTypeDefinition]>,
     crews: &BTreeMap<String, Crew>,
     auto_bands: Option<&BTreeMap<String, Vec<crate::AutoEffortBand>>>,
 ) -> Result<(), OrbitError> {
@@ -170,7 +170,7 @@ pub(crate) fn admit_type_complexity_crews(
             return Err(OrbitError::InvalidInput(format!(
                 "{TYPE_COMPLEXITY_CREWS_KEY}.{task_type} names a type that \
                  {} does not define; known types: {}",
-                crate::CREW_PERFORMANCE_TYPES_KEY,
+                crate::TASK_TYPES_KEY,
                 if known.is_empty() {
                     "(none)".to_string()
                 } else {

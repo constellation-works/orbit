@@ -87,7 +87,6 @@ impl Execute for AgentsCommand {
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
             AgentsVerb::Scorecard if value["per_task"] == true => per_task_blocks(&value),
-            AgentsVerb::Scorecard if value["shadow"] == true => shadow_blocks(&value),
             AgentsVerb::Scorecard if value["by_type"] == true => by_type_blocks(&value),
             AgentsVerb::Scorecard => scorecard_blocks(&value),
             AgentsVerb::Show => show_blocks(&value),
@@ -168,68 +167,6 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
         ));
     }
     vec![Block::table(table)]
-}
-
-/// The shadow share report: one row per crew in a pool and type, then the
-/// draws that recorded no performance factor.
-fn shadow_blocks(value: &Value) -> Vec<Block> {
-    let mut recorded = Table::new(vec![
-        Column::new("POOL").fixed(),
-        Column::new("TYPE"),
-        Column::new("CREW").fixed(),
-        Column::new("DRAWS").number(),
-        Column::new("STATIC").number(),
-        Column::new("DRAWN").number(),
-        Column::new("WOULD-BE").number(),
-    ])
-    .keep_all_columns()
-    .empty_message("no recorded draw in the window".to_string());
-    for pool in value["pools"].as_array().into_iter().flatten() {
-        for crew in pool["crews"].as_array().into_iter().flatten() {
-            recorded.add_row(vec![
-                text(&pool["pool"]),
-                text(&pool["type"]),
-                text(&crew["crew"]),
-                number(&crew["draws"]),
-                percent(&crew["static_share"]),
-                percent(&crew["drawn_share"]),
-                percent(&crew["would_be_share"]),
-            ]);
-        }
-    }
-    let mut unrecorded = Table::new(vec![
-        Column::new("POOL").fixed(),
-        Column::new("CREW").fixed(),
-        Column::new("DRAWS").number(),
-        Column::new("STATIC").number(),
-        Column::new("DRAWN").number(),
-    ])
-    .keep_all_columns()
-    .empty_message("No draws without a performance record in the window.".to_string());
-    for pool in value["static_draws"]["pools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        for crew in pool["crews"].as_array().into_iter().flatten() {
-            unrecorded.add_row(vec![
-                text(&pool["pool"]),
-                text(&crew["crew"]),
-                number(&crew["draws"]),
-                percent(&crew["static_share"]),
-                percent(&crew["drawn_share"]),
-            ]);
-        }
-    }
-    vec![
-        Block::text(
-            "Shares are the mean of each draw's weight share. Would-be applies the recorded factor the draw did not use. Draws without a performance record are listed separately and counted as static."
-                .to_string(),
-        ),
-        Block::table(recorded),
-        Block::text("Draws without a performance record".to_string()),
-        Block::table(unrecorded),
-    ]
 }
 
 /// The by-type matrix: one row per (crew, model, tier, type) cell.
@@ -457,8 +394,7 @@ fn vision_probe_blocks(value: &Value) -> Vec<Block> {
 }
 
 fn selection_line(value: &Value) -> String {
-    // Only implementer counts read the execution scope; the shadow report,
-    // which reads draws, carries none.
+    // Only implementer counts read the execution scope.
     let execution = match value["execution"].as_str() {
         Some(scope) if value["role"] == "implementers" => format!(" · {scope} tasks"),
         _ => String::new(),
@@ -475,13 +411,6 @@ fn selection_line(value: &Value) -> String {
 
 fn text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
-}
-
-/// A share as a percent to one place. `number` collapses `0.5102` to `0.5`.
-fn percent(value: &Value) -> String {
-    value
-        .as_f64()
-        .map_or_else(|| "-".to_string(), |share| format!("{:.1}%", share * 100.0))
 }
 
 /// A count, rate or score; `-` when the payload has none.

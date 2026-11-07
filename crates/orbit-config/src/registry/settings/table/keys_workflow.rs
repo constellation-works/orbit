@@ -201,48 +201,12 @@ macro_rules! with_workflow_keys {
             "workflow.usage_pressure_strength",
         ),
     },
-    workflow_crew_performance_types: Vec<CrewPerformanceType> => Vec<CrewPerformanceType> {
-        key: "workflow.crew_performance_types", value_type: "array<table>",
-        description: "Ordered task types for the implementer scorecard: each entry's name, tags and context-file path globs.",
+    workflow_task_types: Vec<TaskTypeDefinition> => Vec<TaskTypeDefinition> {
+        key: "workflow.task_types", value_type: "array<table>",
+        description: "Ordered task types for workflow.type_complexity_crews routing and the implementer by-type scorecard: each entry's name, tags and context-file path globs.",
         section: ConfigSection::Delivery, order: 113,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<Vec<CrewPerformanceType>>| crate::crew_performance::admit_crew_performance_types(raw),
-    },
-    workflow_crew_performance: String => String {
-        key: "workflow.crew_performance", value_type: "string",
-        description: "How task crew draws weigh crew performance: off, absolute, comparative, shadow_absolute or shadow_comparative. Shadow records the factor and does not apply it.",
-        section: ConfigSection::Delivery, order: 114,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| crate::crew_performance::admit_crew_performance(raw),
-    },
-    workflow_crew_performance_strength: f64 => f64 {
-        key: "workflow.crew_performance_strength", value_type: "number",
-        description: "Scale of the crew-performance factor's exponent; 0 disables it.",
-        section: ConfigSection::Delivery, order: 116,
-        tier: ConfigKeyTier::Advanced,
-        resolve: crate::finite_factor_admission(
-            crate::DEFAULT_CREW_PERFORMANCE_STRENGTH,
-            0.0,
-            crate::CREW_PERFORMANCE_STRENGTH_KEY,
-        ),
-    },
-    workflow_crew_performance_cap: f64 => f64 {
-        key: "workflow.crew_performance_cap", value_type: "number",
-        description: "Largest factor crew performance scales a crew's draw weight up or down by.",
-        section: ConfigSection::Delivery, order: 117,
-        tier: ConfigKeyTier::Advanced,
-        resolve: crate::finite_factor_admission(
-            crate::DEFAULT_CREW_PERFORMANCE_CAP,
-            1.0,
-            crate::CREW_PERFORMANCE_CAP_KEY,
-        ),
-    },
-    workflow_crew_performance_window_days: u32 => u32 {
-        key: "workflow.crew_performance_window_days", value_type: "integer",
-        description: "Evidence window in days (1-90) the crew-performance snapshot is built from.",
-        section: ConfigSection::Delivery, order: 115,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| crate::crew_performance::admit_crew_performance_window_days(raw),
+        resolve: |raw: Option<Vec<TaskTypeDefinition>>| crate::crew_task_types::admit_task_types(raw),
     },
     workflow_crew_ladder_mode: String => String {
         key: "workflow.crew_ladder.mode", value_type: "string",

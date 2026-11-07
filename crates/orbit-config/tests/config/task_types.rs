@@ -1,19 +1,19 @@
-// `workflow.crew_performance_types`: the ordered task-type list admits and
+// `workflow.task_types`: the ordered task-type list admits and
 // rejects through the same registry row a config load uses.
 
 /// The admitted type list one load of `body` gives, or its error.
-fn load_types(body: &str) -> Result<Vec<CrewPerformanceType>, String> {
-    load_config(body).map(|config| config.snapshot.crew_performance_types().to_vec())
+fn load_types(body: &str) -> Result<Vec<TaskTypeDefinition>, String> {
+    load_config(body).map(|config| config.snapshot.task_types().to_vec())
 }
 
 #[test]
-fn crew_performance_types_default_to_empty_and_admit_an_ordered_list() {
+fn task_types_default_to_empty_and_admit_an_ordered_list() {
     assert_eq!(load_types("").expect("empty loads"), Vec::new());
     let types = load_types(
-        "[[workflow.crew_performance_types]]\n\
+        "[[workflow.task_types]]\n\
          name = \"review\"\n\
          tags = [\"no-diff-expected\"]\n\
-         [[workflow.crew_performance_types]]\n\
+         [[workflow.task_types]]\n\
          name = \"ui\"\n\
          tags = [\"ui\"]\n\
          paths = [\"web/**\"]\n",
@@ -25,18 +25,18 @@ fn crew_performance_types_default_to_empty_and_admit_an_ordered_list() {
 }
 
 #[test]
-fn crew_performance_types_reject_duplicate_reserved_and_matchless_entries() {
+fn task_types_reject_duplicate_reserved_and_matchless_entries() {
     let duplicate = load_types(
-        "[[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"a\"]\n\
-         [[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"b\"]\n",
+        "[[workflow.task_types]]\nname = \"review\"\ntags = [\"a\"]\n\
+         [[workflow.task_types]]\nname = \"review\"\ntags = [\"b\"]\n",
     )
     .expect_err("duplicate names are refused");
     assert!(duplicate.contains("review"), "{duplicate}");
     let reserved =
-        load_types("[[workflow.crew_performance_types]]\nname = \"other\"\ntags = [\"a\"]\n")
+        load_types("[[workflow.task_types]]\nname = \"other\"\ntags = [\"a\"]\n")
             .expect_err("other is refused");
     assert!(reserved.contains("other"), "{reserved}");
-    let matchless = load_types("[[workflow.crew_performance_types]]\nname = \"empty\"\n")
+    let matchless = load_types("[[workflow.task_types]]\nname = \"empty\"\n")
         .expect_err("an entry with neither tags nor paths is refused");
     assert!(matchless.contains("empty"), "{matchless}");
 }
@@ -44,12 +44,12 @@ fn crew_performance_types_reject_duplicate_reserved_and_matchless_entries() {
 #[test]
 fn classification_takes_the_first_match_and_falls_back_to_other() {
     let types = vec![
-        CrewPerformanceType {
+        TaskTypeDefinition {
             name: "review".into(),
             tags: vec!["no-diff-expected".into()],
             paths: Vec::new(),
         },
-        CrewPerformanceType {
+        TaskTypeDefinition {
             name: "ui".into(),
             tags: vec!["ui".into()],
             paths: vec!["web/**".into()],
@@ -80,7 +80,7 @@ fn classification_takes_the_first_match_and_falls_back_to_other() {
         "other"
     );
     // Anchor-less selectors (module:, command:) never match a path glob.
-    let wildcard_types = vec![CrewPerformanceType {
+    let wildcard_types = vec![TaskTypeDefinition {
         name: "wildcard".into(),
         tags: Vec::new(),
         paths: vec!["*".into()],

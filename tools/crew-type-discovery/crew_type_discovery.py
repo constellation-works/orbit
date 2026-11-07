@@ -226,7 +226,7 @@ def unrepresentable_reason(leaf) -> str | None:
         details.append("has no positive tag or path to match on")
     return (
         "leaf predicate " + "; ".join(details) + ": a "
-        "[[workflow.crew_performance_types]] entry matches a task carrying any "
+        "[[workflow.task_types]] entry matches a task carrying any "
         "listed tag or path, so no ready-to-paste block describes exactly this "
         "population; the reported n/mean describe the leaf only"
     )
@@ -245,7 +245,7 @@ def suggestion_for(leaf, margin, min_leaf):
     name = slug("-".join(name_parts))[:64]
     if name in RESERVED_TYPE_NAMES:
         name = f"candidate-{name}"
-    lines = ["[[workflow.crew_performance_types]]", f'name = "{name}"']
+    lines = ["[[workflow.task_types]]", f'name = "{name}"']
     if tags:
         lines.append("tags = [" + ", ".join(f'"{t}"' for t in tags) + "]")
     if paths:

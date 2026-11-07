@@ -1033,7 +1033,7 @@ fn creation_pool_draws_skip_provider_limited_crews() {
             "purpose:baseline_red_repair",
         ),
         (
-            "[[workflow.crew_performance_types]]\nname = \"repair\"\ntags = [\"repair\"]\n\
+            "[[workflow.task_types]]\nname = \"repair\"\ntags = [\"repair\"]\n\
              [workflow.type_complexity_crews.repair]\nmedium = POOL",
             vec!["repair".to_string()],
             "type:repair/medium",

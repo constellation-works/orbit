@@ -38,7 +38,6 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "worktree_gc",
     "task_publication",
     "store_gc",
-    "crew_performance_refresh",
     "ux-rules",
 ];
 
@@ -48,6 +47,7 @@ pub const RETIRED_DEFAULT_ROUTINES: &[&str] = &[
     "task_triage",
     "ship_sweep",
     "blocked_task_triage",
+    "crew_performance_refresh",
 ];
 
 /// Names of the default auto-tasks this Orbit ships, in seeding order.

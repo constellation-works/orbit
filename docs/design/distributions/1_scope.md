@@ -22,9 +22,10 @@ unbuilt are called out separately below.
 Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
-12 default routines and 19 default auto-tasks: 31 defaults in total. By default it seeds all
-31 into each workspace; the routine `crew_performance_refresh` ([ORB-17816]) and the auto-task
-`host-health` ([ORB-21596]) are seeded enabled, and the others are disabled. Seeded definitions carry managed
+11 default routines and 19 default auto-tasks: 30 defaults in total. By default it seeds all
+30 into each workspace; the auto-task `host-health` ([ORB-21596]) is seeded enabled, and the
+others are disabled. The routine `crew_performance_refresh` ([ORB-17816]), once seeded enabled,
+was retired in [ORB-22804]. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
 which of its already-seeded plugin definitions to enable with a preset.
 
@@ -104,8 +105,7 @@ routines, a list policy is the durable per-name opt-out; there is no separate ro
 delete record.
 
 `orbit workspace show` reports the effective policies and applied preset. `orbit doctor`
-does not report an excluded default as missing; it warns if crew performance uses a
-snapshot while `crew_performance_refresh` is excluded. See [Configuration](../../CONFIG.md)
+does not report an excluded default as missing. See [Configuration](../../CONFIG.md)
 for the operator-facing reference.
 
 ### Workspace presets
@@ -214,6 +214,7 @@ These ideas appeared in earlier proposals but are not current behavior or requir
 
 - [ORB-10800] — gave seeded definitions managed provenance and digest-based retirement.
 - [ORB-17816] — added `crew_performance_refresh`, the one default routine seeded enabled.
+- [ORB-22804] — retired `crew_performance_refresh` with crew-performance weighting.
 - [ORB-19186] — implemented the seeding policy, presets and their workspace surfaces.
 - [ORB-21596] — shipped the host-health auto-task enabled by default.
 

@@ -44,7 +44,7 @@ pub(super) struct RoleSpec {
 pub(super) fn implementer_per_task_rows(
     facts: &AgentFacts,
     since: DateTime<Utc>,
-    types: &[orbit_config::CrewPerformanceType],
+    types: &[orbit_config::TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
     implementers::per_task_rows(facts, since, types, execution)
@@ -53,7 +53,7 @@ pub(super) fn implementer_per_task_rows(
 pub(super) fn implementer_by_type_cells(
     facts: &AgentFacts,
     since: DateTime<Utc>,
-    types: &[orbit_config::CrewPerformanceType],
+    types: &[orbit_config::TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
     implementers::by_type_cells(facts, since, types, execution)

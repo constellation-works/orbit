@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use super::ConfigSnapshot;
 use crate::attention::AttentionSettings;
 use crate::crew_ladder::{CrewLadderMode, CrewLadderSettings};
-use crate::crew_performance::{CrewPerformanceMode, CrewPerformancePolicy, CrewPerformanceType};
+use crate::crew_task_types::TaskTypeDefinition;
 use crate::provider_limit::{
     CrewSelection, ProviderLimitBudget, ProviderLimitExplicitCrews, ProviderLimitPolicy,
     ProviderLimitTarget, UsagePressurePolicy, stored_provider_limit_override,
@@ -60,32 +60,10 @@ impl ConfigSnapshot {
 }
 
 impl ConfigSnapshot {
-    /// The admitted `workflow.crew_performance_types`, in configured order.
+    /// The admitted `workflow.task_types`, in configured order.
     #[must_use]
-    pub fn crew_performance_types(&self) -> &[CrewPerformanceType] {
-        &self.workflow_crew_performance_types
-    }
-
-    /// The admitted `workflow.crew_performance` mode.
-    #[must_use]
-    pub fn crew_performance(&self) -> CrewPerformanceMode {
-        CrewPerformanceMode::parse(&self.workflow_crew_performance).unwrap_or_default()
-    }
-
-    /// The admitted `workflow.crew_performance_window_days`.
-    #[must_use]
-    pub fn crew_performance_window_days(&self) -> u32 {
-        self.workflow_crew_performance_window_days
-    }
-
-    /// The admitted draw-weighting policy: mode, strength and cap.
-    #[must_use]
-    pub fn crew_performance_policy(&self) -> CrewPerformancePolicy {
-        CrewPerformancePolicy {
-            mode: self.crew_performance(),
-            strength: self.workflow_crew_performance_strength,
-            cap: self.workflow_crew_performance_cap,
-        }
+    pub fn task_types(&self) -> &[TaskTypeDefinition] {
+        &self.workflow_task_types
     }
 }
 
@@ -134,7 +112,6 @@ impl ConfigSnapshot {
                 cap: self.workflow_usage_pressure_cap,
                 strength: self.workflow_usage_pressure_strength,
             },
-            crew_performance: self.crew_performance_policy(),
         }
     }
 }

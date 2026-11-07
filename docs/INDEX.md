@@ -141,7 +141,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (38)
+### Shipped (37)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -152,7 +152,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
-| [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
@@ -216,7 +215,6 @@ a conservative title/status fallback.
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Draft | claude |
-| [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
 | [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer. | Draft | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
@@ -269,6 +267,7 @@ They are reference only and are not authoritative.
 
 | Feature | Summary | Status | Lead |
 | --- | --- | --- | --- |
+| [Crew Performance](./design/_archived/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Deprecated | claude |
 | [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
