@@ -354,6 +354,21 @@ fn tracking_blocks(tracking: &Value) -> Vec<Block> {
         succeeded,
         count(&own["fires_24h"]),
     ));
+    // `auto_tasks['<name>']` histories the condition reads; unavailable is
+    // never shown as "never".
+    if let Some(named) = tracking["auto_tasks"].as_object() {
+        for (name, history) in named {
+            let state = match (
+                history["last_succeeded_at"].as_str(),
+                history["unavailable"].as_str(),
+            ) {
+                (Some(at), _) => format!("last succeeded {at}"),
+                (None, Some(why)) => format!("last succeeded unavailable ({why})"),
+                (None, None) => "last succeeded never".to_string(),
+            };
+            lines.push(format!("Auto-task {name}: {state}"));
+        }
+    }
     let mut blocks = vec![Block::text(lines.join("\n"))];
     blocks.push(Block::text("\nRecent fires"));
     let mut fires = Table::new(vec![

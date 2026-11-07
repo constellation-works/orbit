@@ -339,6 +339,7 @@ fn reject_self_match(
         board: BoardFacts::default(),
         tasks: BTreeMap::new(),
         self_facts: SelfFacts::default(),
+        auto_tasks: BTreeMap::new(),
     };
     let evaluator = ConditionEvaluator::new(&facts);
     if evaluator.truth(&checked.when, Some(&base)) != Truth::True {

@@ -21,8 +21,8 @@ pub use check::{
     check_condition, check_guard,
 };
 pub use evaluate::{
-    BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, JobWaitFacts, OperandValue,
-    OriginFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
+    AcceptedHistoryFacts, BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, JobWaitFacts,
+    OperandValue, OriginFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
 };
 pub use firing::{
     ConditionObservation, PassOutcome, PassSettings, SubjectObservation, advance_pass,

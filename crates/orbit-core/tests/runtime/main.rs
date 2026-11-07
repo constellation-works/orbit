@@ -154,6 +154,7 @@ mod job_finalization;
 mod light_delivery;
 mod local_route_before_pr;
 mod mid_run_steering;
+mod named_accepted_history;
 mod notice_authority;
 mod orphan_adoption;
 mod plugin_inspection;

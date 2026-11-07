@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use cel::IdedExpr;
 use cel::common::ast::{CallExpr, ComprehensionExpr, Expr, LiteralValue, SelectExpr, SourceInfo};
 use orbit_types::workflow::automation::ConditionScope;
+use orbit_types::workflow::is_valid_auto_task_name;
 
 use super::ast::{path_of, string_list_literal, string_literal};
 use super::check::{ConditionReads, MAX_COMPREHENSION_NESTING};
@@ -147,8 +148,10 @@ impl Checker<'_> {
                 "unknown identifier '{name}'; a {} condition reads {}",
                 scope.as_str(),
                 match scope {
-                    ConditionScope::Task => "task, tasks['<ID>'], board, self and now",
-                    _ => "tasks['<ID>'], board, self and now",
+                    ConditionScope::Task => {
+                        "task, tasks['<ID>'], auto_tasks['<name>'], board, self and now"
+                    }
+                    _ => "tasks['<ID>'], auto_tasks['<name>'], board, self and now",
                 }
             ),
         )
@@ -157,12 +160,16 @@ impl Checker<'_> {
     fn presence_test(&mut self, expr: &IdedExpr, select: &SelectExpr) -> Result<CelType, Failure> {
         let operand = self.check(&select.operand)?;
         match operand {
-            CelType::Object(ObjectKind::Tasks | ObjectKind::TagCounts | ObjectKind::Steps) => self
-                .fail(
-                    expr,
-                    "has() does not test a cross-read; an index that does not exist makes the \
+            CelType::Object(
+                ObjectKind::Tasks
+                | ObjectKind::TagCounts
+                | ObjectKind::Steps
+                | ObjectKind::AutoTasks,
+            ) => self.fail(
+                expr,
+                "has() does not test a cross-read; an index that does not exist makes the \
                      evaluation unknown",
-                ),
+            ),
             CelType::Object(kind) => {
                 let Some(field) = kind.field(&select.field) else {
                     return self.fail(expr, unknown_field(kind, &select.field));
@@ -214,6 +221,10 @@ impl Checker<'_> {
             CelType::Object(ObjectKind::Steps) => self.fail(
                 expr,
                 "steps takes a string-literal index: write steps['<id>']",
+            ),
+            CelType::Object(ObjectKind::AutoTasks) => self.fail(
+                expr,
+                "auto_tasks takes a string-literal index: write auto_tasks['<name>']",
             ),
             CelType::Object(kind) => {
                 let Some(field) = kind.field(&select.field) else {
@@ -659,6 +670,27 @@ impl Checker<'_> {
                 self.check(index)?;
                 self.reads.steps.insert(id.to_owned());
                 Ok(CelType::Object(ObjectKind::StepObservation))
+            }
+            CelType::Object(ObjectKind::AutoTasks) => {
+                let Some(name) = string_literal(index) else {
+                    return self.fail(
+                        index,
+                        "computed cross-read index: auto_tasks[...] takes a string literal, such \
+                         as auto_tasks['release-prep']",
+                    );
+                };
+                if !is_valid_auto_task_name(name) {
+                    return self.fail(
+                        index,
+                        format!(
+                            "auto_tasks['{name}']: an auto-task name is lowercase alphanumeric \
+                             plus '-' and '_', starting alphanumeric"
+                        ),
+                    );
+                }
+                self.check(index)?;
+                self.reads.auto_task_histories.insert(name.to_owned());
+                Ok(CelType::Object(ObjectKind::AcceptedHistory))
             }
             CelType::Object(ObjectKind::TagCounts) => {
                 let Some(tag) = string_literal(index) else {

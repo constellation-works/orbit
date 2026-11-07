@@ -90,6 +90,9 @@ pub struct ConditionReads {
     /// Whether `self.last_succeeded_at` is read, which needs the definition's
     /// accepted-result history.
     pub self_last_succeeded: bool,
+    /// `auto_tasks['<name>']` auto-task names, whose accepted-result history
+    /// the condition reads.
+    pub auto_task_histories: BTreeSet<String>,
 }
 
 /// A condition that passed every load-time check.

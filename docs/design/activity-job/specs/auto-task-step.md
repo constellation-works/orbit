@@ -1,7 +1,7 @@
 ---
 title: "Spec: Auto-task steps and durable waiting"
 owner: codex
-last_updated: 2026-11-04
+last_updated: 2026-11-07
 last_validated: 2026-11-04
 status: Draft
 feature: activity-job
@@ -267,9 +267,11 @@ No cross-workspace task binding or follower-owned coordination is introduced.
 These examples are disabled design examples. Auto-task job `wait_until`,
 `expire_when` and job-wait `board.empty` are shipped. The routine condition has
 per-bucket `board.backlog.empty`, `board.in_progress.empty`, and
-`board.review.empty` fields, but no aggregate `board.empty`; its
-`auto_tasks['release-prep'].last_succeeded_at` read is also future work. The
-accepted-history accessor and workspace adapter exist (see "Phase 3 as built"), but
+`board.review.empty` fields, but no aggregate `board.empty`. Its
+`auto_tasks['release-prep'].last_succeeded_at` read is shipped [ORB-22676]: any
+condition reads a named definition's accepted-result history, and a missing
+definition, missing contract or unreadable history is unknown, never "never
+accepted". The workspace adapter exists (see "Phase 3 as built"), but
 `reuse_when` does not read a `result` yet, so this release-readiness flow is not
 ready to enable. The target must name the actual definition: full QA is the
 workspace's `qa-full-sweep`, while a step ID may say `full-qa-sweep`.
@@ -437,8 +439,9 @@ enablement, provider work and release timing remain operator decisions.
   step requires `release-readiness/v1`, which pins the revision at admission;
   otherwise it needs `has()`. So does `result.revision`, except under that
   contract. The job-wait schema adds aggregate `board.empty`; condition-trigger
-  `board` still exposes only per-bucket `empty` fields, and does not expose
-  `auto_tasks['name']` accepted-completion reads. `tasks['<ID>']` stays readable.
+  `board` still exposes only per-bucket `empty` fields. Condition triggers (not
+  job waits) read `auto_tasks['<name>'].last_succeeded_at` [ORB-22676].
+  `tasks['<ID>']` stays readable.
 - **Explain.** `orbit automation explain job:<name>` (MCP
   `orbit.automation.explain`) reports the outer bound, the revision pin, and
   each step's target, resolved now with its file digest, enabled state and
