@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.46.0 — 2026-11-07
+
+### Breaking Changes
+
+- **Explorer and agent invocation removed**: `orbit run agent`, the `orbit.agent.invoke` tool, the `agent-invoke` MCP toolset and explorer delegation are gone. The `workflow.explore.*` and `workflow.purpose_crews.explorer` keys are deprecated and warn. ([ORB-20383])
+  `orbit run agent` removed → use task workflows or a provider CLI; delete the explorer keys and `agent-invoke` from `machine.mcp.toolsets`
+- **Root help regrouped**: `orbit --help` now lists commands under Setup, Work, Operate, Observe, Analytics, Scheduler, Services and Advanced. Two commands move; their old paths still work, warn on stderr and stay for the compatibility window. ([ORB-22572])
+  `orbit crew ladder` renamed → use `orbit agents ladder`; `orbit browser-kit` renamed → use `orbit config browser-kit`
+- **Finding rejections bind to the finding**: A report rejecting a task's review finding now records which finding it judged, so a task edited since is not rejected. ([ORB-22588])
+  A rejection report written by 0.45.x no longer verifies → re-run the task to judge the finding again
+- **Auto-task completion contracts**: Auto-task definitions take an optional `completion` contract that their job step is held to. Orbit 0.45.x refuses to load a definition that sets one. ([ORB-20165])
+  Upgrade every host before adding `completion` to a definition
+
+### Highlights
+
+- **Effort picked per task**: A `<crew>@auto` reference in an implementer, task-pilot or reviewer pool picks the effort level at admission from the crew's configured effort bands. Orbit refuses it until bands are set. ([ORB-20386])
+- **Release-readiness job**: An example job runs QA, security review and release preparation as one gated run with validated evidence. Steps can reuse a recent accepted result, and routine conditions can read named accepted history. ([ORB-20166])
+- **Task pilot holds what a leaf can't satisfy**: Acceptance criteria that need owner-only evidence, and explicit start prerequisites, now hold a task at piloting instead of failing it later in a worker. ([ORB-22621])
+- **Hosted CI hiccups stop failing deliveries**: CI artifact download failures count as infrastructure and are retried longer, and a CI rerun waits for a workflow that is still running instead of escalating. ([ORB-22620])
+- **Dashboard fits more screens**: Long Routines, crew settings and plugin tool lists are bounded and searchable, task actions move to the top bar, and narrow widths gain a Drain rail item. ([ORB-22551])
+- **Doctor suggests a way back**: `orbit doctor --check` with an unknown name now offers a recovery command, and diagnostic summaries and failed-run headers wrap to the terminal. ([ORB-22544])
+
 ## 0.45.1 — 2026-11-06
 
 ### Highlights
