@@ -366,7 +366,7 @@ cancel the schedule or override the hold automatically. See
 [authorization.md](authorization.md#keep-authorized-work-moving).
 
 While sustained host resource pressure throttles admissions
-(`[workflow.resource_throttle]`), every task reports `resource_throttled` and
+(`[workflow.resource_throttle]`), held tasks report `resource_throttled` and
 the output names the resource, its value, threshold and since-when. Unknown
 readings never throttle; JSON lists them in
 `capacity.resource_telemetry_unknown`. On a replica the throttle is this

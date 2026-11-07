@@ -2579,10 +2579,11 @@ cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 While CPU, memory, Linux disk I/O stall or a checkout/worktree/global-root
 filesystem stays at or above its high mark for ten seconds (`[workflow.resource_throttle]` in
 [CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)), Orbit
-starts no new task work until that resource falls back below its resume mark.
-Local drain waves admit no leaves and poll for recovery, pull drains request
-no new claims but keep settling and reconciling, and `orbit run ship` without
-task ids is refused with `resource_throttled`.
+throttles admission until the held resource falls below its resume mark. A
+local drain can still admit eligible CPU-light auto-tasks while CPU alone is
+held and reserved slots remain; memory, disk and I/O pressure hold them too.
+Pull drains do not use that budget and request no new claims while throttled.
+`orbit run ship` without task ids is refused with `resource_throttled`.
 Running work is never cancelled, paused or killed.
 
 **Whose resources gate a pull claim.** A claimed leaf runs on the follower,
@@ -2629,8 +2630,10 @@ on hosts that report it.
   `drain_last_pass`.
 - `orbit run auto`, MCP `orbit.workflow.auto` start, the dashboard's drain
   start, and a ship of named tasks (`orbit run ship`, MCP
-  `orbit.workflow.ship`, the dashboard's ship) proceed and report a warning. The drain admits nothing until the
-  pressure clears; a named ship starts at once.
+  `orbit.workflow.ship`, the dashboard's ship) proceed and report a warning.
+  A resource-throttled drain admits nothing until the pressure clears, except
+  that a local drain can still admit eligible CPU-light work while CPU alone is
+  held and reserved slots remain; a named ship starts at once.
 - CPU-light work keeps moving under CPU pressure. When CPU is the only held
   resource, a local drain still starts `no-diff-expected` auto-task leaves
   (after-landing review, friction curation, full review) until

@@ -891,7 +891,7 @@ Interactive init asks for the default crew by name, offering only enabled crews.
 
 ### `[workflow.resource_throttle]` — host pressure
 
-While CPU, memory, disk I/O (Linux) or a watched filesystem stays at or above its high mark, admission using those thresholds starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
+While CPU, memory, disk I/O (Linux) or a watched filesystem stays at or above its high mark, admission using those thresholds is held until it falls below the resume mark; a local drain may still admit eligible CPU-light auto-tasks while CPU alone is held and reserved slots remain. Memory, disk and I/O pressure also hold CPU-light work, and pull drains do not use the budget. Running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
 
 A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minutes` (default 180, global only, at least 1) stands new unattended work down only when the schedule is that close, so a reboot set for tomorrow does not idle the host all day. Readiness still names a later schedule. See [scheduled host shutdown](runbooks/distributed-drain.md#scheduled-host-shutdown-or-reboot).
 

@@ -139,21 +139,11 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   // and free slots there is nothing to explain, so no line shows.
   let summary = "";
   let detail = "";
-  if (capacity.host_shutdown && capacity.host_shutdown_holding !== false) {
-    summary = "Host shutdown holds new tasks.";
-  } else if (capacity.host_shutdown) {
-    const mode = capacity.host_shutdown.mode || "shutdown";
-    const at = capacity.host_shutdown.scheduled_at || "a later time";
-    summary = `Host ${mode}; holds later.`;
-    detail = `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`;
-  } else if (capacity.resource_throttle) {
-    const resources = Array.isArray(capacity.resource_throttle.resources)
-      ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";
-    summary = "Host throttle: no new starts.";
-    detail = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
-  } else if (capacity.admissions_stopped === true) {
-    summary = "Window admissions stopped.";
-    detail = "This window has stopped starting new tasks. Tasks already admitted keep running.";
+  const pulling = autoDrainPhase({ capacity }).pulling;
+  const hold = autoDrainAdmissionHold(capacity, { pull: pulling });
+  if (hold) {
+    summary = hold.summary;
+    detail = hold.detail;
   } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
     const toClear = busy - limit + 1;
     summary = `Leaf limit: ${autoDrainPlural(toClear, "slot")} must clear.`;
@@ -254,6 +244,90 @@ function throttleName(item) {
 export function throttleNames(resources) {
   const names = [...new Set(resources.map(throttleName))];
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] || "";
+}
+
+// Explain what the current throttle allows for this admission route. Readiness
+// sets `applies` only for the local CPU-only light gate; pull drains never use
+// that budget, even when the same host snapshot has reserved slots available.
+export function autoDrainThrottleCopy(capacity, { pull = false } = {}) {
+  const resources = throttledResources(capacity);
+  const names = throttleNames(resources);
+  const cpuOnly = resources.length === 1 && resources[0].resource === "cpu";
+  if (pull) {
+    return {
+      summary: `Pull drain held by ${names} throttle.`,
+      detail: `New pull tasks cannot start until the host ${names} throttle clears. Pull drains do not use reserved CPU-light slots.`,
+    };
+  }
+  if (cpuOnly) {
+    const budget = capacity?.cpu_light_budget || {};
+    const remaining = autoDrainNumber(budget.remaining);
+    const reserved = autoDrainNumber(budget.reserved);
+    const free = autoDrainNumber(capacity?.free_slots);
+    if (budget.applies === true && remaining > 0 && free > 0) {
+      const available = Math.min(remaining, free);
+      return {
+        summary: "CPU throttle: eligible CPU-light tasks may start.",
+        detail: `CPU pressure holds other tasks. Eligible CPU-light tasks may use up to ${autoDrainPlural(available, "free reserved slot")} while workspace capacity is available.`,
+      };
+    }
+    if (budget.applies === true && remaining <= 0) {
+      return {
+        summary: "CPU throttle: CPU-light budget exhausted.",
+        detail: `All ${Number.isFinite(reserved) ? reserved : "reserved"} CPU-light slots are in use. New tasks wait until a slot frees or CPU pressure clears.`,
+      };
+    }
+    if (budget.applies === true && free === 0) {
+      return {
+        summary: "CPU throttle: no free leaf slots.",
+        detail: "CPU pressure holds ordinary tasks, and no workspace leaf slots are free for CPU-light tasks.",
+      };
+    }
+    if (Number.isFinite(reserved) && reserved === 0) {
+      return {
+        summary: "CPU throttle: CPU-light admission disabled.",
+        detail: "The CPU-light budget is disabled, so new tasks wait until CPU pressure clears.",
+      };
+    }
+  }
+  const compactNames = names.replace(/ and /g, "/");
+  return {
+    summary: `${compactNames} throttle holds new tasks.`,
+    detail: `New tasks cannot start until the host ${names} throttle clears.`,
+  };
+}
+
+// Holds that apply to the current capacity view. Shutdown and explicit stops
+// precede resource pressure so a secondary throttle cannot hide the real hold.
+export function autoDrainAdmissionHold(capacity, { pull = false } = {}) {
+  if (capacity?.host_shutdown && capacity.host_shutdown_holding !== false) {
+    return {
+      summary: "Host shutdown holds new tasks.",
+      detail: "The host shutdown hold prevents new tasks from starting.",
+    };
+  }
+  if (pull && capacity?.pull_drain_admissions_stopped === true) {
+    return {
+      summary: "Pull drain admissions stopped.",
+      detail: "This pull drain has stopped claiming new tasks. Tasks already claimed keep running.",
+    };
+  }
+  if (!pull && capacity?.admissions_stopped === true) {
+    return {
+      summary: "Window admissions stopped.",
+      detail: "This window has stopped starting new tasks. Tasks already admitted keep running.",
+    };
+  }
+  if (capacity?.resource_throttle) return autoDrainThrottleCopy(capacity, { pull });
+  if (capacity?.host_shutdown) {
+    const mode = capacity.host_shutdown.mode || "shutdown";
+    const at = capacity.host_shutdown.scheduled_at || "a later time";
+    return {
+      summary: `Host ${mode}; holds later.`,
+      detail: `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`,
+    };
+  }
+  return null;
 }
 
 // The current readings, stop thresholds and resume thresholds of a throttle.
