@@ -316,7 +316,7 @@ their sources; `--json` includes the same `review` object, and the default text 
 Mid-run steering lets an operator's task comments guide a run at a later prompt
 and prevents delivery from committing while an operator comment remains
 undelivered. It works within the task's admitted scope and authority; enabling
-it does not widen either. It is opt-in, and `orbit init` leaves it disabled.
+it does not widen either. A new global config seeded by `orbit init` sets `workflow.mid_run_steering.enabled = true`; when the key is absent it resolves to `false`.
 
 | Key | Default | Effect |
 |---|---|---|
