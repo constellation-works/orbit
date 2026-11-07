@@ -498,12 +498,15 @@ pub(super) fn backlog_snapshot_in_mode(
             if runnable {
                 return true;
             }
-            let missing = candidates
+            // `crew_unset` holds one entry per base crew, so iterate it and
+            // keep each entry any candidate matches: two pool members of one
+            // family then name that crew once, not once per member.
+            let missing = crew_unset
                 .iter()
-                .filter_map(|candidate| {
-                    crew_unset
+                .filter(|unset| {
+                    candidates
                         .iter()
-                        .find(|unset| same_crew_family(&unset.crew, &candidate.crew.name))
+                        .any(|candidate| same_crew_family(&unset.crew, &candidate.crew.name))
                 })
                 .collect::<Vec<_>>();
             if !missing.is_empty() {

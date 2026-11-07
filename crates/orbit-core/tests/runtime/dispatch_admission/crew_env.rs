@@ -163,6 +163,82 @@ env = ["OPENAI_API_KEY={SOURCE}"]
 }
 
 #[test]
+fn two_pool_members_of_one_family_report_the_unset_crew_once() {
+    if !isolated(
+        "dispatch_admission::crew_env::two_pool_members_of_one_family_report_the_unset_crew_once",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::unset([SOURCE]);
+    let crews = format!(
+        r#"
+[crews.sol]
+provider = "codex"
+model = "fixture-shared"
+[crews.opus]
+provider = "claude"
+model = "claude-opus"
+env = ["OPENAI_API_KEY={SOURCE}"]
+"#
+    );
+    let config = format!(
+        r#"
+[workflow]
+default_crew = "sol"
+hard_complexity_crews = ["sol"]
+{crews}"#
+    );
+    let (_root, runtime, _) = configured_runtime(&config, &["src/fixture.rs"]);
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Same-family unset crew fixture".into(),
+            description: "Two pool members share one unset crew family".into(),
+            acceptance_criteria: vec!["The unset crew is named once".into()],
+            plan: "Observe admission".into(),
+            complexity: TaskComplexity::Hard,
+            context_files: vec!["file:src/fixture.rs".into()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    // Creation drew `sol`, the hard pool's only member then. Replace the
+    // pool with two references to one unset family and reopen, so admission
+    // draws the whole new pool, as it does for an unassigned hard task.
+    let config = format!(
+        r#"
+[workflow]
+default_crew = "sol"
+hard_complexity_crews = ["opus@medium:100", "opus:100"]
+{crews}"#
+    );
+    std::fs::write(runtime.paths().global_dir.join("config.toml"), config).unwrap();
+    let runtime = OrbitRuntime::from_roots(&runtime.paths().global_dir, &runtime.paths().orbit_dir)
+        .unwrap()
+        .with_host_resource_probe(PressureProbe::calm());
+    let backlog = list_backlog_tasks(&runtime, json!({}));
+    let excluded = backlog["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == task.id)
+        .unwrap();
+    assert_eq!(excluded["reason"], "crew_env_unset", "{backlog}");
+    assert_eq!(excluded["crew"], "opus", "{backlog}");
+    let detail = excluded["detail"].as_str().unwrap();
+    assert_eq!(detail.matches(SOURCE).count(), 1, "{detail}");
+    assert_eq!(detail.matches("crew `opus`").count(), 1, "{detail}");
+    let readiness = default_readiness(&runtime);
+    let entry = readiness_task(&readiness, &task.id.to_string());
+    assert_eq!(entry["reason"], "crew_env_unset", "{entry}");
+    assert_eq!(entry["crew"], "opus", "{entry}");
+    assert_eq!(
+        entry["detail"].as_str().unwrap().matches(SOURCE).count(),
+        1,
+        "{entry}"
+    );
+}
+
+#[test]
 fn readiness_preserves_the_live_drains_unset_source_in_a_different_environment() {
     if !isolated(
         "dispatch_admission::crew_env::readiness_preserves_the_live_drains_unset_source_in_a_different_environment",
