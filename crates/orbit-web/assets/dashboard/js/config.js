@@ -64,6 +64,7 @@ export function initConfig() {
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastPayload = null;
     editing = null;
+    resetCrewList();
     resetTopics();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
@@ -736,12 +737,43 @@ function systemValueCell(row, payload) {
 
 // ------------------------------------------------------------------- crews
 
+// Limit, Effort, Tags / fallbacks, Layer and Used by. On a narrow screen they
+// sit behind each row's "Details" control; at desktop width every column shows.
+const CREW_DETAIL_COLUMNS = new Set([3, 4, 5, 6, 7]);
 const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+
+// The crew list is bounded: the first CREW_PAGE matches render, and the rest
+// stay one control away ("Show more", "Show all"). The filter, the reveal
+// window and each row's open detail group are operator state that survives
+// a background refresh; a workspace switch starts them over.
+const CREW_PAGE = 6;
+let crewQuery = "";
+let crewLimit = CREW_PAGE;
+const crewExpanded = new Set();
+
+function resetCrewList() {
+  crewQuery = "";
+  crewLimit = CREW_PAGE;
+  crewExpanded.clear();
+}
+
+/// Every whitespace-separated term of the query must appear in the crew's
+/// name, provider, model, effort, tags or description.
+function crewMatchesQuery(crew, query) {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const haystack = [crew.name, crew.provider, crew.model, crew.effort, crew.description, ...(Array.isArray(crew.tags) ? crew.tags : [crew.tags])]
+    .filter((value) => value != null)
+    .join(" ")
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
 
 function crewsPanel(payload) {
   const crews = payload.crews || [];
   const panel = el("section", { class: "panel config-section config-crews" });
   const section = (payload.sections || []).find((entry) => entry.kind === "crews");
+  const count = el("span", { class: "count" });
   panel.appendChild(
     el("header", {}, [
       el("span", {}, [
@@ -749,12 +781,48 @@ function crewsPanel(payload) {
         el("span", { class: "config-section-blurb", text: section?.blurb }),
       ]),
       el("span", { class: "config-header-right" }, [
-        el("span", { class: "count", text: `${crews.length} defined` }),
+        count,
         editable(payload) ? addCrewButton() : null,
       ]),
     ]),
   );
   const body = el("div", { class: "config-section-body" });
+  const list = el("div", { class: "config-crew-list" });
+  const more = el("div", { class: "config-crew-more" });
+  const status = el("span", { class: "config-crew-status" });
+  status.setAttribute("role", "status");
+  const refresh = (revealFrom) => {
+    const matches = crews.filter((crew) => crewMatchesQuery(crew, crewQuery));
+    // A crew being edited stays on screen even when the filter or window hides it.
+    const editingName = editing && editing.kind === "crew" ? editing.name : null;
+    const shown = matches.slice(0, crewLimit);
+    if (editingName && crews.some((crew) => crew.name === editingName) && !shown.some((crew) => crew.name === editingName)) {
+      shown.push(crews.find((crew) => crew.name === editingName));
+    }
+    list.replaceChildren(...shown.map((crew) => crewRow(crew, payload)));
+    if (crewQuery && !matches.length) {
+      list.appendChild(el("div", { class: "config-empty", text: `No crew matches “${crewQuery}”.` }));
+    }
+    count.textContent = crewQuery ? `${matches.length} of ${crews.length} defined` : `${crews.length} defined`;
+    status.textContent = matches.length ? `Showing ${Math.min(crewLimit, matches.length)} of ${matches.length}${crewQuery ? " matching" : ""} crews` : "";
+    renderCrewMore(more, status, matches.length, () => refresh(), (from) => refresh(from));
+    if (revealFrom != null) list.children[revealFrom]?.focus();
+  };
+  if (crews.length) {
+    const tools = el("div", { class: "config-crew-tools" });
+    const filter = el("input", { class: "config-input config-crew-filter" });
+    filter.type = "search";
+    filter.placeholder = "Filter by name, provider or model…";
+    filter.value = crewQuery;
+    filter.setAttribute("aria-label", "Filter crews by name, provider or model");
+    filter.addEventListener("input", () => {
+      crewQuery = filter.value.trim();
+      crewLimit = CREW_PAGE;
+      refresh();
+    });
+    tools.appendChild(filter);
+    body.appendChild(tools);
+  }
   const head = el("div", { class: "config-crew-cells config-crew-head col-head" });
   head.setAttribute("role", "row");
   for (const label of CREW_COLUMNS) {
@@ -769,9 +837,47 @@ function crewsPanel(payload) {
   if (editing && editing.kind === "crew" && editing.name === "") {
     body.appendChild(crewEditor({ name: "", tags: [] }, payload, true));
   }
-  for (const crew of crews) body.appendChild(crewRow(crew, payload));
+  body.appendChild(list);
+  body.appendChild(more);
   panel.appendChild(body);
+  refresh();
   return panel;
+}
+
+/// The reveal controls under the list: the status line, "Show more", "Show all"
+/// and, once the window has grown, "Show fewer". Each keeps every crew reachable.
+function renderCrewMore(container, status, total, onShrink, onReveal) {
+  container.replaceChildren(status);
+  const control = (label, onClick) => {
+    const button = el("button", { class: "config-action", text: label });
+    button.type = "button";
+    button.addEventListener("click", onClick);
+    container.appendChild(button);
+    return button;
+  };
+  if (total > crewLimit) {
+    const remaining = total - crewLimit;
+    control(`Show ${Math.min(CREW_PAGE, remaining)} more`, () => {
+      const from = crewLimit;
+      crewLimit += CREW_PAGE;
+      onReveal(from);
+    });
+    if (remaining > CREW_PAGE) {
+      control(`Show all ${total}`, () => {
+        const from = crewLimit;
+        crewLimit = total;
+        onReveal(from);
+      });
+    }
+  }
+  if (crewLimit > CREW_PAGE && total > CREW_PAGE) {
+    const fewer = control("Show fewer", () => {
+      crewLimit = CREW_PAGE;
+      onShrink();
+      container.querySelector("button")?.focus();
+    });
+    fewer.classList.add("config-crew-fewer");
+  }
 }
 
 function addCrewButton() {
@@ -785,6 +891,7 @@ function crewRow(crew, payload) {
   const referenced = crew.referenced_by || [];
   const node = el("div", { class: "config-row config-crew-row" });
   node.dataset.key = `crews.${crew.name}`;
+  node.tabIndex = -1;
   if (referenced.length) node.classList.add("referenced");
   // A table without `enabled` is enabled; only an explicit false disables.
   const disabled = crew.enabled === false;
@@ -827,14 +934,34 @@ function crewRow(crew, payload) {
     el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
     usedBy,
     editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : el("span", { text: EMPTY_ARRAY }),
-  ].map((value, index) => el("div", { class: "config-crew-cell" }, [
+  ].map((value, index) => el("div", { class: CREW_DETAIL_COLUMNS.has(index) ? "config-crew-cell config-crew-detail" : "config-crew-cell" }, [
     el("span", { class: "config-crew-label", text: CREW_COLUMNS[index] }),
     value,
   ])));
   node.appendChild(cells);
+  node.appendChild(crewDetailToggle(node, crew.name));
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
+}
+
+function crewDetailToggle(node, name) {
+  const open = crewExpanded.has(name);
+  node.classList.toggle("expanded", open);
+  const button = el("button", { class: "config-crew-toggle", text: open ? "Hide details" : "Details" });
+  button.type = "button";
+  button.setAttribute("aria-expanded", String(open));
+  button.setAttribute("aria-label", `${open ? "Hide" : "Show"} details for crew ${name}`);
+  button.addEventListener("click", () => {
+    const next = !crewExpanded.has(name);
+    if (next) crewExpanded.add(name);
+    else crewExpanded.delete(name);
+    node.classList.toggle("expanded", next);
+    button.textContent = next ? "Hide details" : "Details";
+    button.setAttribute("aria-expanded", String(next));
+    button.setAttribute("aria-label", `${next ? "Hide" : "Show"} details for crew ${name}`);
+  });
+  return button;
 }
 
 // A crew's `env` entries (`NAME` or `NAME=SOURCE`): the variables its agents
