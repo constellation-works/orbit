@@ -410,6 +410,21 @@ sweep. Browser setup uses the host kit when available and the documented
 disposable Playwright recipe otherwise; an
 unavailable browser is NOT_RUN, not a clean dashboard result.
 
+On macOS, the harness probes nested Seatbelt application before running
+`definition-policy-boundary`, and protected fixture writes before
+`distributed-drain-owner-roundtrip` and `workflow-process-boundary`. The
+write probe uses synthetic environment and `.orbit` files under the same
+disposable `TMPDIR` as the Cargo fixtures. A nested `sandbox_apply` EPERM or
+a protected-write EPERM/EACCES makes the affected scenario `NOT_RUN`, with
+no earned assertions. Each row retains `capability_probe` (exact command,
+exit status, stdout and stderr), and the report lists it in `capability_gaps`.
+These gaps keep the release decision `INCOMPLETE`; they never count as PASS.
+Probe failures other than the recognized permission refusals, including
+timeouts, truncated output or unverified cleanup, stay FAIL. If the probe
+passes, an EPERM from the scenario itself also stays FAIL: the harness never
+reclassifies scenario failures by matching permission-error text. Non-macOS
+execution and the inventory's capability keys are unchanged.
+
 The local `npm-package` row runs
 `./scripts/smoke-npm-install.sh --local-package-check` from the candidate root.
 It checks the Cargo workspace, npm, server and registry-package versions and

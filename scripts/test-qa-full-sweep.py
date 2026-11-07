@@ -1796,6 +1796,77 @@ def inspect_browser_capability(playwright_module: Path, env: dict, repo: Path):
     return probe, version
 
 
+def inspect_nested_sandbox_capability(capability, env, repo):
+    """Probe the fixture operation itself, never infer availability from scenario errors."""
+    if capability == "sandbox-apply":
+        command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default)", "/usr/bin/true"]
+    else:
+        # Use the same TMPDIR and protected spellings as the Cargo fixtures.
+        # All bytes are synthetic and stay under the disposable sweep root.
+        command = [sys.executable, "-c", """
+import errno, json, sys, tempfile
+from pathlib import Path
+denied = []
+with tempfile.TemporaryDirectory(prefix="qa-protected-write-", dir=sys.argv[1]) as directory:
+    for name in [".env", ".ENV.local", ".Orbit/state.json", ".orbit/private.json", ".Env.local", ".ENVRC"]:
+        path = Path(directory) / name
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic capability probe\\n")
+        except OSError as error:
+            if error.errno not in (errno.EPERM, errno.EACCES):
+                raise
+            denied.append({"path": name, "errno": error.errno, "error": str(error)})
+print(json.dumps({"denied": denied}))
+sys.exit(77 if denied else 0)
+""", env["TMPDIR"]]
+    evidence = run(command, cwd=repo, env=env)
+    unavailable = False
+    if capability == "sandbox-apply":
+        unavailable = (evidence["exit_code"] == 71 and
+                       "sandbox_apply: Operation not permitted" in evidence.get("stderr", ""))
+    elif evidence["exit_code"] == 77:
+        try:
+            denied = json.loads(evidence["stdout"])["denied"]
+            unavailable = bool(denied) and all(item["errno"] in (errno.EPERM, errno.EACCES)
+                                               for item in denied)
+        except (ValueError, KeyError, TypeError):
+            pass
+    # A timeout, truncated log or unverified cleanup is a probe failure, not
+    # permission to conceal a harness defect as an unavailable capability.
+    if (unavailable and not evidence.get("output_truncated")
+            and evidence.get("cleanup_verified") is True):
+        evidence["outcome"] = "NOT_RUN"
+    else:
+        finalize_result(evidence, [], "capability-probe")
+    return {"capability": capability, **evidence}
+
+
+def scenario_sandbox_probe(scenario, temp, env, repo, probes):
+    capability = {
+        "definition-policy-boundary": "sandbox-apply",
+        "distributed-drain-owner-roundtrip": "protected-fixture-write",
+        "workflow-process-boundary": "protected-fixture-write",
+    }.get(scenario)
+    if platform.system() != "Darwin" or capability is None:
+        return None
+    if capability not in probes:
+        probes[capability] = inspect_nested_sandbox_capability(capability, env, repo)
+    return probes[capability]
+
+
+def sandbox_capability_gate(scenario, command, candidate_id, probe):
+    if probe is None or probe["outcome"] == "PASS":
+        return None
+    reason = f"{probe['capability']}: preflight {probe['outcome']}; scenario was not executed"
+    result = {"scenario": scenario, "command": command, "exit_code": None,
+              "stdout": "", "stderr": reason, "outcome": probe["outcome"],
+              "assertions": [], "candidate_id": candidate_id, "capability_probe": probe}
+    if probe["outcome"] == "NOT_RUN":
+        result["missing_capabilities"] = [reason]
+    return result
+
+
 def add_result(results, scenario, evidence):
     evidence["scenario"] = scenario
     results.append(evidence)
@@ -1808,6 +1879,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
     records on every scenario that was not reached.
     """
     results = []
+    sandbox_probes = {}
     root = temp / "home/.orbit"
     work = temp / "workspace"
     other = temp / "other-workspace"
@@ -1825,7 +1897,14 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
             raise RuntimeError(f"fixture commit failed: {evidence}")
 
     def checked(scenario, argv, cwd, assertions, validator, *, accept_nonzero=False):
+        probe = scenario_sandbox_probe(scenario, temp, env, repo, sandbox_probes)
+        gated = sandbox_capability_gate(scenario, argv, candidate_id, probe)
+        if gated is not None:
+            results.append(gated)
+            return None
         evidence = run(argv, cwd=cwd, env=env)
+        if probe is not None:
+            evidence["capability_probe"] = probe
         failure = None
         try:
             validator(evidence)
@@ -2303,6 +2382,9 @@ spec:
                     cwd=work, env=operator_env)
         tool = run([*plugin_base, "tool", "run", "qashapes.recommend", "--input",
                     json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env)
+        probe = scenario_sandbox_probe("definition-policy-boundary", temp, env, repo, sandbox_probes)
+        if probe is not None:
+            group["capability_probe"] = tool["capability_probe"] = probe
         failure = None
         try:
             group_body = parse_json(group, "plugin command group")
@@ -3952,6 +4034,7 @@ def main():
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
         browser_run_dir = None
+        sandbox_probes = {}
         if args.run_commands and capabilities["browser"]:
             browser_evidence_dir.mkdir(parents=True, exist_ok=True)
             browser_run_dir = Path(tempfile.mkdtemp(prefix=f"{candidate_id[:12]}-", dir=browser_evidence_dir))
@@ -3968,6 +4051,11 @@ def main():
                 command = expand_scenario_command(scenario["command"], args.playwright_module,
                                                   scenario_evidence_dir)
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
+                probe = scenario_sandbox_probe(scenario["id"], temp, scenario_env, repo, sandbox_probes)
+                gated = sandbox_capability_gate(scenario["id"], command, candidate_id, probe)
+                if gated is not None:
+                    results.append(gated)
+                    continue
                 if scenario["id"] == "website-build":
                     evidence = website_build_evidence(repo, temp, env, command)
                 else:
@@ -4004,6 +4092,8 @@ def main():
                     assertions = []
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, assertions, candidate_id, failure)}
+                if probe is not None:
+                    result["capability_probe"] = probe
                 if scenario["capability"] == "macos" and result["outcome"] == "PASS":
                     result.update(outcome="NOT_RUN", assertions=[], evidence_type="inventory-listing",
                                   inventory_assertions=["macos-required-workflow-is-current"],
@@ -4107,6 +4197,11 @@ def main():
                             "warning": scratch_cleanup_warning,
                             "detached_workers": detached_workers},
         "results": results, "findings": decision_failures,
+        "capability_gaps": [{"scenario": row["scenario"],
+                             "missing_capabilities": row["missing_capabilities"],
+                             **({"capability_probe": row["capability_probe"]}
+                                if row.get("capability_probe") else {})}
+                            for row in results if row.get("missing_capabilities")],
         "post_publish_handoff": {"npm_freshness":"PENDING", "website_freshness":"PENDING",
                                   "part_of_pre_release_decision":False},
         "decision":"PASS" if full_pass else "INCOMPLETE"
