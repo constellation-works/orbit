@@ -43,7 +43,7 @@ mod body_history;
 mod change_probe;
 mod completion;
 #[cfg(feature = "test-support")]
-pub(crate) mod completion_test_support;
+pub(crate) use completion::test_support as completion_test_support;
 pub mod crud;
 pub mod delete;
 pub(crate) mod demoted;
