@@ -20,12 +20,14 @@
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
 //! same workspace name write byte-identical cron definitions, and differ only
-//! in the state trigger's owner. Seeded routines are disabled when written;
-//! they exist so a fresh workspace gets reviewable, opt-in schedules without
-//! silently enabling unattended work. The one exception is
-//! `crew_performance_refresh`, seeded enabled because, while
+//! in the state trigger's owner. Most seeded routines are disabled when
+//! written; they exist so a fresh workspace gets reviewable, opt-in schedules
+//! without silently enabling unattended work. `worktree_gc` and `task_pilot`
+//! are seeded enabled, and so is `crew_performance_refresh`, because, while
 //! `workflow.crew_performance` is `off`, its action skips the scan and
-//! writes no snapshot (it still records a job run each hour).
+//! writes no snapshot (it still records a job run each hour). `enabled` is
+//! the operator's: a refresh onto a changed template keeps the on-disk
+//! value, so a workspace seeded while a default was disabled stays disabled.
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -157,6 +159,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../../assets/routines/superseded/task_pilot.2026-11-01.yaml"),
+    ),
+    (
+        "task_pilot",
+        include_str!("../../../assets/routines/superseded/task_pilot.2026-11-07.yaml"),
     ),
     (
         "worktree_gc",

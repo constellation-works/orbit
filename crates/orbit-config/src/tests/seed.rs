@@ -108,7 +108,7 @@ fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
                 .expect("rendered pool parses and references defined crews");
             for entry in canonical.entries {
                 assert!(
-                    crews[&entry.name].enabled,
+                    crews[orbit_types::identity::crew_reference_base(&entry.name)].enabled,
                     "families {detected:?}: pool entry `{}` must be enabled",
                     entry.name
                 );

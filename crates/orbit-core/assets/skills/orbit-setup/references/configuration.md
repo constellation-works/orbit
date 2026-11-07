@@ -1481,11 +1481,19 @@ table, nor a system-crew key. The four
 grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored
-legacy `qa` crew remains loadable, but init never creates it. Init also writes every
-`workflow.purpose_crews` pool explicitly: `task_pilot` and `auto_fix` copy `low`, and
-`failure_recovery` and `review` copy `medium`. Because a fresh init writes them as explicit lists,
-editing `workflow.*_complexity_crews` later does not move those purpose pools; to move system
-work, edit its `workflow.purpose_crews.<purpose>` pool directly. With no supported
+legacy `qa` crew remains loadable, but init never creates it. Init also writes the
+`workflow.purpose_crews` pools as fixed lists filtered to the enabled crews: `review` from
+`sol, sonnet, muse-wonder, grok, opus@medium`; `task_pilot` from `luna@high, haiku@high,
+muse-spark@high`; `failure_recovery` from `luna, haiku, muse-spark, grok`; `auto_fix` and
+`pre_landing_review` from `luna, haiku, muse-spark`; `final_recovery` from `sol, muse-wonder,
+opus@medium`; `baseline_red_repair` from `terra, sonnet, muse-wonder, grok`. A pool left empty
+is omitted, except `final_recovery`, written as `[]` (off). Editing
+`workflow.*_complexity_crews` later does not move those purpose pools; to move system
+work, edit its `workflow.purpose_crews.<purpose>` pool directly. The same seed sets
+`machine.auto_concurrency.mode = "enforce"`, `experiments.enabled = true`,
+`workflow.crew_selection = "static"`, `workflow.mid_run_steering.enabled = true`,
+`workflow.task_pilot_freshness.material_fields = ["description", "criteria"]` and
+`workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`. With no supported
 agent CLI, every crew is written disabled and no default crew is set, so nothing
 dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:

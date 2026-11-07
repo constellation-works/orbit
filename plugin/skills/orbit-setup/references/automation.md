@@ -115,8 +115,9 @@ deleted.
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
 to change that selection and reconcile an existing workspace. Every routine default starts disabled
-except `crew-performance-refresh`, which is seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The `host-health` auto-task is
+except `worktree-gc`, `task-pilot` and `crew-performance-refresh` (which
+no-ops while `workflow.crew_performance` is `off`). A workspace seeded while
+`worktree-gc` or `task-pilot` shipped disabled keeps its `enabled` value. The `host-health` auto-task is
 the one shipped auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of
 the two starts enabled only when the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
@@ -339,7 +340,8 @@ worker, or on another platform. See
 
 ## Recommended enablement order
 
-Enable in this order and stop wherever the value runs out. Each step is safe
+A newly initialized workspace starts with steps 1 and 2 enabled. Otherwise,
+enable in this order and stop wherever the value runs out. Each step is safe
 without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every

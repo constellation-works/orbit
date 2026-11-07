@@ -19,6 +19,13 @@ pass = [
 [execution.codex]
 sandbox = "danger-full-access"
 
+[machine.auto_concurrency]
+# Admit delivery work only while its forecast fits this host's CPU and memory.
+mode = "enforce"
+
+[experiments]
+enabled = true
+
 # Selective before-landing review is off by default. To watch what it would
 # select without invoking reviewers or changing delivery, an operator may
 # set (example only; `review.timing` stays "off"):
@@ -33,6 +40,14 @@ sandbox = "danger-full-access"
 # configured) when selected candidates must review before landing.
 
 [workflow]
+# Draw task crews by their pool weights alone.
+crew_selection = "static"
+# Context entries matching these globs take no context lock.
+unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]
+# Deliver operator comments written on a task while its run is in flight.
+mid_run_steering.enabled = true
+# Only a requirements edit makes a task-pilot assessment stale.
+task_pilot_freshness.material_fields = ["description", "criteria"]
 
 # Footprint lock modes. Any overlap between two tasks' context selectors keeps
 # the second task waiting. A path in `shared` mode lets overlapping tasks run
