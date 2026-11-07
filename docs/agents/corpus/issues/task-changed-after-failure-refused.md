@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery]
 status: active
-links: [ORB-16063, ORB-16616, ORB-17520, ORB-18052, ORB-15206, ORB-21875, ORB-21229]
+links: [ORB-16063, ORB-16616, ORB-17520, ORB-18052, ORB-15206, ORB-21875, ORB-21229, ORB-22481]
 ---
 
 # Final recovery refused because the task changed after the failure
@@ -50,3 +50,15 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | 2026-11-02T03:30:22.703477930Z | ORB-21229 | jrun-20261102-0329-t1 | outcome=refused: task changed after failure; final_recovery; later operator decision stands; task changed after the failure (was blocked at 2026-11-02T03:28:56.631967965+00:00, now backlog at 2026-11-02T03:29:31.286067434+00:00); the later decision stands; source ORB-21229 history:final_recovery_decided@2026-11-02T03:30:22.703477930Z | status_changed done at 2026-11-02T04:10:58.680990206Z |
 
 Correct stale-decision refusal, not an escalated block or repair request. Included for complete record accounting.
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 1 source occurrence on 1 task; route `recovery`, disposition `counted`.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-02T03:30:22Z | ORB-21229 | jrun-20261102-0329-t1 | final_recovery decision=decide outcome=refused: task changed after the failure; the later decision stands; source ORB-21229 history:final_recovery_decided | correct stale-decision refusal; ORB-21229 done 2026-11-02T04:10Z |
+
+Not an escalated block; included for complete accounting. The preceding block was the SIGTERM interruption in `worker-killed-sigterm-before-landing`.

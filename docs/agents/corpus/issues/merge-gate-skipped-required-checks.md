@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery]
 status: resolved
-links: [ORB-20578, ORB-20615, ORB-20620, ORB-20631, ORB-20641, ORB-21875]
+links: [ORB-20578, ORB-20615, ORB-20620, ORB-20631, ORB-20641, ORB-21875, ORB-22481]
 ---
 
 # Merge gate refuses PRs whose required checks were skipped
@@ -48,3 +48,17 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | 2026-11-01T00:51:01.936832339Z | ORB-20641 | jrun-20261101-0039-c3 | friction_reported: repair skipped-check policy then resume; pr_complete; intentional skipped required checks lack strict successful run; F2026-10-727: same strict-success refusal; no CI rerun can clear intentional skips; source ORB-20641 history:blocked_task_triaged@2026-11-01T00:51:01.936832339Z | external_merge_settled done at 2026-11-01T00:52:05.271898058Z |
 
 Already fixed by ORB-20615 at 2026-11-01T01:05:24Z; all three occurrences predate landing. No duplicate run-failure task or comments on terminal tasks.
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 3 source occurrences across 3 tasks; route `run_failure`, disposition `counted` (covered by done ORB-20615). Rows confirm episodes already recorded above; they are not additional incidents.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T23:44:10Z | ORB-20620 | jrun-20261031-2330-c6 | final_recovery escalate: complete_pr rejects skipped required checks (delivery.rs strict-success guard); triage friction_reported F2026-10-727; source ORB-20620 history:final_recovery_decided, blocked_task_triaged@2026-10-31T23:50:12Z | merged outside Orbit, settled done |
+| 2026-11-01T00:02:03Z | ORB-20631 | jrun-20261031-2355-c3 | same signature; triage friction_reported F2026-10-727@2026-11-01T00:10:31Z | merged outside Orbit, settled done |
+| 2026-11-01T00:44:35Z | ORB-20641 | jrun-20261101-0039-c3 | same signature; triage friction_reported F2026-10-727@2026-11-01T00:51:01Z | merged outside Orbit, settled done |
+
+All three precede ORB-20615 landing (2026-11-01T01:05Z). No occurrence after landing was found in the candidate set.

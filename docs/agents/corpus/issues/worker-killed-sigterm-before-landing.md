@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery]
 status: resolved
-links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21229, ORB-21876]
+links: [ORB-18010, ORB-18052, ORB-20155, ORB-21875, ORB-21111, ORB-21174, ORB-21229, ORB-21876, ORB-22481]
 ---
 
 # Worker killed by SIGTERM before landing
@@ -60,3 +60,21 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-10-30T09:03:52.937051156Z | ORB-20155 | not recorded in triage comment | worker killed by SIGTERM before landing; source ORB-20155 history:blocked_triage@2026-10-30T09:03:52.937051156Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 7 source occurrences across 3 tasks (prior ORB-22246 slice: 1); route `run_failure`, disposition `counted` (covered by done ORB-21876). Rows confirm episodes already recorded above; they are not additional incidents.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-02T01:51:15Z | ORB-21111 | jrun-20261102-0145-c3 | workflow_run_interrupted error_code=worker_terminated, reason=process_not_found; supervisor reaped worker pid 2959134, killed by SIGTERM sent by pid 1227088 (command `orbit`); oom_kill=0, pids max=0; source ORB-21111 history:workflow_run_interrupted | task returned to backlog; ORB-21111 delivered, done 2026-11-02T03:34Z |
+| 2026-11-02T01:53:36Z | ORB-21111 | jrun-20261102-0152-c12 | same signature; pid 3541701 killed by SIGTERM from pid 1227088 | as above |
+| 2026-11-02T02:10:11Z | ORB-21111 | jrun-20261102-0208-c2 | same signature; pid 108066 killed by SIGTERM from pid 1227088 | as above |
+| 2026-11-02T01:50:44Z | ORB-21174 | jrun-20261102-0149-c3 | same signature; pid 3275102 killed by SIGTERM from pid 1227088; source ORB-21174 history:workflow_run_interrupted | final recovery requeue 1 of 2 at 01:55:50Z (`run was killed from outside`); ORB-21174 done 2026-11-02T04:16Z |
+| 2026-11-02T01:53:44Z | ORB-21174 | jrun-20261102-0152-c11 | same signature; pid 3541691 killed by SIGTERM from pid 1227088 | as above |
+| 2026-11-02T02:50:55Z | ORB-21174 | jrun-20261102-0248-c27 | same signature on build 266d234e9; pid 560304 killed by SIGTERM from pid 1227088 | as above |
+| 2026-11-02T03:28:54Z | ORB-21229 | jrun-20261102-0328-c3 | same signature; pid 3239733 killed by SIGTERM from pid 3266805 (command `orbit`); source ORB-21229 history:workflow_run_interrupted | final recovery refused (task changed after failure); ORB-21229 done 2026-11-02T04:10Z |
+
+Post-landing check: `orbit run history -j task_pr_pipeline --since 2026-11-04T08:37:41Z --state interrupted --limit 200 --no-reconcile --json` listed 0 runs when ORB-22481 ran (2026-11-07, 2.8 days after ORB-21876 landed). Verdict stays `too early`; all seven episodes precede landing.
