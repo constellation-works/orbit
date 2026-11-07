@@ -2452,7 +2452,8 @@ spec:
     return results, None
 
 
-def validate_hosted_macos_evidence(body, scenario, candidate, repo):
+def validate_hosted_macos_evidence(body, scenario, candidate, repo, *, source_files=None):
+    """Check candidate files in a checkout or an explicit repository-path mount map."""
     if body.get("evidence_type") != "orbit-macos-platform" or body.get("platform") != "macos":
         raise ValueError("hosted evidence has the wrong type or platform")
     if candidate.get("status"):
@@ -2478,7 +2479,9 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
         raise ValueError("hosted evidence has an invalid workflow revision")
 
     expected_identity = {
-        path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
+        path: hashlib.sha256(
+            (source_files[path] if source_files is not None else repo / path).read_bytes()
+        ).hexdigest()
         for path in [
             "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
             "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
@@ -2486,12 +2489,15 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
     }
     if body.get("source_identity") != expected_identity:
         raise ValueError("hosted evidence source identity does not match the checkout")
-    validate_native_execution(body.get("execution", []), repo, candidate["head"])
+    workflow_path = source_files[".github/workflows/ci-macos.yml"] if source_files is not None else None
+    validate_native_execution(body.get("execution", []), repo, candidate["head"],
+                              workflow_path=workflow_path)
 
 
-def native_required_commands(repo):
+def native_required_commands(repo, *, workflow_path=None):
     commands = []
-    for line in (repo / ".github/workflows/ci-macos.yml").read_text().splitlines():
+    workflow = workflow_path if workflow_path is not None else repo / ".github/workflows/ci-macos.yml"
+    for line in workflow.read_text().splitlines():
         if line.lstrip().startswith("#") or "--record-native-command " not in line:
             continue
         tokens = shlex.split(line.split("# check-ci-macos:")[0])
@@ -2523,8 +2529,8 @@ def native_shell_status(evidence):
     return code
 
 
-def validate_native_execution(records, repo, head):
-    expected = native_required_commands(repo)
+def validate_native_execution(records, repo, head, *, workflow_path=None):
+    expected = native_required_commands(repo, workflow_path=workflow_path)
     if sorted(json.dumps(row.get("command")) for row in records) != sorted(json.dumps(cmd) for cmd in expected):
         raise ValueError("macOS evidence does not record every exact required execution command")
     for row in records:
