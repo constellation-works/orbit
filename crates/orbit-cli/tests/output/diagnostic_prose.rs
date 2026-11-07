@@ -17,7 +17,7 @@ fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     for args in [
         vec!["agents", "scorecard", "--role", "implementers"],
         vec!["run", "readiness"],
-        vec!["crew", "ladder"],
+        vec!["agents", "ladder"],
         vec!["task", "flow"],
         vec!["codebase", "analytics"],
         vec!["run", "history", "--no-reconcile"],
@@ -38,7 +38,7 @@ fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
             let stderr = ansi.replace_all(&stderr, "");
             for line in stdout.lines().chain(stderr.lines()) {
                 // Fixed table columns may overflow by contract; only prose wraps.
-                let table_row = args[0] == "crew"
+                let table_row = args[1] == "ladder"
                     && ["TIER", "low", "medium", "hard", "xhard"]
                         .iter()
                         .any(|prefix| line.starts_with(&format!("{prefix} ")))
