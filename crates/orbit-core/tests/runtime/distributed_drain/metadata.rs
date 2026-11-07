@@ -22,16 +22,31 @@ impl OwnerCoordinator for MetadataWire {
         session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         self.requests.lock().unwrap().push(input.clone());
-        if input["_worker_read"] == "history"
-            && *self.fault.lock().unwrap() == Some("history-failed")
-        {
-            return Err(OrbitError::UnreachableDestination(
-                "history unavailable".into(),
-            ));
+        if input["_worker_read"] == "regression_risk" {
+            match *self.fault.lock().unwrap() {
+                Some("failed") => {
+                    return Err(OrbitError::UnreachableDestination(
+                        "owner unavailable".into(),
+                    ));
+                }
+                Some("unknown") => {
+                    return Err(OrbitError::OutcomeUnknown {
+                        mcp_call_id: "fixture/marks".into(),
+                        message: "unknown read outcome".into(),
+                    });
+                }
+                Some("tool-error") => {
+                    return Ok(
+                        json!({"error": {"code": "store_error", "message": "owner read failed"}}),
+                    );
+                }
+                _ => {}
+            }
         }
-        if input["_worker_read"] == "task_metadata"
-            && !input["metadata_page"]["cursor"].is_null()
-            && *self.fault.lock().unwrap() == Some("scan-change")
+        if *self.fault.lock().unwrap() == Some("scan-change")
+            && (input["_worker_read"] == "regression_risk"
+                || (input["_worker_read"] == "task_metadata"
+                    && !input["metadata_page"]["cursor"].is_null()))
         {
             self.owner.add_task(TaskAddParams {
                 title: "Deterministic scan mutation".into(),
@@ -394,20 +409,8 @@ fn worker_metadata_regression_marks_match_the_owner() {
             })
             .unwrap();
     }
-    *wire.fault.lock().unwrap() = Some("history-failed");
-    assert_eq!(
-        RuntimeHost::regression_risk_for_agent_input(
-            &bound,
-            "history-failure",
-            "agent_implement",
-            &json!({"task_id": ids.first().unwrap()})
-        ),
-        None,
-        "a failed history read must not become a successful analytics scan"
-    );
-    *wire.fault.lock().unwrap() = None;
     // These tasks have recent update stamps but entered done outside the window.
-    // The separate history read must exclude them from the denominator.
+    // Owner-local history reads must exclude them from the denominator.
     for n in 0..5 {
         let old = owner
             .add_task(TaskAddParams {
@@ -455,12 +458,62 @@ fn worker_metadata_regression_marks_match_the_owner() {
         serde_json::to_value(owner.list_task_metadata().unwrap()).unwrap(),
         "all envelope fields, including regression sites and attribution, survive the wire"
     );
-    assert_eq!(marks(&bound), Some(expected.clone()));
+    wire.requests.lock().unwrap().clear();
+    wire.responses.lock().unwrap().clear();
+    let history_before = owner.get_task_history(ids.first().unwrap()).unwrap();
+    let task_count = owner.list_task_metadata().unwrap().len();
+    *wire.fault.lock().unwrap() = Some("scan-change");
+    assert_eq!(
+        marks(&bound),
+        Some(expected.clone()),
+        "an owner task write must not discard prompt marks"
+    );
+    assert_eq!(owner.list_task_metadata().unwrap().len(), task_count + 1);
+    assert_eq!(
+        serde_json::to_value(owner.get_task_history(ids.first().unwrap()).unwrap()).unwrap(),
+        serde_json::to_value(history_before).unwrap(),
+        "the owner projection must not record mark history on behalf of a leaf"
+    );
+    {
+        let requests = wire.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "one task read and one mark read");
+        assert_eq!(requests[0]["_worker_read"], "task");
+        assert_eq!(requests[1]["_worker_read"], "regression_risk");
+        assert_eq!(requests[1]["paths"], json!(["src/hot.rs"]));
+        let responses = wire.responses.lock().unwrap();
+        assert_eq!(responses[1], expected);
+        assert!(serde_json::to_vec(&responses[1]).unwrap().len() <= CEILING);
+    }
     *wire.fault.lock().unwrap() = Some("identity");
     assert_eq!(
         marks(&bound),
-        None,
-        "a failed metadata scan with a known hotspot omits advisory marks"
+        Some(expected.clone()),
+        "prompt marks no longer depend on paged metadata identity"
+    );
+    let log = leaf.pair._root.path().join("mark-failure.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(Mutex::new(std::fs::File::create(&log).unwrap()))
+        .finish();
+    {
+        let _logging = tracing::subscriber::set_default(subscriber);
+        for fault in ["failed", "unknown", "tool-error"] {
+            *wire.fault.lock().unwrap() = Some(fault);
+            wire.requests.lock().unwrap().clear();
+            assert_eq!(marks(&bound), None, "{fault}: marks remain advisory");
+            assert_eq!(wire.requests.lock().unwrap().len(), 2, "no fallback scan");
+        }
+    }
+    let warnings = std::fs::read_to_string(log).unwrap();
+    assert_eq!(warnings.matches("WARN").count(), 3, "{warnings}");
+    assert_eq!(
+        warnings
+            .matches("regression risk: marks unavailable")
+            .count(),
+        3,
+        "{warnings}"
     );
     *wire.fault.lock().unwrap() = None;
     assert_eq!(expected["marks"][0]["regressed"], "3 of 7 touching tasks");
@@ -469,18 +522,5 @@ fn worker_metadata_regression_marks_match_the_owner() {
     assert_eq!(
         expected["marks"][0]["lesson"],
         "Restore the bounded retry lesson"
-    );
-    let requests = wire.requests.lock().unwrap();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request["_worker_read"] == "history"),
-        "history remains a separate read"
-    );
-    assert!(
-        requests
-            .iter()
-            .all(|request| request["_worker_read"] != "tasks"),
-        "no whole-corpus body read"
     );
 }

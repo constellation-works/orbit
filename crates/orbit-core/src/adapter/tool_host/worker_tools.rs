@@ -181,6 +181,11 @@ pub(crate) fn execute(
                 return crate::application::task::metadata::owner_metadata_page(runtime, input)
                     .map(Some);
             }
+            "regression_risk" => serde_json::to_value(runtime.owner_regression_risk_section(
+                &optional_field(input, "paths")?.ok_or_else(|| {
+                    OrbitError::InvalidInput("regression mark paths are required".into())
+                })?,
+            )?),
             "status_index" => serde_json::to_value(runtime.task_status_index()?),
             "completion_by_complexity" => serde_json::to_value(
                 runtime

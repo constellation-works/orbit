@@ -18,7 +18,7 @@
 //! Each mark carries the two natures and escapes most of its links record
 //! (an unrecorded one reads `unclassified`, never a guess) and one lesson:
 //! the newest regression task's title, with internal task and friction IDs
-//! removed. Every prompt that carries marks records them on the task as a
+//! removed. Locally built prompts record their marks on the task as a
 //! `regression_risk_marked` history event, which the Regressions ranking
 //! reads back to compare marked paths' rates with marks against the window
 //! before the first mark.
@@ -33,6 +33,7 @@ use orbit_types::task::{
     REGRESSION_RISK_MARKED_EVENT, RegressionRiskMarks, TaskDecision, TaskHistoryEntry,
 };
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::facts::{Anchor, CodebaseFacts, HistoryCompleteness, TaskFacts};
@@ -47,6 +48,23 @@ use crate::application::task::SYSTEM_ACTOR_LABEL;
 const CATEGORY_LIMIT: usize = 2;
 /// Longest lesson line, in bytes, before it is cut with an ellipsis.
 const LESSON_MAX_BYTES: usize = 160;
+/// Leave room for MCP framing under the transport cap, even for long paths.
+const MAX_MARK_RESPONSE_BYTES: usize = 1024 * 1024;
+
+// Decode the projection as a section rather than arbitrary JSON, so a tool
+// error cannot be mistaken for marks and MCP's null envelope is unwrapped.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OwnerRiskSection {
+    window_days: u32,
+    marks: Vec<Value>,
+}
+
+struct ComputedRiskSection {
+    value: Value,
+    paths: Vec<String>,
+    window_days: u32,
+}
 
 /// One marked path, before rendering.
 struct Mark<'a> {
@@ -60,7 +78,8 @@ impl OrbitRuntime {
     /// The `regression_risk` section of the prompt `run_id` builds for
     /// `activity` on `task_id`, whose canonical context selectors are
     /// `selectors`, or `None` when marks are off or no `file:` or `symbol:`
-    /// file qualifies. Marks it returns are recorded on the task first; a record
+    /// file qualifies. A follower reads rendered marks from its owner without
+    /// recording history. Local marks are recorded on the task first; a record
     /// that cannot be written is logged and does not withhold them.
     pub(crate) fn regression_risk_section(
         &self,
@@ -69,7 +88,6 @@ impl OrbitRuntime {
         run_id: &str,
         activity: &str,
     ) -> Result<Option<Value>, OrbitError> {
-        let settings = self.regression_risk_settings();
         let paths: BTreeSet<String> = selectors
             .iter()
             .filter(|selector| {
@@ -79,30 +97,81 @@ impl OrbitRuntime {
             .filter_map(|selector| Anchor::parse(selector))
             .map(|anchor| anchor.path)
             .collect();
-        if !settings.enabled || paths.is_empty() {
+        if paths.is_empty() {
             return Ok(None);
         }
-        let since = Utc::now() - Duration::days(i64::from(settings.window_days));
-        let facts = super::facts::scan_regressions(self, since, HistoryCompleteness::Strict)?;
-        let marks = marks(&facts, &paths, &settings, since);
-        if marks.is_empty() {
-            return Ok(None);
+        if self.worker_invocation().is_some() {
+            let section: Option<OwnerRiskSection> = self.read_owner_request(json!({
+                "_worker_read": "regression_risk",
+                "paths": paths,
+            }))?;
+            return section
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| OrbitError::Store(error.to_string()));
         }
+        let Some(section) = self.compute_regression_risk_section(&paths)? else {
+            return Ok(None);
+        };
         self.record_marks(
             task_id,
             RegressionRiskMarks {
                 run_id: run_id.to_string(),
                 activity: activity.to_string(),
-                paths: marks.iter().map(|mark| mark.path.clone()).collect(),
-                window_days: settings.window_days,
+                paths: section.paths,
+                window_days: section.window_days,
             },
         );
+        Ok(Some(section.value))
+    }
+
+    /// The bounded, read-only owner projection for a follower's prompt. Use the
+    /// owner's admitted settings; no task history is written on this route.
+    pub(crate) fn owner_regression_risk_section(
+        &self,
+        paths: &BTreeSet<String>,
+    ) -> Result<Option<Value>, OrbitError> {
+        let value = self
+            .compute_regression_risk_section(paths)?
+            .map(|section| section.value);
+        let bytes =
+            serde_json::to_vec(&value).map_err(|error| OrbitError::Store(error.to_string()))?;
+        if bytes.len() > MAX_MARK_RESPONSE_BYTES {
+            return Err(OrbitError::Store(
+                "owner regression marks exceed the response limit".into(),
+            ));
+        }
+        Ok(value)
+    }
+
+    fn compute_regression_risk_section(
+        &self,
+        paths: &BTreeSet<String>,
+    ) -> Result<Option<ComputedRiskSection>, OrbitError> {
+        let settings = self.regression_risk_settings();
+        if !settings.enabled || paths.is_empty() {
+            return Ok(None);
+        }
+        let since = Utc::now() - Duration::days(i64::from(settings.window_days));
+        // The metadata and history share a local read boundary, rather than a
+        // scan identity rechecked across thousands of remote calls.
+        let facts = self.in_task_read_section(|| {
+            super::facts::scan_regressions(self, since, HistoryCompleteness::Strict)
+        })?;
+        let marks = marks(&facts, paths, &settings, since);
+        if marks.is_empty() {
+            return Ok(None);
+        }
         let scrubber = IdScrubber::new(&facts);
         let rendered: Vec<Value> = marks.iter().map(|mark| render(mark, &scrubber)).collect();
-        Ok(Some(json!({
-            "window_days": settings.window_days,
-            "marks": rendered,
-        })))
+        Ok(Some(ComputedRiskSection {
+            value: json!({
+                "window_days": settings.window_days,
+                "marks": rendered,
+            }),
+            paths: marks.iter().map(|mark| mark.path.clone()).collect(),
+            window_days: settings.window_days,
+        }))
     }
 
     /// Record what one prompt marked, once per run, activity and paths. A
