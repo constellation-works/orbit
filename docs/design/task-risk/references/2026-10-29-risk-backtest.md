@@ -1,15 +1,17 @@
 ---
 title: "Exploratory task-risk evidence: October 29, 2026"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-11-05
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 type: reference
 summary: "Seven-day regression observations, within-tier comparisons and model-specific size curves."
 ---
 
 # Exploratory task-risk evidence: October 29, 2026
 
-Supplement to the attribution-aware backtest for ORB-20095 / ORB-20094. Uses the same frozen owner snapshot at 2026-10-30T06:31:09Z (October 29 Pacific), SHA-256 d6445bfd33beea3e350597945be1fc95a69c58ee393ed5e5872ea93af7e7811d. User requests: compare models within the same complexity tier; Sol should have medium and hard support; pool Luna + Haiku + Muse Spark where individual samples are thin.
+[ORB-20107] publishes this supplement to the attribution-aware backtest owned by
+[ORB-20095] and recorded by [ORB-20094]. Uses the same frozen owner snapshot at
+2026-10-30T06:31:09Z (October 29 Pacific), SHA-256 d6445bfd33beea3e350597945be1fc95a69c58ee393ed5e5872ea93af7e7811d. User requests: compare models within the same complexity tier; Sol should have medium and hard support; pool Luna + Haiku + Muse Spark where individual samples are thin.
 
 ## Cohort and method
 
@@ -197,10 +199,19 @@ bootstrap success counts, support limits and curve grids are in the JSON.
 Source snapshot time is October 29 at 23:31 Pacific; later label edits do not
 silently rewrite these receipts.
 
+[ORB-20118] also preserved the analysis as manual contributor tooling under
+[`scripts/crew-risk/`](../../../../scripts/crew-risk/README.md). Its supported
+entrypoint is `report.py`: `--input <snapshot.json.gz> --output <new-scratch-directory>
+--protocol observational-v2` consumes a frozen snapshot without accessing Orbit
+state. Use the README's dependency and coverage prerequisites. This portable
+driver does not turn the historical exploratory results into prospective validation,
+and the monthly crew-ladder review does not invoke it.
+
 ## Task References
 
 - [ORB-20107] — publishes these supplementary figures and results.
 - [ORB-20095] — owns the task-risk design and attached evidence artifacts.
 - [ORB-20094] — records the authoring-session analysis.
+- [ORB-20118] — preserves the portable manual analysis scripts separately from monthly crew review.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

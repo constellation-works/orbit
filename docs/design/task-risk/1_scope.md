@@ -1,8 +1,8 @@
 ---
 title: "Scope: Task risk relative to model capability"
 owner: codex
-last_updated: 2026-11-01
-last_validated: 2026-10-30
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: designing
 next: "Review estimands and evidence prerequisites before authorizing implementation."
@@ -438,7 +438,9 @@ backlog dispatch. Core contracts remain generic and provider names remain data.
 
 1. **Evidence audit and study manifest.** Inventory run/claim, review, regression
    relation and landed-diff sources against the ledger above. Consume the
-   [ORB-20094] receipts when available. Deliver coverage/attrition tables and an
+   completed [ORB-20094] receipts owned by [ORB-20095] and the supplementary
+   [ORB-20107] evidence above. Those exploratory outputs do not complete this
+   prospective evidence audit. Deliver coverage/attrition tables and an
    exact replayable export with hashes; verify sampled joins and identify which
    outcomes can actually be fitted. No numerical claim ships from summaries alone.
 2. **Prospective snapshots and labels.** Add immutable assignment rubric,

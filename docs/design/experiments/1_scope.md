@@ -1,11 +1,11 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: building
-next: "Raise a due experiment through the human decision channel (decision requests are task-bound today)"
+next: "Remove explorer tooling (ORB-20383); the horizon decision-channel step remains unfiled"
 feature: experiments
 doc_role: scope
 type: design
@@ -49,8 +49,8 @@ The trials run so far show what is missing:
 - **Explorer delegation** was offered in about 300 implement prompts and used zero times
   (2026-10-24). The explore comparison could only split runs by whether the agent *chose* to
   explore, so its cohorts differ in more than the treatment.
-- **The explore-first trial** ([ORB-18032], readout [ORB-18033]) assigns by tag at filing,
-  by hand.
+- **The explore-first trial** ([ORB-18032] added its tag instruction) assigns by tag at
+  filing, by hand. Its readout task [ORB-18033] was rejected.
 - **The explore-brief trial** ([ORB-18363]) designs three arms assigned by task number modulo
   3 at filing, arms defined in workspace config, and a readout assembled by hand from several
   Analytics series.
@@ -93,7 +93,8 @@ Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
 `escaped_regressions`, `lines_changed`, `visual_landed_mismatches`,
 `visual_review_repairs`, and `visual_verified_finding_rate`. `cost_per_line`
 and `lead_time_per_line` are whole-task too (lower is better) and may be
-the primary. Each is a ratio of sums: the arm's total cost, or its total
+the primary; [ORB-20646] added these per-line metrics and their attributed
+denominator. Each is a ratio of sums: the arm's total cost, or its total
 lead time in hours, divided by the arm's total reviewable lines. The
 interval is a paired bootstrap that resamples tasks. It is never the mean
 of per-task ratios. Duration is `lead_time`, not `implement_duration`.
@@ -173,13 +174,21 @@ activities themselves.
 |---|---|---|---|
 | Instructions | A repository file per role (`implement`, `review`, `recovery`), or `false` to suppress a shipped default | The tag-instruction slot; an experiment's text follows tag-instruction text | File exists at the current base |
 | Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
-| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`. Removing is **new**: a per-run denial applied after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
+| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
-| Config | Values for allowlisted keys only | **New:** no typed list of per-run overridable `workflow.*` keys exists; `orbit-config` gains one, each key opted in by code | Key is on both the code list and the workspace allowlist |
+| Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean) | Key is on both the code list and the workspace allowlist |
 
 Each overlay entry names the roles it applies to; the default is `implement` only. Review and
 recovery overlays are allowed but are opt-in per entry, because a reviewer that shares the
-implementer's treatment stops being an independent check of it.
+implementer's treatment stops being an independent check of it. The config exception is
+`visual_review.reviewer`: it controls the mock comparison reviewer and verifier for the
+whole delivery regardless of its declared roles. [ORB-19982] added that experiment
+surface; [ORB-22524] reconciled the config reference with both typed keys and this exception.
+
+**Pending retirement:** [ORB-20383] is approved in backlog to remove the explorer
+agent, `orbit.agent.invoke` and `workflow.explore.*`, including affected experiment
+surfaces. Those interfaces still exist at this checkout; the removal task owns their
+cleanup. Historical explorer readout fields may remain for concluded experiments.
 
 ### Assignment
 
@@ -198,7 +207,8 @@ implementer's treatment stops being an independent check of it.
    new tasks. Paused experiments and retired arms retain their existing-assignment behavior.
    Already admitted owner runs, same-task children and owner-issued follower receipts retain
    their captured treatment on resume, even after conclusion. This replaces the earlier rule
-   that kept terminal experiment treatment active until the task itself became terminal.
+   that kept terminal experiment treatment active until the task itself became terminal;
+   [ORB-21202] implemented this admission-authority change.
 4. **One experiment per surface per task.** A task can be in several experiments only when
    their overlays touch disjoint surfaces. A later experiment that conflicts records the task
    as excluded (`surface_conflict`) rather than assigning it.
@@ -276,9 +286,9 @@ For the `cost_usd` metric, each arm's `cost_coverage` reports settled task count
 uses the price table and all are priced, and `unmeasured` otherwise. Reported
 plus estimated equals the metric's measured `n`; unmeasured matches its
 `unmeasured` count. In-flight tasks stay in `open`, outside these counts.
-The CLI prints coverage even with no measured costs, and dashboard arm cards
-show it regardless of the primary metric. Models absent from the shared table
-remain unmeasured until pricing data is available; they are never assumed free.
+The CLI prints coverage even with no measured costs, and the dashboard's Trust
+tab shows it in per-arm evidence regardless of the primary metric. Models absent
+from the shared table remain unmeasured until pricing data is available; they are never assumed free.
 Cost and coverage are recomputed on read from the raw invocation records.
 
 The experiment names one primary metric and any number of guardrails
@@ -352,8 +362,8 @@ as a side effect of a decision.
 When an experiment reaches its horizon, Orbit should raise it for decision through the
 [human decision channel](../human-decision-channel/1_scope.md) instead of waiting to be
 noticed. Decision requests are task-bound today (`orbit_types::task::DecisionRequest` carries
-a `task_id` and a `DecisionGate` of block triage, pilot admission, proposed approval or review
-approval), so this needs either a subject that is not a task or a tracking task per
+a `task_id`; `DecisionGate::AgentRequest` is the agent-raised human question), so this
+needs either a subject that is not a task or a tracking task per
 experiment (open question).
 
 ### Configuration
@@ -369,9 +379,11 @@ Policy only. Experiment definitions are store records.
 ### Surfaces
 
 - **Tools and CLI.** `orbit.experiment.{create, update, clone, start, pause, resume, reweight,
-  assign, conclude, abandon, show, list, readout}` and the matching `orbit experiment` verbs.
+  assign, conclude, abandon, delete, show, list, readout}` and the matching `orbit experiment` verbs.
   `update` works only in `draft`. Creating, starting, reweighting, forcing and concluding are
-  operator actions; agents may read.
+  operator actions; agents may read. [ORB-20370] added operator-only deletion: a draft,
+  concluded or abandoned experiment can be deleted only when it has no concluded arm and
+  never assigned a live treatment. Rows, arms, events and assignments are removed together.
 - **Task and run.** `orbit.task.show` gains an `experiments` field (arm, segment, digest);
   `orbit run show` prints one line per applied arm.
 - **Dashboard: Analytics › Experiments.** A list with status, segment and sample progress.
@@ -380,7 +392,13 @@ Policy only. Experiment definitions are store records.
   shared trend ladder, the per-complexity table, health warnings (sample ratio, drift, open
   lagging outcomes), the event timeline, and the conclude action for operators. Operators
   also create a draft, edit a draft and start one there, through the same core lifecycle as
-  `orbit.experiment.create`, `update` and `start`.
+  `orbit.experiment.create`, `update` and `start`. [ORB-22359] organized the detail around a
+  decision band and three tabs: Result holds arm cards and primary/guardrail differences;
+  Trust holds health, delivery, crew mix, cumulative series and the per-complexity table;
+  Setup holds the definition and timeline. [ORB-22445] separated record and readout loading:
+  the header, Setup and Conclude remain usable while Result and Trust load or offer Retry.
+  A failed refresh retains the previous readout with a stale notice and its own Retry in
+  each tab; [ORB-22475] repaired that notice in Result.
 
 ## Non-goals
 
@@ -441,7 +459,8 @@ Policy only. Experiment definitions are store records.
 5. **Decision and promotion.** Done in part ([ORB-18480] made conclude store the readout
    snapshot and file one promotion task). Conclude stores the readout snapshot and files one promotion
    task. The decision-channel prompt at the horizon remains open: decision requests are
-   task-bound today. The explore-brief trial becomes the first live experiment.
+   task-bound today. Live rollout is no longer pending: [ORB-19390] repaired enrollment
+   for the first running crew experiments. That rollout does not complete the horizon prompt.
 
 ## Open questions
 
@@ -485,7 +504,7 @@ Policy only. Experiment definitions are store records.
 
 - [ORB-16814] — compares implement runs with and without explorer calls (observational)
 - [ORB-18032] — adds the `explore-first` tag instruction for a forced-explorer trial
-- [ORB-18033] — reads out the explore-first trial
+- [ORB-18033] — requested the explore-first readout; the task was rejected
 - [ORB-18363] — designs explore briefs and their three-arm trial
 - [ORB-18364] — charts tokens per task by complexity and tag
 - [ORB-18383] — records landed diff stats per delivery
@@ -498,7 +517,19 @@ Policy only. Experiment definitions are store records.
 - [ORB-18479] — built the Analytics › Experiments dashboard page (phase 4)
 - [ORB-18480] — made conclude store the readout snapshot and file the promotion task (phase 5)
 - [ORB-19368] — added create, edit and start for experiments on the dashboard page (phase 4)
+- [ORB-19390] — enrolls eligible tasks after experiments are enabled while a drain is already running
+- [ORB-19982] — added the live visual-review experiment and its reviewer config overlay
+- [ORB-20370] — added guarded deletion of experiments that never applied a live treatment
+- [ORB-20383] — is approved to remove explorer tooling and reconcile affected experiment surfaces
+- [ORB-20572] — records incomplete tool traces and excludes them from first-edit measurements
+- [ORB-20590] — separates later retry trace warnings from first-invocation first-edit measurement
 - [ORB-20597] — withholds the verdict when a treatment arm's overlay was not delivered, and adds
   the per-protocol view
+- [ORB-20646] — adds whole-task per-line cost and lead-time metrics with an attributed denominator
+- [ORB-21202] — stops ended experiments overriding fresh admissions and honors later operator pins
+- [ORB-22359] — organizes experiment details around the decision and Result, Trust and Setup tabs
+- [ORB-22445] — loads the experiment record independently and reduces readout cost
+- [ORB-22475] — preserves a stale-readout notice and Retry in each result-bearing tab
+- [ORB-22524] — documents both typed config keys and the visual-review role exception
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
