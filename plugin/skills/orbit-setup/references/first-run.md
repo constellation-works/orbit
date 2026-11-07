@@ -131,14 +131,16 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Only `crew_performance_refresh` and `host-health` are seeded enabled.** Every
-  other routine and auto-task ships disabled: the automation layer is installed
-  but dark until someone reviews and opts in. `crew_performance_refresh` no-ops while
-  `workflow.crew_performance` is `off`, but it still records a job run each hour,
-  so a fresh workspace that seeds the default routines schedules it. The
-  `host-health` auto-task files a daily host-health review on the workspace
-  owner once the host clock is installed; `orbit auto-task toggle host-health off`
-  turns it off. → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
+- **Two shipped defaults are seeded enabled:** the `crew-performance-refresh`
+  routine and the `host-health` auto-task, when the seeding policy selects them.
+  Every other routine and auto-task ships disabled: the automation layer is
+  installed but dark until someone reviews and opts in. `crew-performance-refresh`
+  no-ops while `workflow.crew_performance` is `off`, but it still records a job
+  run each hour, so a fresh workspace that seeds the default routines schedules
+  it. The `host-health` auto-task files a daily host-health review on the
+  workspace owner once the host clock is installed; `orbit auto-task toggle
+  host-health off` turns it off, and `orbit routine disable <routine-name>`
+  turns the routine off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.
@@ -235,9 +237,10 @@ auto_tasks = []
   `[seeding]`, not here.
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
-  a shipped default, so `crew_performance_refresh` (seeded enabled) is the only
-  shipped default on without an opt-in; every other shipped routine and
-  auto-task stays disabled unless someone opts in.
+  a shipped default. The two shipped defaults seeded enabled, the
+  `crew-performance-refresh` routine and the `host-health` auto-task, are on
+  without an opt-in only when the seeding policy selects them; every other
+  shipped routine and auto-task stays disabled unless someone opts in.
 
 **Validation and limits.** Orbit validates the whole file against this
 workspace before it writes anything. Nothing is written or registered when any

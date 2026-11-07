@@ -77,13 +77,34 @@ out remain in the service cgroup and can be killed when that service stops.
 recovery settings. Run `orbit clock repair` to update an older service, even
 when it already names the current binary. A paused clock stays paused.
 
-**2. Enable routines, one at a time.** Each is a YAML file in this checkout's
-`.orbit/routines/`. `.orbit/` is per-user state that git ignores, so flipping
-`enabled: true` is a local edit to that file, not a commit; `orbit routine
-pause` is the separate host-local toggle. Registering the
-checkout already made the workspace a routine source; an older `.orbit/config.toml`
-may still carry a `[routines]` section, which is ignored with a warning and can
-be deleted.
+**2. Enable routines, one at a time, as an operator.** Each routine is a YAML
+file in this checkout's `.orbit/routines/`. Set its `enabled` field with the
+audited verbs rather than by editing the file:
+
+```bash
+orbit routine list                          # rendered names, enabled and paused state
+orbit routine enable <routine-name>         # operator only: sets enabled: true
+orbit routine show <routine-name>           # confirm enabled and the effective state
+orbit clock tick --dry-run                  # what would fire on this host; writes nothing
+```
+
+`enable` and `disable` (`orbit routine disable <routine-name>`) need operator
+authority; an agent session is refused. They act on the selected workspace:
+`--workspace <name>` when given (`orbit --workspace <name> routine enable
+<routine-name>`), otherwise the current checkout. A routine that belongs to
+another registered workspace is refused, and the error names the workspace to
+rerun with. The write re-checks the state it read and refuses if the routine
+changed in the meantime; the command is audited. Copy the name from `orbit
+routine list`: seeded names carry the workspace suffix (`<base>-<workspace>`),
+which the base names in the table below omit.
+
+`.orbit/` is per-user state that git ignores, so the enabled field is a local
+setting, not a commit. The host-local pause (`orbit routine pause`) and the host
+clock (`orbit clock`) are separate controls; see
+[Observe and control](#observe-and-control). Registering the checkout already
+made the workspace a routine source; an older `.orbit/config.toml` may still
+carry a `[routines]` section, which is ignored with a warning and can be
+deleted.
 
 <a id="the-nine-seeded-routines"></a>
 <a id="the-ten-seeded-routines"></a>
@@ -93,9 +114,11 @@ be deleted.
 `orbit workspace init` seeds the routines selected by `seeding.routines`
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
-to change that selection and reconcile an existing workspace. Every default starts disabled
+to change that selection and reconcile an existing workspace. Every routine default starts disabled
 except `crew-performance-refresh`, which is seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The cron routines
+no-ops while `workflow.crew_performance` is `off`. The `host-health` auto-task is
+the one shipped auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of
+the two starts enabled only when the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot`, `finding-verification`, `pilot-warning-triage` and `resident-cycle`
 are state-triggered and additionally resolve this host's
@@ -738,22 +761,40 @@ and store-GC routines.
 ## Observe and control
 
 Fires are ordinary runs — they appear in `orbit run history` under the actor
-`routine/<name>`.
+`routine/<name>`. Three controls act at different scopes, and an enabled
+routine can still be held on one host:
+
+| Control | Scope | Commands |
+|---|---|---|
+| Enabled (the definition) | The routine's versioned `enabled` field in this checkout | `orbit routine enable <name>`, `orbit routine disable <name>` (operator only, audited) |
+| Host-local pause | This host only; unversioned; survives reboots | `orbit routine pause <name>`, `orbit routine resume <name>` |
+| Host clock | Every routine and auto-task this host runs | `orbit clock pause`, `orbit clock enable` (definition state is untouched) |
 
 ```bash
-orbit routine pause <name>         # this host only; survives reboots
-orbit routine resume <name>
+orbit routine enable <routine-name>   # set enabled: true (operator only)
+orbit routine disable <routine-name>  # set enabled: false (operator only)
+orbit routine pause <name>            # hold it on this host only
+orbit routine resume <name>           # clear the host-local pause
+orbit clock status                    # clock cadence and whether it is paused
 ```
+
+Verify an enablement, a pause and the clock separately. `orbit routine list`
+shows each routine's enabled and paused state and its next due time, and
+`orbit routine show <name>` shows its definition and effective state. An
+auto-task uses its own kill-switch, `orbit auto-task toggle <name> on|off`
+([Auto-tasks](auto-tasks.md)).
 
 ## "Why didn't it fire?"
 
 Resolve the toggles in this order — `orbit routine list` shows both at once:
 
-1. `enabled: false` in this checkout's definition (per-user, gitignored).
-2. A local pause (this host only, unversioned, durable across reboots).
+1. `enabled: false` in this checkout's definition (`orbit routine enable` sets
+   it; per-user, gitignored).
+2. A local pause (`orbit routine pause`: this host only, unversioned, durable
+   across reboots).
 
 If neither explains it, check further out: is this checkout registered as an
-owner (`orbit workspace list`), is the clock unit running
+owner (`orbit workspace list`), is the clock unit running and not paused
 (`orbit clock status`), and did the tick itself error
 (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
