@@ -57,9 +57,11 @@
 /* The bar is its own hint: no icon, and a tap target taller than the bar's 8px. */
 .info-hint.info-hint-pinned.drain-capacity-hint { display: block; width: auto; height: auto; margin: -8px 0; padding: 8px 0; border-radius: 0; color: inherit; }
 .info-hint.info-hint-pinned.drain-capacity-hint::before { content: none; }
-.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg-well); overflow: hidden; }
-.drain-capacity-bar.segmented { background: transparent; }
-.drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--bg-control); box-shadow: inset 0 0 0 1px var(--hair); }
+/* Free capacity is outlined in --fg-disabled (3.6:1 on the card): the darker
+   wells and hairlines vanished, so an idle drain read as an empty card. */
+.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); overflow: hidden; }
+.drain-capacity-bar.segmented { background: transparent; box-shadow: none; }
+.drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); }
 .drain-capacity-seg.used { background: var(--state-running); box-shadow: none; }
 .drain-capacity-seg.over, .drain-capacity-over { background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); box-shadow: none; }
 .drain-capacity-used { background: var(--state-running); border-radius: 3px; }
