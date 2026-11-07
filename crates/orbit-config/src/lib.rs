@@ -173,8 +173,8 @@ pub use provider_limit::{
     UsagePressurePolicy,
 };
 pub use registry::{
-    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
-    ConfigSection, ConfigSnapshot, ExperimentSettings, LeaseListenerSettings,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigAllowedValues, ConfigKeyDescriptor,
+    ConfigKeyTier, ConfigSection, ConfigSnapshot, ExperimentSettings, LeaseListenerSettings,
     LeaseListenerTlsSettings, MachineSettings, MidRunSteeringSettings, NoticeKindHours,
     NoticeSettings, ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
     admit_settable_config_key, config_key_options, describe as describe_config_key,
@@ -199,24 +199,6 @@ pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{
     AGENT_CORPUS_KEY, TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings,
 };
-
-/// Build a resolver for a finite factor with a setting-specific lower bound.
-pub(crate) fn finite_factor_admission(
-    default: f64,
-    minimum: f64,
-    key: &'static str,
-) -> impl Fn(Option<f64>) -> Result<f64, OrbitError> {
-    move |raw| {
-        let value = raw.unwrap_or(default);
-        if value.is_finite() && value >= minimum {
-            Ok(value)
-        } else {
-            Err(OrbitError::InvalidInput(format!(
-                "{key} must be a finite number of at least {minimum}, got {value}"
-            )))
-        }
-    }
-}
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 

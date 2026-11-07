@@ -6,9 +6,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
-use super::resolve::{
-    resolve_at, resolve_bounded_count, resolve_bounded_range, resolve_optional_non_empty,
-};
+use super::resolve::{resolve_at, resolve_bounded_range, resolve_optional_non_empty};
 use crate::config_document;
 
 pub(super) const LEASE_LISTENER_BIND_KEY: &str = "lease.listener.bind";
@@ -94,117 +92,57 @@ pub struct LeaseListenerSettings {
 }
 
 pub(super) fn resolve_listener_address_per_minute(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        120,
-        1,
-        100000,
-        "lease.listener.limits.address_per_minute",
-    )
+    resolve_bounded_range(raw, 120, "lease.listener.limits.address_per_minute")
 }
 
 pub(super) fn resolve_listener_ipv6_prefix_len(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(raw, 64, 0, 128, "lease.listener.limits.ipv6_prefix_len")
+    resolve_bounded_range(raw, 64, "lease.listener.limits.ipv6_prefix_len")
 }
 
 pub(super) fn resolve_listener_token_reads_per_minute(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        60,
-        1,
-        100000,
-        "lease.listener.limits.token_reads_per_minute",
-    )
+    resolve_bounded_range(raw, 60, "lease.listener.limits.token_reads_per_minute")
 }
 
 pub(super) fn resolve_listener_token_writes_per_minute(
     raw: Option<u32>,
 ) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        20,
-        1,
-        100000,
-        "lease.listener.limits.token_writes_per_minute",
-    )
+    resolve_bounded_range(raw, 20, "lease.listener.limits.token_writes_per_minute")
 }
 
 pub(super) fn resolve_listener_max_streams_per_token(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        2,
-        1,
-        100,
-        "lease.listener.limits.max_streams_per_token",
-    )
+    resolve_bounded_range(raw, 2, "lease.listener.limits.max_streams_per_token")
 }
 
 pub(super) fn resolve_listener_max_in_flight_per_token(
     raw: Option<u32>,
 ) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        8,
-        1,
-        1000,
-        "lease.listener.limits.max_in_flight_per_token",
-    )
+    resolve_bounded_range(raw, 8, "lease.listener.limits.max_in_flight_per_token")
 }
 
 pub(super) fn resolve_listener_max_connections(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(raw, 64, 1, 10000, "lease.listener.limits.max_connections")
+    resolve_bounded_range(raw, 64, "lease.listener.limits.max_connections")
 }
 
 pub(super) fn resolve_listener_max_in_flight_requests(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        16,
-        1,
-        1000,
-        "lease.listener.limits.max_in_flight_requests",
-    )
+    resolve_bounded_range(raw, 16, "lease.listener.limits.max_in_flight_requests")
 }
 
 pub(super) fn resolve_listener_max_body_bytes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        65536,
-        1,
-        1048576,
-        "lease.listener.limits.max_body_bytes",
-    )
+    resolve_bounded_range(raw, 65536, "lease.listener.limits.max_body_bytes")
 }
 
 pub(super) fn resolve_listener_header_timeout_seconds(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        5,
-        1,
-        300,
-        "lease.listener.limits.header_timeout_seconds",
-    )
+    resolve_bounded_range(raw, 5, "lease.listener.limits.header_timeout_seconds")
 }
 
 pub(super) fn resolve_listener_request_timeout_seconds(
     raw: Option<u32>,
 ) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        10,
-        1,
-        300,
-        "lease.listener.limits.request_timeout_seconds",
-    )
+    resolve_bounded_range(raw, 10, "lease.listener.limits.request_timeout_seconds")
 }
 
 pub(super) fn resolve_listener_max_tracked_keys(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        4096,
-        3,
-        65536,
-        "lease.listener.limits.max_tracked_keys",
-    )
+    resolve_bounded_range(raw, 4096, "lease.listener.limits.max_tracked_keys")
 }
 
 /// `lease.listener.trusted_proxy`: trimmed, non-empty entries.
@@ -227,10 +165,9 @@ pub(super) fn resolve_lease_listener_trusted_proxy(
 }
 
 pub(super) fn resolve_lease_listener_failed_auth(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_count(
+    resolve_bounded_range(
         raw,
         DEFAULT_FAILED_AUTH_LIMIT,
-        1000,
         LEASE_LISTENER_FAILED_AUTH_KEY,
     )
 }
@@ -238,10 +175,9 @@ pub(super) fn resolve_lease_listener_failed_auth(raw: Option<u32>) -> Result<u32
 pub(super) fn resolve_lease_listener_failed_auth_window(
     raw: Option<u32>,
 ) -> Result<u32, OrbitError> {
-    resolve_bounded_count(
+    resolve_bounded_range(
         raw,
         DEFAULT_FAILED_AUTH_WINDOW_SECONDS,
-        86_400,
         LEASE_LISTENER_FAILED_AUTH_WINDOW_KEY,
     )
 }

@@ -26,7 +26,7 @@ pub const AUTO_EFFORT_EXPLORE_SHARE_KEY: &str = "workflow.auto_effort.explore_sh
 /// The exploration share when unset: one draw in ten.
 pub const DEFAULT_AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.1;
 /// The largest exploration share: past half, the policy is no longer the norm.
-const MAX_AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.5;
+pub(crate) const MAX_AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.5;
 /// Resolution of the exploration roll, in parts per million.
 const EXPLORE_SCALE: u64 = 1_000_000;
 

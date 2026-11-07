@@ -672,7 +672,7 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
     );
     for line in &lines {
         let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(fields.len(), 4, "4 tab-separated fields per row: {line}");
+        assert_eq!(fields.len(), 5, "5 tab-separated fields per row: {line}");
     }
     assert!(
         !lines[0].starts_with("KEY\t"),
@@ -695,14 +695,14 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
         let fields = line.split('\t').collect::<Vec<_>>();
         assert_eq!(
             fields.len(),
-            4,
-            "4 tab-separated fields in each row: {line}"
+            5,
+            "5 tab-separated fields in each row: {line}"
         );
     }
     assert_eq!(
         lines_header[0].split('\t').count(),
-        4,
-        "header has 4 fields"
+        5,
+        "header has 5 fields"
     );
 
     // 4. Table: aligned columns with header, key_count + 1 lines.

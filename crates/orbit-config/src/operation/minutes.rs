@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use super::keys::{LEGACY_REVIEW_MINUTES_KEY, REVIEW_MINUTES_KEY};
 use crate::config_document;
 
-const MAX_REVIEW_MINUTES: u32 = 1_440;
+pub(crate) const MAX_REVIEW_MINUTES: u32 = 1_440;
 
 /// Translate one document's deprecated `operation.review_minutes` into
 /// `review.minutes`, in place, unless the document already states it

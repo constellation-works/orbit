@@ -209,6 +209,7 @@ pub(super) fn effective_provenance_json(entry: &EffectiveConfigValue) -> JsonVal
     object.insert("section".to_string(), section_token(&entry.key));
     object.insert("tier".to_string(), tier_json(&entry.key));
     object.insert("description".to_string(), description_json(&entry.key));
+    object.insert("allowed".to_string(), allowed_json(&entry.key));
     object.insert("state".to_string(), json!(entry.state().label()));
     object.insert(
         "shadowed_by".to_string(),
@@ -243,6 +244,7 @@ pub(super) fn scoped_provenance_json(
         "section": section_token(key),
         "tier": tier_json(key),
         "description": description_json(key),
+        "allowed": allowed_json(key),
         "state": scoped_state(store, key, value).1,
         "shadowed_by": JsonValue::Array(Vec::new()),
     })
@@ -386,7 +388,7 @@ fn effective_rows(
                     } else {
                         effective_state(entry)
                     },
-                    description: descriptor.description.to_string(),
+                    description: described(descriptor),
                     note: shadow_note(entry),
                 };
                 if is_show_identity_key(&entry.key) {
@@ -450,7 +452,7 @@ fn scoped_rows(
                 } else {
                     scoped_state(store, key, value).1.to_string()
                 },
-                description: descriptor.description.to_string(),
+                description: described(descriptor),
                 note: None,
             };
             if is_show_identity_key(key) {
@@ -757,6 +759,20 @@ fn description_json(key: &str) -> JsonValue {
     match describe_config_key(key) {
         Some(descriptor) => json!(descriptor.description),
         None => JsonValue::Null,
+    }
+}
+
+/// The key's accepted values, in the shape `orbit config keys --json` uses.
+fn allowed_json(key: &str) -> JsonValue {
+    describe_config_key(key).map_or(JsonValue::Null, |descriptor| descriptor.allowed.to_json())
+}
+
+/// A row's description with its accepted values appended in brackets, so the
+/// text view shows them beside the setting [ORB-22809].
+fn described(descriptor: &orbit_config::ConfigKeyDescriptor) -> String {
+    match descriptor.allowed.summary() {
+        Some(allowed) => format!("{} [{allowed}]", descriptor.description),
+        None => descriptor.description.to_string(),
     }
 }
 

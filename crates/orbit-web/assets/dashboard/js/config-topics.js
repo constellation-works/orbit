@@ -106,13 +106,17 @@ export function parseDraft(row, text) {
   if (t === 'integer') {
     const trimmed = text.trim();
     if (!/^-?\d+$/.test(trimmed)) throw new Error(`${row.key} takes a whole number`);
-    return Number(trimmed);
+    return inAllowedRange(row, Number(trimmed));
   }
   if (t === 'number') {
     const trimmed = text.trim();
     const n = Number(trimmed);
     if (trimmed === '' || Number.isNaN(n) || !Number.isFinite(n)) throw new Error(`${row.key} takes a number`);
-    return n;
+    return inAllowedRange(row, n);
+  }
+  const choices = row.allowed?.kind === 'enum' ? row.allowed.values : null;
+  if (choices && !isTable(row) && !Array.isArray(row.value) && !choices.includes(text.trim())) {
+    throw new Error(`${row.key} takes one of: ${choices.join(', ')}`);
   }
   if (isTable(row)) {
     let parsed;
@@ -122,6 +126,14 @@ export function parseDraft(row, text) {
   }
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
   return text;
+}
+/// A number outside the key's declared range is refused before the save, with
+/// the same range the server checks [ORB-22809].
+function inAllowedRange(row, n) {
+  const a = row.allowed;
+  if (a?.kind !== 'range') return n;
+  if ((a.min != null && n < a.min) || (a.max != null && n > a.max)) throw new Error(`${row.key} takes ${a.summary}`);
+  return n;
 }
 // A bare TOML integer token must fit signed 64-bit. String() writes a whole number
 // from 2^63 up to 1e21 as an integer token, so those use exponent (float) form.
@@ -163,8 +175,12 @@ function rowNode(row, context, opts = {}) {
   node.id = `key-${row.key.replace(/[^a-z0-9]+/gi, '-')}`;
   const pool = Array.isArray(row.value) && /crews$|purpose_crews/.test(row.key) ? weightBar(row.value) : null;
   node.append(
-    el('span', { class: 'topic-label' }, [el('span', { text: row.label || row.key }), el('span', { class: 'config-key mono', text: row.key })]),
-    el('span', { class: 'config-value mono', text: display(row.value) }),
+    el('span', { class: 'topic-label' }, [
+      el('span', { text: row.label || row.key }),
+      row.description ? el('span', { class: 'topic-description', text: row.description }) : null,
+      el('span', { class: 'config-key mono', text: row.key }),
+    ]),
+    el('span', { class: 'topic-value-cell' }, [el('span', { class: 'config-value mono', text: display(row.value) }), allowedNode(row)]),
     el('span', { class: `config-source ${layer}`, text: layer }),
     el('span', { class: 'topic-diff', text: diffText(row) }),
   );
@@ -178,6 +194,21 @@ function rowNode(row, context, opts = {}) {
     node.appendChild(el('span', { class: 'topic-diff topic-readonly', text: row.read_only_reason || 'read-only' }));
   }
   return node;
+}
+/// The values a key accepts, beside its value [ORB-22809]: a short enum as
+/// chips with the current one marked, anything else as the server's one-line
+/// summary (`1–1440 minutes`, a format note).
+const MAX_ALLOWED_CHIPS = 6;
+function allowedNode(row) {
+  const a = row.allowed;
+  if (!a?.summary) return null;
+  const title = `Accepts: ${a.summary}`;
+  if (a.kind === 'enum' && a.values.length <= MAX_ALLOWED_CHIPS) {
+    const node = el('span', { class: 'topic-allowed', title, 'aria-label': title });
+    for (const v of a.values) node.appendChild(el('span', { class: `topic-allowed-chip mono${v === row.value ? ' current' : ''}`, text: v }));
+    return node;
+  }
+  return el('span', { class: `topic-allowed${a.kind === 'format' ? '' : ' mono'}`, title, text: a.summary });
 }
 function weightBar(values) {
   const wrap = el('span', { class: 'topic-pool' });
@@ -258,6 +289,8 @@ function drawerNode(payload, context) {
   panel.appendChild(el('h3', { text: row.label || row.key }));
   panel.appendChild(el('div', { class: 'config-key mono', text: row.key }));
   if (row.description) panel.appendChild(el('p', { text: row.description }));
+  if (row.detail) panel.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
+  if (row.allowed?.summary) panel.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
   const chain = el('div', { class: 'drawer-chain' });
   chain.appendChild(el('div', { text: `built-in: ${display(row.built_in?.value)}` }));
   for (const s of row.shadowed_by || []) chain.appendChild(el('div', { text: `${s.layer}: ${display(s.value)}` }));
@@ -278,6 +311,13 @@ function drawerNode(payload, context) {
     field = el('select', { class: 'config-input' });
     for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
     field.addEventListener('change', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
+  } else if (row.allowed?.kind === 'range' && (row.value_type === 'integer' || row.value_type === 'number')) {
+    field = el('input', { class: 'config-input mono', type: 'number' });
+    if (row.allowed.min != null) field.min = String(row.allowed.min);
+    if (row.allowed.max != null) field.max = String(row.allowed.max);
+    field.step = row.allowed.integer ? '1' : 'any';
+    field.value = session.text;
+    field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   } else {
     field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });

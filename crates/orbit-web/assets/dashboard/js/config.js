@@ -445,6 +445,11 @@ function valueInput(row, draft) {
   if (row.value_type === "integer") {
     const input = el("input", { class: "config-input mono" });
     input.type = "number";
+    // The key's declared range bounds the field [ORB-22809].
+    if (row.allowed?.kind === "range") {
+      if (row.allowed.min != null) input.min = String(row.allowed.min);
+      if (row.allowed.max != null) input.max = String(row.allowed.max);
+    }
     const sync = bindDraft(input, "value", draft, "value", row.value == null ? "" : String(row.value));
     return {
       node: input,

@@ -36,7 +36,7 @@ orbit config show              # values with their source
 orbit config show --all        # also Paths, Crew purposes and Review
 orbit config get workflow.default_crew
 orbit config set workflow.default_crew opus
-orbit config keys              # every settable key, with type and description
+orbit config keys              # every settable key, with type, allowed values and description
 ```
 
 `orbit config show` hides unconfigured **Advanced** keys and counts them in each

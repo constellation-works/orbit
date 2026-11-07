@@ -201,6 +201,8 @@ pub fn key_catalog() -> &'static JsonValue {
                     "section": descriptor.section.token(),
                     "section_title": descriptor.section.title(),
                     "description": descriptor.description,
+                    "detail": descriptor.detail,
+                    "allowed": descriptor.allowed.to_json(),
                     "settable": admit_settable_config_key(descriptor.key).is_ok(),
                 })
             })
