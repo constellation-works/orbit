@@ -6,9 +6,12 @@ workspaces; the rest is periodic hygiene.
 ## Worktree garbage collection
 
 Implementation pipelines create worktrees; deterministic collection or filing
-jobs need not. Nothing reclaims them automatically unless
-you arrange it, so a workspace that ships on a schedule accumulates worktrees
-until the disk fills. **Enable this before, not after, scheduling ship traffic.**
+jobs need not. With the default seeding policy, a fresh workspace seeds the
+`worktree-gc` routine enabled, but automatic reclamation needs the host's Orbit
+scheduler clock installed and enabled. Without
+that clock, a workspace that ships on a schedule accumulates worktrees until the
+disk fills. **Make sure the host clock is running before, not after, scheduling
+ship traffic.**
 
 ```bash
 orbit gc worktrees                          # report only — the default is non-destructive
@@ -38,8 +41,9 @@ sweep sees that the patch file is gone. `recovery` in the
 report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
 [worktree reclaim runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/worktree-reclaim.md).
-Run the report a few times before automating it, then enable the `worktree-gc`
-routine for hourly reclamation — [automation.md](automation.md).
+Run the report a few times before relying on scheduled reclamation. The default
+seeding policy seeds `worktree-gc` enabled for hourly collection; the host clock
+must also be running — [automation.md](automation.md).
 
 ### Workspace scratch
 
