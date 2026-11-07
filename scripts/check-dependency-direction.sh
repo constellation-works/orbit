@@ -911,6 +911,24 @@ for lower_module in task job review distributed; do
   fi
 done
 
+# [ORB-22708] Landing sits above distributed, beside visual_delivery. Task
+# owns the pure handoff-to-claim read; review records authority and reaches
+# dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
+# grouped trees, relative chains and calls into landing's inherent methods.
+# These exact lines read the task store, whose method shares a runtime name.
+landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
+for lower_module in task job review distributed; do
+  if rg -n 'crate::application::landing\b' \
+    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
+    rg -n -U 'crate::application::\{[^}]*\blanding\b' \
+      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
+    ! inherent_calls_into "$app_src" "$lower_module" landing "$landing_store_reads_allowed" '' ||
+    ! super_chains_into "$app_src" "$lower_module" landing; then
+    echo "orbit-core ${lower_module} must not name landing or call its inherent methods; task owns handoff claim resolution, and review dispatches through review::ReviewLandingDispatchPort"
+    fail=1
+  fi
+done
+
 # [ORB-22623] `routines` (the sweep clock) sits outside the order, above
 # `automation` and `auto_tasks`: it calls automation's evaluation and the
 # auto-task scheduler, and reaches `review`, `pull_drain` and `backlog_forecast`.

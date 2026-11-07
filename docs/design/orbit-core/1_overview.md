@@ -279,7 +279,14 @@ moved the backlog forecast out of `task` to its own place in the order:
   and the live evidence recheck through `distributed::DistributedVisualPort`,
   both implemented by `visual_delivery`. `visual_delivery/mod.rs` aliases
   `read_visual_record` as `read_record`, a shim for its children whose
-  retirement is a follow-up [ORB-22624].
+  retirement is a follow-up [ORB-22624]. `landing` sits above `distributed`,
+  beside `visual_delivery`: it consumes authorized handoff requests and calls
+  down into `task`, `job`, `distributed` and `visual_delivery`. The pure
+  handoff-to-claim read `landing_claim` lives in `task/handoff_claim.rs`, so
+  task and job no longer resolve claims through landing. Review dispatches
+  at the same acceptance and approval points through its own
+  `review::ReviewLandingDispatchPort`, implemented in `landing/review_port.rs`;
+  failures are still logged and leave the durable request pending [ORB-22708].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`
@@ -307,7 +314,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   when `automation` or `auto_tasks` names `routines` or calls its inherent
   methods [ORB-22623],
   when `task`, `job`, `review` or `distributed` names `visual_delivery` or
-  calls its inherent methods [ORB-22624],
+  calls its inherent methods [ORB-22624], when those same four modules name
+  `landing` or call its inherent methods [ORB-22708],
   or when a shared contract is defined or imported anywhere but
   `application::contracts`. [ORB-22004] The same derivation covers the adapter:
   `application` may not import `crate::adapter`, and no application file may call
@@ -333,7 +341,9 @@ moved the backlog forecast out of `task` to its own place in the order:
 
 The application layering, lowest first, is `contracts < task < job <
 automation < review < distributed < pull_drain < admission < workspace_auto <
-backlog_forecast < sweep_filing`. A module map that counts `crate::` paths, grouped trees,
+backlog_forecast < sweep_filing`. `landing` sits above `distributed` beside
+`visual_delivery`, with review reaching its dispatch through a review-owned
+port and task owning their shared handoff-to-claim read. A module map that counts `crate::` paths, grouped trees,
 `super::` chains and calls on an `OrbitRuntime` receiver into another
 module's inherent methods (a lowercase `module::name(` path is a free
 function, not a method call) shows that every direct edge among the ten modules
@@ -401,10 +411,10 @@ distributed` no longer climbs; it also keeps the persisted representation of
 `agents` and its own modules, whose retirement is a follow-up. The guard's
 `task` upper-module list names `codebase`. Their back-edges with other unordered
 modules (`precedent_decision`, `resident`, `experiment`, `codebase`) still keep
-the core strongly connected component and await a later audit, as do
-`experiment <-> visual_delivery` and `landing -> visual_delivery`: [ORB-22624]
-cut only the edges into `visual_delivery` from `task`, `job`, `review` and
-`distributed`.
+the core strongly connected component and await a later audit, as does
+`experiment <-> visual_delivery`. The `landing -> visual_delivery` edge runs
+between the consumers above `distributed`; [ORB-22708] cut the lower modules’
+direct edges into `landing` without changing its visual resolution checks.
 
 ## Task References
 
@@ -431,6 +441,7 @@ cut only the edges into `visual_delivery` from `task`, `job`, `review` and
 - [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
 - [ORB-22416] — cut the distributed → experiment capture edge through `distributed::DistributedExperimentPort`, implemented by `experiment`, and guarded the direction.
 - [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
+- [ORB-22708] — placed `landing` above `distributed` beside `visual_delivery`, moved its pure handoff claim resolution into `task`, routed review dispatch through `ReviewLandingDispatchPort`, and guarded the direction.
 - [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
 - [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.

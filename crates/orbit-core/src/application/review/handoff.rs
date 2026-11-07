@@ -18,8 +18,7 @@ use orbit_types::workflow::handoff::{
 use crate::OrbitRuntime;
 use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::JobDrainPort;
-use crate::application::landing::dispatch_recorded_authority;
-use crate::application::review::ReviewVisualPort;
+use crate::application::review::{ReviewLandingDispatchPort, ReviewVisualPort};
 use crate::application::task;
 
 impl OrbitRuntime {
@@ -95,7 +94,7 @@ impl OrbitRuntime {
                 super::flaky::record_frictions(self, &accepted.handoff.task_id, flaky)?;
             }
         }
-        dispatch_recorded_authority(self);
+        self.dispatch_recorded_landing_authority();
         Ok(outcome)
     }
 
@@ -130,7 +129,7 @@ impl OrbitRuntime {
                 candidate,
             },
         )?;
-        dispatch_recorded_authority(self);
+        self.dispatch_recorded_landing_authority();
         Ok(result)
     }
 
@@ -149,8 +148,7 @@ impl OrbitRuntime {
     }
 
     /// The durable outbox, readable without a live drain. Dispatch and external
-    /// merge reconciliation belong to
-    /// [`crate::application::landing`].
+    /// merge reconciliation belong to the owner landing consumer.
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.stores().tasks().landing_start_requests()
