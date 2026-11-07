@@ -852,13 +852,14 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
   /* An explicit Drain, Locks held or Log route (`dock=` in the hash) shows the
-     dock in place of the list, and the message area goes with the list. Any
-     route without `dock=` returns to the list, and desktop keeps the dock beside
-     it. The list's column has an inline display, hence !important. The log
-     scrolls inside a bounded height rather than running down the page. */
+     dock in place of the list. The message area stays as the floating area at
+     the foot of the view (below), because the top-bar search and its lookup
+     status stay offered on this route. Any route without `dock=` returns to
+     the list, and desktop keeps the dock beside it. The list's column has an
+     inline display, hence !important. The log scrolls inside a bounded height
+     rather than running down the page. */
   main.tasks-layout.dock-route > .col-tasks { display: none !important; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
-  main.tasks-layout.dock-route > .tasks-dock > .tasks-messages { display: none; }
   main.tasks-layout.dock-route .dock-back { display: inline-flex; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
