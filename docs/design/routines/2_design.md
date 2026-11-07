@@ -65,7 +65,9 @@ total catalogue and summarize blocked, stalled and repeatedly failing routines
 even when their cards are on another page or collapsed. The failure warning
 and next-hour timeline always cover the full catalogue. Filter, page and
 disclosure choices survive status refreshes and reset on workspace or host
-changes. Close an open trigger editor before filtering or changing pages.
+changes. Filtering and paging are refused only while a trigger editor is on
+screen: close it first. An open editor whose routine moved to another page or
+group keeps the controls usable, so the operator can page back to it.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace

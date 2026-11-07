@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
-import { closeEditors, editingIn, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
+import { closeEditors, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
 import {
   $,
@@ -499,9 +499,6 @@ function routineCatalogue(payload, routines, workspaceId) {
   search.dataset.routineFocus = "filter";
   search.placeholder = "Name, job or description";
   search.value = routineList.query;
-  const editing = editingIn("routine");
-  search.disabled = editing;
-  if (editing) search.title = "Close the trigger editor to filter routines.";
   const label = el("label", { text: "Filter routines" });
   label.htmlFor = search.id;
   const clear = el("button", { class: "operation-button", type: "button", text: "Clear" });
@@ -511,13 +508,18 @@ function routineCatalogue(payload, routines, workspaceId) {
   search.setAttribute("aria-controls", groups.id);
   catalogue.append(el("div", { class: "routine-list-toolbar" }, [label, search, clear, count]), routineTimeline(routines), groups);
 
+  // Filter and paging are refused only while an editor is on screen: an open
+  // editor whose routine is on another page or filtered out has nothing to
+  // close here, so the controls stay usable to navigate back to it.
+  let editing = false;
+  let pageButtons = [];
   const paintGroups = () => {
     groups.textContent = "";
+    pageButtons = [];
     const query = routineList.query.trim().toLocaleLowerCase();
     const matches = routines.filter(routine => [routine.name, routine.target, routine.description]
       .some(value => String(value || "").toLocaleLowerCase().includes(query)));
     count.textContent = query ? `${matches.length} of ${routines.length} routines match` : `${routines.length} routines · ${ROUTINE_PAGE_SIZE} per page`;
-    clear.disabled = editing || !routineList.query;
     for (const [kind, title, hint] of [
       ["active", "Active", "enabled and delivered by the host clock"],
       ["paused", "Paused", "slots are skipped, not queued"],
@@ -558,17 +560,18 @@ function routineCatalogue(payload, routines, workspaceId) {
             class: "operation-button", type: "button", text: direction,
             "aria-label": `${direction} ${kind} routines`,
           });
-          button.disabled = offset < 0 ? start === 0 : routineList[pageKey] === lastPage;
+          const atEnd = offset < 0 ? start === 0 : routineList[pageKey] === lastPage;
+          button.disabled = atEnd;
           button.dataset.routineFocus = `${kind}-${direction}`;
-          button.disabled ||= editing;
-          if (editing) button.title = "Close the trigger editor to change pages.";
+          pageButtons.push({ button, atEnd });
           button.addEventListener("click", () => {
             routineList[pageKey] += offset;
             paintGroups();
             // Keep keyboard focus in the replaced page controls, including at an end.
             const controls = groups.querySelector(`[aria-label="${title} routine pages"]`);
             const next = controls.querySelector(`[aria-label="${direction} ${kind} routines"]`);
-            (next.disabled ? controls.querySelector("button:not(:disabled)") : next)?.focus();
+            // Paging onto a page that shows an open editor disables the controls: focus the editor instead.
+            (next.disabled ? controls.querySelector("button:not(:disabled)") ?? groups.querySelector(".schedule-editor input, .schedule-editor select, .schedule-editor button") : next)?.focus();
           });
           page.appendChild(button);
         }
@@ -578,6 +581,12 @@ function routineCatalogue(payload, routines, workspaceId) {
         container.appendChild(el("p", { class: "routine-list-empty", text: `No ${kind} routines match. Clear or change the filter.` }));
       }
       groups.appendChild(container);
+    }
+    editing = Boolean(groups.querySelector(".schedule-editor"));
+    clear.disabled = editing || !routineList.query;
+    for (const { button, atEnd } of pageButtons) {
+      button.disabled = atEnd || editing;
+      button.title = editing ? "Close the trigger editor to change pages." : "";
     }
   };
   search.addEventListener("input", () => {
@@ -592,6 +601,9 @@ function routineCatalogue(payload, routines, workspaceId) {
     search.focus();
   });
   paintGroups();
+  // Set once per catalogue so typing never disables the field being typed in.
+  search.disabled = editing;
+  if (editing) search.title = "Close the trigger editor to filter routines.";
   return catalogue;
 }
 
