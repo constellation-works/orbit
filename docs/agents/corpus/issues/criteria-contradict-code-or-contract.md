@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement]
 status: active
-links: [ORB-19533, ORB-19553, ORB-19680, ORB-19863, ORB-21875, ORB-20702, ORB-21012]
+links: [ORB-19533, ORB-19553, ORB-19680, ORB-19863, ORB-21875, ORB-20702, ORB-21012, ORB-22481]
 ---
 
 # Acceptance criterion contradicts the code or a documented contract
@@ -84,3 +84,15 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | 2026-10-29T16:33:52.313789243Z | ORB-19863 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-19863 history:pilot_triage@2026-10-29T16:33:52.313789243Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
 | 2026-10-31T05:00:06.800819110Z | ORB-20391 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-20391 history:pilot_triage@2026-10-31T05:00:06.800819110Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
 | 2026-10-31T05:27:50.200262888Z | ORB-20400 | not recorded in triage comment | acceptance criterion contradicts code or documented contract; source ORB-20400 history:pilot_triage@2026-10-31T05:27:50.200262888Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 1 source occurrence on 1 task (prior ORB-22246 slice: 10 across 9); route `authoring`, disposition `counted`; ORB-21012 is the covering done fix.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-01T03:28:12Z | ORB-20702 | jrun-20261101-0321-c1 | pilot_warning_triaged disposition=human_only: holding findings adr_conflicts (proposed repricing conflicts with the design decision not to backdate rates) and utility_warnings (criterion 1 needs reviewer approval not recorded on the task); source ORB-20702 history:pilot_warning_triaged | description and acceptance_criteria edited 03:35:54Z, re-piloted clean 03:36:53Z; ORB-20702 done 03:57Z (PR #7420) |
+
+The hold preceded ORB-21012 landing (2026-11-01T19:34Z).

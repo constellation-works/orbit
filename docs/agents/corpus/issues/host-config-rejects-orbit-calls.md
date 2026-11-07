@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: active
-links: [ORB-20352, ORB-20357, ORB-20359, ORB-17664, ORB-20650, ORB-20736, ORB-20766, ORB-21875]
+links: [ORB-20352, ORB-20357, ORB-20359, ORB-17664, ORB-20650, ORB-20736, ORB-20766, ORB-21875, ORB-22481]
 ---
 
 # Host or workspace config makes every Orbit tool call fail
@@ -62,3 +62,13 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | 2026-10-31T02:38:36.188748749Z | ORB-20359 | jrun-20261031-0235-c3 | host/workspace config makes every Orbit tool call fail; source ORB-20359 history:final_recovery@2026-10-31T02:38:36.188748749Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
 | 2026-10-31T02:39:59.121320014Z | ORB-20357 | jrun-20261031-0226-c4 | host/workspace config makes every Orbit tool call fail; source ORB-20357 history:final_recovery@2026-10-31T02:39:59.121320014Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
 | 2026-10-31T02:47:25.209323899Z | ORB-20352 | jrun-20261031-0229-c6 | host/workspace config makes every Orbit tool call fail; source ORB-20352 history:final_recovery@2026-10-31T02:47:25.209323899Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 1 source occurrence on 1 task (prior ORB-22246 slice: 3); route `setup`, disposition `counted`.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-01T04:39:36Z | ORB-20736 | jrun-20261101-0435-c1 | claim_failed, failure_class=candidate: remote tool failed (invalid_input): `[plugin_enablement] is a workspace setting: remove it from '~/.orbit/config.toml'` on the claiming follower mac-mini-1; final_recovery returned no decision; triage blocked_task_triaged disposition=human_only@04:49:08Z; source ORB-20736 history:claim_failed | operator moved the task; ORB-20736 done 2026-11-01T05:44Z |

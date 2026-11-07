@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: active
-links: [ORB-19066, ORB-20598, ORB-20646, ORB-21875]
+links: [ORB-19066, ORB-20598, ORB-20646, ORB-21875, ORB-22481]
 ---
 
 # Implementer stops for scope reassessment with no candidate
@@ -41,3 +41,13 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-10-31T23:32:59.761256064Z | ORB-20598 | jrun-20261031-2330-c5 | decision: split historical denominator semantics; implement_one scope_reassessment; aggregate rows lack task path attribution; No implementation; multi-task rows share base/head range and lack paths. Operator split per-line metrics into ORB-20646 at 2026-11-01T00:30:09Z.; source ORB-20598 history:final_recovery_decided@2026-10-31T23:32:59.761256064Z | status_changed done at 2026-11-01T01:06:41.289626485Z |
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 1 source occurrence on 1 task; route `authoring`, disposition `counted`.
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-31T23:32:59Z | ORB-20598 | jrun-20261031-2330-c5 | final_recovery escalate: no candidate; historical denominator semantics undecided; human_action re-pilot to settle unavailable-data semantics; source ORB-20598 history:final_recovery_escalated | re-run jrun-20261101-0030-c7 delivered; ORB-20598 done 2026-11-01T01:06Z |

@@ -2,7 +2,7 @@
 type: issue
 applies_to: [agent_implement, final_recovery]
 status: resolved
-links: [ORB-21875, ORB-21111, ORB-21202]
+links: [ORB-21875, ORB-21111, ORB-21202, ORB-22481]
 ---
 
 # Experiment overlay overrides the explicit crew on a retry
@@ -34,3 +34,13 @@ Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieve
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-11-02T01:56:37.782193532Z | ORB-21111 | jrun-20261102-0155-t2 | friction_reported: reconcile explicit crew with experiment overlay; recovery retry; concluded experiment overrides task crew; F2026-11-022: recovery reports experiment overlay defeating explicit crew. Later comment 02:15:15Z identifies ORB-21202 and admission after experiment conclusion.; source ORB-21111 history:final_recovery_decided@2026-11-02T01:56:37.782193532Z | review_approved done at 2026-11-02T03:34:27.103395859Z |
+
+### ORB-22481 owner scan, 2026-11-07
+
+Reviewed proposal from fixed resume window `2026-10-21T14:44:15Z` through `2026-11-04T14:44:15Z`, after `2026-10-31T12:50:12.003276941Z` (resume pass continuing ORB-22246). This slice counts 1 source occurrence on 1 task; route `run_failure`, disposition `counted` (covered by done ORB-21202).
+
+Durable sources: the task `history` and `comments` read with `orbit.task.show` and the run record read with `orbit run show <run> --no-reconcile --json` remain authoritative; ORB-22481 attaches `pilot-block-report.json`.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-02T01:56:37Z | ORB-21111 | jrun-20261102-0155-t2 | final_recovery decision=friction_reported outcome=escalated: Orbit-issued stop and crew-routing defect F2026-11-022; source ORB-21111 history:final_recovery_decided | continued with explicit run-level crew; ORB-21111 done 2026-11-02T03:34Z |
