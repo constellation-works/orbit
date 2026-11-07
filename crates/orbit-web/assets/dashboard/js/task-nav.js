@@ -1,12 +1,11 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
-import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, isAggregateView, copyText } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
 
-let settleMergedInFlight = false;
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
 // the hash no longer names is dropped.
 let openTaskGeneration = 0;
@@ -666,53 +665,6 @@ export function renderTaskPagination(context) {
     previous.addEventListener("click", () => context.navigateTaskPage("previous"));
     next.addEventListener("click", () => context.navigateTaskPage("next"));
   }
-}
-
-// The page-level Settle merged PRs control: one confirmation settles every
-// blocked, in-progress and review task in the selected workspace whose own
-// delivery PR already merged. Disabled in aggregate and read-only views,
-// like the per-task recovery controls.
-export function syncSettleMergedButton(context) {
-  const btn = $("tasks-settle-merged");
-  if (!btn) return;
-  const blocked = isAggregateView() || Boolean(hostWriteRefusal());
-  btn.disabled = blocked || settleMergedInFlight;
-  btn.textContent = settleMergedInFlight ? "Settling…" : "Settle merged PRs";
-  btn.title = blocked
-    ? aggregateRefusalTitle("Settle merged PRs", "settle merged tasks")
-    : "Settle every blocked, in-progress and review task in this workspace whose delivery pull request already merged into its target branch; tasks whose pull request has not merged do not change";
-  if (btn.dataset.wired !== "true") {
-    btn.dataset.wired = "true";
-    btn.addEventListener("click", () => {
-      settleMergedPrs(context).catch((error) => console.error("Failed to settle merged PRs", error));
-    });
-  }
-}
-
-async function settleMergedPrs(context) {
-  if (settleMergedInFlight || isAggregateView() || hostWriteRefusal()) return;
-  if (typeof window.confirm !== "function" || !window.confirm(
-    "Settle merged PRs? Only tasks in this workspace whose delivery pull request already merged into its target branch change: each moves to done with a landing note naming the pull request and merge commit. Tasks whose pull request has not merged, and tasks with a live run or claim, do not change and are reported as skipped.",
-  )) return;
-  const visit = captureWorkspaceVisit();
-  settleMergedInFlight = true;
-  syncSettleMergedButton(context);
-  try {
-    const result = await postJson(visit.path("/api/tasks/settle-merged"), {});
-    if (!visit.isCurrent()) return;
-    const settled = Array.isArray(result && result.settled) ? result.settled : [];
-    const skipped = Array.isArray(result && result.skipped) ? result.skipped : [];
-    const settledText = settled.map((entry) => `${entry.task_id} (#${entry.pr_number})`).join(", ");
-    const skippedText = skipped.map((entry) => entry.task_id).join(", ");
-    taskState.taskActionNotice = `Settled ${settled.length}${settledText ? `: ${settledText}` : ""}; skipped ${skipped.length}${skippedText ? `: ${skippedText}` : ""}`;
-  } catch (error) {
-    if (!visit.isCurrent()) return;
-    const code = error && error.code ? error.code : "settle_merged_failed";
-    taskState.taskActionNotice = `[${code}] ${error && error.message ? error.message : String(error)}`;
-  } finally {
-    settleMergedInFlight = false;
-  }
-  await refreshTasks(context);
 }
 
 export function buildChips(context) {
