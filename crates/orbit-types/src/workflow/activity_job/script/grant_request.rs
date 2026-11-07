@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::script::{ScriptGrant, ScriptHostRole, ScriptNetwork, ScriptSpec};
+use super::{ScriptGrant, ScriptHostRole, ScriptNetwork, ScriptSpec};
 use crate::identity::lower_hex;
 
 /// Tag on the `someday` holder task a workspace script's grant requests
