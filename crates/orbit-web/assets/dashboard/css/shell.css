@@ -670,7 +670,10 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .topbar :is(button, a) { scroll-margin-inline: 8px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
-  .topbar .global-drain-state { order: 2; }
+  /* The narrow bar drops the fleet pill and provider usage to keep its row
+     clear. Both readings and their entry points stay on wider layouts. */
+  .topbar .global-drain-state,
+  .topbar .provider-usage-chips { display: none; }
   .topbar .refresh-btn { order: 3; }
   .topbar .host-resource-group {
     order: 4;
@@ -687,19 +690,15 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
-  .topbar .global-drain-state,
   .topbar .refresh-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
     height: 44px;
+    width: 44px;
+    padding: 0;
   }
-  .topbar .global-drain-state { min-width: 86px; max-width: calc(100vw - 32px); padding: 0 10px; }
-  .topbar .global-drain-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .topbar .global-drain-running { display: none; }
-  .topbar .refresh-btn { width: 44px; padding: 0; }
-  .topbar .global-drain-state[hidden] { display: none; }
   /* Keep the action name available to assistive tech. */
   .refresh-label {
     position: absolute;
