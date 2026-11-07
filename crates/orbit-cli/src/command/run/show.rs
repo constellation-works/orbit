@@ -541,7 +541,7 @@ pub(crate) fn run_show_payload(
     Ok(Payload::blocks(
         doc,
         vec![
-            Block::text(header),
+            Block::prose(header),
             Block::table(step_summary_table(&steps)),
         ],
     )
