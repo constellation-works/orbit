@@ -14,7 +14,7 @@ mod writes;
 pub(super) use artifacts::get_task_artifact;
 pub(super) use lifecycle::{
     approve_task_action, archive_task_action, reject_task_action, requeue_task_action,
-    settle_merged_task_action, settle_merged_tasks_action,
+    settle_merged_task_action,
 };
 pub(super) use reads::{completion_by_complexity, get_task, list_task_locks, list_tasks};
 pub(super) use records::{

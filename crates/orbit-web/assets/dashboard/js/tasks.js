@@ -15,7 +15,7 @@ import * as taskComments from './task-comments.js';
 export { buildArtifacts } from './task-evidence.js';
 export { scrollToComment } from './task-comments.js';
 import { clearTaskDataCaches } from './task-data.js';
-import { closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction, syncSettleMergedButton } from './task-nav.js';
+import { closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction } from './task-nav.js';
 export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, applyTasksHashQuery, syncTaskControls, renderTaskPagination, refreshChips, buildChips, wireSearch } from './task-nav.js';
 import { buildQuickAction, buildQuickActionError, hasQuickAction, pruneQuickActionErrors, quickActionSignature, quickActionState } from './task-quick-actions.js';
 import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-controls.js';
@@ -436,7 +436,6 @@ export function renderTasks(tasks, context) {
   if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
-  syncSettleMergedButton(context);
   // ORB-10972: the rail shows the matching total the panel header reports, so
   // the Tasks entry reads correctly from any other tab. The rows on this page
   // are not that total once the list is paginated (ORB-14701).

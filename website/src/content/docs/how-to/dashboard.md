@@ -222,8 +222,8 @@ notices](../fleet-notices/).
 
 ## Tasks
 
-Search by ID or title from the top bar, or filter by status. **Settle merged PRs**
-and **New task** are in the top bar too, at every width. My work, Waiting on you,
+Search by ID or title from the top bar, or filter by status. **New task** stays
+in the top bar at every width. My work, Waiting on you,
 Done, Rejected, Archived, Someday, All, Not ready, and Pilot warnings are
 under **More**. Press Enter on a full task ID
 to open it even when the filter, page, or selected workspace hides it.
