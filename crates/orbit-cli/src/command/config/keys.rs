@@ -19,6 +19,8 @@ impl Execute for ConfigKeysArgs {
                     "type": entry.value_type,
                     "section": entry.section.token(),
                     "description": entry.description,
+                    "detail": entry.detail,
+                    "allowed": entry.allowed.to_json(),
                 })
             })
             .collect();
@@ -27,15 +29,18 @@ impl Execute for ConfigKeysArgs {
             Column::new("TYPE").fixed(),
             Column::new("SECTION").fixed(),
             Column::new("DESCRIPTION"),
+            Column::new("ALLOWED"),
         ])
         .empty_message("no config keys registered");
 
         for entry in CONFIG_KEY_REGISTRY.iter() {
+            let allowed = entry.allowed.summary().unwrap_or_default();
             table.add_row(vec![
                 entry.key,
                 entry.value_type,
                 entry.section.token(),
                 entry.description,
+                allowed.as_str(),
             ]);
         }
 

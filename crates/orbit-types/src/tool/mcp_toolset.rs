@@ -127,8 +127,22 @@ impl McpToolset {
         Self::Plugins,
     ];
 
+    /// Every name a `machine.mcp.toolsets` entry takes: each toolset's
+    /// name in [`Self::ALL`] order, then `all` and `default` [ORB-22809].
+    pub const SELECTION_NAMES: [&'static str; 22] = {
+        let mut names = [""; 22];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            names[index] = Self::ALL[index].as_str();
+            index += 1;
+        }
+        names[20] = "all";
+        names[21] = "default";
+        names
+    };
+
     /// The name a selection uses.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Core => "core",
             Self::TasksRead => "tasks-read",
@@ -232,8 +246,19 @@ impl McpRole {
         Self::Reader,
     ];
 
+    /// Every role's name, in [`Self::ALL`] order [ORB-22809].
+    pub const NAMES: [&'static str; 5] = {
+        let mut names = [""; 5];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            names[index] = Self::ALL[index].as_str();
+            index += 1;
+        }
+        names
+    };
+
     /// The name `--role` and `machine.mcp.role` take.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Operator => "operator",
             Self::Manager => "manager",

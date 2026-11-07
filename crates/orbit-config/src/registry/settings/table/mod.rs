@@ -11,9 +11,13 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value as JsonValue, json};
 
+use super::super::allowed::{
+    PERCENT, each_of, format, integers, integers_from, numbers, numbers_from, one_of,
+};
 use super::super::{
-    CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigKeyDescriptor,
-    ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
+    CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues,
+    ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
+    SECURITY_ALERT_SEVERITIES,
 };
 use super::lease_listener::{
     LeaseListenerTlsSettings, resolve_lease_listener_failed_auth,
@@ -31,7 +35,7 @@ use super::resolve::{
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS, DEFAULT_STORE_WARN_BYTES,
     DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list,
     normalize_logins, normalize_pass_list, resolve_agent_stall_minutes, resolve_at,
-    resolve_bounded_count, resolve_bounded_minutes, resolve_bounded_range, resolve_branch_template,
+    resolve_bounded_number, resolve_bounded_range, resolve_branch_template,
     resolve_build_output_env, resolve_choice, resolve_commit_subject_template,
     resolve_cpu_light_leaves, resolve_distributed_completion,
     resolve_experiments_min_delivered_rate, resolve_generated_paths,
@@ -62,6 +66,8 @@ macro_rules! define_config_settings {
             section: $section:expr,
             order: $order:literal,
             $(tier: $tier:expr,)?
+            $(allowed: $allowed:expr,)?
+            $(detail: $detail:literal,)?
             resolve: $resolve:expr $(,)?
         }
     ),+ $(,)?) => {
@@ -85,6 +91,8 @@ macro_rules! define_config_settings {
                 section: $section,
                 order: $order,
                 tier: define_config_settings!(@tier $($tier)?),
+                allowed: define_config_settings!(@allowed $($allowed)?),
+                detail: define_config_settings!(@detail $($detail)?),
             },)+
         ];
 
@@ -287,6 +295,10 @@ macro_rules! define_config_settings {
     };
     (@tier $tier:expr) => { $tier };
     (@tier) => { ConfigKeyTier::Standard };
+    (@allowed $allowed:expr) => { $allowed };
+    (@allowed) => { ConfigAllowedValues::Any };
+    (@detail $detail:literal) => { Some($detail) };
+    (@detail) => { None };
 }
 
 // The key list is split at setting-family boundaries across `.rs` modules:

@@ -31,7 +31,7 @@ orbit config show                  # effective merged view, with source provenan
 orbit config show --scope global   # one physical file
 orbit config get <key>
 orbit config set <key> <value>
-orbit config keys                  # every registered key; machine.id and machine.task_prefix are listed and read-only
+orbit config keys                  # every registered key with its allowed values; machine.id and machine.task_prefix are listed and read-only
 orbit config path
 ```
 

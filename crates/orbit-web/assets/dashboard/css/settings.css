@@ -358,10 +358,16 @@
    2.7:1 at .55), so every text tone here stays at AA, and the reason chip stays
    readable. The marker is a box-shadow, so the grid does not move. */
 .topic-row.inactive { box-shadow: inset 2px 0 0 var(--fg-disabled); }
-.topic-row.inactive > .topic-label, .topic-row.inactive > .config-value { color: var(--fg-dim); }
+.topic-row.inactive > .topic-label, .topic-row.inactive .config-value { color: var(--fg-dim); }
 .topic-row.inactive > .topic-inactive { color: var(--fg-dim); border: 1px dashed var(--fg-mute); }
 .topic-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 .topic-label .config-key { color: var(--fg-mute); font: 11px/1.4 var(--font-mono); }
+.topic-description { color: var(--fg-dim); font-size: 12px; line-height: 1.4; }
+/* ORB-22809: the values a key accepts, beside its value. */
+.topic-allowed { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; color: var(--fg-mute); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.topic-allowed-chip { padding: 0 5px; border: 1px solid var(--hair); border-radius: var(--radius-sm); color: var(--fg-mute); }
+.topic-allowed-chip.current { color: var(--fg); border-color: var(--border); background: var(--bg-sunk); }
+.drawer-detail { color: var(--fg-dim); }
 .topic-plain > .config-key { color: var(--fg); }
 .topic-row > .config-value { min-width: 0; }
 .topic-value-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }

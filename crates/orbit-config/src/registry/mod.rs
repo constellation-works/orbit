@@ -10,7 +10,6 @@
 //! through [`admit_config_key`].
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::CODEX_PROVIDER_SANDBOX_MODES;
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
@@ -155,7 +154,7 @@ impl ConfigKeyTier {
 }
 
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfigKeyDescriptor {
     /// Dotted key path.
     pub key: &'static str,
@@ -163,9 +162,15 @@ pub struct ConfigKeyDescriptor {
     pub value_type: &'static str,
     /// What the setting controls.
     ///
-    /// One sentence of at most 100 characters. Defaults, ranges and
-    /// interactions live in `docs/CONFIG.md`.
+    /// One sentence of at most 100 characters. Accepted values are in
+    /// `allowed`, the built-in default comes from the snapshot, and longer
+    /// explanation is in `detail` or `docs/CONFIG.md`.
     pub description: &'static str,
+    /// Further explanation a detail view shows under `description`.
+    pub detail: Option<&'static str>,
+    /// The values the key accepts beyond its type; the shared resolvers
+    /// read their bounds and choices from here [ORB-22809].
+    pub allowed: ConfigAllowedValues,
     /// Grouping for `orbit config show`/`keys`.
     pub section: ConfigSection,
     /// Visibility in the ordinary configuration overview.
@@ -176,8 +181,11 @@ pub struct ConfigKeyDescriptor {
     pub order: u16,
 }
 
+mod allowed;
 mod keys;
 mod settings;
+
+pub use allowed::ConfigAllowedValues;
 
 pub(crate) use keys::{
     DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, LEASE_INTAKE_PEER_USER_KEY,

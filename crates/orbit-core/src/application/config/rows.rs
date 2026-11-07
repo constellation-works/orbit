@@ -439,6 +439,16 @@ fn build_base_row(
         "description".to_string(),
         json!(descriptor.map(|descriptor| descriptor.description)),
     );
+    row.insert(
+        "detail".to_string(),
+        json!(descriptor.and_then(|descriptor| descriptor.detail)),
+    );
+    // The values the key accepts, from the same declaration config load
+    // checks, so the Settings rows and editors cannot drift from it.
+    row.insert(
+        "allowed".to_string(),
+        descriptor.map_or(JsonValue::Null, |descriptor| descriptor.allowed.to_json()),
+    );
     row
 }
 

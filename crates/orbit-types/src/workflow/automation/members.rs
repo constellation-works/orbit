@@ -240,6 +240,24 @@ pub enum MaterialField {
 }
 
 impl MaterialField {
+    /// Every field's serialized name, as `workflow.task_pilot_freshness.
+    /// material_fields` takes it [ORB-22809].
+    pub const NAMES: [&'static str; 13] = [
+        "title",
+        "description",
+        "criteria",
+        "plan",
+        "selectors",
+        "tags",
+        "crew",
+        "tools",
+        "type",
+        "complexity",
+        "relations",
+        "dependencies",
+        "instructions",
+    ];
+
     /// What an assessment is about: editing any of these re-admits the task.
     pub const DEFAULT: [Self; 5] = [
         Self::Title,
@@ -264,6 +282,11 @@ pub enum SourceSensitivity {
     ContextFiles,
     /// Every head move invalidates every assessment.
     Any,
+}
+
+impl SourceSensitivity {
+    /// Every value's serialized name [ORB-22809].
+    pub const NAMES: [&'static str; 3] = ["ignore", "context_files", "any"];
 }
 
 /// A partial freshness block: an absent key falls through to the next layer

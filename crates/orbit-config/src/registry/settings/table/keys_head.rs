@@ -6,15 +6,17 @@ macro_rules! assemble_config_settings {
         with_tail_keys! {
     publication_routine_attachments: String => String {
         key: "publication.routine_attachments", value_type: "string",
-        description: "Scheduled task publication attachment policy: omit, fail, or include.",
+        description: "Scheduled task publication attachment policy.",
         section: ConfigSection::Housekeeping, order: 22,
-        resolve: |raw: Option<String>| resolve_choice(raw, "omit", "publication.routine_attachments", &["omit", "fail", "include"]),
+        allowed: one_of(&["omit", "fail", "include"]),
+        resolve: |raw: Option<String>| resolve_choice(raw, "omit", "publication.routine_attachments"),
     },
     publication_routine_allow_unscanned_attachments: bool => bool {
         key: "publication.routine_allow_unscanned_attachments", value_type: "boolean",
-        description: "Explicitly allow scheduled included attachments without a sensitivity scanner; path and size checks still apply.",
+        description: "Allow scheduled included attachments without a sensitivity scanner.",
         section: ConfigSection::Housekeeping, order: 23,
         tier: ConfigKeyTier::Advanced,
+        detail: "Path and size checks still apply.",
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     ci_failure_operator_suppression_hours: u32 => u32 {
@@ -22,37 +24,37 @@ macro_rules! assemble_config_settings {
         description: "Hours an archived or rejected CI sweep task suppresses re-filing.",
         section: ConfigSection::Housekeeping, order: 21,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| {
-            let hours = raw.unwrap_or(6);
-            if hours > 720 {
-                Err(OrbitError::InvalidInput("ci_failure.operator_suppression_hours must be 0..=720".into()))
-            } else { Ok(hours) }
-        },
+        allowed: integers(0, 720, "hours"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 6, "ci_failure.operator_suppression_hours"),
     },
     automation_stall_window_minutes: u32 => u32 {
         key: "automation.stall_window_minutes", value_type: "integer",
         description: "Minutes a deferred delivery-automation reason may persist before it is logged and filed.",
         section: ConfigSection::Housekeeping, order: 20,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_STALL_WINDOW_MINUTES, "automation.stall_window_minutes"),
+        allowed: integers(1, 1440, "minutes"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_STALL_WINDOW_MINUTES, "automation.stall_window_minutes"),
     },
     codex_approval_policy: Option<String> => String {
         key: "execution.codex.approval_policy", value_type: "string",
-        description: "Codex approval policy: untrusted, on-request, or never.",
+        description: "Codex approval policy.",
         section: ConfigSection::Execution, order: 20,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy", CODEX_APPROVAL_POLICIES),
+        allowed: one_of(CODEX_APPROVAL_POLICIES),
+        resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy"),
     },
     codex_sandbox: String => String {
         key: "execution.codex.sandbox", value_type: "string",
-        description: "Codex sandbox mode: read-only, workspace-write, or danger-full-access.",
+        description: "Codex sandbox mode.",
         section: ConfigSection::Execution, order: 10,
-        resolve: |raw: Option<String>| resolve_choice(raw, "workspace-write", "execution.codex.sandbox", CODEX_PROVIDER_SANDBOX_MODES),
+        allowed: one_of(CODEX_PROVIDER_SANDBOX_MODES),
+        resolve: |raw: Option<String>| resolve_choice(raw, "workspace-write", "execution.codex.sandbox"),
     },
     execution_env_pass: Vec<String> => Vec<String> {
         key: "execution.env.pass", value_type: "array<string>",
         description: "Environment variable names passed through into agent subprocesses.",
         section: ConfigSection::Execution, order: 30,
+        allowed: format("environment variable names"),
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
     },
     execution_proc_spawn_max_timeout_minutes: u32 => u32 {
@@ -60,13 +62,15 @@ macro_rules! assemble_config_settings {
         description: "Longest timeout, in minutes, one proc.spawn call may use inside an activity.",
         section: ConfigSection::Execution, order: 40,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, "execution.proc_spawn_max_timeout_minutes"),
+        allowed: integers(1, 1440, "minutes"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, "execution.proc_spawn_max_timeout_minutes"),
     },
     execution_agent_stall_minutes: u32 => u32 {
         key: "execution.agent_stall_minutes", value_type: "integer",
         description: "Minutes a provider process may sit idle before its step fails as stalled.",
         section: ConfigSection::Execution, order: 50,
         tier: ConfigKeyTier::Advanced,
+        allowed: integers(0, 1440, "minutes"),
         resolve: |raw: Option<u32>| resolve_agent_stall_minutes(raw),
     },
     machine_id: Option<String> => String {
@@ -80,18 +84,21 @@ macro_rules! assemble_config_settings {
         description: "Longest lifetime, in days, of an application consent with constrained, named or rate-limited scopes.",
         section: ConfigSection::Machine, order: 90,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_APPLICATION_CONSENT_MAX_DAYS, 1, 365, "machine.application_consent_max_days"),
+        allowed: integers(1, 365, "days"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_APPLICATION_CONSENT_MAX_DAYS, "machine.application_consent_max_days"),
     },
     machine_auto_concurrency_admit_cpu_percent: u8 => u8 {
         key: "machine.auto_concurrency.admit_cpu_percent", value_type: "integer",
         description: "Maximum forecast CPU utilization as a percentage of host cores.",
         section: ConfigSection::Machine, order: 33,
+        allowed: PERCENT,
         resolve: |raw: Option<u8>| resolve_percent(raw, 90, "machine.auto_concurrency.admit_cpu_percent"),
     },
     machine_auto_concurrency_admit_memory_percent: u8 => u8 {
         key: "machine.auto_concurrency.admit_memory_percent", value_type: "integer",
         description: "Maximum forecast non-reclaimable memory as a percentage of host memory.",
         section: ConfigSection::Machine, order: 34,
+        allowed: PERCENT,
         resolve: |raw: Option<u8>| resolve_percent(raw, 75, "machine.auto_concurrency.admit_memory_percent"),
     },
     machine_auto_concurrency_head_max_wait_minutes: u32 => u32 {
@@ -106,10 +113,8 @@ macro_rules! assemble_config_settings {
         description: "Starvation guard: protected passes before a stuck queue head is reported.",
         section: ConfigSection::Machine, order: 39,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| match raw.unwrap_or(20) {
-            0 => Err(OrbitError::InvalidInput("machine.auto_concurrency.head_stuck_passes must be at least 1".into())),
-            passes => Ok(passes),
-        },
+        allowed: integers_from(1, "passes"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 20, "machine.auto_concurrency.head_stuck_passes"),
     },
     machine_auto_concurrency_horizon_cap_minutes: u32 => u32 {
         key: "machine.auto_concurrency.horizon_cap_minutes", value_type: "integer",
@@ -126,9 +131,10 @@ macro_rules! assemble_config_settings {
     },
     machine_auto_concurrency_mode: String => String {
         key: "machine.auto_concurrency.mode", value_type: "string",
-        description: "Forecast admission mode: off, shadow, or enforce.",
+        description: "Forecast admission mode.",
         section: ConfigSection::Machine, order: 32,
-        resolve: |raw: Option<String>| resolve_choice(raw, "off", "machine.auto_concurrency.mode", &["off", "shadow", "enforce"]),
+        allowed: one_of(&["off", "shadow", "enforce"]),
+        resolve: |raw: Option<String>| resolve_choice(raw, "off", "machine.auto_concurrency.mode"),
     },
     machine_auto_concurrency_profile_window: u32 => u32 {
         key: "machine.auto_concurrency.profile_window", value_type: "integer",
@@ -142,6 +148,7 @@ macro_rules! assemble_config_settings {
         description: "Minutes before a scheduled shutdown when new unattended admissions hold.",
         section: ConfigSection::Machine, order: 31,
         tier: ConfigKeyTier::Advanced,
+        allowed: integers_from(1, "minutes"),
         resolve: |raw: Option<u32>| resolve_host_shutdown_hold_minutes(raw),
     },
     machine_labels: Vec<String> => Vec<String> {
@@ -164,8 +171,9 @@ macro_rules! assemble_config_settings {
     },
     machine_worker_containment: String => crate::aliases::WorkerContainmentSetting {
         key: "machine.worker_containment", value_type: "string",
-        description: "How detached pipeline workers are bounded: warn, strict, or off.",
+        description: "How detached pipeline workers are bounded.",
         section: ConfigSection::Machine, order: 40,
+        allowed: one_of(crate::aliases::WorkerContainmentMode::CHOICES),
         resolve: |raw: Option<crate::aliases::WorkerContainmentSetting>| crate::aliases::resolve_worker_containment(raw).map(|mode| mode.as_str().to_string()),
     },
     machine_worker_memory_high: MemoryLimit => String {
@@ -173,6 +181,7 @@ macro_rules! assemble_config_settings {
         description: "MemoryHigh for each contained worker scope, where throttling starts.",
         section: ConfigSection::Machine, order: 50,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("bytes with an optional K, M, G or T suffix, a percentage of RAM, or infinity"),
         resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_HIGH, "machine.worker_memory_high"),
     },
     machine_worker_memory_max: MemoryLimit => String {
@@ -180,6 +189,7 @@ macro_rules! assemble_config_settings {
         description: "MemoryMax for each contained worker scope, where the kernel may OOM-kill.",
         section: ConfigSection::Machine, order: 60,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("bytes with an optional K, M, G or T suffix, a percentage of RAM, or infinity"),
         resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_MAX, "machine.worker_memory_max"),
     },
     machine_worker_tasks_max: u32 => u32 {
@@ -187,6 +197,7 @@ macro_rules! assemble_config_settings {
         description: "TasksMax for each contained worker scope, capping processes and threads.",
         section: ConfigSection::Machine, order: 70,
         tier: ConfigKeyTier::Advanced,
+        allowed: integers_from(1, "tasks"),
         resolve: |raw: Option<u32>| resolve_worker_tasks_max(raw),
     },
     machine_worker_cpu_quota: u32 => u32 {
@@ -201,7 +212,8 @@ macro_rules! assemble_config_settings {
         description: "Minimum Dependabot and code-scanning severity the security sweep files.",
         section: ConfigSection::Housekeeping, order: 90,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| resolve_choice(raw, "moderate", "security_alert_sweep.min_severity", SECURITY_ALERT_SEVERITIES),
+        allowed: one_of(SECURITY_ALERT_SEVERITIES),
+        resolve: |raw: Option<String>| resolve_choice(raw, "moderate", "security_alert_sweep.min_severity"),
     },
     pr_close_on_terminal: bool => bool {
         key: "pr.close_on_terminal", value_type: "bool",
@@ -226,9 +238,11 @@ macro_rules! assemble_config_settings {
     },
     pr_body_template: Option<String> => String {
         key: "pr.body_template", value_type: "string",
-        description: "Pull request body template: \"repo\" or a repository-relative path read at the delivery base; unset uses Orbit's layout.",
+        description: "Pull request body template source; unset uses Orbit's layout.",
         section: ConfigSection::Delivery, order: 171,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("\"repo\" or a repository-relative path"),
+        detail: "A path is read at the delivery base.",
         resolve: |raw: Option<String>| resolve_pr_body_template(raw, "pr.body_template"),
     },
     pr_agent_sections: Vec<String> => Vec<String> {
@@ -247,17 +261,21 @@ macro_rules! assemble_config_settings {
     },
     pr_missing_required_section: String => String {
         key: "pr.missing_required_section", value_type: "string",
-        description: "When a required pull request section is unfilled: draft (open as a draft) or refuse.",
+        description: "What happens when a required pull request section is unfilled.",
         section: ConfigSection::Delivery, order: 174,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| resolve_choice(raw, "draft", "pr.missing_required_section", MissingSectionPolicy::VALUES),
+        allowed: one_of(MissingSectionPolicy::VALUES),
+        detail: "draft opens the pull request as a draft; refuse refuses it.",
+        resolve: |raw: Option<String>| resolve_choice(raw, "draft", "pr.missing_required_section"),
     },
     pr_screenshot_section: String => String {
         key: "pr.screenshot_section", value_type: "string",
-        description: "When single-task pull request bodies carry the Screenshots table from screenshots/ task artifacts: auto (tasks tagged ui), always or off.",
+        description: "When single-task pull request bodies carry the Screenshots table.",
         section: ConfigSection::Delivery, order: 174,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| resolve_choice(raw, "auto", "pr.screenshot_section", ScreenshotSection::VALUES),
+        allowed: one_of(ScreenshotSection::VALUES),
+        detail: "The table lists screenshots/ task artifacts; auto includes it for tasks tagged ui.",
+        resolve: |raw: Option<String>| resolve_choice(raw, "auto", "pr.screenshot_section"),
     },
     pr_freshness_section: bool => bool {
         key: "pr.freshness_section", value_type: "bool",
@@ -289,9 +307,11 @@ macro_rules! assemble_config_settings {
     },
     pr_task_tag_labels: Vec<String> => Vec<String> {
         key: "pr.task_tag_labels", value_type: "array<string>",
-        description: "Task tags to mirror as pull request labels, matched exactly and applied best-effort after creation or reuse.",
+        description: "Task tags to mirror as pull request labels.",
         section: ConfigSection::Delivery, order: 178,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("task tags"),
+        detail: "Matched exactly and applied best-effort after creation or reuse.",
         resolve: resolve_task_tag_labels,
     },
     pr_task_type_labels: BTreeMap<String, String> => BTreeMap<String, String> {
@@ -359,48 +379,60 @@ macro_rules! assemble_config_settings {
     },
     review_timing: String => String {
         key: "review.timing", value_type: "string",
-        description: "When a fresh reviewer runs before landing: off or before_landing (recommended); before_pr is deprecated but still holds PR creation for a reviewer.",
+        description: "When a fresh reviewer runs before landing.",
         section: ConfigSection::Review, order: 10,
+        allowed: one_of(operation::ReviewTimingSetting::CHOICES),
+        detail: "before_landing is recommended. before_pr is deprecated but still holds PR creation for a reviewer.",
         resolve: |raw: Option<String>| operation::ReviewTimingSetting::parse(raw.as_deref().unwrap_or("off")).map(|timing| timing.as_str().to_string()),
     },
     review_before_landing_hosts: Vec<String> => Vec<String> {
         key: "review.before_landing_hosts", value_type: "array<string>",
         description: "Machine ids whose claimed leaves review their open pull request before landing.",
         section: ConfigSection::Review, order: 16,
+        allowed: format("machine ids"),
         resolve: |raw: Option<Vec<String>>| operation::before_landing_hosts(raw).map(Option::unwrap_or_default),
     },
     review_minutes: u32 => u32 {
         key: "review.minutes", value_type: "integer",
         description: "Reviewer runtime minutes for one candidate's review before landing.",
         section: ConfigSection::Review, order: 20,
+        allowed: integers(1, operation::MAX_REVIEW_MINUTES as u64, "minutes"),
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
     review_selective_before_landing_mode: String => String {
         key: "review.selective_before_landing.mode", value_type: "string",
-        description: "Selective before-landing review: off (default), observe (record would-review), or enforce (selected candidates review before landing).",
+        description: "Selective before-landing review.",
         section: ConfigSection::Review, order: 22,
         tier: ConfigKeyTier::Advanced,
+        allowed: one_of(orbit_types::workflow::SelectiveBeforeLandingMode::CHOICES),
+        detail: "observe records which candidates would review; enforce reviews the selected candidates before landing.",
         resolve: |raw: Option<String>| operation::selective_mode_parse(raw.as_deref().unwrap_or("off")).map(|mode| mode.as_str().to_string()),
     },
     review_selective_before_landing_risk_threshold: Option<String> => f64 {
         key: "review.selective_before_landing.risk_threshold", value_type: "number",
-        description: "Select a candidate when its estimated regression risk is strictly above this probability in [0, 1]; unset disables the risk predicate.",
+        description: "Select a candidate whose estimated regression risk is above this probability.",
         section: ConfigSection::Review, order: 23,
         tier: ConfigKeyTier::Advanced,
+        allowed: numbers(0.0, 1.0),
+        detail: "Strictly above; unset disables the risk predicate.",
         resolve: |raw: Option<f64>| operation::selective_threshold_value(raw),
     },
     review_selective_before_landing_paths: Vec<String> => Vec<String> {
         key: "review.selective_before_landing.paths", value_type: "array<string>",
-        description: "Repository-relative path globs that select a candidate for before-landing review; a stated list replaces the lower layer's.",
+        description: "Path globs that select a candidate for before-landing review.",
         section: ConfigSection::Review, order: 24,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("path globs"),
+        detail: "Repository-relative; a stated list replaces the lower layer's.",
         resolve: |raw: Option<Vec<String>>| operation::selective_paths(raw).map(Option::unwrap_or_default),
     },
     review_selective_before_landing_unknown_risk: String => String {
         key: "review.selective_before_landing.unknown_risk", value_type: "string",
-        description: "When the risk predicate has no usable estimate: review (default) or skip. Never applies to an unreadable path diff.",
+        description: "What the risk predicate does without a usable estimate.",
         section: ConfigSection::Review, order: 25,
         tier: ConfigKeyTier::Advanced,
+        allowed: one_of(orbit_types::workflow::SelectiveUnknownRisk::CHOICES),
+        detail: "Never applies to an unreadable path diff.",
         resolve: |raw: Option<String>| operation::selective_unknown_risk_parse(raw.as_deref().unwrap_or("review")).map(|value| value.as_str().to_string()),
     },
     review_verify_findings: bool => bool {
@@ -414,12 +446,15 @@ macro_rules! assemble_config_settings {
         key: "retention.audit_days", value_type: "integer",
         description: "Days orbit gc audit keeps command and run audit rows.",
         section: ConfigSection::Housekeeping, order: 100,
+        allowed: integers(1, 36_500, "days"),
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.audit_days", DEFAULT_RETENTION_DAYS),
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
-        description: "Days after a terminal run before orbit gc runs may drop its pipeline state (minimum 30).",
+        description: "Days after a terminal run before orbit gc runs may drop its pipeline state.",
         section: ConfigSection::Housekeeping, order: 110,
+        allowed: integers(30, 36_500, "days"),
+        detail: "A stored value below the minimum loads as the minimum, with a warning.",
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days", DEFAULT_RETENTION_DAYS),
     },
     retention_journal_days: u32 => u32 {
@@ -427,6 +462,7 @@ macro_rules! assemble_config_settings {
         description: "Days after a task commit is applied before its journal row may be deleted.",
         section: ConfigSection::Housekeeping, order: 112,
         tier: ConfigKeyTier::Advanced,
+        allowed: integers(1, 36_500, "days"),
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.journal_days", DEFAULT_JOURNAL_RETENTION_DAYS),
     },
     retention_store_warn_bytes: u64 => u64 {
@@ -441,6 +477,7 @@ macro_rules! assemble_config_settings {
         description: "Relative globs of rebuildable paths reclaimed in terminal run worktrees.",
         section: ConfigSection::Housekeeping, order: 120,
         tier: ConfigKeyTier::Advanced,
+        allowed: format("relative path globs"),
         resolve: resolve_reclaim,
     },
     worktree_reclaim_below_free_mib: Option<u64> => u64 {
@@ -455,17 +492,14 @@ macro_rules! assemble_config_settings {
         description: "Hours a someday task stays parked before worktree GC may remove its worktree.",
         section: ConfigSection::Housekeeping, order: 135,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u64>| match raw {
-            Some(hours) if hours > 876_000 => Err(OrbitError::InvalidInput(format!(
-                "worktree.parked_reclaim_after_hours must be at most 876000, got {hours}"
-            ))),
-            raw => Ok(raw.unwrap_or(336)),
-        },
+        allowed: integers(0, 876_000, "hours"),
+        resolve: |raw: Option<u64>| resolve_bounded_range(raw, 336, "worktree.parked_reclaim_after_hours"),
     },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",
         description: "Commands before-PR review may rerun to confirm a failure also fails on the base.",
         section: ConfigSection::Review, order: 30,
+        allowed: format("shell commands"),
         resolve: resolve_unlocked_path_validation_commands,
     },
     runtime_log_max_file_mb: u64 => u64 {

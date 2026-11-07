@@ -1,29 +1,12 @@
 use super::*;
 
-/// Every literal a key's resolver accepts, or an empty list when the key is
-/// free-form.
-///
-/// The choices are read from the same constants the resolvers admit against,
-/// so an editor that offers them cannot drift from what a write would accept,
-/// and a retired choice disappears from both at once.
+/// The choices an enum key accepts, from its declared allowed values; empty
+/// for every other key.
 pub fn config_key_options(key: &str) -> Vec<&'static str> {
-    match key {
-        "publication.routine_attachments" => vec!["omit", "fail", "include"],
-        "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
-        "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
-        "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
-        "ux_rules.file_at" => vec!["critical", "high", "medium", "low", "nit"],
-        "review.timing" => crate::operation::ReviewTimingSetting::CHOICES.to_vec(),
-        "review.selective_before_landing.mode" => {
-            orbit_types::workflow::SelectiveBeforeLandingMode::CHOICES.to_vec()
-        }
-        "review.selective_before_landing.unknown_risk" => {
-            orbit_types::workflow::SelectiveUnknownRisk::CHOICES.to_vec()
-        }
-        "machine.worker_containment" => crate::aliases::WorkerContainmentMode::CHOICES.to_vec(),
-        "workflow.validation_env.shell_probe" => crate::aliases::ShellProbeMode::CHOICES.to_vec(),
-        _ => Vec::new(),
-    }
+    describe(key)
+        .and_then(|descriptor| descriptor.allowed.choices())
+        .map(<[&str]>::to_vec)
+        .unwrap_or_default()
 }
 
 /// Look up one registry key's metadata.

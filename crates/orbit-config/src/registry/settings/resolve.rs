@@ -11,7 +11,8 @@ use orbit_types::workflow::automation::members::MaterialField;
 use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
 
 use super::super::{
-    CONSTELLATION_DEFAULT_PROVIDER_ENV, DEFAULT_WORKFLOW_CREW, LEGACY_DEFAULT_WORKFLOW_CREW,
+    CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues, DEFAULT_WORKFLOW_CREW,
+    LEGACY_DEFAULT_WORKFLOW_CREW, describe,
 };
 use crate::config_document;
 use crate::memory_limit::MemoryLimit;
@@ -232,58 +233,35 @@ pub(super) fn resolve_retention_days(
     key: &str,
     default: u32,
 ) -> Result<u32, OrbitError> {
-    const MAX_DAYS: u32 = 36_500;
+    let (min, _) = declared_integer_bounds(key)?;
     match raw {
-        Some(value) if key == "retention.runs_days" && value < 30 => {
+        Some(value) if key == "retention.runs_days" && u64::from(value) < min => {
             // Older releases recommended 14 days. Keep those persisted
             // files loadable so operators can repair them through config set.
             // ConfigStore refuses new writes below the floor separately.
+            let effective_days = u32::try_from(min).unwrap_or(u32::MAX);
             tracing::warn!(
                 key,
                 stored_days = value,
-                effective_days = 30,
-                "stored run retention is below the supported minimum; using 30 days; \
-                 persist the correction with orbit config set retention.runs_days 30 \
+                effective_days,
+                "stored run retention is below the supported minimum; using {effective_days} days; \
+                 persist the correction with orbit config set retention.runs_days {effective_days} \
                  (add --global for the global config)"
             );
-            Ok(30)
+            Ok(effective_days)
         }
-        Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(default),
+        _ => resolve_bounded_range(raw, default, key),
     }
 }
 
 /// Admit `execution.agent_stall_minutes`. Zero disables the stall check and
 /// leaves only the wall-clock deadline. A day is the ceiling.
 pub(super) fn resolve_agent_stall_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    const MAX_MINUTES: u32 = 1440;
-    match raw {
-        Some(value) if value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
-            "execution.agent_stall_minutes has invalid value {value}; expected 0..={MAX_MINUTES}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_AGENT_STALL_MINUTES),
-    }
-}
-
-/// Admit a positive minute budget, defaulting when unset. A day is the
-/// ceiling: anything longer is indistinguishable from never escalating.
-pub(super) fn resolve_bounded_minutes(
-    raw: Option<u32>,
-    default: u32,
-    key: &str,
-) -> Result<u32, OrbitError> {
-    const MAX_MINUTES: u32 = 1440;
-    match raw {
-        Some(value) if value == 0 || value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected 1..={MAX_MINUTES}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(default),
-    }
+    resolve_bounded_range(
+        raw,
+        DEFAULT_AGENT_STALL_MINUTES,
+        "execution.agent_stall_minutes",
+    )
 }
 
 /// Default `machine.worker_memory_high`: throttle one run well before it can
@@ -317,13 +295,7 @@ pub(super) fn resolve_memory_limit(
 }
 
 pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitError> {
-    match raw {
-        Some(0) => Err(OrbitError::InvalidInput(
-            "machine.worker_tasks_max has invalid value 0; expected >= 1".to_string(),
-        )),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_WORKER_TASKS_MAX),
-    }
+    resolve_bounded_range(raw, DEFAULT_WORKER_TASKS_MAX, "machine.worker_tasks_max")
 }
 
 /// Default `machine.host_shutdown_hold_minutes`: long enough for work admitted
@@ -338,36 +310,25 @@ pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<Str
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
-/// Admit a positive shutdown-hold horizon. There is no upper bound: a host
-/// that wants a longer quiet period before a reboot may set one.
 pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    match raw {
-        Some(0) => Err(OrbitError::InvalidInput(
-            "machine.host_shutdown_hold_minutes has invalid value 0; expected >= 1".to_string(),
-        )),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES),
-    }
+    resolve_bounded_range(
+        raw,
+        DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES,
+        "machine.host_shutdown_hold_minutes",
+    )
 }
 
 /// Default `workflow.mid_run_steering.max_rounds`.
 const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
 
-/// Each steering round re-dispatches an agent step, so a run may spend at
-/// most this many before it holds instead.
-const MAX_MID_RUN_STEERING_ROUNDS: u8 = 10;
-
+/// Each steering round re-dispatches an agent step, so the key's declared
+/// maximum bounds how many a run may spend before it holds instead.
 pub(super) fn resolve_mid_run_steering_max_rounds(raw: Option<u8>) -> Result<u8, OrbitError> {
-    match raw {
-        Some(value) if value == 0 || value > MAX_MID_RUN_STEERING_ROUNDS => {
-            Err(OrbitError::InvalidInput(format!(
-                "workflow.mid_run_steering.max_rounds has invalid value {value}; expected \
-                 1..={MAX_MID_RUN_STEERING_ROUNDS}"
-            )))
-        }
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_MID_RUN_STEERING_MAX_ROUNDS),
-    }
+    resolve_bounded_range(
+        raw,
+        DEFAULT_MID_RUN_STEERING_MAX_ROUNDS,
+        "workflow.mid_run_steering.max_rounds",
+    )
 }
 
 pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
@@ -398,12 +359,14 @@ pub(super) fn resolve_task_prefix(raw: Option<String>) -> Result<Option<String>,
     Ok(Some(value))
 }
 
+/// One of the key's declared [`ConfigAllowedValues::OneOf`] choices,
+/// `default` when unset.
 pub(super) fn resolve_choice(
     raw: Option<String>,
     default: &str,
     key: &str,
-    choices: &[&str],
 ) -> Result<String, OrbitError> {
+    let choices = declared_choices(key)?;
     let value = raw.as_deref().unwrap_or(default).trim();
     if choices.contains(&value) {
         Ok(value.to_string())
@@ -418,9 +381,8 @@ pub(super) fn resolve_choice(
 pub(super) fn resolve_optional_choice(
     raw: Option<String>,
     key: &str,
-    choices: &[&str],
 ) -> Result<Option<String>, OrbitError> {
-    raw.map(|value| resolve_choice(Some(value), "", key, choices))
+    raw.map(|value| resolve_choice(Some(value), "", key))
         .transpose()
 }
 
@@ -451,15 +413,8 @@ pub(super) fn resolve_material_fields(
     }
 }
 
-/// `review` unless the owner opts into landing claimed handoffs itself.
 pub(super) fn resolve_distributed_completion(raw: Option<String>) -> Result<String, OrbitError> {
-    match raw.as_deref().map(str::trim) {
-        None | Some("review") => Ok("review".to_string()),
-        Some("done") => Ok("done".to_string()),
-        Some(other) => Err(OrbitError::InvalidInput(format!(
-            "workflow.distributed_completion must be `review` or `done`, not `{other}`"
-        ))),
-    }
+    resolve_choice(raw, "review", "workflow.distributed_completion")
 }
 
 /// `lease.intake.peer_user`: unset, or a non-empty OS user name. Whether the
@@ -579,49 +534,17 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
 }
 
 pub(super) fn resolve_validation_path_mode(raw: Option<String>) -> Result<String, OrbitError> {
-    let mode = raw.unwrap_or_else(|| "prepend".to_string());
-    match mode.trim() {
-        "prepend" | "replace" => Ok(mode.trim().to_string()),
-        other => Err(OrbitError::InvalidInput(format!(
-            "workflow.validation_env.path_mode must be `prepend` or `replace`, got `{other}`"
-        ))),
-    }
+    resolve_choice(raw, "prepend", "workflow.validation_env.path_mode")
 }
 
-/// Ceiling for `workflow.resource_throttle.cpu_light_leaves`: a reservation,
-/// not a second concurrency limit.
-const MAX_CPU_LIGHT_LEAVES: u8 = 32;
-
+/// The key's declared maximum keeps this a reservation, not a second
+/// concurrency limit.
 pub(super) fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError> {
-    let value = raw.unwrap_or(2);
-    if value <= MAX_CPU_LIGHT_LEAVES {
-        Ok(value)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "workflow.resource_throttle.cpu_light_leaves must be in 0..={MAX_CPU_LIGHT_LEAVES}"
-        )))
-    }
+    resolve_bounded_range(raw, 2, "workflow.resource_throttle.cpu_light_leaves")
 }
 
 pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
-    let value = raw.unwrap_or(default);
-    if (1..=100).contains(&value) {
-        Ok(value)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{key} must be in 1..=100"
-        )))
-    }
-}
-
-/// A bounded count: `default` when unset, else `1..=max`.
-pub(super) fn resolve_bounded_count(
-    raw: Option<u32>,
-    default: u32,
-    max: u32,
-    key: &str,
-) -> Result<u32, OrbitError> {
-    resolve_bounded_range(raw, default, 1, max, key)
+    resolve_bounded_range(raw, default, key)
 }
 
 /// Default `machine.application_consent_max_days`: the longest lifetime of a
@@ -629,20 +552,82 @@ pub(super) fn resolve_bounded_count(
 /// window and the operator re-reviews the profile at least monthly.
 pub(super) const DEFAULT_APPLICATION_CONSENT_MAX_DAYS: u32 = 30;
 
-/// A bounded setting whose representation or behavior requires a minimum.
-pub(super) fn resolve_bounded_range(
-    raw: Option<u32>,
-    default: u32,
-    min: u32,
-    max: u32,
+/// A bounded whole-number setting: `default` when unset, else a value within
+/// the key's declared [`ConfigAllowedValues::Integer`] bounds, so what
+/// `orbit config keys` shows is what load accepts [ORB-22809].
+pub(super) fn resolve_bounded_range<T>(
+    raw: Option<T>,
+    default: T,
     key: &str,
-) -> Result<u32, OrbitError> {
+) -> Result<T, OrbitError>
+where
+    T: Copy + Into<u64> + std::fmt::Display,
+{
+    let (min, max) = declared_integer_bounds(key)?;
     let value = raw.unwrap_or(default);
-    if (min..=max).contains(&value) {
+    if value.into() >= min && max.is_none_or(|max| value.into() <= max) {
         Ok(value)
     } else {
         Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected {min}..={max}"
+            "{key} has invalid value {value}; expected {}",
+            expected_range(min, max)
+        )))
+    }
+}
+
+/// The declared integer bounds of registry key `key`.
+fn declared_integer_bounds(key: &str) -> Result<(u64, Option<u64>), OrbitError> {
+    match describe(key).map(|descriptor| descriptor.allowed) {
+        Some(ConfigAllowedValues::Integer { min, max, .. }) => Ok((min, max)),
+        _ => Err(undeclared(key, "an integer range")),
+    }
+}
+
+/// The declared number bounds of registry key `key`.
+fn declared_number_bounds(key: &str) -> Result<(f64, Option<f64>), OrbitError> {
+    match describe(key).map(|descriptor| descriptor.allowed) {
+        Some(ConfigAllowedValues::Number { min, max, .. }) => Ok((min, max)),
+        _ => Err(undeclared(key, "a number range")),
+    }
+}
+
+/// The declared choices of registry key `key`.
+fn declared_choices(key: &str) -> Result<&'static [&'static str], OrbitError> {
+    describe(key)
+        .and_then(|descriptor| descriptor.allowed.choices())
+        .ok_or_else(|| undeclared(key, "a choice list"))
+}
+
+/// A resolver asked for allowed values its registry row does not declare: a
+/// registry defect, reported on every load so no build ships it.
+fn undeclared(key: &str, shape: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "{key}: the config registry declares no {shape} for this key; report this Orbit defect"
+    ))
+}
+
+fn expected_range<T: std::fmt::Display>(min: T, max: Option<T>) -> String {
+    match max {
+        Some(max) => format!("{min}..={max}"),
+        None => format!("at least {min}"),
+    }
+}
+
+/// A bounded finite number: `default` when unset, else a value within the
+/// key's declared [`ConfigAllowedValues::Number`] bounds.
+pub(super) fn resolve_bounded_number(
+    raw: Option<f64>,
+    default: f64,
+    key: &str,
+) -> Result<f64, OrbitError> {
+    let (min, max) = declared_number_bounds(key)?;
+    let value = raw.unwrap_or(default);
+    if value.is_finite() && value >= min && max.is_none_or(|max| value <= max) {
+        Ok(value)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {value}; expected {}",
+            expected_range(min, max)
         )))
     }
 }
@@ -839,14 +824,6 @@ fn resolve_optional_non_empty_raw(
     }
 }
 
-/// `experiments.min_delivered_rate`: a share from 0 to 1, `0.9` when unset.
 pub(super) fn resolve_experiments_min_delivered_rate(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let rate = raw.unwrap_or(0.9);
-    if rate.is_finite() && (0.0..=1.0).contains(&rate) {
-        Ok(rate)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "experiments.min_delivered_rate has invalid value {rate}; expected 0..=1"
-        )))
-    }
+    resolve_bounded_number(raw, 0.9, "experiments.min_delivered_rate")
 }

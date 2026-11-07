@@ -67,7 +67,7 @@ pub use keys::{
 };
 pub use layer::{OperationField, OperationLayer, OperationLayerSource};
 pub(crate) use legacy::legacy_policy_before_pr;
-pub(crate) use minutes::{review_minutes, translate_legacy_review_minutes};
+pub(crate) use minutes::{MAX_REVIEW_MINUTES, review_minutes, translate_legacy_review_minutes};
 pub use policy::{OPERATION_POLICY_VERSION, OperationPolicy, SelectiveResolved};
 pub use selective::{SelectiveLayer, selective_mode_parse, selective_unknown_risk_parse};
 pub(crate) use selective::{selective_paths, selective_threshold_value};
