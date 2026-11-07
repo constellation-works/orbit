@@ -145,7 +145,6 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         tool_disallow_list: None,
         instruction: String::new(),
         steering_instruction: None,
-        regression_risk_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: Vec::new(),

@@ -38,7 +38,6 @@ fn agent_loop_activity(
             crew_name: None,
             instruction: "test".to_string(),
             steering_instruction: None,
-            regression_risk_instruction: None,
             notice_instruction: None,
             notice_posting_instruction: None,
             tools,

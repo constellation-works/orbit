@@ -175,12 +175,14 @@ impl RegressionClassification {
 }
 
 /// History event recording which context files an agent prompt marked as
-/// regression-prone.
+/// regression-prone. Nothing records it since prompt marks were removed
+/// [ORB-22806]; the name and [`RegressionRiskMarks`] stay so history written
+/// before then still loads.
 pub const REGRESSION_RISK_MARKED_EVENT: &str = "regression_risk_marked";
 
 /// The decision of one [`REGRESSION_RISK_MARKED_EVENT`] history entry: the
-/// paths one run's prompt for one activity marked, so analytics can compare
-/// how marked paths fare once agents are told about them.
+/// paths one run's prompt for one activity marked. Kept only so earlier
+/// history entries parse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegressionRiskMarks {
     /// The run whose prompt carried the marks.

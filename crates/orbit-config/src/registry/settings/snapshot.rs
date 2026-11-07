@@ -26,24 +26,6 @@ pub struct MidRunSteeringSettings {
     pub max_rounds: u8,
 }
 
-/// Admitted `workflow.regression_risk.*`: settings for prompt marks on
-/// regression-prone context files and task riskiness scores. `enabled` gates
-/// marks only; `window_days` and `min_support` size both, while
-/// `threshold_percent` and `max_files` govern marks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RegressionRiskSettings {
-    /// `workflow.regression_risk.enabled` (default `true`).
-    pub enabled: bool,
-    /// `workflow.regression_risk.window_days` (default 30).
-    pub window_days: u32,
-    /// `workflow.regression_risk.min_support` (default 5).
-    pub min_support: u32,
-    /// `workflow.regression_risk.threshold_percent` (default 40).
-    pub threshold_percent: u8,
-    /// `workflow.regression_risk.max_files` (default 3).
-    pub max_files: u32,
-}
-
 /// Admitted `experiments.*`: the workspace's experiment policy. Experiment
 /// definitions are store records, not configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -605,17 +587,6 @@ impl ConfigSnapshot {
             brief_max_items: self.notice_brief_max_items,
             brief_body_chars: self.notice_brief_body_chars,
             brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
-        }
-    }
-
-    /// The admitted `workflow.regression_risk.*` settings.
-    pub fn regression_risk(&self) -> RegressionRiskSettings {
-        RegressionRiskSettings {
-            enabled: self.workflow_regression_risk_enabled,
-            window_days: self.workflow_regression_risk_window_days,
-            min_support: self.workflow_regression_risk_min_support,
-            threshold_percent: self.workflow_regression_risk_threshold_percent,
-            max_files: self.workflow_regression_risk_max_files,
         }
     }
 

@@ -139,22 +139,6 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Option<Value>, DispatchError>;
 
-        /// The `regression_risk` section `activity_name` of `run_id` adds to its
-        /// task snapshot: the task's context files that regressed often enough
-        /// in the configured trailing window to be marked, highest risk first,
-        /// each with its regressed-of-touching counts, nature and escape
-        /// categories and one lesson line, and no internal IDs. The engine asks
-        /// only for an activity that declares a `regression_risk_instruction`.
-        /// `None` when marks are off, nothing qualifies, the input names no
-        /// single task, or the host cannot read its records; the host records
-        /// each section it returns on the task.
-        fn regression_risk_for_agent_input(
-            &self,
-            run_id: &str,
-            activity_name: &str,
-            input: &Value,
-        ) -> Option<Value>;
-
         /// Before agent activity `activity_name` of `run_id`, which may edit the
         /// run's worktree, take the context locks the run's admission deferred,
         /// waiting while other work holds them.

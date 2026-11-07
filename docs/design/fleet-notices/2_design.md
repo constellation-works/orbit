@@ -57,7 +57,7 @@ needed: every crate below already depends on the ones it would call.
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
 | Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `application/routines/sweep.rs`) materializes cross-workspace closures |
-| Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs` beside `regression_risk_for_agent_input`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
+| Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
 | `[notice]` configuration | `crates/orbit-config` registry settings |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |
 | Dashboard banner and view | `crates/orbit-web` (`assets/dashboard/js/notices.js`, `css/notices.css`) |
@@ -124,8 +124,8 @@ corroborates rather than duplicates.
 
 Delivery is specified in [notice-delivery](./specs/notice-delivery.md). The design points:
 
-- The block is attached in `dispatch/preparation.rs` beside the regression-risk marks, through
-  one new `RuntimeHost` capability, so the engine stays free of store reads.
+- The block is attached in `dispatch/preparation.rs` through one new `RuntimeHost` capability, so
+  the engine stays free of store reads.
 - It is rebuilt at every prompt build, so a notice posted or closed mid-run takes effect at the next
   safe point.
 - Brief delivery is governed by the workspace switch `notice.brief_delivery`, not by the MCP

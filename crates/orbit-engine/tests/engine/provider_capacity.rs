@@ -131,7 +131,6 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         steering_instruction: None,
-        regression_risk_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: vec![],

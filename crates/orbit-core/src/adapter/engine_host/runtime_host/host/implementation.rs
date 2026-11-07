@@ -712,15 +712,6 @@ impl RuntimeHost for OrbitRuntime {
         task_context::task_context_for_agent_input(self, run_id, step_id, input)
     }
 
-    fn regression_risk_for_agent_input(
-        &self,
-        run_id: &str,
-        activity_name: &str,
-        input: &Value,
-    ) -> Option<Value> {
-        task_context::regression_risk_for_agent_input(self, run_id, activity_name, input)
-    }
-
     fn agent_corpus_for_activity(
         &self,
         run_id: &str,

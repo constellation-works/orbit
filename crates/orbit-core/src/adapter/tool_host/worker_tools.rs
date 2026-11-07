@@ -177,11 +177,10 @@ pub(crate) fn execute(
                 return crate::application::task::metadata::owner_metadata_page(runtime, input)
                     .map(Some);
             }
-            "regression_risk" => serde_json::to_value(runtime.owner_regression_risk_section(
-                &optional_field(input, "paths")?.ok_or_else(|| {
-                    OrbitError::InvalidInput("regression mark paths are required".into())
-                })?,
-            )?),
+            // [ORB-22806] Regression-risk marks were removed. A follower still
+            // on an earlier build asks for them at each prompt; answer "no
+            // marks" until 2026-12-07 so it stays quiet, then delete the arm.
+            "regression_risk" => Ok(Value::Null),
             "status_index" => serde_json::to_value(runtime.task_status_index()?),
             "completion_by_complexity" => serde_json::to_value(
                 runtime

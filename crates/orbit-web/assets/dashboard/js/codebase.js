@@ -6,13 +6,12 @@
 // poll never rescans bundles. How well task pilots predicted landed diffs is
 // graded under Agents › Pilots.
 //
-// Four views, each a hash route that keeps the selection's query:
+// Three views, each a hash route that keeps the selection's query:
 //   #analytics/codebase             Hotspots: one table, a column per path signal
 //   #analytics/codebase/file?path=  one path: its signals, regression sites
 //                                   (/api/codebase/show), regressed tasks and the
 //                                   files that land with it (/api/codebase/related)
 //   #analytics/codebase/coupling    reserved-together pairs and lock waits
-//   #analytics/codebase/marks       the regression-risk marks comparison
 // The other view choices (Show all, the path search, release grouping, the
 // lock sort) live here, not in the hash. Every node is keyed and hashed for
 // `syncNodes`, so a poll that answers the same payload leaves the page exactly
@@ -25,7 +24,7 @@ const $ = (id) => document.getElementById(id);
 const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
-const VIEWS = ["hotspots", "file", "coupling", "marks"];
+const VIEWS = ["hotspots", "file", "coupling"];
 // The dimensions a regression is filtered by, each value in the server's
 // breakdown order. `absent` (a link stored without a classification) and
 // `unclassified` (the filer could not tell) stay apart.
@@ -85,7 +84,6 @@ const PURPOSES = {
   hotspots: "Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff; Regressed counts a regression only where its links record a site.",
   coupling: "Files that are reserved together, and files that make tasks wait for a lock.",
   file: "",
-  marks: "Whether regression-risk marks in implement and review prompts lowered regressions on the marked paths.",
 };
 
 let codebaseQuery = { ...DEFAULT_QUERY };
@@ -222,15 +220,15 @@ function syncCodebaseControls() {
     }
     support.value = value;
   }
-  // The file and marks views have their own heading and no toolbar; Coupling
+  // The file view has its own heading and no toolbar; Coupling
   // keeps the window, rollup and minimum but has no path search.
   const toolbar = $("codebase-toolbar");
-  if (toolbar) toolbar.hidden = route.view === "file" || route.view === "marks";
+  if (toolbar) toolbar.hidden = route.view === "file";
   const search = $("codebase-search");
   if (search) search.hidden = route.view !== "hotspots";
   const views = $("codebase-views");
   if (views) {
-    views.hidden = route.view === "file" || route.view === "marks";
+    views.hidden = route.view === "file";
     for (const link of views.querySelectorAll("a")) {
       const on = link.dataset.view === route.view;
       link.classList.toggle("on", on);
@@ -705,24 +703,8 @@ function hotspotTable(model) {
   });
 }
 
-function linkTo(text, target) {
-  return viewLink(target, [text]);
-}
-
-function riskMarksLine(data) {
-  const marks = section(data, "regressions").risk_marks || {};
-  if (!marks.enabled_at) return ["No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."];
-  const sample = (rates) => Number(rates?.denominator)
-    ? `${pct(rates.rate)} (${count(rates.numerator)} of ${count(rates.denominator)})`
-    : "no tasks";
-  return [
-    `Regression-risk marks: ${sample(marks.with_marks)} of marked tasks regressed, against ${sample(marks.before)} in the ${count(marks.window_days)} days before marking. `,
-    linkTo("Per-path comparison", { view: "marks" }),
-  ];
-}
-
 /// The footnotes that stand in for whole sections: hidden columns, blocks
-/// that never count, the regression-risk marks and where defect trends live.
+/// that never count and where defect trends live.
 function notesNode(model) {
   const { data, signals } = model;
   const lines = [];
@@ -744,17 +726,15 @@ function notesNode(model) {
   if (data.rollup === "crate") {
     lines.push(["At crate grouping nearly every crate clears the minimum, so most crates turn up under several signals. Group by file or directory to find hotspots."]);
   }
-  lines.push(riskMarksLine(data));
   const defects = el("a", { text: "Metrics › Defects" });
   defects.setAttribute("href", scopedHashHref("#analytics/metrics"));
   defects.addEventListener("click", (event) => followLink(event, "#analytics/metrics"));
   lines.push(["Defect trends are on ", defects, "."]);
   const node = el("div", { class: "codebase-notes" }, lines.map((parts) => el("p", { class: "codebase-note" }, parts)));
-  const marks = section(data, "regressions").risk_marks || {};
   return keyed(node, "notes", {
     hidden: SIGNALS.filter((signal) => !signals.includes(signal)), rejected: section(data, "rejected").rejected_with_run,
     causes, rollup: data.rollup, min: data.min_support, attribution: regressions.attribution || null, unsited: regressions.unsited || null,
-    marks: [marks.enabled_at, marks.window_days, marks.with_marks, marks.before], links: [scopedHashHref(buildCodebaseHash({ view: "marks" })), scopedHashHref("#analytics/metrics")],
+    links: [scopedHashHref("#analytics/metrics")],
   });
 }
 
@@ -1378,60 +1358,6 @@ function couplingNodes(model) {
   return [pairsNode(model), locksNode(model)];
 }
 
-// ---- marks ------------------------------------------------------------------
-
-// A rate with the counts behind it, so a small sample reads as one.
-function sampleNode(rates) {
-  const denominator = Number(rates && rates.denominator) || 0;
-  if (!denominator) return el("td", { class: "codebase-risk-none", text: "no tasks" });
-  return el("td", {}, [
-    el("span", { class: "codebase-rate", text: pct(rates.rate) }),
-    " ",
-    el("span", { class: "codebase-frac", text: `${count(rates.numerator)}/${count(denominator)}` }),
-  ]);
-}
-
-/// Regression-risk marks: the marked paths' regression rate for tasks
-/// delivered with marks against the same paths before the first mark.
-function marksNode(model) {
-  const marks = section(model.data, "regressions").risk_marks || {};
-  const box = el("section", { class: "codebase-box codebase-risk-marks", "aria-label": "Regression-risk marks" }, [
-    el("div", { class: "codebase-box-head" }, [el("h4", { text: "Regression-risk marks: with marks vs before" })]),
-  ]);
-  const body = el("div", { class: "codebase-box-body" });
-  box.appendChild(body);
-  if (!marks.enabled_at) {
-    body.appendChild(note("No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."));
-    return keyed(box, "marks", { marks });
-  }
-  const header = (text, scope) => {
-    const cell = el("th", { text });
-    cell.setAttribute("scope", scope);
-    return cell;
-  };
-  const rowNode = (label, row, total) => {
-    const name = header(total ? label : "", "row");
-    if (!total) name.appendChild(viewLink({ view: "file", path: label }, [pathNode(label)], "codebase-path-link"));
-    const item = el("tr", { class: total ? "codebase-risk-total" : "" }, [name, sampleNode(row.with_marks), sampleNode(row.before)]);
-    item.dataset.path = total ? "" : label;
-    return item;
-  };
-  const tbody = el("tbody", {}, [
-    rowNode(`All ${plural(marks.marked_paths, "marked path")}`, marks, true),
-    ...(Array.isArray(marks.rows) ? marks.rows : []).map((row) => rowNode(row.path, row, false)),
-  ]);
-  const head = el("tr", {}, [header("", "col"), header("With marks", "col"), header(`${count(marks.window_days)} days before`, "col")]);
-  body.appendChild(el("div", { class: "codebase-hot-scroll" }, [
-    el("table", { class: "codebase-risk-table", "aria-label": "Regression rate on marked paths with marks and before" }, [el("thead", {}, [head]), tbody]),
-  ]));
-  body.appendChild(note(`With marks: done tasks in this window whose implement or review prompt marked the path, regressed ÷ marked. Before: done tasks that touched the path in the ${count(marks.window_days)} days before the first mark (${String(marks.enabled_at).slice(0, 10)}). Recent tasks have had less time to be named by a regression.`));
-  return keyed(box, "marks", { marks, query: buildCodebaseHash({ view: "hotspots" }) });
-}
-
-function marksNodes(model) {
-  return [keyed(el("div", { class: "codebase-file-head" }, [backLink()]), "marks-head", { back: buildCodebaseHash({ view: "hotspots" }) }), marksNode(model)];
-}
-
 // ---- render -----------------------------------------------------------------
 
 function paint() {
@@ -1440,8 +1366,7 @@ function paint() {
   const model = buildModel(lastData);
   const nodes = route.view === "file" ? fileNodes(model)
     : route.view === "coupling" ? couplingNodes(model)
-      : route.view === "marks" ? marksNodes(model)
-        : hotspotNodes(model);
+      : hotspotNodes(model);
   body.dataset.view = route.view;
   syncNodes(body, nodes);
   // Opening another view starts at its top, not where the last one scrolled.

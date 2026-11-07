@@ -317,8 +317,8 @@ reason: `no files` (no context selectors and no usable diff-based estimate),
 enough usable done-task observations on the selected basis to fit), or
 `unavailable` (the estimate could not be computed). Hover, keyboard-focus or
 tap the pill to read its accessible description; Escape dismisses the tooltip.
-The score uses `window_days` and `min_support` even when `workflow.regression_risk.enabled` is off, since that
-switch controls prompt marks only. A circled *i* beside a value explains it on
+The score is fitted over done tasks of the last 30 days and needs at least 5 of
+them on its basis. A circled *i* beside a value explains it on
 hover or focus. Its tabs are
 **Overview**, **Delivery** (only for a task with a delivery claim), **History**,
 **Runs**, [**Artifacts**](../../concepts/tasks/#task-artifacts), and
@@ -831,19 +831,6 @@ release files** is on, because those pairs record a release. **Lock waits**
 is the time a task spent denied a lock on the file, from the first denial
 until admission or until the task left the backlog. A wait still in progress
 is measured to now. Paths under the minimum are hidden.
-
-**Marks** (`#analytics/codebase/marks`) compares regression rates on paths
-that implement and review prompts marked as regression-prone. **With marks**
-is done tasks in the window whose prompt marked the path: regressed divided
-by marked. Regressed here means any `regression_from` link to the task
-matches, whether or not the link records a site, so these rates can differ
-from the Regressed signal. **Before** is done tasks that touched the path in
-the days before the first mark. Open it from **Per-path comparison** on Hotspots. Until a
-prompt has marked a path, the view says there is nothing to compare. Recent
-tasks have had less time to be named by a regression. Marks are written
-while `workflow.regression_risk.enabled` is true (the default). With it off,
-prompts carry no marks and this comparison stays empty. The key is global;
-see [Settable keys](../../reference/config/#settable-keys).
 
 The same rankings from a terminal, for the active workspace:
 

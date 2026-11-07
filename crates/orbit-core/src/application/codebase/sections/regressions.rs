@@ -156,32 +156,6 @@ pub(in crate::application::codebase) fn regression_rows<'a>(
     }
 }
 
-/// Footprint-attributed regressions, which regression-risk marks read:
-/// distinct done tasks with an incoming `regression_from` the filter keeps ÷
-/// done tasks whose footprint touched the path, for tasks that became done in
-/// the window. A regressed task counts against every path it declared.
-pub(in crate::application::codebase) fn footprint_regression_rows<'a>(
-    facts: &'a CodebaseFacts,
-    params: &Params,
-) -> BTreeMap<String, RegressionRow<'a>> {
-    let mut rows: BTreeMap<String, RegressionRow> = BTreeMap::new();
-    for task in &facts.tasks {
-        if !task.done_at.is_some_and(|at| params.within(at)) {
-            continue;
-        }
-        let regressed = params.filter.regressed(task);
-        let crew = crew_of(task);
-        for key in params.rollup.keys(&task.footprint) {
-            let row = rows.entry(key).or_default();
-            row.count_touching(task, &crew);
-            if regressed {
-                row.count_regressed(task, &crew);
-            }
-        }
-    }
-    rows
-}
-
 pub(in crate::application::codebase) fn regressions(
     facts: &CodebaseFacts,
     params: &Params,
@@ -239,7 +213,7 @@ pub(in crate::application::codebase) fn regressions(
             )
         })
         .collect();
-    let mut section = merge(
+    merge(
         json!({
             "rows": rows,
             "below_support": below_support,
@@ -248,9 +222,7 @@ pub(in crate::application::codebase) fn regressions(
             "unsited": { "tasks": unsited_tasks, "links": unsited_links },
         }),
         super::super::regression::summary(facts, params),
-    );
-    section["risk_marks"] = super::super::risk::comparison(facts, params);
-    section
+    )
 }
 
 /// What a regressed task's entry adds: its crew and complexity, the links

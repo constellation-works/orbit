@@ -399,8 +399,8 @@ For symbol `s` over the trailing `site_window_days` (default 180):
   count once.
 - **Base rate.** With `N` the total of (task, symbol) exposures and `R` the number of those that
   were named sites, `p0 = (R + 1) / (N + 2)`.
-- **Shrunk rate.** `p_s = (r_s + m·p0) / (n_s + m)`, with `m = workflow.regression_risk.min_support`
-  (default 5), the same shrinkage the per-file estimator uses.
+- **Shrunk rate.** `p_s = (r_s + m·p0) / (n_s + m)`, with `m = 5`, the task riskiness model's fixed minimum support
+  (`RISKINESS_MIN_SUPPORT`), the same shrinkage the per-file estimator uses.
 
 The read tool reports `n_s`, `r_s`, `p_s`, counts of `r_s` by `RegressionEscape` (`no_test`,
 `test_not_selected` and the rest), `orphaned_sites` and `unresolved_sites`. A symbol with

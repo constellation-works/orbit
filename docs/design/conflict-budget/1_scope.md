@@ -107,8 +107,8 @@ risk(path) = p(path) · c(path)                             # expected repair co
 `class` is a cheap, deterministic prior from the path itself: `generated` (matches
 `workflow.generated_paths`; the repair is the regenerate command), `docs`, `config`, `code`.
 The priors (`p₀`, `c₀`) are configuration, so a fresh workspace starts from them, and history
-replaces them as support grows, following the window and `min_support` pattern of
-[regression-risk marks](../../../crates/orbit-core/src/application/codebase/risk.rs).
+replaces them as support grows, following the window and minimum-support pattern of
+[task riskiness](../../../crates/orbit-core/src/application/codebase/riskiness.rs).
 
 A conflict rate measures textual conflicts only. Whether a clean merge of two edits still breaks
 behaviour depends on the code, which is where an optional **complexity weight** helps: a periodic
@@ -171,7 +171,7 @@ be explained later.
 | `workflow.conflict_budget` | `0` (or a `{default, windows}` table) | Expected repair cost, in recovery agent-minutes, that admission may take on per candidate by running it beside overlapping work. `0` keeps today's exclusive locks. |
 | `workflow.exclusive_context_paths` | `[]` | Path globs (`unlocked_context_paths` syntax) that are never shared at any budget. |
 | `workflow.conflict_budget_max_holders` | `4` | Most tasks that may hold one path at once. |
-| `workflow.conflict_risk.window_days`, `.min_support`, `.priors` | `30`, `5`, per class | Scoring window, support needed before history replaces a class prior, and the priors; named after `[workflow.regression_risk]`. |
+| `workflow.conflict_risk.window_days`, `.min_support`, `.priors` | `30`, `5`, per class | Scoring window, support needed before history replaces a class prior, and the priors; following the task riskiness model's window and support. |
 
 ### Surfaces
 

@@ -240,12 +240,6 @@ impl RuntimeKernel {
         self.context.settings().diff_non_reviewable_paths()
     }
 
-    /// `[workflow.regression_risk]` as admitted: whether implement and
-    /// review prompts mark regression-prone context files.
-    pub fn regression_risk_settings(&self) -> orbit_config::RegressionRiskSettings {
-        self.context.settings().regression_risk()
-    }
-
     /// `[workflow.tag_instructions]` as admitted.
     pub fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
         self.context.settings().tag_instructions()

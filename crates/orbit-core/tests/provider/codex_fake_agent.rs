@@ -177,7 +177,6 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
-        regression_risk_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: Vec::new(),

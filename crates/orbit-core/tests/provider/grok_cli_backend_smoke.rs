@@ -64,7 +64,6 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
-        regression_risk_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: Vec::new(),
