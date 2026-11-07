@@ -13,8 +13,9 @@ unattended drain is where every section below pays off.
 ## Before you change anything
 
 1. **Read the effective policy.** `orbit --version`, then
-   `orbit config show --all` (every key with its source: `workspace`,
-   `global`, `built-in`), `orbit config keys` (what this build accepts) and
+   `orbit config show --all` (every key with its state: `workspace`,
+   `global`, `environment`, `default`, or `unset`), `orbit config keys` (what
+   this build accepts) and
    `orbit workspace show` (registered base branch). Never assume a built-in
    default is this host's value.
 2. **Find the owner.** Policy is written on the owner host's workspace file
