@@ -29,6 +29,9 @@
 //!   and the job names, and dispatches no repair. A job that concluded
 //!   `failure` keeps log classification, and a mixed failure is not reduced
 //!   to this set.
+//!   A log line starting with an entry of
+//!   `workflow.ci_infrastructure_signatures` classifies the job the same way
+//!   as a network failure.
 //! - **base-suspect**: the log cites only files the candidate did not
 //!   change, and the base's recorded run does not fail it that way. A
 //!   successful same-job run on the accepted base ancestry, even if it

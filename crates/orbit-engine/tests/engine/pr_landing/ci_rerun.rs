@@ -181,6 +181,7 @@ mod bounded;
 mod cancelled;
 mod diagnostic;
 mod hold;
+mod infrastructure;
 
 #[test]
 fn dependency_adapter_refuses_incomplete_or_forged_evidence() {

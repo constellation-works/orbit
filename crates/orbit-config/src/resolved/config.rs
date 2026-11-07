@@ -53,6 +53,9 @@ pub struct PrSettings {
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
+    /// Log-line prefixes that mark a failed CI job as an infrastructure failure
+    /// (`workflow.ci_infrastructure_signatures`). Empty declares none.
+    pub ci_infrastructure_signatures: Vec<String>,
     /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
     /// shape what a delivery publishes.
     pub conventions: orbit_types::workflow::DeliveryConventions,
@@ -135,6 +138,9 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                ci_infrastructure_signatures: snapshot
+                    .workflow_ci_infrastructure_signatures
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
@@ -373,6 +379,9 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                ci_infrastructure_signatures: snapshot
+                    .workflow_ci_infrastructure_signatures
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,

@@ -849,6 +849,11 @@ suppression of the same evidenced cause
 (`ci_failure.operator_suppression_hours`, default 6; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
+A job whose log has a line starting with an entry of
+`workflow.ci_infrastructure_signatures` is listed under `infrastructure`, not
+filed, and on a pull request it gets a CI rerun rather than a repair agent. The
+sweep itself reruns nothing, so a failed landing-branch run stays red until a
+rerun or a newer push.
 Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows
 a rejected exact-key task's inbound `Supersedes` relation to its covering owner,
 preferring a still-open owner and then the lowest task ID if several supersede

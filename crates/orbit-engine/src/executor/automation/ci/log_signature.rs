@@ -602,6 +602,36 @@ fn is_successful_test_result(lowered: &str) -> bool {
 
 /// Strip a raw timestamp or the `job<TAB>step<TAB>timestamp ` runner columns,
 /// preserving payload tabs and indentation used to distinguish printed source.
+/// The first `workflow.ci_infrastructure_signatures` entry a line the job
+/// emitted starts with. The script text of a run step is not emitted output,
+/// and a prefix keeps a test that quotes the line from matching.
+pub fn declared_infrastructure_signature<'a>(
+    log: &str,
+    signatures: &'a [String],
+) -> Option<&'a str> {
+    if signatures.is_empty() {
+        return None;
+    }
+    classify_log_lines(log)
+        .into_iter()
+        .filter(|(kind, _)| {
+            !matches!(
+                kind,
+                LineKind::RunCommand
+                    | LineKind::CommandBody
+                    | LineKind::ParamDump
+                    | LineKind::EndGroup
+            )
+        })
+        .find_map(|(_, line)| {
+            let payload = log_payload(line).trim_start();
+            signatures
+                .iter()
+                .find(|signature| payload.starts_with(signature.as_str()))
+                .map(String::as_str)
+        })
+}
+
 pub fn log_payload(line: &str) -> &str {
     // Raw job API logs have no job/step columns. Their payload can contain
     // arbitrary tabs, so recognize the leading timestamp before splitting.

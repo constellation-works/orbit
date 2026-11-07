@@ -8,7 +8,8 @@ use serde_json::json;
 use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::log_signature::{
-    LineKind, classify_log_lines, diagnostic_excerpt, log_payload,
+    LineKind, classify_log_lines, declared_infrastructure_signature, diagnostic_excerpt,
+    log_payload,
 };
 use super::super::super::baseline::network_inconclusive;
 use super::super::super::operations;
@@ -174,6 +175,19 @@ pub(super) fn transient_evidence(log: &str) -> Option<String> {
             .iter()
             .find(|marker| lowered.contains(*marker))
             .map(|marker| (*marker).to_string())
+    })
+}
+
+/// [`transient_evidence`], or the infrastructure signature this workspace
+/// declares that a failed job's log carries. Declared signatures live in
+/// configuration, so core knows no repository's scripts.
+pub(super) fn infrastructure_evidence<H: RuntimeHost + ?Sized>(
+    host: &H,
+    log: &str,
+) -> Option<String> {
+    transient_evidence(log).or_else(|| {
+        declared_infrastructure_signature(log, &host.pr_config().ci_infrastructure_signatures)
+            .map(str::to_string)
     })
 }
 

@@ -14,8 +14,8 @@ use super::super::super::pr::RequiredChecks;
 use super::annotations::source_annotations;
 use super::base_update::contains;
 use super::jobs::{
-    answers, commit_jobs, excerpt, exclusive_awaited_stop, failed_step, job_label, same_job,
-    transient_evidence, unsuccessful,
+    answers, commit_jobs, excerpt, exclusive_awaited_stop, failed_step, infrastructure_evidence,
+    job_label, same_job, unsuccessful,
 };
 use super::log::job_log;
 use super::recovery::{CheckFailureClass, FailedJob};
@@ -208,7 +208,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 };
             }
         };
-        if let Some(evidence) = transient_evidence(&log) {
+        if let Some(evidence) = infrastructure_evidence(host, &log) {
             return HeadCheckEvidence::Stop(format!(
                 "the log of '{}' shows `{evidence}`: the runner or the network failed, not \
                  the candidate",
@@ -306,7 +306,7 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     deadline_ms: Option<u64>,
 ) -> Result<(CheckFailureClass, String, bool, String), Box<DeferredLogRead>> {
     let signature = error_signature(log, failed_step(job));
-    if let Some(evidence) = transient_evidence(log) {
+    if let Some(evidence) = infrastructure_evidence(host, log) {
         return Ok((
             CheckFailureClass::Transient,
             format!("the log shows `{evidence}`"),
