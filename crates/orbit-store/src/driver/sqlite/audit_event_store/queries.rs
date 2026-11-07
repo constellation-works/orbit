@@ -10,6 +10,7 @@ use crate::Store;
 use crate::contracts::AuditEventFilter;
 
 use super::row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
+use super::{param_refs, since_tool_filter, where_clause};
 
 impl Store {
     pub fn list_audit_events(
@@ -18,17 +19,8 @@ impl Store {
     ) -> Result<Vec<AuditEvent>, OrbitError> {
         let conn = self.read()?;
 
-        let mut conditions = Vec::new();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(ref since) = filter.since {
-            conditions.push(format!("timestamp >= ?{}", param_values.len() + 1));
-            param_values.push(Box::new(since.to_rfc3339()));
-        }
-        if let Some(ref tool) = filter.tool_name {
-            conditions.push(format!("tool_name = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(tool.clone()));
-        }
+        let (mut conditions, mut param_values) =
+            since_tool_filter(filter.since.as_ref(), filter.tool_name.as_deref());
         if let Some(ref target_type) = filter.target_type {
             conditions.push(format!("target_type = ?{}", param_values.len() + 1));
             param_values.push(Box::new(target_type.clone()));
@@ -97,11 +89,7 @@ impl Store {
             param_values.push(Box::new(entry_execution_id.clone()));
         }
 
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let where_clause = where_clause(&conditions);
 
         let limit = if filter.limit == 0 {
             1000
@@ -121,8 +109,7 @@ impl Store {
 
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|b| b.as_ref()).collect();
+        let param_refs = param_refs(&param_values);
 
         let rows = stmt
             .query_map(param_refs.as_slice(), audit_event_from_row)
