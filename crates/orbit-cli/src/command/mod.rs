@@ -8,7 +8,6 @@ pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
-pub mod crew;
 pub mod decision;
 pub mod doctor;
 pub mod evolution;
@@ -119,7 +118,7 @@ Observe:
   doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
 Analytics:
-  agents       Score agents by crew and model, and show the crew ladder
+  agents       Score agents by crew and model
   codebase     Rank the repository paths that are risky for agents to change
 
 Scheduler:
@@ -239,10 +238,6 @@ pub enum Commands {
     // window; each use warns on stderr.
     #[command(name = "browser-kit", hide = true)]
     BrowserKit(browser_kit::BrowserKitCommand),
-    // Deprecated path of `orbit agents ladder`, kept for the compatibility
-    // window; each use warns on stderr.
-    #[command(hide = true)]
-    Crew(crew::CrewCommand),
     // Compatibility spelling of `orbit clock tick`.
     #[command(hide = true)]
     Sweep(sweep::SweepCommand),

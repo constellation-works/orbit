@@ -6,9 +6,6 @@
 //! row per crew and model for `scorecard`, and one row's terms with the tasks
 //! behind every count for `show`.
 //!
-//! `ladder` is the crew noun's report, mounted here beside the scorecards; its
-//! rendering stays in [`super::crew`].
-//!
 //! `vision-probe` is hand-wired: it launches one canary run per crew and
 //! prints whether each model returned the code.
 
@@ -16,7 +13,6 @@ use std::fmt::Write as _;
 
 use clap::{Args, Subcommand};
 use orbit_common::governance::agents::AgentsVerb;
-use orbit_common::governance::crew::CrewVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
@@ -37,9 +33,6 @@ pub enum AgentsSubcommand {
     // Scorecard and show, derived from the agents operation registry.
     #[command(flatten)]
     Operation(Invocation<AgentsVerb>),
-    // The crew ladder report, derived from the crew operation registry.
-    #[command(flatten)]
-    Ladder(Invocation<CrewVerb>),
     /// Check that each crew's model sees images: run the canary per crew
     #[command(long_about = VISION_PROBE_LONG_ABOUT)]
     VisionProbe(AgentsVisionProbeArgs),
@@ -72,9 +65,6 @@ impl Execute for AgentsCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let invocation = match self.command {
             AgentsSubcommand::Operation(invocation) => invocation,
-            AgentsSubcommand::Ladder(invocation) => {
-                return super::crew::crew_ladder_output(invocation, runtime);
-            }
             AgentsSubcommand::VisionProbe(args) => {
                 let report = runtime.vision_probe(&args.crews, args.timeout_seconds)?;
                 let value = serde_json::to_value(&report)

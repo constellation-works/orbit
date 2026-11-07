@@ -221,8 +221,10 @@ With steering enabled, an operator comment newer than the delivered watermark
 prevents `before` from starting and reruns from `round`, even if that step's
 `when` is false. `workflow.mid_run_steering.max_rounds` bounds those rounds;
 exhausted rounds or a round that delivers none of the outstanding comments
-hold delivery as `steering_unconsumed`. An unreadable gate or a task that has
-become terminal also stops before promotion. Without `steering_gate`, or with
+hold delivery as `steering_unconsumed`. An unreadable gate also stops before
+promotion. A done or archived task stops the steering gate before the
+`before` step only when outstanding operator comments remain; a terminal
+task with none proceeds. Without `steering_gate`, or with
 steering disabled, this promotion check does not run.
 
 ## Step bodies

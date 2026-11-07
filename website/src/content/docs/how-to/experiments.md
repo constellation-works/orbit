@@ -39,9 +39,7 @@ CLI command only.
 
 - Leave room under `experiments.max_running` (default `3`, range `1`–`20`).
   Starting or resuming past it is refused. A paused experiment does not
-  count. Conclude, pause, or abandon one first. Shadow trials that the
-  [crew ladder](../../concepts/agents/#crew-ladder) keeps (off by default) are
-  experiments too and use these slots.
+  count. Conclude, pause, or abandon one first.
 - If a treatment sets a `config` overlay, list every key it sets under
   `experiments.config_keys` (default `[]`). Starting refuses an arm that
   sets any other key. The overlay itself only admits keys Orbit has opted
@@ -457,7 +455,7 @@ no winner.
 ## Delete a finished experiment
 
 ```bash
-orbit experiment delete crew-ladder-hard-7 --reason "old shadow trial"
+orbit experiment delete hard-tier-by-model --reason "old shadow trial"
 ```
 
 `delete` removes a draft, concluded, or abandoned experiment along with its

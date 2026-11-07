@@ -3,7 +3,6 @@ use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
-use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
@@ -55,9 +54,6 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
-        },
-        OrbitBuiltinAction::Crew(verb) => match verb {
-            CrewVerb::Ladder => false,
         },
         // Capture renders the checkout it runs in, so a claimed leaf
         // captures locally rather than routing to the owner. Accepting a
@@ -398,9 +394,6 @@ pub(crate) fn execute(
                     "claimed worker operation requires its lifecycle boundary".into(),
                 ));
             }
-        },
-        OrbitBuiltinAction::Crew(verb) => match verb {
-            CrewVerb::Ladder => return Ok(None),
         },
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture => return Ok(None),

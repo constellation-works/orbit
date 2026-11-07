@@ -64,8 +64,6 @@
 //!   its one parser [ORB-12913].
 //! - `crew::task_types` — the ordered `workflow.task_types` list and the one
 //!   task-type classification type-pool routing and the scorecard share.
-//! - `crew::ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
-//!   first, and its standing-trial settings.
 //! - `crew::pools` — weighted pool grammar and admission.
 //! - `provider_limit` — provider/account admission policy, with threshold and draw
 //!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
@@ -118,10 +116,7 @@ mod visual_review;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
-use crew::{
-    auto_effort as crew_auto_effort, ladder as crew_ladder, pools as crew_pools,
-    task_types as crew_task_types,
-};
+use crew::{auto_effort as crew_auto_effort, pools as crew_pools, task_types as crew_task_types};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -136,13 +131,6 @@ pub use aliases::{
 pub use crew_auto_effort::{
     AUTO_EFFORT_BANDS_KEY, AUTO_EFFORT_EXPLORE_SHARE_KEY, AUTO_EFFORT_POOLS, AutoEffortBand,
     AutoEffortPolicy, DEFAULT_AUTO_EFFORT_EXPLORE_SHARE,
-};
-pub use crew_ladder::{
-    CREW_LADDER_DELIVERY_QUALITY_KEY, CREW_LADDER_EXCLUDE_TYPES_KEY, CREW_LADDER_EXPLORE_RATE_KEY,
-    CREW_LADDER_LOOK_EVERY_KEY, CREW_LADDER_MARGIN_KEY, CREW_LADDER_MAX_SAMPLE_KEY,
-    CREW_LADDER_MIN_GRADE_COVERAGE_KEY, CREW_LADDER_MODE_KEY, CREW_LADDER_QUALITY_GRADE_MARGIN_KEY,
-    CREW_LADDER_RUNGS_KEY, CREW_LADDER_TIERS_KEY, CREW_LADDER_WEIGHT_SCALE, CrewLadderMode,
-    CrewLadderSettings,
 };
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,

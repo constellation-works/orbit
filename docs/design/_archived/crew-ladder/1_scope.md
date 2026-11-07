@@ -1,11 +1,9 @@
 ---
 title: "Scope: crew ladder"
 owner: claude
-last_updated: 2026-11-03
-last_validated: 2026-11-03
-status: Draft
-stage: building
-next: "Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials)"
+last_updated: 2026-11-07
+last_validated: 2026-11-07
+status: Deprecated
 feature: crew-ladder
 doc_role: scope
 type: design
@@ -14,6 +12,10 @@ tags: [crew-ladder, crew-pools, experiments, crew-performance, agent-scorecards,
 ---
 
 # Scope: crew ladder
+
+Retired in [ORB-22803] (2026-11-07): Daniel removed the crew ladder while simplifying Orbit's
+configuration. Its keys load with a deprecation warning and are ignored; tiers route through
+`workflow.<tier>_complexity_crews`, and crews are compared with operator experiments.
 
 Status: phase 1 shipped in [ORB-19999]: off/shadow ladder configuration, trials and reporting.
 Promotion/demotion and delivery-quality integration below remain proposed; the offline
@@ -27,18 +29,18 @@ it does well "and eventually settle to its optimal level. Or perhaps we should a
 
 Bearing: which crews may run a tier is the operator's pool configuration
 (`workflow.<tier>_complexity_crews`, `workflow.type_complexity_crews.<type>.<tier>`,
-[CONFIG.md › pools](../../CONFIG.md#automatic-crew-pools-by-complexity)). Inside a pool,
-[usage pressure](../usage-pressure/1_scope.md) and
-[crew performance](../_archived/crew-performance/1_scope.md) scale member weights, and admission writes
+[CONFIG.md › pools](../../../CONFIG.md#automatic-crew-pools-by-complexity)). Inside a pool,
+[usage pressure](../../usage-pressure/1_scope.md) and
+[crew performance](../crew-performance/1_scope.md) scale member weights, and admission writes
 the drawn crew and its `crew_source` back to the task. A crew is a model, a provider and an
 optional reasoning `effort`. The
-[agent scorecards](../agent-scorecards/2_design.md) score implementers per tier.
-[Experiments](../experiments/1_scope.md) randomise tasks between arms, one of which can be a
+[agent scorecards](../../agent-scorecards/2_design.md) score implementers per tier.
+[Experiments](../../experiments/1_scope.md) randomise tasks between arms, one of which can be a
 crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, recoveries,
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
 experiment, run by hand, with a verdict expected around 2026-11-18. The proposed
-[delivery-quality grader](../decision-assistance/specs/delivery-quality.md) ([ORB-20000],
+[delivery-quality grader](../../decision-assistance/specs/delivery-quality.md) ([ORB-20000],
 design only) would grade each delivered code
 change on six anchored dimensions (scope fit, robustness, structure, standards, verification,
 maintainability), with abstention and coverage. It forbids any ranking or routing use until a
@@ -48,7 +50,7 @@ separate evaluated proposal and an explicit adoption decision; §
 ## Monthly evidence review
 
 `crew-ladder-review` shipped in [ORB-20118] and was demoted for unproven
-yield in [ORB-20704] ([auto-task promotion](../auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)).
+yield in [ORB-20704] ([auto-task promotion](../../auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)).
 Orbit no longer seeds it; a workspace that already had a copy keeps it as a
 workspace-local definition, with its settings and schedule. Its `0 9 1 * *` schedule means the first day at 09:00 host-local; enabling the
 review does not enable the ladder. It mints a medium, backlog, no-diff chore
@@ -207,7 +209,7 @@ the experiment readout does by complexity.
 ### Code quality (opt-in, gated)
 
 The outcome score above cannot see code quality. When the workspace opts in, trials also
-read the [delivery-quality profile](../decision-assistance/specs/delivery-quality.md) of
+read the [delivery-quality profile](../../decision-assistance/specs/delivery-quality.md) of
 their tasks, as a **guardrail**, never as a score term:
 
 - **Per dimension, no composite.** For each of the six dimensions, the share of the arm's
@@ -232,7 +234,7 @@ their tasks, as a **guardrail**, never as a score term:
   is not 11% failed coverage. One missing selected control gives 90% control coverage.
   An arm below the threshold or a gap over 10 points makes an adopted guardrail
   inconclusive, blocks promotion and stops at `max_sample` without promotion. The
-  [offline evaluator protocol](../decision-assistance/2_evaluation.md#frozen-sampling-and-ladder-joins)
+  [offline evaluator protocol](../../decision-assistance/2_evaluation.md#frozen-sampling-and-ladder-joins)
   defines exact denominators and join/capture identities; it authorizes no routing action.
 - **Attribution.** Grades follow the implementation attempt the grader attributes, not the
   task's later crew. A task the reviewer repaired is graded on the implementer's attempt; a
@@ -445,7 +447,7 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 - [ORB-20221] — repaired trial reconciliation across runtime configuration reloads
 - [ORB-20704] — demoted the unproven monthly review default while preserving workspace copies
 
-The reused machinery is in the [experiments](../experiments/1_scope.md) and
-[crew performance](../_archived/crew-performance/1_scope.md) designs.
+The reused machinery is in the [experiments](../../experiments/1_scope.md) and
+[crew performance](../crew-performance/1_scope.md) designs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
