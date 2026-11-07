@@ -529,7 +529,10 @@ enablement, provider work and release timing remain operator decisions.
   revision and completion time: the frozen target, the pinned revision, the task's
   recorded history, and a run that actually carried the task. `task.job_run_id` and the
   `auto-task:<name>` tag are writable, so neither is trusted alone; the creation receipt
-  proves the task was minted for this step. The evidence manifest must match these
+  proves the task was minted for the required definition, contract and source inputs.
+  The minting step must also match its reservation key; compatible jobs binding the
+  same open task retain their own keys and independently accept its completion.
+  The evidence manifest must match these
   values and cannot state a time or status. An artifact written after completion, or
   whose digest differs, is refused. The final message is never read.
 - **Adapter.** A granted workspace script judges the evidence through the existing script
