@@ -99,17 +99,19 @@ let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", a
 let lastData = null;
 let lastPayloadKey = null;
 let paintedView = null;
-// The file view's related-files request: the key it answers, its response or
-// error, and a counter that retires superseded requests.
-let related = { key: null, data: null, error: null, loading: false, request: 0 };
+// The file view's related-files request: the key it answers, the selection its
+// data belongs to, its response or error, and a counter that retires superseded
+// requests. Only data whose `selection` is the open one is shown or kept across
+// a refetch: a changed path, window or minimum never relabels an older answer.
+let related = { key: null, selection: null, data: null, error: null, loading: false, request: 0 };
 // The file view's path-detail request (/api/codebase/show), which carries the
 // path's regression sites: the same shape as `related`.
-let pathDetail = { key: null, data: null, error: null, loading: false, request: 0 };
+let pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: 0 };
 let requestHashChange = () => {};
 
 function resetRelated() {
-  related = { key: null, data: null, error: null, loading: false, request: related.request + 1 };
-  pathDetail = { key: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
+  related = { key: null, selection: null, data: null, error: null, loading: false, request: related.request + 1 };
+  pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
 }
 
 onWorkspaceChange(() => {
@@ -971,11 +973,13 @@ function fileSymbols(model, path) {
   const body = el("div", { class: "codebase-box-body" });
   box.appendChild(body);
   const done = (hash) => keyed(box, "file-symbols", { path, ...hash });
-  if (pathDetail.error) {
+  // Detail read for another path, window, minimum or filter is not this selection's.
+  const answers = pathDetail.selection === pathDetailSelection(path);
+  if (answers && pathDetail.error) {
     body.appendChild(el("p", { class: "codebase-empty", text: `Could not load regression sites: ${pathDetail.error}` }));
     return done({ error: pathDetail.error });
   }
-  const data = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
+  const data = answers && pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
   if (!data) {
     body.appendChild(el("p", { class: "codebase-empty", text: "Loading regression sites…" }));
     return done({ loading: true });
@@ -1082,11 +1086,13 @@ function fileRelated(path) {
     body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => updateQuery({ rollup: "file" }))]));
     return done({ path, rollup: true });
   }
-  if (related.error) {
+  // An answer for another path, window or minimum is not this selection's.
+  const answers = related.selection === relatedSelection(path);
+  if (answers && related.error) {
     body.appendChild(el("p", { class: "codebase-empty", text: `Could not load related files: ${related.error}` }));
     return done({ path, error: related.error });
   }
-  const data = related.data;
+  const data = answers ? related.data : null;
   if (!data) {
     body.appendChild(el("p", { class: "codebase-empty", text: "Loading related files…" }));
     return done({ path, loading: true });
@@ -1112,8 +1118,14 @@ function fileNodes(model) {
   return [fileHead(model, path), fileTiles(model, path), fileSymbols(model, path), fileTasks(model, path), fileRelated(path)];
 }
 
-// The related query reads only the window and minimum support; a changed
-// payload refetches it too.
+// What the related answer is for: the related query reads only the path, the
+// window and the minimum support.
+function relatedSelection(path) {
+  return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support]);
+}
+
+// A changed payload refetches the related answer too, keeping it on screen only
+// while the selection is unchanged.
 function relatedFetchKey(path) {
   return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support, lastPayloadKey]);
 }
@@ -1132,9 +1144,10 @@ function ensureRelated() {
 
 async function fetchRelated(path, key) {
   const request = related.request + 1;
-  // Keep the last answer for the same file on screen while a refresh runs.
-  const keep = related.data && related.data.path === path ? related.data : null;
-  related = { key, data: keep, error: null, loading: true, request };
+  // Keep the last answer for the same selection on screen while a refresh runs.
+  const selection = relatedSelection(path);
+  const keep = related.selection === selection && related.data ? related.data : null;
+  related = { key, selection, data: keep, error: null, loading: true, request };
   paint();
   const visit = captureWorkspaceVisit();
   const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: String(RELATED_TOP) });
@@ -1150,7 +1163,13 @@ async function fetchRelated(path, key) {
   if (route.view === "file" && route.path === path) paint();
 }
 
-// The path detail reads the whole selection; a changed payload refetches it.
+// What the path detail is for: it reads the path and the whole selection.
+function pathDetailSelection(path) {
+  return JSON.stringify([path, analyticsPath()]);
+}
+
+// A changed payload refetches the path detail too, keeping it on screen only
+// while the selection is unchanged.
 function pathDetailFetchKey(path) {
   return JSON.stringify([path, analyticsPath(), lastPayloadKey]);
 }
@@ -1164,8 +1183,9 @@ function ensurePathDetail() {
 
 async function fetchPathDetail(path, key) {
   const request = pathDetail.request + 1;
-  const keep = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
-  pathDetail = { key, data: keep, error: null, loading: true, request };
+  const selection = pathDetailSelection(path);
+  const keep = pathDetail.selection === selection && pathDetail.data ? pathDetail.data : null;
+  pathDetail = { key, selection, data: keep, error: null, loading: true, request };
   const visit = captureWorkspaceVisit();
   const sp = new URLSearchParams(analyticsPath().split("?")[1] || "");
   sp.set("path", path);

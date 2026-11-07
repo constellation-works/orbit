@@ -12,7 +12,7 @@
 // Close asks for its reason only once chosen. Posting is a modal dialog with
 // title, severity and body up front.
 
-import { bindTaskLink, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, makeRowDisclosure, onWorkspaceChange, postJson, relativeTime, requestPanel, syncNodes } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, makeRowDisclosure, onWorkspaceChange, relativeTime, requestJson, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -157,7 +157,12 @@ const SEVERITY_ORDER = ["incident", "maintenance", "info"];
 let lastPayload = null;
 let shownList = "open";
 const openedNotices = new Set();
-let closing = null; // { id, draft, error, pending } for the row asking for its reason.
+// The row asking for its reason: { id, draft, error, pending, visit }. The object
+// is the close session. A write's completion touches the page only while the
+// same object is still `closing` and its visit is current, so a reply for a
+// session that was replaced or left (a workspace switch, A -> B -> A) can never
+// clear, relabel or refocus the newer session's reason.
+let closing = null;
 
 onWorkspaceChange(() => {
   lastPayload = null;
@@ -245,7 +250,7 @@ function toggleNotice(id) {
 
 function chooseClose(id) {
   if (closing?.pending) return;
-  closing = { id, draft: "", error: "", pending: false };
+  closing = { id, draft: "", error: "", pending: false, visit: captureWorkspaceVisit() };
   repaintNoticeList();
   focusRowControl(id, ".notice-close-reason");
   // Focus alone would stop at the input, leaving its actions below the fold.
@@ -260,28 +265,37 @@ function cancelClose() {
   focusRowControl(id, ".notice-close-open");
 }
 
-async function closeChosenNotice(id) {
-  const reason = closing.draft.trim();
+async function closeChosenNotice(session) {
+  const id = session.id;
+  const reason = session.draft.trim();
   if (!reason) {
-    closing.error = "Enter a reason.";
+    session.error = "Enter a reason.";
     repaintNoticeList();
     focusRowControl(id, ".notice-close-reason");
     return;
   }
-  closing.pending = true;
-  closing.error = "";
+  session.pending = true;
+  session.error = "";
   repaintNoticeList();
+  const isCurrentSession = () => closing === session && session.visit.isCurrent();
   try {
-    await postJson(`/api/notices/${encodeURIComponent(id)}/close`, { reason });
+    await requestJson(`/api/notices/${encodeURIComponent(id)}/close`, "POST", { reason }, session.visit);
   } catch (error) {
-    if (closing?.id !== id) return; // The scope changed meanwhile.
-    closing.pending = false;
-    closing.error = String(error?.message || error);
+    if (!isCurrentSession()) return; // The scope or session changed meanwhile.
+    session.pending = false;
+    session.error = String(error?.message || error);
     repaintNoticeList();
     focusRowControl(id, ".notice-close-reason");
     return;
   }
+  // The write stands whichever session asked, so the shared read is dropped. A
+  // reply for a session that has been replaced or left leaves the page alone: the
+  // newer session owns the draft, the open rows and the focus.
   noticesRead = null;
+  if (!isCurrentSession()) {
+    if (session.visit.isCurrent()) await refreshNoticesAfterWrite();
+    return;
+  }
   closing = null;
   openedNotices.delete(id);
   await refreshNoticesAfterWrite();
@@ -297,13 +311,14 @@ function refreshNoticesAfterWrite() {
 
 function closeReasonForm(notice) {
   const id = text(notice.id);
+  const session = closing;
   const reason = el("input", { class: "notice-close-reason", type: "text" });
   reason.placeholder = "Why is this over?";
   reason.maxLength = 240;
   reason.required = true;
   reason.value = closing.draft;
   reason.setAttribute("aria-label", `Close reason for ${text(notice.title)}`);
-  reason.addEventListener("input", () => { closing.draft = reason.value; });
+  reason.addEventListener("input", () => { session.draft = reason.value; });
   const submit = el("button", { class: "action save notice-close-submit", type: "submit", text: "Close notice" });
   submit.disabled = closing.pending;
   const cancel = el("button", { class: "action cancel notice-close-cancel", type: "button", text: "Cancel" });
@@ -322,7 +337,7 @@ function closeReasonForm(notice) {
   });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (closing?.id === id && !closing.pending) closeChosenNotice(id);
+    if (closing === session && !session.pending) closeChosenNotice(session);
   });
   return form;
 }
@@ -444,26 +459,52 @@ function postOptionsSummary() {
   ].join(" · ");
 }
 
+// Each time the dialog opens it starts a post session: { visit }. A reply
+// touches the dialog only while that same session is still open in the visit
+// that sent it. Dismissing, Cancel, reopening or a scope switch ends the session,
+// so a late reply can never reset, close or relabel a newer draft. One post per
+// visit is in flight at a time; its Submit stays disabled until the reply.
 function wirePostDialog() {
   const dialog = $("notices-post-dialog");
   const form = $("notices-post-form");
   if (!dialog || !form) return;
   const feedback = $("notices-post-feedback");
   const syncSummary = () => { $("notices-post-summary").textContent = postOptionsSummary(); };
-  let pending = false;
+  let session = null;
+  let inflight = null; // { visit } of the post awaiting its reply.
+  const postBusy = () => !!inflight && inflight.visit.isCurrent();
+  const syncSubmit = () => { $("notices-post-submit").disabled = postBusy(); };
+  const readDraft = () => ({
+    kind: form.querySelector('input[name="notices-post-kind"]:checked')?.value,
+    title: $("notices-post-title").value,
+    body: $("notices-post-body").value || undefined,
+    scope: $("notices-post-scope").value,
+    linked_task: $("notices-post-linked").value.trim() || undefined,
+    expires_in_hours: $("notices-post-expires").value ? Number($("notices-post-expires").value) : undefined,
+  });
+  const resetDraft = () => {
+    form.reset();
+    $("notices-post-options").open = false;
+  };
   $("notices-post-toggle")?.addEventListener("click", () => {
-    feedback.textContent = "";
-    syncSummary();
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      session = { visit: captureWorkspaceVisit() };
+      feedback.textContent = "";
+      syncSummary();
+      syncSubmit();
+      dialog.showModal();
+    }
     $("notices-post-title").focus();
   });
+  // Every way the dialog closes ends its session; a reopen has already replaced it.
+  dialog.addEventListener("close", () => { if (!dialog.open) session = null; });
   form.addEventListener("input", syncSummary);
   // A rejected option folded away would otherwise stop the post with no message.
   form.addEventListener("invalid", () => { $("notices-post-options").open = true; }, true);
   // Cancel discards the draft; Escape only dismisses it.
   $("notices-post-cancel").addEventListener("click", () => {
-    form.reset();
-    $("notices-post-options").open = false;
+    session = null;
+    resetDraft();
     dialog.close();
   });
   window.addEventListener("hashchange", () => {
@@ -471,33 +512,37 @@ function wirePostDialog() {
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (pending) return;
-    const input = {
-      kind: form.querySelector('input[name="notices-post-kind"]:checked')?.value,
-      title: $("notices-post-title").value,
-      body: $("notices-post-body").value || undefined,
-      scope: $("notices-post-scope").value,
-      linked_task: $("notices-post-linked").value.trim() || undefined,
-      expires_in_hours: $("notices-post-expires").value ? Number($("notices-post-expires").value) : undefined,
-    };
-    pending = true;
-    $("notices-post-submit").disabled = true;
+    if (!session || !session.visit.isCurrent() || postBusy()) return;
+    const mine = session;
+    const input = readDraft();
+    const sent = JSON.stringify(input);
+    const mineInflight = { visit: mine.visit };
+    inflight = mineInflight;
+    syncSubmit();
     feedback.textContent = "";
+    const isCurrentSession = () => session === mine && mine.visit.isCurrent();
     try {
-      await postJson("/api/notices", input);
+      await requestJson("/api/notices", "POST", input, mine.visit);
     } catch (error) {
-      feedback.textContent = String(error?.message || error);
+      if (isCurrentSession()) feedback.textContent = String(error?.message || error);
       return;
     } finally {
-      pending = false;
-      $("notices-post-submit").disabled = false;
+      if (inflight === mineInflight) inflight = null;
+      if (session) syncSubmit();
     }
+    // The post stands whichever session sent it, so the shared read is dropped.
     noticesRead = null;
-    form.reset();
-    $("notices-post-options").open = false;
-    dialog.close();
-    shownList = "open";
-    await refreshNoticesAfterWrite();
+    if (isCurrentSession()) {
+      resetDraft();
+      dialog.close();
+      shownList = "open";
+      await refreshNoticesAfterWrite();
+      return;
+    }
+    // A dismissed or replaced session leaves the page alone: the sent draft is
+    // cleared only when no dialog is open and nothing was typed over it since.
+    if (!session && JSON.stringify(readDraft()) === sent) resetDraft();
+    if (mine.visit.isCurrent()) await refreshNoticesAfterWrite();
   });
 }
 
