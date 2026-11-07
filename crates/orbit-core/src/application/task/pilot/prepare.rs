@@ -19,9 +19,8 @@ use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
-    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, EXPLORE_BRIEF_REQUESTED,
-    EXPLORE_BRIEF_TASK_IDS, OPERATOR_TOOL_CANDIDATES, VALIDATION_TOOL_WARNINGS,
-    requested_base_branch,
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, OPERATOR_TOOL_CANDIDATES,
+    VALIDATION_TOOL_WARNINGS, requested_base_branch,
 };
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -362,7 +361,6 @@ pub(crate) fn prepare(
     #[cfg(test)]
     hydration_test_hook::run(runtime);
     let lane = ImplementationLane::resolve(runtime);
-    let explore_brief = runtime.explore_brief_settings();
     let mut retained = Vec::with_capacity(task_ids.len());
     let mut superseded_during_preparation = Vec::new();
     for (task_id, mut snapshot) in task_ids.into_iter().zip(task_snapshots) {
@@ -407,14 +405,6 @@ pub(crate) fn prepare(
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
-        // A brief is keyed to the pinned revision, so a non-Git workspace
-        // never requests one. Tags are read now: a task tagged after its
-        // pilot gets a brief only when it is piloted again. The mark is
-        // written only when set, so a workspace without briefs keeps its
-        // prepared shape.
-        if source.is_some() && explore_brief.requested_for(&task.tags) {
-            snapshot[EXPLORE_BRIEF_REQUESTED] = json!(true);
-        }
         // Only an explicit request re-pilots an assessed task, so only it
         // may re-check a held assessment instead of piloting in full.
         if explicit_mode {
@@ -548,11 +538,6 @@ pub(crate) fn prepare(
             groups.push((vec![task_id.clone()], signal));
         }
     }
-    let brief_requested = task_snapshots
-        .iter()
-        .filter(|snapshot| snapshot[EXPLORE_BRIEF_REQUESTED] == json!(true))
-        .filter_map(|snapshot| snapshot["task_id"].as_str())
-        .collect::<BTreeSet<_>>();
     let partitions = groups
         .iter()
         .flat_map(|(ids, signal)| {
@@ -567,13 +552,6 @@ pub(crate) fn prepare(
             });
             if let Some(signal) = signal {
                 partition[super::auto_effort::AUTO_EFFORT_SIGNAL] = signal.clone();
-            }
-            let requested = ids
-                .iter()
-                .filter(|id| brief_requested.contains(id.as_str()))
-                .collect::<Vec<_>>();
-            if !requested.is_empty() {
-                partition[EXPLORE_BRIEF_TASK_IDS] = json!(requested);
             }
             let operator_tools = ids
                 .iter()

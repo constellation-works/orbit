@@ -98,7 +98,6 @@ impl TaskCommitBoundary {
                         task_id: task.id.clone(),
                         assignments: Vec::new(),
                     },
-                    explore_brief: None,
                     artifacts: Vec::new(),
                     visual_review: None,
                 })
@@ -277,7 +276,6 @@ impl TaskCommitBoundary {
             gates: ordering.gates.clone(),
             tag_instructions: ordering.tag_instructions.clone(),
             experiments: None,
-            explore_brief: None,
             visual_review: None,
             affinity: None,
         };
@@ -359,7 +357,6 @@ impl TaskCommitBoundary {
                 .map(|offer| offer.candidate.clone());
             let guidance = guidance_capture(&task)?;
             receipt.experiments = Some(guidance.experiments);
-            receipt.explore_brief = guidance.explore_brief;
             let guidance_evidence = ClaimEvidence {
                 artifacts: guidance.artifacts,
                 ..ClaimEvidence::default()

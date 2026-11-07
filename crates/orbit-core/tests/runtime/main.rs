@@ -78,7 +78,6 @@ mod drain_extend;
 mod escalation_triage_crews;
 mod experiment_lifecycle;
 mod experiment_readout;
-mod explore_brief;
 mod final_recovery;
 mod final_recovery_cards;
 mod final_recovery_mechanical;

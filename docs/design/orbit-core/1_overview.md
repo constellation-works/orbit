@@ -220,9 +220,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   since [ORB-22003] also the script-grant decision answer, the decision
   pilot preflight and explicit pilot request, the native publication
   identity desktop review checks, purpose-pool members, the final-recovery
-  resume, a claimed leaf's captured explore brief and crew candidates, the
-  live pilot run, the exact batched run-state read and a row's delivery
-  attention; the brief's pilot-policy read reuses `observed_job_run`;
+  resume, a claimed leaf's crew candidates, the live pilot run, the exact
+  batched run-state read and a row's delivery attention;
   since [ORB-22289] also a task's host-OS wait over the draw's candidates
   and the live delivery runs carrying a task, for mock admission),
   `task::TaskReviewPort` (the review projection, the evidence

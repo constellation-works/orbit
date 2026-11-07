@@ -4,7 +4,6 @@
 //! Each phase returns the task's outcome as its error, so the first refusal
 //! settles the task and its siblings still apply.
 use super::super::PostDeployRequirement;
-use super::super::explore_brief::{BriefScope, decide_explore_brief, take_explore_brief};
 use super::super::persist::{
     source_superseded, superseded_with_current, task_operation_id, task_outcome,
 };
@@ -37,8 +36,6 @@ pub(super) struct Scope {
     /// A review-filed task's evidence the pilot omitted.
     pub(super) evidence: Vec<String>,
     pub(super) reauthorization: Vec<String>,
-    /// Creation targets the task's durable grant names.
-    pub(super) authorized_creation: Vec<String>,
 }
 
 /// The assessment as apply records it, with the host's findings attached.
@@ -102,10 +99,7 @@ pub(super) fn settle_task(
     // A deleted task cannot be superseded (the helper returns None without
     // a task to compare), so it falls through to scope/assess, which settle
     // it stale like before.
-    // The brief is the artifact's, never the receipt's: it is removed before
-    // the assessment is validated, fingerprinted or audited.
     let mut assessment = assessment.clone();
-    let brief = take_explore_brief(&mut assessment);
     // A re-check is completed from its prior assessment first, then
     // validated, proven and written exactly as a full assessment is.
     let mode = &snapshot.pilot_mode;
@@ -126,7 +120,6 @@ pub(super) fn settle_task(
         pre_current.as_ref(),
         &pre_history,
     )?;
-    let authorized_creation = scope.authorized_creation.clone();
     let assessed = assess::assess_with(
         context,
         task_id,
@@ -140,24 +133,6 @@ pub(super) fn settle_task(
     if let Some(outcome) = escalation(context, partition_index, task_id, snapshot, &assessed) {
         return Err(outcome);
     }
-    // Decided only once the assessment itself is valid, so an invalid brief
-    // never makes the task `invalid` or spends the repair pass.
-    let explore_brief = decide_explore_brief(
-        context.action,
-        brief,
-        &BriefScope {
-            requested: snapshot.explore_brief_requested,
-            disposition: assessed.assessment["disposition"]
-                .as_str()
-                .unwrap_or_default(),
-            recommended_complexity: assessed.assessment["recommended_complexity"].as_str(),
-            after: &assessed.after,
-            authorized_creation: &authorized_creation,
-            workspace_root: context.workspace_root,
-            source: context.source,
-            source_tree: context.source_tree,
-        },
-    );
     let operation_id = task_operation_id(context.prepared, task_id, &assessed.assessment);
     let validated = ValidatedTask {
         task_id: task_id.clone(),
@@ -179,7 +154,6 @@ pub(super) fn settle_task(
             .partition_draws
             .get(&partition_index)
             .map(|draw| draw.crew.clone()),
-        explore_brief,
     };
     write::write(context, applied, validated, snapshot)
 }

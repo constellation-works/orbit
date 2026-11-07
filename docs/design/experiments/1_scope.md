@@ -53,7 +53,7 @@ The trials run so far show what is missing:
   filing, by hand. Its readout task [ORB-18033] was rejected.
 - **The explore-brief trial** ([ORB-18363]) designs three arms assigned by task number modulo
   3 at filing, arms defined in workspace config, and a readout assembled by hand from several
-  Analytics series.
+  Analytics series. The explore brief itself was removed in [ORB-22805].
 
 Each trial re-invents the same four things, and each gets one of them wrong in a way that
 weakens the result:

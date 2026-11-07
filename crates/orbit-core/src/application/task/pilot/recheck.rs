@@ -191,11 +191,7 @@ pub(super) fn plan(
     if let Some(reason) = unbounded_scope(&diff) {
         return Ok(RecheckPlan::full(reason, prior_id));
     }
-    let mut prior_assessment = prior.clone();
-    if let Value::Object(fields) = &mut prior_assessment {
-        // The brief is an artifact, not a field a re-check keeps.
-        fields.remove("explore_brief");
-    }
+    let prior_assessment = prior.clone();
     Ok(RecheckPlan {
         mode: MODE_RECHECK,
         reason: None,

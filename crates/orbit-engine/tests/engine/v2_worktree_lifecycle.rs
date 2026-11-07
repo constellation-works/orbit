@@ -3226,7 +3226,6 @@ fn agent_loop(instruction: &str) -> ActivityV2Spec {
         instruction: instruction.to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
-        explore_brief_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: Vec::new(),

@@ -106,9 +106,6 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
-    /// `[workflow.explore_brief]`: whether the task pilot is asked for
-    /// explore briefs, for which tasks, and whether they are delivered.
-    explore_brief: orbit_config::ExploreBriefSettings,
     /// `workflow.crew_performance_types`: the scorecard's task-type lens.
     crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
     /// `workflow.crew_performance`: whether the snapshot refresh scans.
@@ -183,7 +180,6 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
-        explore_brief: orbit_config::ExploreBriefSettings,
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
         crew_performance: orbit_config::CrewPerformanceMode,
         crew_performance_window_days: u32,
@@ -241,7 +237,6 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
             regression_risk,
-            explore_brief,
             crew_performance_types,
             crew_performance,
             crew_performance_window_days,
@@ -302,10 +297,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn crew_performance_window_days(&self) -> u32 {
         self.crew_performance_window_days
-    }
-
-    pub(crate) fn explore_brief(&self) -> &orbit_config::ExploreBriefSettings {
-        &self.explore_brief
     }
 
     pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {

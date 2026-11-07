@@ -12,7 +12,7 @@ pub use machine::{
 };
 pub(crate) use resolve::{admit_lease_intake_peer_user, resolve_percent};
 pub use snapshot::{
-    ExperimentSettings, ExploreBriefSettings, MidRunSteeringSettings, NoticeKindHours,
-    NoticeSettings, RegressionRiskSettings,
+    ExperimentSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings,
+    RegressionRiskSettings,
 };
 pub use table::{CONFIG_KEY_REGISTRY, ConfigSnapshot};

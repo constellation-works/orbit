@@ -298,7 +298,6 @@ impl OrbitRuntime {
             &|task| {
                 Ok(AdmissionTaskGuidance {
                     experiments: self.capture_pull_experiments(task, &request.ship)?,
-                    explore_brief: self.captured_explore_brief(&task.id),
                     // Freeze the claimed task's mock digests on the owner,
                     // where its artifacts live, in the same commit as the
                     // claim: an ordinary write is refused once the claim

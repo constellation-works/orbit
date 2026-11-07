@@ -13,8 +13,8 @@ use orbit_types::task::{
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
-    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -828,15 +828,6 @@ pub trait NullRuntimeHost: Send + Sync {
         _input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         Ok(Vec::new())
-    }
-
-    fn explore_brief_for_activity(
-        &self,
-        _run_id: &str,
-        _activity_name: &str,
-        _input: &Value,
-    ) -> Option<ExploreBriefAdmission> {
-        None
     }
 
     fn notices_for_agent_input(

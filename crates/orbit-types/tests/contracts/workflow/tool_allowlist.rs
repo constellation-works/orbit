@@ -39,7 +39,6 @@ fn agent_loop_activity(
             instruction: "test".to_string(),
             steering_instruction: None,
             regression_risk_instruction: None,
-            explore_brief_instruction: None,
             notice_instruction: None,
             notice_posting_instruction: None,
             tools,
