@@ -102,7 +102,14 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.add",
     tool_description: "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     cli_about: "Create a new auto-task definition",
-    cli_help: CliHelp::NONE,
+    cli_help: CliHelp {
+        constraints: &[],
+        long_about: None,
+        after_help: Some(
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+        ),
+        flag_order: &[],
+    },
     effect: Effect::Write,
     params: &[&[
         required(both(
@@ -330,7 +337,14 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
     tool_name: "orbit.auto_task.update",
     tool_description: "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
     cli_about: "Update an existing definition (present fields only)",
-    cli_help: CliHelp::NONE,
+    cli_help: CliHelp {
+        constraints: &[],
+        long_about: None,
+        after_help: Some(
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+        ),
+        flag_order: &[],
+    },
     effect: Effect::Write,
     params: &[&[
         mcp_only(
