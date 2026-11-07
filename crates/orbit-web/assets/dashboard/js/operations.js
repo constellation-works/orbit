@@ -30,7 +30,7 @@ export { fetchAndRenderJobs, peekJobFailures } from './operations-jobs.js';
 function renderOperations(payload, { force = false } = {}) {
   noteCronZone(payload);
   operationsState.lastOperations = payload;
-  if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
+  if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Reload the page to load session access details.";
   const workspace = selectedWorkspaceName();
   const workspaceId = selectedWorkspace()?.id || null;
   const routines = scopedRoutines(payload);

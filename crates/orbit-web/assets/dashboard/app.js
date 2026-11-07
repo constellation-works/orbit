@@ -1891,9 +1891,9 @@ function fetchAndRenderRunDetail() {
     renderRunDetailEmpty(
       e.status === 404
         ? `Run not found: ${runId}`
-        : `Unable to load run ${runId}: ${e.message}. Use Refresh to retry.`,
+        : `Unable to load run ${runId}: ${e.message}. Reload the page to retry.`,
     );
-    setActiveRunDetailError(`Unable to load steps: ${e.message}. Use Refresh to retry.`);
+    setActiveRunDetailError(`Unable to load steps: ${e.message}. Reload the page to retry.`);
     renderRunSteps();
     throw e;
   });
