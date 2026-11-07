@@ -75,6 +75,41 @@ changed substantially. `--full` always requests a full assessment. A pending
 or running pilot, live delivery, human crew, or replica checkout refuses the
 request. Repiloting neither approves nor dispatches the task.
 
+### Evidence access and start prerequisites
+
+Before approval, the pilot checks whether the implementing leaf can produce the
+evidence each criterion requires. Host placement says where the leaf runs; it
+does not grant access to owner-only records or operator tools. A leaf on the
+owner host still cannot produce an owner-only audit rescan unless its granted
+tools and authority allow it. The pilot reports inaccessible evidence as a
+holding `utility_warnings` finding. Candidate checks the leaf can repeat
+locally, and task records available through the workspace bridge, do not need
+that warning.
+
+- **Before:** “Verify the candidate with the owner's restricted audit rescan and
+  attach its report.” If that evidence is required, keep it as a separate
+  owner/operator validation. If the criterion is meant to check the candidate,
+  rewrite it to a repeatable check, for example: “Run `npm run check` and
+  `npm run build` from `website/` and record both outcomes.” The local check
+  does not stand in for an authoritative audit.
+- **Before:** “Do not start until the external contract verdict arrives.” If
+  that verdict belongs to a real task, record a dependency on that task; for a
+  known future start time, set `not_before`. If neither route applies, keep the
+  unresolved condition explicit so the pilot records a mandatory
+  `start_prerequisites` hold. Do not invent dependency IDs. A previous leaf's
+  refusal to produce evidence is a failed run to investigate, not a start
+  prerequisite.
+
+Inspect the detailed finding in the pilot run (`orbit run show
+"$PILOT_RUN_ID"`) or in the task details under the dashboard's
+[Tasks view](../dashboard/#tasks). When a prerequisite is satisfied, add the
+authoritative evidence to the task; if the criterion or scope was wrong, have
+the owner rewrite it to match the actual requirement. Then request a fresh
+assessment with `orbit task repilot "$TASK_ID"`. The pilot clears a start
+prerequisite only when evidence or an authoritative rewrite establishes that it
+is satisfied. For the backlog admission callout and its authorized evidence and
+override controls, see [Clear a pilot admission hold](../dashboard/#clear-a-pilot-admission-hold).
+
 An operator can instead skip pilot admission by adding `no-pilot`; see
 [Skip pilot in Readiness](../dashboard/#skip-pilot-in-readiness) for the
 authority boundary, history and other holds.
