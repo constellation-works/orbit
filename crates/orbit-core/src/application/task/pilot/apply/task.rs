@@ -9,8 +9,9 @@ use orbit_types::task::{ContextCreationState, Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::application::task::{
-    CiSweepAdmission, InvalidFinding, MachineRequirement, NativeOsRequirement, REVIEW_FINDING_TAGS,
-    TaskSweepFilingPort, VerdictConfidence, VerdictSource, VerdictWrite, is_review_finding,
+    AnalyzedFinding, CiSweepAdmission, InvalidFinding, MachineRequirement, NativeOsRequirement,
+    REVIEW_FINDING_TAGS, TaskSweepFilingPort, VerdictConfidence, VerdictSource, VerdictWrite,
+    is_review_finding,
 };
 
 use super::super::PostDeployRequirement;
@@ -604,8 +605,56 @@ fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedT
         Some("low") => VerdictConfidence::Low,
         _ => VerdictConfidence::Medium,
     };
+    #[cfg(test)]
+    super::super::persist::lock_hook::fire(
+        super::super::persist::lock_hook::Point::BeforeFindingRejection,
+    );
+    // The receipt holds what the locked pilot write left; history past it
+    // happened after the judgement, on first apply and on replay alike.
+    let sealed = validated
+        .applied_material
+        .as_ref()
+        .and_then(|material| Some((material.finding_fingerprint.clone()?, material.status?)));
+    let boundary = context
+        .runtime
+        .get_task_history(&validated.task_id)
+        .map(|history| {
+            history
+                .iter()
+                .position(|event| {
+                    event.event == "task_pilot_applied"
+                        && event.receipt() == Some(validated.operation_id.as_str())
+                })
+                .map(|position| position + 1)
+        });
+    let (fingerprint, status, boundary) = match (sealed, boundary) {
+        (Some((fingerprint, status)), Ok(Some(boundary))) => (fingerprint, status, boundary),
+        (_, Err(error)) => {
+            record_finding_rejection(
+                validated,
+                json!({ "recorded": false, "reason": "apply_failed", "detail": error.to_string() }),
+            );
+            return;
+        }
+        _ => {
+            record_finding_rejection(
+                validated,
+                json!({
+                    "recorded": false,
+                    "reason": "analyzed_snapshot_missing",
+                    "detail": "the pilot's receipt seals no finding material to bind the rejection to",
+                }),
+            );
+            return;
+        }
+    };
     let finding = InvalidFinding {
         source: VerdictSource::TaskPilot,
+        analyzed: AnalyzedFinding {
+            fingerprint: &fingerprint,
+            status,
+            history_boundary: Some(boundary),
+        },
         verified_sha: &source.source_revision,
         base_branch: &source.base_branch,
         confidence,
@@ -632,6 +681,10 @@ fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedT
             json!({ "recorded": false, "reason": "apply_failed", "detail": error.to_string() })
         }
     };
+    record_finding_rejection(validated, report);
+}
+
+fn record_finding_rejection(validated: &mut ValidatedTask, report: Value) {
     if let Value::Object(fields) = &mut validated.assessment {
         fields.insert("finding_rejection".to_string(), report);
     }

@@ -17,7 +17,6 @@ use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use super::super::legacy_decisions;
 use super::super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
-use super::super::resolves::pending_resolves_history;
 use super::mechanical::FrictionRef;
 use super::request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TERMINAL_REFUSAL_MARK,
@@ -28,7 +27,7 @@ use super::{FINAL_RECOVERY_REQUEUED_EVENT, FINAL_RECOVERY_RESUMED_EVENT};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskPrecedentDecisionPort, TaskRecords};
 
-const COMPLETED_EVENT: &str = "final_recovery_completed";
+pub(in super::super) const FINAL_RECOVERY_COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
 const ESCALATED_EVENT: &str = "final_recovery_escalated";
@@ -121,7 +120,7 @@ impl OrbitRuntime {
                         .find(|entry| {
                             matches!(
                                 entry.event.as_str(),
-                                COMPLETED_EVENT | REJECTED_EVENT | ARCHIVED_EVENT
+                                FINAL_RECOVERY_COMPLETED_EVENT | REJECTED_EVENT | ARCHIVED_EVENT
                             ) && entry
                                 .note
                                 .as_deref()
@@ -269,7 +268,7 @@ impl OrbitRuntime {
                     );
                     Plan {
                         status,
-                        event: COMPLETED_EVENT,
+                        event: FINAL_RECOVERY_COMPLETED_EVENT,
                         execution_summary: task.execution_summary.trim().is_empty().then(|| {
                             format!(
                                 "Outcome: success\nAlready delivered on '{}' by {commit} \
@@ -625,11 +624,6 @@ impl OrbitRuntime {
                         .chain(infra.clone())
                         .chain(corpus_appends.clone())
                         .chain(plan.history.clone())
-                        .chain(if transition && plan.status == TaskStatus::Done {
-                            pending_resolves_history(task)
-                        } else {
-                            Vec::new()
-                        })
                         .collect(),
                     expected_status: (!plan.readmitted).then(|| vec![task.status]),
                     ..Default::default()

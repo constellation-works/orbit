@@ -139,15 +139,15 @@ pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
+pub(crate) use finding_verification::{
+    AnalyzedFinding, InvalidFinding, STATUS_NOT_VERIFIABLE, UNVERIFIED_REVIEW_FINDING,
+    VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment, crew_named_by, finding_fingerprint,
+    latest_verification, needs_verification, next_tier,
+};
 pub use finding_verification::{
     FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingVerdict,
     FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence, VerdictSource,
     VerifierReport, VerifierVerdict, is_review_finding,
-};
-pub(crate) use finding_verification::{
-    InvalidFinding, UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite,
-    VerifierAssignment, crew_named_by, finding_fingerprint, latest_verification,
-    needs_verification, next_tier,
 };
 use job_port::CrewPools;
 pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};

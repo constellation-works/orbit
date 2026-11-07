@@ -460,6 +460,8 @@ impl FindingVerification {
 /// reason `premise_wrong`.
 pub(crate) struct InvalidFinding<'a> {
     pub(crate) source: VerdictSource,
+    /// The task state this judgement read.
+    pub(crate) analyzed: AnalyzedFinding<'a>,
     pub(crate) verified_sha: &'a str,
     pub(crate) base_branch: &'a str,
     pub(crate) confidence: VerdictConfidence,
@@ -470,6 +472,19 @@ pub(crate) struct InvalidFinding<'a> {
     /// The crew that judged it, when known.
     pub(crate) crew: Option<&'a str>,
     pub(crate) run_id: Option<&'a str>,
+}
+
+/// The task state a rejection route judged, carried from where the route
+/// durably learned it rather than read again at the write: a fresh read would
+/// bless whatever the task had become by then.
+pub(crate) struct AnalyzedFinding<'a> {
+    /// [`finding_fingerprint`] of the material judged.
+    pub(crate) fingerprint: &'a str,
+    /// The status the judgement expects the task still to have.
+    pub(crate) status: TaskStatus,
+    /// History length past which another run's verdict supersedes this one.
+    /// `None` for a route whose status no other verdict can be written in.
+    pub(crate) history_boundary: Option<usize>,
 }
 
 /// The latest verdict `history` records, read only from the verification
@@ -512,6 +527,21 @@ fn verified_relations(
         .collect();
     changed.then_some(relations)
 }
+
+/// Whether a verdict from `source` may be written on a task in `status`: an
+/// implementer judges work it holds in progress, and every other route judges
+/// a finding not yet started. Neither reaches a task that already settled.
+fn verdict_admits_status(source: VerdictSource, status: TaskStatus) -> bool {
+    match source {
+        VerdictSource::Implementer => status == TaskStatus::InProgress,
+        VerdictSource::Verification | VerdictSource::TaskPilot | VerdictSource::VisualReview => {
+            VERIFIABLE_STATUSES.contains(&status)
+        }
+    }
+}
+
+/// The `Superseded` reason of a task whose status admits no verdict from its route.
+pub(crate) const STATUS_NOT_VERIFIABLE: &str = "status_not_verifiable";
 
 /// Whether `history` past `boundary` records a verdict another run wrote.
 pub(crate) fn verified_since(history: &[TaskHistoryEntry], boundary: usize) -> bool {
@@ -738,9 +768,11 @@ impl OrbitRuntime {
     /// Record that `task_id`'s review finding does not exist at
     /// `finding.verified_sha`: the same REJECTED verdict and move to
     /// `rejected` as [`Self::record_finding_verification`], attributed to the
-    /// route that judged it. A task that is not a review finding is refused.
-    /// A replay of a rejection this run already recorded returns
-    /// `Recorded(rejected)` without a second write.
+    /// route that judged it and bound to `finding.analyzed`, so a task that
+    /// changed meaning or status since is left untouched. A task that is not a
+    /// review finding is refused. A replay of a rejection this run already
+    /// recorded for the same material returns `Recorded(rejected)` without a
+    /// second write.
     pub(crate) fn reject_invalid_finding(
         &self,
         task_id: &str,
@@ -766,6 +798,7 @@ impl OrbitRuntime {
                     && record.source == finding.source
                     && record.run_id.as_deref() == finding.run_id
                     && record.verified_sha == finding.verified_sha
+                    && record.finding_fingerprint.as_deref() == Some(finding.analyzed.fingerprint)
             })
         {
             return Ok(VerdictWrite::Recorded(TaskStatus::Rejected));
@@ -777,7 +810,7 @@ impl OrbitRuntime {
             verdict: FindingVerdict::Rejected,
             confidence: finding.confidence,
             verified_sha: finding.verified_sha.to_string(),
-            finding_fingerprint: Some(finding_fingerprint(&task)),
+            finding_fingerprint: Some(finding.analyzed.fingerprint.to_string()),
             base_branch: finding.base_branch.to_string(),
             severity: None,
             evidence: finding
@@ -810,16 +843,22 @@ impl OrbitRuntime {
             run_id: finding.run_id.map(ToOwned::to_owned),
             verified_at: Utc::now(),
         };
-        self.record_finding_verification(task_id, &record, task.status, history.len())
+        self.record_finding_verification(
+            task_id,
+            &record,
+            finding.analyzed.status,
+            finding.analyzed.history_boundary.unwrap_or(history.len()),
+        )
     }
 
     /// Record `record` on `task_id`, prepared in `prepared_status` with
     /// `history_len` history entries: the trusted history entry, the verdict
     /// comment and, for REJECTED, the move to `rejected`, or for CONFIRMED
     /// the verified severity on its `regression_from` links — one write
-    /// under the task lock. A task that left that status, is no longer a review
-    /// finding, changed its material, or was verified by another run since is
-    /// left untouched. Legacy prepared records without a fingerprint are stale.
+    /// under the task lock. A task that left that status, is in a status the
+    /// record's route may not judge, is no longer a review finding, changed
+    /// its material, or was verified by another run since is left untouched.
+    /// Legacy prepared records without a fingerprint are stale.
     pub(crate) fn record_finding_verification(
         &self,
         task_id: &str,
@@ -841,6 +880,17 @@ impl OrbitRuntime {
                         reason: "status_changed",
                         detail: format!(
                             "task moved from {prepared_status} to {} during verification",
+                            task.status
+                        ),
+                    });
+                    return Ok(());
+                }
+                if !verdict_admits_status(record.source, task.status) {
+                    outcome = Some(VerdictWrite::Superseded {
+                        reason: STATUS_NOT_VERIFIABLE,
+                        detail: format!(
+                            "a {} verdict cannot be written on a {} task",
+                            record.source.label(),
                             task.status
                         ),
                     });

@@ -489,8 +489,9 @@ spec:
       code does not do what the finding claims, or the consequence cannot
       happen; not "already fixed", not "not worth fixing"), change nothing,
       run no gates, and attach `finding-invalid.json` with `path:line`
-      evidence at your base, using the schema in that reference's Invalid
-      review finding section. The pipeline rejects the task and lands
+      evidence at your base and the `finding_fingerprint` from your task
+      context, using the schema in that reference's Invalid review finding
+      section. The pipeline rejects the task and lands
       nothing. Claimed mode cannot reject the owner's task: return
       `result.blocker` `{kind: "finding_invalid", evidence}` instead.
 

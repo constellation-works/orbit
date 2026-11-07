@@ -299,10 +299,14 @@ the frictions it names when it reaches `done`:
   set through the tool can name one. From the CLI, close a friction with
   `orbit friction resolve <friction-id>`. Friction IDs have the form `FYYYY-MM-NNN`.
 - A task that reaches `done` through a landed pull request also closes the frictions
-  named in its description or acceptance criteria. A manual move to `done` reads only
-  the `resolves` relations, not the text.
+  named in its description or acceptance criteria. So does final recovery when it
+  completes a task on a commit already on the base. A manual move to `done` closes only
+  the `resolves` relations, not the text, and the task's history notes each friction it
+  left open.
 - A friction that is already resolved stays resolved. Updating a task that is already
-  `done` doesn't resolve again.
+  `done` doesn't resolve again, unless closing a friction failed or was interrupted at
+  the move to `done`. The next update to the task retries it with the original commit
+  and pull request.
 - Only frictions in this workspace close. A `resolves` target that lives in another
   workspace refuses the move to `done`, and the error names the friction and where it
   lives. Remove that relation, or resolve the friction in its own workspace.

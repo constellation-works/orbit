@@ -3,8 +3,12 @@
 //! evidence, is refused before any write. Fixtures drive the real prepare and
 //! apply actions against a real store and repository in isolated children.
 
-use orbit_core::application::task::{FindingVerdict, TaskAddParams, VerdictSource};
+use orbit_core::application::task::{
+    FindingVerdict, TaskAddParams, TaskUpdateParams, VerdictSource,
+};
 use orbit_core::{Task, TaskStatus, TaskType};
+use orbit_engine::RuntimeHost;
+use orbit_types::workflow::handoff::{FindingInvalidCitation, FindingInvalidReport};
 use serde_json::{Value, json};
 
 use super::Workspace;
@@ -142,9 +146,144 @@ fn null_finding_invalid_applies_as_before() {
     );
 }
 
+impl Workspace {
+    /// The report an implementer writes after judging the prompt it was given.
+    fn implementer_report(&self, task: &Task) -> FindingInvalidReport {
+        let prompt = RuntimeHost::task_context_for_agent_input(
+            &self.runtime,
+            "jrun-fixture",
+            "implement",
+            &json!({ "task_id": task.id }),
+        )
+        .unwrap()
+        .expect("a task context");
+        FindingInvalidReport {
+            schema_version: 1,
+            task_id: task.id.clone(),
+            run_id: "jrun-fixture".into(),
+            tested_head: "a".repeat(40),
+            finding_fingerprint: prompt["finding_fingerprint"]
+                .as_str()
+                .expect("a review finding's prompt carries its fingerprint")
+                .to_string(),
+            reasoning: EVIDENCE.into(),
+            evidence: vec![FindingInvalidCitation {
+                location: "README.md:1".into(),
+                note: "The only line.".into(),
+            }],
+        }
+    }
+
+    fn set_status(&self, task_id: &str, status: TaskStatus) {
+        self.runtime
+            .force_update_task_with_identity(
+                task_id,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+
+    fn start(&self, task: &Task) {
+        self.set_status(&task.id, TaskStatus::InProgress);
+    }
+}
+
+fn implementer_rejection_binds_the_material_its_prompt_carried() {
+    let workspace = Workspace::new();
+    let task = workspace.finding(&["code-review"]);
+    workspace.start(&task);
+    let report = workspace.implementer_report(&task);
+
+    // An edit after the prompt: the report judged a different claim.
+    workspace
+        .runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                description: Some("The review now claims README.md is empty.".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    let error = RuntimeHost::reject_invalid_finding(&workspace.runtime, &report, "main")
+        .expect_err("a stale report refuses");
+    assert!(error.to_string().contains("material_changed"), "{error}");
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::InProgress
+    );
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap(),
+        history
+    );
+
+    // A report for the current prompt rejects, and replays without a write.
+    let report = workspace.implementer_report(&workspace.runtime.get_task(&task.id).unwrap());
+    RuntimeHost::reject_invalid_finding(&workspace.runtime, &report, "main").unwrap();
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::Rejected
+    );
+    let verdict = workspace
+        .runtime
+        .finding_verification(&task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(verdict.source, VerdictSource::Implementer);
+    assert_eq!(
+        verdict.finding_fingerprint.as_deref(),
+        Some(report.finding_fingerprint.as_str())
+    );
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    RuntimeHost::reject_invalid_finding(&workspace.runtime, &report, "main").unwrap();
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap(),
+        history
+    );
+}
+
+fn implementer_rejection_never_reaches_a_task_outside_its_run() {
+    for status in [TaskStatus::Backlog, TaskStatus::Archived, TaskStatus::Done] {
+        let workspace = Workspace::new();
+        let task = workspace.finding(&["code-review"]);
+        workspace.start(&task);
+        let report = workspace.implementer_report(&task);
+        workspace.set_status(&task.id, status);
+        let history = workspace.runtime.get_task_history(&task.id).unwrap();
+        let error = RuntimeHost::reject_invalid_finding(&workspace.runtime, &report, "main")
+            .expect_err("a task outside its run refuses");
+        assert!(
+            error.to_string().contains("status_changed"),
+            "{status}: {error}"
+        );
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap().status, status);
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap(),
+            history
+        );
+        assert!(
+            workspace
+                .runtime
+                .finding_verification(&task.id)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 crate::scenario_table!(
     finding_invalid_scenarios,
     invalid_review_finding_is_rejected_with_the_pilot_evidence,
     finding_invalid_without_a_review_finding_or_evidence_writes_nothing,
     null_finding_invalid_applies_as_before,
+    implementer_rejection_binds_the_material_its_prompt_carried,
+    implementer_rejection_never_reaches_a_task_outside_its_run,
 );

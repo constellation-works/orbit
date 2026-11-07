@@ -24,8 +24,8 @@ use super::{attach_system_artifacts, json_artifact, read_record, step_task_ids};
 use crate::OrbitRuntime;
 use crate::application::task::{
     FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingVerdict, FindingVerification,
-    TaskAddParams, TaskUpdateParams, VerdictConfidence, VerdictSource, VerdictWrite,
-    VerifierVerdict, finding_fingerprint,
+    STATUS_NOT_VERIFIABLE, TaskAddParams, TaskUpdateParams, VerdictConfidence, VerdictSource,
+    VerdictWrite, VerifierVerdict, finding_fingerprint,
 };
 
 pub(crate) fn visual_landed_step(
@@ -269,6 +269,11 @@ fn file_follow_up(
         )?;
     }
     let filed = runtime.get_task(&filed.id)?;
+    // The verdict judges the finding this step files, not what a replay finds:
+    // a follow-up edited since keeps its material and earns no confirmation.
+    let mut as_filed = filed.clone();
+    as_filed.tags = vec![VISUAL_REVIEW_TAG.to_string()];
+    as_filed.context_files = Vec::new();
     let confidence = match finding.verdict.confidence.as_deref() {
         Some("high") => VerdictConfidence::High,
         Some("low") => VerdictConfidence::Low,
@@ -280,7 +285,7 @@ fn file_follow_up(
         verdict: FindingVerdict::Confirmed,
         confidence,
         verified_sha: record.candidate_sha.clone(),
-        finding_fingerprint: Some(finding_fingerprint(&filed)),
+        finding_fingerprint: Some(finding_fingerprint(&as_filed)),
         base_branch: base_branch.to_string(),
         severity: DefectSeverity::parse(severity),
         evidence: finding
@@ -334,6 +339,14 @@ fn file_follow_up(
             history.len(),
         )? {
             VerdictWrite::Recorded(_) => {}
+            // No verdict is written, so nothing is blessed: the follow-up
+            // moved on or changed, and verification holds it as unverified.
+            VerdictWrite::Superseded { reason, detail }
+                if matches!(reason, STATUS_NOT_VERIFIABLE | "material_changed") =>
+            {
+                tracing::warn!(task_id = %filed.id, reason, %detail,
+                    "visual follow-up keeps no confirmation");
+            }
             VerdictWrite::Superseded { detail, .. } => {
                 let matching = runtime
                     .get_task_history(&filed.id)?

@@ -12,7 +12,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskAutomationPort, TaskJobPort};
+use crate::application::task::{TaskAutomationPort, TaskJobPort, finding_fingerprint};
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
@@ -378,6 +378,8 @@ pub(in super::super) fn apply_task(
                     .as_ref()
                     .map(|fingerprints| fingerprints.status_neutral.clone()),
                 material_components: fingerprints.map(|fingerprints| fingerprints.components),
+                finding_fingerprint: Some(finding_fingerprint(&assessed)),
+                status: Some(target_status),
             };
             let operator_hold = (!requirements.is_empty()).then(|| {
                 crate::application::task::OperatorValidationHold::new(&assessed, requirements)

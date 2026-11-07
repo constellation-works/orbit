@@ -203,13 +203,29 @@ fn landing_retries_failed_prose_targets_with_the_original_delivery_evidence() {
         store.show(&friction.id).unwrap().unwrap().record.status,
         FrictionStatus::Open
     );
+    let history = owner.get_task_history(&task).unwrap();
     assert!(
-        owner
-            .get_task_history(&task)
-            .unwrap()
+        history
             .iter()
             .any(|entry| entry.event == "resolves_side_effect_failed")
     );
+    // The retry work commits ahead of the transition, so a crash in place of
+    // the failed write would leave it owed too.
+    let owed = history
+        .iter()
+        .position(|entry| {
+            entry.event == "resolves_side_effect_pending"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains(friction.id.as_str()))
+        })
+        .expect("the landing commits its text target as owed");
+    let landed = history
+        .iter()
+        .position(|entry| entry.to_status == Some(TaskStatus::Done))
+        .expect("the landing transition");
+    assert!(owed < landed, "{history:?}");
     database
         .execute_batch("DROP TRIGGER fail_landing_resolution;")
         .unwrap();

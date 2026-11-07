@@ -18,6 +18,7 @@ mod plan;
 mod readiness;
 mod receipt;
 mod regression;
+mod resolves;
 mod schedule;
 mod severity;
 mod show_fields;
@@ -27,6 +28,10 @@ mod ui_requirement;
 mod visual;
 mod work_class;
 pub use error::TaskError;
+pub use resolves::{
+    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, named_friction_targets,
+    pending_resolves_entries, resolves_relation_targets,
+};
 
 pub use context_creation::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,

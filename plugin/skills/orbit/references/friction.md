@@ -139,11 +139,15 @@ owner PR completion path uses its verified merge evidence too.
 The implementer never has to close a record with a future merge SHA: a
 "resolved with the merge sha" criterion is fulfilled by owner-side landing.
 Local and already-landed handoffs name the candidate or covering commit;
-verified no-diff handoffs name the synchronized base, with PR `none`.
+verified no-diff handoffs name the synchronized base, with PR `none`. A final
+recovery's completion names the covering commit it verified, also with PR `none`.
 Auto-resolve runs on the transition into `done`, not on later writes to the
-done task: a friction reopened afterwards stays open. A resolution that failed
-at that transition is recorded in the task's history and retried by the task's
-next write, retaining the original delivery evidence.
+done task: a friction reopened afterwards stays open. The transition commits
+each named target as owed in the task's history. A resolution that failed or
+never ran, because of a failed write, an unreadable history or a crash, is
+retried by the task's next write, retaining the original delivery evidence.
+A target named only in text, on a completion with no delivered commit, is
+closed out in the task's history and the friction stays open.
 
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A

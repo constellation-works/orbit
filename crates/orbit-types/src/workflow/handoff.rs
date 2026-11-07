@@ -433,6 +433,9 @@ pub struct FindingInvalidReport {
     pub task_id: String,
     pub run_id: String,
     pub tested_head: String,
+    /// The `task.finding_fingerprint` of the prompt this run judged: the
+    /// finding material the report rejects. A task edited since is not rejected.
+    pub finding_fingerprint: String,
     /// Why the defect as described does not exist at `tested_head`.
     pub reasoning: String,
     pub evidence: Vec<FindingInvalidCitation>,
