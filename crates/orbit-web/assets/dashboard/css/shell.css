@@ -554,10 +554,12 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
 .topbar .notify-btn[hidden] { display: none; }
 
-/* On phones the top bar is one scrolling row: the brand and fleet drain
-   stay at the start, with actions and provider usage reachable by swiping or
-   tabbing across. Scope pickers and navigation keep their own rows below,
-   leaving most of the viewport for the current pane. */
+/* On phones the top bar is one scrolling row: the brand stays at the start,
+   followed by Notify (when available), Refresh and the host group; the fleet
+   drain pill and provider usage are omitted at this width, and anything that
+   overflows is reachable by swiping or tabbing across. Scope pickers and
+   navigation keep their own rows below, leaving most of the viewport for the
+   current pane. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
