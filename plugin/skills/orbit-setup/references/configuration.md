@@ -1226,6 +1226,125 @@ Scorecards, ladder reports, experiment arms and managed usage include effort
 breakdowns; inspect those populations when tuning a crew. Scorecard rankings
 retain their crew/model score, with effort shown as descriptive execution usage.
 
+### Automatic effort selection: `<crew>@auto`
+
+A pool entry can leave the effort to each draw instead of fixing it:
+`<crew>@auto`, or `<crew>@auto:100` in a weighted pool. At admission the draw
+resolves the entry through the crew's ordered effort bands and runs at the
+resolved `<crew>@<effort>`; runs and records never show `@auto` itself.
+
+**Where `@auto` is allowed.** Only these pools accept it:
+
+- the implementer complexity pools, `workflow.low_complexity_crews`,
+  `workflow.medium_complexity_crews`, `workflow.hard_complexity_crews` and
+  `workflow.xhard_complexity_crews`;
+- the per-type implementer pools, `workflow.type_complexity_crews`;
+- `workflow.purpose_crews.task_pilot`;
+- the review pools, `workflow.purpose_crews.review` and
+  `workflow.purpose_crews.pre_landing_review`.
+
+Everywhere else it is refused: any other pool, `workflow.default_crew`, a
+task's `crew` field, and `--crew` or other run-time crew overrides. The
+refusal happens when configuration loads, on `orbit config set`, and on run
+overrides, so an unsupported field never silently accepts it. A crew also
+needs bands (below) before any pool may name it with `@auto`; a crew without
+bands is refused the same way.
+
+**Bands.** `workflow.auto_effort.bands` maps each crew — by its bare
+`[crews.<name>]` name, never a `<crew>@<effort>` reference — to an ordered
+list of bands. Bands default to empty (`{}`): no crew has bands, and every
+`@auto` entry is refused, until an operator configures them. Each band sets
+an `effort` the crew's provider and model accept, plus at least one
+condition. The first band whose conditions the draw's signal all meets
+chooses the effort; later bands are not consulted.
+
+| Condition | Meets it when |
+|---|---|
+| `complexity = ["hard", "xhard"]` | The signal's tier is listed. Only `low`, `medium`, `hard` and `xhard` are valid; `unassessed` is refused. |
+| `below_files = N` | The signal counts fewer than `N` files (`N` above 0). |
+| `below_lines = N` | The signal counts fewer than `N` reviewable lines (`N` above 0). |
+
+A band with no condition, a bound of 0, an unknown crew key, an empty band
+list for a crew, or an effort the crew's provider and model reject all fail
+configuration load with a message naming the band. To drop a crew's bands,
+remove its key; an empty list is refused, not treated as removal.
+
+Each role resolves from the best signal it has at admission:
+
+| Role | Complexity signal | Size signal |
+|---|---|---|
+| Implementer | The task's assessed tier | `below_files` counts the distinct files the task's declared context files name (the pre-dispatch footprint). An implementer never has a line count, so `below_lines` never matches it. |
+| Task pilot | The task's filed tier only | None; the pilot is what produces a size. |
+| Reviewer | The reviewed tasks' highest settled tier | `below_lines` counts the candidate's reviewable lines and `below_files` its changed files. |
+
+A condition on a signal the role does not have does not match. With no
+signal at all, or when no band matches, the draw falls back to the crew's
+own configured effort: the bare crew when its table sets no `effort`,
+otherwise `<crew>@<effort>` from the table. A task keeps its `@auto` pool
+member while the effort it resolves to moves; the next admission re-resolves
+it against the task's current tier and footprint.
+
+**Exploration.** `workflow.auto_effort.explore_share` (default `0.1`,
+allowed range 0 to 0.5 inclusive) dispatches that share of seeded draws at
+another effort the crew can resolve to — one its bands name, or its
+configured effort — so each side of a cutover keeps getting data. The roll
+is seeded per draw (by the task for implementers, by the run and partition
+for pilots, by the run and candidate head for reviewers), so a retried
+selection resolves alike. A task's creation draw never explores, and a draw
+with no subject to seed it never explores. An explored draw records
+`explored: true` together with the policy reference it replaced.
+
+**Bounded pilot escalation.** Escalation applies only to a task pilot that
+ran at an `@auto` resolution, and only once. When the pilot raises the task
+above its filed tier to a tier whose band maps to a higher effort than it
+ran at, or reports confidence `medium` or `low` (the target is then the
+highest effort the crew's bands name), the assessment is held back and the
+run re-pilots the task once at the higher effort; that second assessment is
+the one applied. A target at or below the effort the pilot ran at never
+escalates (a crew whose table sets no effort counts as below every band
+effort for that comparison), and the re-pilot never escalates again.
+
+**Example.** Replace `example-crew` with a crew defined on the host, and
+name that same crew with `@auto` in one of the supported pools:
+
+```toml
+[workflow.auto_effort]
+explore_share = 0.1
+bands.example-crew = [
+  { complexity = ["hard", "xhard"], effort = "xhigh" },
+  { below_files = 4, effort = "medium" },
+]
+
+[workflow]
+medium_complexity_crews = ["example-crew@auto:100", "example-crew@medium:50"]
+```
+
+Order matters: a hard task with few files runs at `xhigh`, because the
+complexity band comes first. Keep the fixed-effort member beside the `@auto`
+member only when both shares are wanted; they are distinct pool members.
+
+**Verify without dispatching production work.** Configuration alone proves
+the policy is admitted, not that any draw has used it:
+
+1. Read the policy back: `orbit config get workflow.auto_effort.bands`,
+   `orbit config get workflow.auto_effort.explore_share`, and
+   `orbit config show --all`. The show must load without error and report
+   each value with its source. A band against an undefined crew, a band
+   with no condition, or a share outside 0 to 0.5 fails here, before any
+   dispatch.
+2. Confirm each `@auto` entry sits in a supported pool above and names a
+   crew that has bands: `orbit config show` lists the pools. Do not test
+   an unsupported field by setting it there; load and `orbit config set`
+   refuse it by design.
+3. Treat a live rollout as proven only by a recorded resolution. After a
+   real draw, inspect it (`orbit run show --json` for a run, or the task's
+   recorded crew selection): the implementer's crew selection carries the
+   resolution record (`requested`, `resolved`, `policy`, `basis` of `band`,
+   `fallback` or `escalation`, the matching band index, `explored`, and the
+   `signal`), and a frozen activity draw or admitted reviewer carries the
+   same record with a source ending in the resolved effort. Until such a
+   record exists, report the feature as configured, not rolled out.
+
 
 ```toml
 [crews.reviewer]
