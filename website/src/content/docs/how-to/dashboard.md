@@ -686,8 +686,7 @@ Tools follows the Analytics window independently of an Events cutoff. With
 an **all** or **1h** window, its bounded summary uses **24h**, named in the cards.
 Select a tool on **Tools** to open its events for the window the card shows.
 Exact incident-event links select **all** statuses because they list the
-recorded event IDs without a status restriction. Spend, tokens, and
-read-only exploration are explained in [Analytics](#analytics).
+recorded event IDs without a status restriction. Spend and token usage are explained in [Analytics](#analytics).
 
 ## Analytics
 
@@ -1149,8 +1148,7 @@ Below the cards, three sections are collapsed under **Details**:
 ### Cost
 
 Open **Cost** for managed-execution spend and token use in the selected
-workspace, and to compare implement runs that delegated read-only explorer
-calls with runs that did not.
+workspace.
 
 The header reads **Managed execution only**. Interactive
 orchestration-session overhead is excluded. The range under the tabs includes
@@ -1173,21 +1171,6 @@ labeled as an estimate and has its own coverage. Compare the two under
 that population is empty, the panel says to leave the partial sums
 unreconciled. A non-zero amount that rounds to $0.00 is shown as `<$0.01`.
 **unknown** means the figure was not reported.
-
-**Read-only exploration** is `#analytics/cost?tab=exploration`. For each
-implementing crew it shows **with explore** and **without**. Each row has the
-run count, mean duration, mean cost with how many runs were priced, and the
-footprint-miss rate (misses over runs whose footprint is known). Explorer
-call count and explorer cost are a separate column. The mean cost is the
-implementing crew's own spend. The sample count stays on the row, so a thin
-cohort stays visible as thin. When the read is truncated, the footnote names
-how many of the newest implement runs it counted. With no implement runs, the
-panel says so.
-
-Explorer delegation follows `workflow.explore.enabled` (default false). While
-it is on, a managed implement or review-repair agent can ask a sandboxed
-explorer a read-only question. See
-[Settable keys](../../reference/config/#settable-keys).
 
 ### Reliability
 

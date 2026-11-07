@@ -25,7 +25,6 @@ use crate::application::resident::ResidentCallClass;
 /// The tool's canonical name, as the action ledger records it.
 pub(super) fn resident_guard_tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::AgentInvoke => "orbit.agent.invoke",
         OrbitBuiltinAction::CommandExec => "orbit.command.exec",
         OrbitBuiltinAction::DesktopRead => "orbit.desktop.read",
         OrbitBuiltinAction::DesktopAutomation => "orbit.desktop.automation",
@@ -92,7 +91,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
     use ResidentCallClass::{Gated, Open, Read, Refused};
     use ResidentRight::{Dispatch, Merge, Promote};
     match action {
-        OrbitBuiltinAction::AgentInvoke | OrbitBuiltinAction::PipelineInvoke => Gated(Dispatch),
+        OrbitBuiltinAction::PipelineInvoke => Gated(Dispatch),
         OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::DesktopRead
         | OrbitBuiltinAction::DesktopTaskSnapshot => Read,

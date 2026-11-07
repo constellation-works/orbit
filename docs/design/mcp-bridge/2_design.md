@@ -288,8 +288,7 @@ login to a destination is ownership of it: anyone who can start
 `orbit mcp serve --operator` there can equally set `ORBIT_OPERATOR=1` on any
 other command, so a destination-side ceiling would only be a file the caller can
 rewrite. The client decides — a proxy or mux started with `--operator`
-propagates it, and one running as an agent never does. `orbit_agent_invoke` is
-admitted on `operator` like every other governed operation.
+propagates it, and one running as an agent never does.
 
 Core enforces the resulting capabilities and governed operations after the
 accepting server has resolved the session. A proxy or UI may not grant authority,

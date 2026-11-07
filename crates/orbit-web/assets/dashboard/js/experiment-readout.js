@@ -178,7 +178,7 @@ export function armCards(experiment, readout, primary, color) {
   return experimentCard(title, [el("div", { class: "mx-series ex-arms" }, cards)], { meta });
 }
 
-// One row per arm of what sits behind its card: explorer uptake, delivery,
+// One row per arm of what sits behind its card: delivery,
 // the per-protocol estimate and cost coverage.
 export function armEvidenceCard(readout) {
   const arms = readout.arms || [];
@@ -189,13 +189,6 @@ export function armEvidenceCard(readout) {
   const deliveryRoles = arms.find((arm) => arm.delivery)?.delivery.roles || [];
   const minDelivered = Math.round((readout.experiment?.min_delivered_rate ?? 0) * 100);
   const columns = [
-    {
-      head: "Explorer",
-      hint: "Analysed tasks with at least one explorer-delegation call during implement, at or after assignment. A task counts once. Unobserved tasks recorded no call, but an implement invocation's output outgrew the capture bound and lost its early tool calls, so a call there cannot be ruled out.",
-      cell: (arm) => ({
-        text: `${arm.tasks_with_explorer_call ?? 0} of ${arm.n ?? 0}${arm.tasks_explorer_unobserved ? ` (+${arm.tasks_explorer_unobserved} unobserved)` : ""}`,
-      }),
-    },
     arms.some((arm) => arm.delivery) ? {
       head: "Delivered",
       hint: `Settled tasks whose ${deliveryRoles.join(", ")} step received this arm's overlay and finished successfully. Below ${minDelivered}% the verdict is withheld. Pending tasks are in flight and not yet delivered.`,

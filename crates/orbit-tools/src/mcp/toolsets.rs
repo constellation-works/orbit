@@ -54,7 +54,6 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         "orbit.search" => T::Search,
         "orbit.visual.capture" => T::Ui,
         "orbit.command.exec" => T::Exec,
-        "orbit.agent.invoke" => T::AgentInvoke,
         _ if name.starts_with("orbit.lease.") => T::Leases,
         _ if name.starts_with("orbit.notice.") => T::Notice,
         _ if name.starts_with("orbit.resident.") || name.starts_with("orbit.evolution.") => {

@@ -6,7 +6,7 @@ use serde_json::Value;
 /// A workflow key whose type and per-run consumer are opted in by code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExperimentConfigKey {
-    /// Maximum read-only explorer calls a managed run may submit (1–100).
+    /// Legacy explorer call budget (1–100), retained for stored experiments; inert.
     ExploreMaxCallsPerRun,
     /// Whether a `verify-mock-ui` delivery runs the comparison reviewer and
     /// its verifier (a boolean); the visual review experiment's arms.

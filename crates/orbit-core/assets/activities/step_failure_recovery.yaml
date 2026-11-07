@@ -428,7 +428,6 @@ spec:
     - A cancelled run, a claimed task that refuses writes, or an operator
       comment withdrawing the task still stops recovery as the procedure says.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

@@ -1,20 +1,18 @@
-//! Trusted-host execution admission at the CLI-runner boundary [ORB-11354].
+//! Refusal of removed trusted-host execution at the CLI-runner boundary.
 //!
-//! The mode has two halves — the activity declares it, the operator's
-//! submission admits it — and only both halves together, with a well-formed
-//! admission, may run an unsandboxed process.
+//! Neither a legacy activity flag nor a persisted operator admission can
+//! authorize an unsandboxed process.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::NullSink;
-use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::{
-    TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEvent, V2AuditEventKind,
+    TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEventKind,
 };
 use tempfile::tempdir;
 
-use orbit_engine::activity_job::audit_writer::{EnvelopeSink, V2AuditWriter};
+use orbit_engine::activity_job::audit_writer::V2AuditWriter;
 
 use super::cli_support::{TestHost, persisted_writer, test_agent_loop_spec_for, write_executable};
 use orbit_engine::DispatchError;
@@ -131,71 +129,6 @@ fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
     assert_eq!(backend, None);
 }
 
-/// The target activity controls authorization, while the audit event keeps
-/// the pipeline step id for operators reading the run trace.
-fn distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit() {
-    if !super::run_isolated(concat!(
-        module_path!(),
-        "::distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit"
-    )) {
-        return;
-    }
-
-    let temp = tempdir().expect("tempdir");
-    let host = TestHost::with_command(echoing_provider(temp.path()));
-    let mut spec = test_agent_loop_spec_for("codex", Duration::from_secs(10));
-    spec.trusted_host_execution = true;
-    let captured = Arc::new(CapturedEnvelopes::default());
-    let audit = Arc::new(
-        V2AuditWriter::new(
-            "job-trusted-distinct-target",
-            "codex:gpt-5.5",
-            Arc::new(NullSink),
-        )
-        .with_envelope_sink(captured.clone()),
-    );
-
-    let mut target = super::job_support::target_step("review", "unused");
-    let orbit_types::workflow::activity_job::JobV2StepBody::Target(body) = &mut target.body else {
-        panic!("target");
-    };
-    body.spec = orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec);
-    body.activity_name = Some("agent_review_repair".into());
-    let outcome = orbit_engine::execute_job_with_resume(
-        &super::job_support::job_with_steps(vec![target]),
-        admitted_input(),
-        "job-trusted-distinct-target",
-        audit.clone(),
-        &host,
-        None,
-    )
-    .expect("admitted trusted-host activity runs");
-    assert!(outcome.success);
-
-    let events = captured.0.lock().expect("captured events");
-    let activity = events.iter().find_map(|event| match &event.kind {
-        V2AuditEventKind::TrustedHostExecutionAdmitted { activity_name, .. } => {
-            Some(activity_name.as_str())
-        }
-        _ => None,
-    });
-    assert_eq!(
-        activity,
-        Some("review"),
-        "trusted-host audit labels retain the step id while policy uses the target activity"
-    );
-}
-
-#[derive(Default)]
-struct CapturedEnvelopes(Mutex<Vec<V2AuditEvent>>);
-
-impl EnvelopeSink for CapturedEnvelopes {
-    fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
-        self.0.lock().expect("captured events").push(event.clone());
-        Ok(())
-    }
-}
-
 #[test]
 fn trusted_host_authority_contracts() {
     super::run_family(
@@ -209,10 +142,6 @@ fn trusted_host_authority_contracts() {
             (
                 "an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox",
                 an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox,
-            ),
-            (
-                "distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit",
-                distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit,
             ),
         ],
     );

@@ -26,7 +26,6 @@ pub const AUTO_TASK_JOB_SCHEMA_VERSION: u32 = 3;
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
-pub mod explore;
 pub mod job_v2;
 pub mod provider_sandbox;
 pub mod response_correction;
@@ -37,16 +36,7 @@ pub mod script_grant_request;
 pub mod tool_allowlist;
 pub mod trusted_host;
 
-pub use explore::{
-    EXPLORE_ACTIVITY, EXPLORE_CALLER_ACTIVITIES, EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY,
-    EXPLORE_PROVIDER_SANDBOX_MODE, explore_provider_has_read_only_mode,
-};
-pub use provider_sandbox::{
-    CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_PROVIDER_SANDBOX,
-    admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
-    least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
-    parse_provider_sandbox_label, provider_sandbox_modes,
-};
+pub use provider_sandbox::CODEX_PROVIDER_SANDBOX_MODES;
 
 /// The single declaration of the deterministic action catalog. The generated
 /// typed actions make the core/engine ownership boundary exhaustive at compile
@@ -250,7 +240,6 @@ pub use tool_allowlist::{
     validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
 pub use trusted_host::{
-    TRUSTED_HOST_ACTIVITY, TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError,
-    TrustedHostAdmission, run_input_declares_trusted_host, strip_trusted_host_admission,
-    validate_trusted_host_activity,
+    TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError, TrustedHostAdmission,
+    run_input_declares_trusted_host, strip_trusted_host_admission, validate_trusted_host_activity,
 };

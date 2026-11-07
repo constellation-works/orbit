@@ -1,8 +1,7 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
 //! host's `gh` credentials, one of a claimed worker's owner calls that need
-//! the claim's owner route, a read-only explorer submission whose sandbox
-//! cannot nest inside the caller's [ORB-20566], a resident cycle's ship whose
+//! the claim's owner route, a resident cycle's ship whose
 //! leaf worker must not start inside the cycle's sandbox, a resident cycle's
 //! decision raise whose lock that sandbox mounts read-only, or a resident
 //! cycle's landing or move to `done` that reads the forge — through the audited
@@ -30,11 +29,10 @@ use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::authorization::ManagedRunCaller;
 use crate::runtime::plugin::broker::{
-    BROKERED_EXPLORER_TOOL, BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL,
-    BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch, BrokerRequest, EntryPoint,
-    is_brokered_resident_completion, is_host_credentialed_read,
+    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
+    BrokerDispatch, BrokerRequest, EntryPoint, is_brokered_resident_completion,
+    is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -229,40 +227,6 @@ impl BrokerDispatch for RunDispatch {
                             session_context,
                         );
                     }
-                    // [ORB-20566] An explorer submitted inside the agent's
-                    // sandbox would start its own sandbox nested in it, which
-                    // the kernel refuses. The host submits it beside the
-                    // caller instead, for the run it dispatched: the caller
-                    // is that run, never one the request names.
-                    if tool == BROKERED_EXPLORER_TOOL {
-                        self.runtime.ensure_tool_agent_facing(&tool)?;
-                        self.refuse_outside_activity_policy(&tool)?;
-                        if let Some(policy) = &run.tool_deny_policy
-                            && policy.denies(&tool)
-                        {
-                            return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
-                        }
-                        let run_id = run.job_run_id.clone().ok_or_else(|| {
-                            OrbitError::CapabilityDenied(
-                                "this invocation has no job run, so it cannot delegate \
-                                 exploration"
-                                    .to_string(),
-                            )
-                        })?;
-                        let actor = orbit_types::identity::normalize_optional_attribution_label(
-                            run.model_name.as_deref().or(run.agent_name.as_deref()),
-                            run.model_name.as_deref(),
-                        );
-                        return crate::adapter::tool_host::agent_tools::invoke_brokered_explorer(
-                            &self.runtime,
-                            ManagedRunCaller {
-                                run_id,
-                                activity: Some(run.activity_name.clone()),
-                            },
-                            &input,
-                            actor.as_deref(),
-                        );
-                    }
                     // A resident cycle's leaf run starts on the host, its
                     // decision raise locks and writes there, and its landing
                     // and move to `done` read the forge there. Only a run the
@@ -312,7 +276,7 @@ impl BrokerDispatch for RunDispatch {
                     {
                         return Err(OrbitError::PolicyDenied(format!(
                             "the plugin broker runs plugin tools, the read-only github.* tools, \
-                             a claimed worker's owner calls, explorer submissions and a \
+                             a claimed worker's owner calls and a \
                              resident cycle's ship, decision raise, landing and move to done \
                              only; '{tool}' is none of these"
                         )));

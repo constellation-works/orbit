@@ -106,9 +106,6 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
-    /// `[workflow.explore]`: whether implement and review-repair runs may
-    /// delegate read-only exploration, and its per-run budgets.
-    explore: orbit_config::ExploreSettings,
     /// `[workflow.explore_brief]`: whether the task pilot is asked for
     /// explore briefs, for which tasks, and whether they are delivered.
     explore_brief: orbit_config::ExploreBriefSettings,
@@ -188,7 +185,6 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
-        explore: orbit_config::ExploreSettings,
         explore_brief: orbit_config::ExploreBriefSettings,
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
         crew_performance: orbit_config::CrewPerformanceMode,
@@ -248,7 +244,6 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
             regression_risk,
-            explore,
             explore_brief,
             crew_performance_types,
             crew_performance,
@@ -315,10 +310,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn crew_performance_window_days(&self) -> u32 {
         self.crew_performance_window_days
-    }
-
-    pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {
-        self.explore
     }
 
     pub(crate) fn explore_brief(&self) -> &orbit_config::ExploreBriefSettings {

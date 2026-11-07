@@ -241,11 +241,11 @@ usage limit or failure hold redraws inside the pool instead of stalling it.
 
 Orbit's own work: `task_pilot`, `failure_recovery`, `final_recovery`,
 `auto_fix`, `review`, `pre_landing_review`, `baseline_red_repair`,
-`sweep_tasks`, `explorer`. `orbit init` writes them as explicit copies of the
+`sweep_tasks`. `orbit init` writes them as explicit copies of the
 complexity pools, so editing a complexity pool later does **not** move them:
 revisit each one whenever you retune the tiers. Guidance:
 
-- `task_pilot`, `auto_fix`, `explorer`: cheap, fast crews; the pilot also
+- `task_pilot`, `auto_fix`: cheap, fast crews; the pilot also
   needs crews whose executor declares `inspection_args`.
 - `failure_recovery`: crews good at diagnosis; recovery sees failures from
   every tier.
@@ -383,7 +383,6 @@ Changes apply to deliveries recorded afterwards.
 | Feature | Turn on when | Reference |
 |---|---|---|
 | `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [orbit-orchestrate](../../orbit-orchestrate/SKILL.md#mid-run-steering) |
-| `workflow.explore.*` | Implementers would benefit from cheap read-only helpers; needs an `explorer` pool | [Common settings](configuration.md#common-settings) |
 | `[workflow.explore_brief]` | The task pilot should store context briefs for chosen tags | [Explore briefs](configuration.md#explore-briefs) |
 | `[lease]` | Interactive editors and agents share a checkout | [Path-lease policy](configuration.md#path-lease-policy) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |

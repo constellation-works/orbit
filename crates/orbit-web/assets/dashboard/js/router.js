@@ -51,8 +51,8 @@ const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
 const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents", "experiments"];
-// Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
-const COST_TABS = ["spend", "exploration"];
+// Analytics › Cost defaults to Spend.
+const COST_TABS = ["spend"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts", "residents"];
@@ -344,7 +344,6 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   // aggregate view; Cost is per-workspace and does not.
   if (name === "cost" && isAggregateView()) {
     renderPanelPlaceholder("scoreboard-orchestration");
-    renderPanelPlaceholder("scoreboard-exploration");
   }
   // Metrics, Pipeline, Resources and Forecast read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();

@@ -25,7 +25,7 @@ For a task-backed `agent_loop`, the activity's
 - A disallow list (`tool_disallow_list`) can't be overridden. On the
   implementing activity (`agent_implement`) and on custom activities, a
   requirement the list covers is refused before launch. Shipped
-  non-implementers, including exploration, invocation, pilot, verification,
+  non-implementers, including pilot, verification,
   recovery and review activities, drop that requirement and record a note; the tool stays
   uncallable.
 

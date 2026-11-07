@@ -1,8 +1,7 @@
 //! Provider envelope and sandbox preparation.
 
 use super::super::super::super::argv::{
-    apply_provider_static_arg_fixups, apply_read_only_provider_sandbox,
-    apply_trusted_host_provider_sandbox, neutralize_inner_sandbox,
+    apply_provider_static_arg_fixups, neutralize_inner_sandbox,
 };
 use super::super::CliDispatchContext;
 use super::super::preparation::PreparedCliDispatch;
@@ -11,21 +10,19 @@ use crate::activity_job::dispatcher::DispatchError;
 use orbit_agent::{Agent, AgentConfig};
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
-use orbit_types::workflow::activity_job::EXPLORE_ACTIVITY;
 use orbit_types::workflow::{V2AuditEventKind, render_tag_instructions};
 use serde_json::Value;
 
-pub(super) struct ProviderEnvelope<'a> {
+pub(super) struct ProviderEnvelope {
     pub(super) envelope_spec: AgentLoopSpec,
     pub(super) staged_images: Option<StagedImages>,
-    pub(super) explore_instruction: Option<&'a str>,
     pub(super) pinned_recovery_input: Option<Value>,
 }
 
 pub(super) fn prepare_provider_envelope<'a>(
     context: CliDispatchContext<'a>,
     prepared: &PreparedCliDispatch<'_>,
-) -> Result<ProviderEnvelope<'a>, DispatchError> {
+) -> Result<ProviderEnvelope, DispatchError> {
     let CliDispatchContext {
         host,
         spec,
@@ -96,15 +93,6 @@ pub(super) fn prepare_provider_envelope<'a>(
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }
-    let explore_instruction = spec
-        .explore_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())
-        .filter(|_| host.explore_delegation_available());
-    if let Some(instruction) = explore_instruction {
-        envelope_spec.instruction.push_str("\n\n");
-        envelope_spec.instruction.push_str(instruction);
-    }
     if let Some(instruction) = explore_brief_instruction {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
@@ -172,7 +160,6 @@ pub(super) fn prepare_provider_envelope<'a>(
     Ok(ProviderEnvelope {
         envelope_spec,
         staged_images,
-        explore_instruction,
         pinned_recovery_input,
     })
 }
@@ -199,22 +186,12 @@ pub(super) fn rebuilt_envelope_input(input: &serde_json::Value) -> serde_json::V
 pub(super) fn prepare_provider_agent(
     context: CliDispatchContext<'_>,
     provider: &str,
-    trusted_host: Option<&orbit_types::workflow::activity_job::TrustedHostAdmission>,
     sandbox: Option<&crate::activity_job::dispatcher::ResolvedSandbox>,
     resolved_sandbox: Option<&crate::activity_job::dispatcher::ResolvedSandbox>,
     cli_executor: &mut crate::activity_job::dispatcher::ResolvedCliExecutor,
 ) -> Result<(orbit_agent::AgentConfig, orbit_agent::Agent), DispatchError> {
-    let CliDispatchContext {
-        host,
-        spec,
-        input,
-        activity_name,
-        ..
-    } = context;
+    let CliDispatchContext { host, spec, .. } = context;
     let mut provider_config = host.provider_cli_config(provider);
-    if trusted_host.is_some() {
-        apply_trusted_host_provider_sandbox(provider, input, &mut provider_config);
-    }
 
     // Provider-specific static-arg fixups that are independent of whether the
     // outer sandbox is active. Today this only rewrites Claude's `--debug-file`
@@ -237,23 +214,7 @@ pub(super) fn prepare_provider_agent(
     let explicitly_off = resolved_sandbox
         .as_ref()
         .is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::Off);
-    // [ORB-16814] An explorer is read-only by contract. Wrapped by Orbit's
-    // sandbox, its reviewer profile already denies every worktree write and a
-    // second inner sandbox cannot nest (Seatbelt refuses it). Unwrapped,
-    // including an explicit executor opt-out, a bare fallback and a wrapper
-    // that cannot start on this host, the provider's own read-only sandbox is
-    // the boundary instead of being neutralized. A provider with no such mode
-    // must not start: the profile is not an OS boundary, and its native tools
-    // could write the caller's worktree.
-    if activity_name == EXPLORE_ACTIVITY && sandbox.is_none() {
-        if !apply_read_only_provider_sandbox(provider, &mut provider_config) {
-            return Err(DispatchError::CliInvocationPermanent(format!(
-                "refusing explorer provider `{provider}`: no enforced read-only sandbox \
-                 (the outer executor sandbox is not enforced, and this provider has no \
-                 read-only mode)"
-            )));
-        }
-    } else if sandbox.is_some() || explicitly_off {
+    if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(provider, &mut provider_config, &mut cli_executor.args);
     }
 

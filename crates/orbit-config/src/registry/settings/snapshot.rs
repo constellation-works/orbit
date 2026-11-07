@@ -149,23 +149,6 @@ impl Default for NoticeSettings {
     }
 }
 
-/// Admitted `workflow.explore.*`: whether implement and review-repair runs
-/// may delegate read-only exploration through `orbit.agent.invoke`, and the
-/// budgets each run's delegation is held to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExploreSettings {
-    /// `workflow.explore.enabled` (default `false`).
-    pub enabled: bool,
-    /// `workflow.explore.max_calls_per_run` (default 6).
-    pub max_calls_per_run: u32,
-    /// `workflow.explore.max_concurrent_per_run` (default 2).
-    pub max_concurrent_per_run: u32,
-    /// `workflow.explore.timeout_seconds` (default 600).
-    pub timeout_seconds: u32,
-    /// `workflow.explore.max_answer_bytes` (default 16384).
-    pub max_answer_bytes: u32,
-}
-
 /// Admitted `workflow.explore_brief.*`: whether the task pilot is asked for
 /// explore briefs, which tasks request one, and whether a stored brief
 /// reaches the implementer.
@@ -260,10 +243,6 @@ impl ConfigSnapshot {
             (
                 &mut self.workflow_purpose_crews_baseline_red_repair,
                 "workflow.purpose_crews.baseline_red_repair",
-            ),
-            (
-                &mut self.workflow_purpose_crews_explorer,
-                "workflow.purpose_crews.explorer",
             ),
             (
                 &mut self.workflow_purpose_crews_failure_recovery,
@@ -430,10 +409,6 @@ impl ConfigSnapshot {
             (
                 CrewPurpose::SweepTasks,
                 self.workflow_purpose_crews_sweep_tasks.clone(),
-            ),
-            (
-                CrewPurpose::Explorer,
-                self.workflow_purpose_crews_explorer.clone(),
             ),
             (
                 CrewPurpose::VisualReview,
@@ -657,17 +632,6 @@ impl ConfigSnapshot {
             brief_max_items: self.notice_brief_max_items,
             brief_body_chars: self.notice_brief_body_chars,
             brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
-        }
-    }
-
-    /// The admitted `workflow.explore.*` settings.
-    pub fn explore(&self) -> ExploreSettings {
-        ExploreSettings {
-            enabled: self.workflow_explore_enabled,
-            max_calls_per_run: self.workflow_explore_max_calls_per_run,
-            max_concurrent_per_run: self.workflow_explore_max_concurrent_per_run,
-            timeout_seconds: self.workflow_explore_timeout_seconds,
-            max_answer_bytes: self.workflow_explore_max_answer_bytes,
         }
     }
 

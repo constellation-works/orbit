@@ -41,7 +41,7 @@ because brief delivery and orchestrator posting have to work wherever the work r
   goldens for `orbit mcp serve --help`, the `machine.mcp.toolsets` description and the toolset
   error text are regenerated in slice 1.
 - Managed runs: the dispatcher stamps the `notice` toolset onto a managed run's own MCP server when
-  the activity grants a notice tool, the way it stamps `agent-invoke` for explorer delegation
+  the activity grants a notice tool
   ([2_design.md §4](../2_design.md#4-managed-agents-posting)). The stamp adds to the configured
   toolsets.
 

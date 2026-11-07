@@ -13,8 +13,8 @@
 //! "usage_pressure"` [ORB-17770]: creation, re-rate and admission draws weigh
 //! each member by its crew's weekly usage pressure, and admission draws a
 //! system-chosen crew again from its whole pool, persisting a changed crew
-//! under the task's existing automatic source. Activity, review, verifier and
-//! explorer pools use the same helper through `draw_crew_pool`, after their
+//! under the task's existing automatic source. Activity, review and verifier
+//! pools use the same helper through `draw_crew_pool`, after their
 //! existing membership filters, and carry each member's draw provenance.
 //! `workflow.crew_performance` multiplies the creation, re-rate and
 //! admission draws by each crew's performance factor from the persisted

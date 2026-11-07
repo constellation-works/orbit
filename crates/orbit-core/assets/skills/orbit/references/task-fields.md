@@ -501,7 +501,7 @@ another OS (see [Native host evidence](#native-host-evidence)).
   criterion that names a tool the lane does not grant, and that
   `required_tools` does not declare, is still reported.
 - **Operator capability.** Governed operations — workflow run observation and
-  resume, `orbit.command.exec`, `orbit.agent.invoke`,
+  resume, `orbit.command.exec`,
   and the other destructive surfaces — are reserved for an operator.
   `required_tools` grants allowlist membership, not capability, and an
   implementing agent must never set an authority environment variable to get

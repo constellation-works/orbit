@@ -78,7 +78,7 @@ const WORKFLOW_SECTIONS = [
   ['Crew routing', (k) => k === 'workflow.default_crew' || /complexity_crews$/.test(k) || k === 'workflow.crew_selection' || k.startsWith('workflow.crew_performance') || k.startsWith('workflow.provider_limit')],
   ['Task pilot', (k) => k === 'workflow.purpose_crews.task_pilot' || k.startsWith('workflow.task_pilot') || k.includes('task_pilot_freshness') || k === 'workflow.pilot_max_complexity'],
   ['Recovery', (k) => ['workflow.purpose_crews.failure_recovery','workflow.purpose_crews.auto_fix','workflow.purpose_crews.final_recovery','workflow.purpose_crews.baseline_red_repair','workflow.purpose_crews.sweep_tasks'].includes(k)],
-  ['Steering & exploration', (k) => k.startsWith('workflow.mid_run_steering.') || k.startsWith('workflow.explore.') || k === 'workflow.purpose_crews.explorer'],
+  ['Steering', (k) => k.startsWith('workflow.mid_run_steering.')],
 ];
 
 function openDrawer(row, context, lockGlobal) {

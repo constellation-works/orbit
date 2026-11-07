@@ -106,7 +106,6 @@ pub(super) struct ProviderEnvironmentInput<'a> {
     pub(super) scratch: &'a Path,
     pub(super) tool_disallow_list: &'a Option<Vec<String>>,
     pub(super) activity_tools: &'a ResolvedActivityTools,
-    pub(super) explore_instruction: Option<&'a str>,
     pub(super) orbit_env: Vec<(String, String)>,
     pub(super) subprocess_cwd: &'a Option<PathBuf>,
     pub(super) sandbox: Option<&'a ResolvedSandbox>,
@@ -134,7 +133,6 @@ pub(super) fn prepare_provider_environment(
         scratch,
         tool_disallow_list,
         activity_tools,
-        explore_instruction,
         orbit_env,
         subprocess_cwd,
         sandbox,
@@ -192,15 +190,10 @@ pub(super) fn prepare_provider_environment(
         &activity_tools.effective_tools,
         fs_profile,
     ));
-    // A run offered explorer delegation gets `orbit.agent.invoke` on its
-    // nested MCP server, which a default server does not advertise. A run
-    // whose resolved tools include a fleet-notice tool likewise gets the
+    // A run whose resolved tools include a fleet-notice tool gets the
     // `notice` toolset stamped, independent of `machine.mcp.toolsets`, so
     // the agent sees the tool its baseline grants.
     let mut stamped_toolsets: Vec<&str> = Vec::new();
-    if explore_instruction.is_some() {
-        stamped_toolsets.push(McpToolset::AgentInvoke.as_str());
-    }
     if activity_tools
         .effective_tools
         .iter()

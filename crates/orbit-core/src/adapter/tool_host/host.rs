@@ -36,11 +36,7 @@ struct RuntimeOrbitToolHost {
     /// The calling session's asserted grants, carried so a handler whose
     /// decision depends on *who is calling* can reach them [ORB-11354].
     ///
-    /// The tool chokepoint resolves capabilities before dispatch, but its
-    /// answer is a yes/no it does not pass on. `orbit.agent.invoke` needs the
-    /// caller itself, because it records the authorizing operator on a durable
-    /// admission and verifies the operation-specific identity and workspace
-    /// scope of a remote caller the ordinary registry would otherwise allow.
+    /// Session identity and worker binding for operation-specific admission.
     session_context: ToolSessionContext,
 }
 

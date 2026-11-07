@@ -383,57 +383,12 @@ a second drain, weaker checks or a merge. A stopped healthy handoff follows
 the existing operator-only [retry landing](orchestration.md#retry-a-stopped-owner-landing)
 procedure only when its authority and evidence qualify.
 
-## Operator Agent Invocations
+## Historical agent invocations
 
-A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
-invocation of an agent for exploration or debugging, submitted with the
-deprecated `orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
-pull request — so do not look for a worktree, a task lifecycle, or a delivery
-tail when triaging one.
-
-`orbit run show <RUN_ID>` prints an `Invocation:` line for these runs, and
-`--json` carries the same facts under `agent_invocation`:
-
-- `outcome` is the run's own state, never the provider's exit code.
-- `provider_sandbox` is the provider's own inner sandbox at submission
-  (`codex:danger-full-access`, `claude:default`, …), distinct from Orbit's
-  executor sandbox (`sandboxed: false` on the submit result).
-- `envelope_completed: false` on an otherwise-clean exit means the agent stopped
-  mid-turn: exit zero is not evidence the investigation succeeded.
-- `timed_out: true` means the wall-clock bound killed it — resubmit with a
-  longer `--timeout` (the maximum is 7200s) or a narrower prompt.
-- `answer` is the answer: `summary`, `findings`, `next_steps`, any other
-  result field under `extra`, and the bounded `final_message`. `failure_reason`
-  names a missing or malformed response envelope. `orbit run logs <RUN_ID>` has
-  the complete captured output, failed invocations included.
-- `progress` carries the newest `latest_message` and `last_activity_at` while
-  the agent runs; a stale `last_activity_at` on a live child is a quiet agent,
-  not a lost one.
-
-These runs execute their provider subprocess outside the executor sandbox by
-explicit per-invocation operator admission, so a sandbox-denial diagnostic is
-never the explanation for one failing. The run trail records the admission as a
-`trusted_host.execution_admitted` audit event naming the authorizing operator
-and the working directory. For an invocation submitted over SSH it also records
-the forwarded caller machine ID, which is attribution rather than an
-authenticated principal. They are deliberately **not resumable**: the
-admission covered one invocation, so submit a new one rather than resuming.
-
-### Explorer runs
-
-A run of `agent_explore_pipeline` is a read-only explorer an implement or
-review-repair agent delegated through `orbit.agent.invoke`. Its input names the
-caller as `parent_run_id` (with `parent_task_id` and `parent_activity`); the
-caller's run detail lists its explorers with state, crew, duration, tokens,
-cost and paths read. Unlike an operator invocation it runs inside the executor
-sandbox with the reviewer filesystem profile, so a sandbox denial of a write is
-the expected outcome, not a defect. If the executor sandbox is absent or
-explicitly off, the activity fails before the provider starts unless the
-provider has a read-only mode (Codex, which then runs read-only). A refused
-admission never creates a run: the calling agent got the reason as a tool
-error, and the `agent.explore` audit entry records it.
-
-For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
+Operator invocations and delegated explorers are no longer submitted. Stored
+runs retain their answers and captured output through `orbit run show <RUN_ID>`
+and `orbit run logs <RUN_ID>`. An old trusted-host admission cannot authorize
+a new run or a resume; use a task workflow for new work.
 
 ## Check Task State
 

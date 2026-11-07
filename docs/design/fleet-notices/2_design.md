@@ -105,7 +105,7 @@ is on (the default). Posting needs the tool:
   agent's own notice, resolved in `resolve_activity_tool_denials`/`resolve_activity_tools`.
   Nothing else is granted.
 - When the resolved activity tools include a notice tool, the dispatcher stamps the `notice` toolset
-  onto the run's own MCP server, the way explorer delegation stamps `agent-invoke`, so the agent
+  onto the run's own MCP server, so the agent
   sees the tool whatever the host's `machine.mcp.toolsets`.
 - The owner resolves such calls as poster class `agent` from the run binding and applies the agent
   rules: home workspace = the task's, workspace scope only, `incident`/`info` only, linked task or

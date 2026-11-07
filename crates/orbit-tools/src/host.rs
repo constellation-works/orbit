@@ -110,7 +110,6 @@ pub fn prepare_remote_task_artifact_put(
 pub enum OrbitBuiltinAction {
     /// Auto-task verbs are registry data, like friction's.
     AutoTask(AutoTaskVerb),
-    AgentInvoke,
     /// Read-only agent scorecard verbs.
     Agents(AgentsVerb),
     /// Read-only automation verbs: condition explain.

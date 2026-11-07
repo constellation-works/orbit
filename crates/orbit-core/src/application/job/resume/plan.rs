@@ -192,8 +192,8 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{source_run_id}' was an operator-admitted trusted host invocation and \
-                 cannot be resumed; its admission covered that invocation only. Submit a new \
-                 `orbit.agent.invoke` to authorize another one"
+                 cannot be resumed; its admission covered that invocation only. Use \
+                 a task workflow instead"
             )));
         }
         // [ORB-14617] A run held because the forge refused its push resumes

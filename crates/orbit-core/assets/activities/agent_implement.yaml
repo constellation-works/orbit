@@ -667,13 +667,6 @@ spec:
     against every file declared in the task footprint, regardless of sites, so
     a mark can include contributors this lookup does not list. In the execution
     summary, say what you did for each marked file you changed.
-  explore_instruction: |
-    Read-only delegation
-
-    Before delegating a read-only question, read "Read-only delegation" in the
-    Orbit skill's task-execution reference. Delegate only reading; when a call
-    is refused, do the work yourself, and verify the explorer's cited files
-    before using its answer.
   explore_brief_instruction: |
     Explore brief
 

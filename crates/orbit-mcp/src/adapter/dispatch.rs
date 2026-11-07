@@ -31,8 +31,6 @@ use super::structured::mcp_tool_call_result;
 use super::{OrbitToolServer, ToolSurface};
 use crate::error::tool_error_result;
 
-const AGENT_INVOKE_TOOL: &str = "orbit.agent.invoke";
-
 impl OrbitToolServer {
     /// Load and validate once per immutable or live host surface snapshot.
     fn load_tool_surface(&self) -> Result<Arc<ToolSurface>, OrbitError> {
@@ -157,9 +155,6 @@ impl OrbitToolServer {
                 .iter()
                 .filter(|operation| {
                     operation.surface == OperationSurface::Tool
-                        // The managed-run explorer admission can allow an agent
-                        // without the operator capability required by this row.
-                        && operation.id != AGENT_INVOKE_TOOL
                         && authorization::authorize(operation, &caller).is_err()
                 })
                 .map(|operation| operation.id.to_owned()),

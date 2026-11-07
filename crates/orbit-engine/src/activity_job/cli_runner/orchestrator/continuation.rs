@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::dispatch::dispatch_cli_invocation;
-use super::prepare::{invocation_timeout_seconds, trusted_host_admission};
+use super::prepare::{invocation_timeout_seconds, reject_removed_trusted_host_execution};
 use super::response_correction;
 use crate::context::RuntimeHost;
 
@@ -99,13 +99,8 @@ pub(crate) fn run_cli_backend_for_step(
     }
     // The budget the first invocation was admitted with. Later invocations
     // spend what it left; build-admission waits never refill it.
-    let trusted_host = trusted_host_admission(spec, activity_name, input)?;
-    let budget = Duration::from_secs(invocation_timeout_seconds(
-        spec,
-        activity_name,
-        trusted_host.as_ref(),
-        input,
-    ));
+    reject_removed_trusted_host_execution(spec, activity_name)?;
+    let budget = Duration::from_secs(invocation_timeout_seconds(spec));
     if let Some(policy) = spec.response_correction {
         // Asset load keeps this apart from `incomplete_continuation`: a
         // correction's activity is read-only, so it has no work to continue.

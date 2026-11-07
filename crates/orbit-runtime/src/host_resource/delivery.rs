@@ -24,12 +24,10 @@ pub const SUBMITTED_DELIVERY_JOBS: &[&str] = &[
 /// delivery.
 pub const CLAIMED_LEAF_JOBS: &[&str] = &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
 
-/// Definitions whose runs a delivery delegates without taking a slot of
-/// their own: a read-only explorer an implement or review-repair agent
-/// invoked. Its admission copies the delegating run's class into its input,
-/// so its minutes join that delivery's profile; it is never a delivery the
-/// forecast counts.
-pub const ATTRIBUTED_CHILD_JOBS: &[&str] = &[orbit_types::workflow::activity_job::EXPLORE_JOB];
+/// Historical child jobs whose admission copied their parent's class.
+/// Retained so stored explorer minutes still join the parent delivery's
+/// profile rather than counting as a separate forecast delivery.
+pub const ATTRIBUTED_CHILD_JOBS: &[&str] = &["agent_explore_pipeline"];
 
 /// Every job definition whose runs belong to a delivery.
 pub(crate) fn delivery_jobs() -> Vec<&'static str> {

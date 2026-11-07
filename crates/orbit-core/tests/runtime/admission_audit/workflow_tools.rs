@@ -302,7 +302,7 @@ fn mcp_run_show_reports_a_running_invocations_latest_message() {
     let (_root, runtime, _repo_root) = test_runtime();
     let run = crate::admission_audit::store_support::jobs(&runtime)
         .insert_job_run(
-            orbit_core::application::job::AGENT_INVOKE_JOB_ID,
+            "agent_invoke_pipeline", // Legacy stored identity; no shipped job is required to read it.
             1,
             Utc::now(),
             None,

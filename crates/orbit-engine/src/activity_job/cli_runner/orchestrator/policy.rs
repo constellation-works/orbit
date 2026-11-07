@@ -73,7 +73,6 @@ fn legacy_program_allowlist_for_mcp(activity: &str, disallowed: &[String]) -> Op
             "java,javac,mvn,gradle,dotnet,cc,c++,clang,clang++,gcc,g++,",
             "cmake,ctest,ninja,swift,ruby,bundle,rake"
         )),
-        "agent_invoke" => Some("awk,bash,cargo,cat,find,git,grep,jq,ls,make,ps,python3,rg,sed,sh"),
         "pr_conflict_recovery" => Some("cargo,git,make,orbit,rg"),
         "step_failure_recovery" => Some("git,gh,orbit,rg"),
         "task_pilot" => Some("git,rg"),

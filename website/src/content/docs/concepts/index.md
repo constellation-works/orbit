@@ -78,7 +78,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 - **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later. Interactive work can hold an advisory or hard path lease with `orbit lease` instead; see [Path leases](../how-to/path-leases/).
 - **Gated pipeline.** Each run goes plan → execute → review, with repair budgets and failure recovery. Dependencies gate admission, so you declare the order once and the queue enforces it.
 - **Seven agent CLIs, routed by crews.** Claude Code, Codex, Copilot, Grok, Gemini, Antigravity, and Muse Code (the Cursor, Pi, and OpenCode lanes were [retired](./agents/#retired-providers)). Crews pin a provider, model, and supported effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](../reference/config/#crews)).
-- **Read-only exploration and operator steering.** Opt-in exploration lets implementing and review-repair agents ask an explorer crew bounded code-reading questions. Opt-in mid-run steering delivers new operator comments and holds promotion until the run consumes them ([agent execution](./agents/)).
+- **Operator steering.** Opt-in mid-run steering delivers new operator comments and holds promotion until the run consumes them ([agent execution](./agents/)).
 
 ### Run unattended
 

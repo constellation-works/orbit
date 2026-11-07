@@ -324,8 +324,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // the thing they are debugging. It stays verbatim; the run record is
         // already operator-only, and the provider argv/stdout paths keep their
         // own redactors.
-        | OrbitBuiltinAction::Attention(_)
-        | OrbitBuiltinAction::AgentInvoke => NO_REDACTION,
+        | OrbitBuiltinAction::Attention(_) => NO_REDACTION,
     }
 }
 

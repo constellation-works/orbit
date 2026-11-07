@@ -20,363 +20,48 @@ fn operator_json(fixture: &Fixture, args: &[&str]) -> Value {
 const AGENT_TEST_ANSWER: &str = r#"{"schemaVersion":1,"status":"success","result":{"summary":"fixture answer","findings":["fixture evidence"],"next_steps":["fixture action"],"details":{"ok":true}},"error":null}"#;
 
 fn plant_invoke_provider(fixture: &Fixture, body: &str) {
+    let executor_path = fixture.home.join(".orbit/resources/executors/codex.yaml");
+    let mut executor: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&executor_path).unwrap()).unwrap();
+    executor["spec"]["sandbox"] = serde_yaml::Value::String("off".to_string());
+    fs::write(executor_path, serde_yaml::to_string(&executor).unwrap()).unwrap();
+    let activity = fixture
+        .home
+        .join(".orbit/resources/activities/observation_probe.yaml");
+    fs::write(
+        activity,
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: observation_probe
+spec:
+  type: agent_loop
+  description: Exercise ordinary invocation observation.
+  instruction: Return the fixture response envelope.
+  require_completion_envelope: true
+  require_response_envelope: true
+  wall_clock_timeout_seconds: 30
+"#,
+    )
+    .unwrap();
+    fixture.write_job(
+        "observation_probe.yaml",
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: observation_probe
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: invoke
+      target: activity:observation_probe
+"#,
+    );
     use std::os::unix::fs::PermissionsExt;
     let path = fixture.home.join("empty-bin/codex");
     fs::write(&path, format!("#!/bin/sh\n/bin/cat > /dev/null\n{body}\n")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-mod checkout;
-
-fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
-    let fixture = Fixture::init();
-    plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
-    let submission = operator_json(
-        &fixture,
-        &[
-            "run",
-            "agent",
-            "probe",
-            "--wait",
-            "--timeout",
-            "30s",
-            "--provider-sandbox",
-            "danger-full-access",
-            "--json",
-        ],
-    );
-    // Mark an observed warning as a sensitive env value to exercise the real
-    // CLI boundary without pinning its prose or injecting production warnings.
-    // The first warning is the fixed deprecation notice; mark the one after it.
-    let sensitive = submission["warnings"][1].as_str().unwrap();
-    for as_json in [false, true] {
-        let mut command = fixture.orbit();
-        command
-            .env("ORBIT_OPERATOR", "1")
-            .env("RUST_LOG", "off")
-            .env("ORBIT_TEST_WARNING_SECRET", sensitive)
-            .args([
-                "run",
-                "agent",
-                "probe",
-                "--wait",
-                "--timeout",
-                "30s",
-                "--provider-sandbox",
-                "danger-full-access",
-            ]);
-        if as_json {
-            command.arg("--json");
-        }
-        let output = command
-            .timeout(std::time::Duration::from_secs(30))
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        for rendered in [&stdout, &stderr] {
-            assert!(
-                !rendered.contains(sensitive),
-                "submission warnings must not expose sensitive env values: {rendered}"
-            );
-            assert!(rendered.contains("[REDACTED_ENV]"), "{rendered}");
-        }
-        if as_json {
-            let result: Value = serde_json::from_str(&stdout).unwrap();
-            assert_eq!(result["state"], "success");
-            assert_eq!(result["answer"]["summary"], "fixture answer");
-            assert_eq!(result["provider_sandbox"], "codex:danger-full-access");
-            assert_eq!(result["warnings"].as_array().unwrap().len(), 2);
-            assert!(
-                result["warnings"][0]
-                    .as_str()
-                    .unwrap()
-                    .contains("is deprecated")
-            );
-            assert!(
-                result["warnings"][1]
-                    .as_str()
-                    .unwrap()
-                    .contains("[REDACTED_ENV]")
-            );
-        } else {
-            assert!(stdout.contains("fixture answer"), "{stdout}");
-        }
-    }
-}
-
-fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
-    let fixture = Fixture::init();
-    plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
-    let answer = operator_json(
-        &fixture,
-        &[
-            "run",
-            "agent",
-            "probe",
-            "--wait",
-            "--timeout",
-            "30s",
-            "--json",
-        ],
-    );
-    assert_eq!(answer["state"], "success", "{answer}");
-    assert_eq!(answer["waited"], true);
-    assert_eq!(answer["answer"]["summary"], "fixture answer");
-    assert_eq!(
-        answer["answer"]["findings"],
-        serde_json::json!(["fixture evidence"])
-    );
-    assert_eq!(
-        answer["answer"]["next_steps"],
-        serde_json::json!(["fixture action"])
-    );
-    assert_eq!(
-        answer["answer"]["extra"],
-        serde_json::json!({"details":{"ok":true}})
-    );
-    assert_eq!(answer["answer"]["final_message"], AGENT_TEST_ANSWER);
-    // This already-executed answer also proves that an explicit interior
-    // timeout reaches the engine unchanged, rather than being clamped to the
-    // maximum. The separate ceiling matrix retains default and upper-bound
-    // acceptance without another otherwise identical provider invocation.
-    assert_eq!(answer["timeout_seconds"], 30);
-    let trace = operator_json(
-        &fixture,
-        &["run", "trace", answer["run_id"].as_str().unwrap(), "--json"],
-    );
-    let mut actual = Vec::new();
-    timeouts(&trace, &mut actual);
-    assert_eq!(
-        actual,
-        vec![30_000],
-        "interior timeout transmission: {trace}"
-    );
-    let text = fixture
-        .orbit()
-        .env("ORBIT_OPERATOR", "1")
-        .env_remove("RUST_LOG")
-        .args(["run", "agent", "probe", "--wait", "--timeout", "30s"])
-        .timeout(AGENT_COMMAND_TIMEOUT)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    assert!(
-        String::from_utf8_lossy(&text).contains("fixture evidence"),
-        "the human wait view prints the answer"
-    );
-
-    for (body, timeout, reason, expected_log) in [
-        (
-            "printf '%s\\n' 'no envelope'",
-            "30",
-            "response envelope",
-            Some("no envelope"),
-        ),
-        ("/bin/sleep 30", "1", "wall-clock timeout", None),
-    ] {
-        plant_invoke_provider(&fixture, body);
-        let output = fixture
-            .orbit()
-            .env("ORBIT_OPERATOR", "1")
-            .env_remove("RUST_LOG")
-            .args([
-                "run",
-                "agent",
-                "probe",
-                "--wait",
-                "--timeout",
-                timeout,
-                "--json",
-            ])
-            .timeout(AGENT_COMMAND_TIMEOUT)
-            .output()
-            .unwrap();
-        assert!(
-            !output.status.success(),
-            "a failed invocation must fail --wait: {output:?}"
-        );
-        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["waited"], true, "{result}");
-        assert!(
-            result["agent_invocation"]["failure_reason"]
-                .as_str()
-                .unwrap()
-                .contains(reason),
-            "{result}"
-        );
-        assert_eq!(result["answer"], Value::Null);
-        let run_id = result["run_id"].as_str().unwrap();
-        assert_eq!(fixture.run_state(run_id), "failed", "{result}");
-        // ORB-14397: the old five-second assertion deadline killed this new
-        // CLI process under full-suite load, even after --wait finished the run.
-        // Allow the same startup budget as the agent commands; the provider's
-        // one-second timeout above still exercises invocation termination.
-        let logs = fixture
-            .orbit()
-            .env_remove("RUST_LOG")
-            .args(["run", "logs", run_id, "--follow", "--json"])
-            .timeout(AGENT_COMMAND_TIMEOUT)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let mut captured = String::new();
-        for line in String::from_utf8(logs).unwrap().lines() {
-            let record: Value = serde_json::from_str(line).unwrap();
-            assert_eq!(record["run_id"], run_id, "{record}");
-            captured.push_str(record["text"].as_str().unwrap());
-        }
-        if let Some(expected_log) = expected_log {
-            assert!(captured.contains(expected_log), "{captured}");
-        }
-    }
-}
-
-fn timeouts(value: &Value, found: &mut Vec<u64>) {
-    match value {
-        Value::Object(fields) => {
-            if let Some(ms) = fields.get("wall_clock_timeout_ms").and_then(Value::as_u64) {
-                found.push(ms);
-            }
-            for value in fields.values() {
-                timeouts(value, found);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                timeouts(value, found);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn agent_timeout_admission_and_engine_use_the_same_ceiling() {
-    let fixture = Fixture::init();
-    plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
-    // Compare the public ceiling with the activity the fixture actually loads,
-    // then inspect the engine's dispatch event, not the source text.
-    let path = fixture
-        .home
-        .join(".orbit/resources/activities/agent_invoke.yaml");
-    let asset = orbit_engine::activity_job::load_activity_catalog_asset(
-        &path,
-        &fs::read_to_string(&path).unwrap(),
-        false,
-    )
-    .unwrap()
-    .unwrap();
-    let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec
-    else {
-        panic!("agent invocation must load as an agent loop");
-    };
-    let ceiling = orbit_core::application::job::MAX_AGENT_INVOKE_TIMEOUT_SECONDS;
-    assert_eq!(
-        spec.wall_clock_timeout_seconds, ceiling,
-        "API and loaded activity must agree on the execution ceiling"
-    );
-    for timeout in [None, Some(ceiling)] {
-        let mut args = vec!["run", "agent", "probe", "--wait", "--json"];
-        let seconds = timeout.map(|seconds| seconds.to_string());
-        if let Some(seconds) = &seconds {
-            args.extend(["--timeout", seconds]);
-        }
-        let result = operator_json(&fixture, &args);
-        let expected =
-            timeout.unwrap_or(orbit_core::application::job::DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS);
-        assert_eq!(result["timeout_seconds"], expected);
-        let trace = operator_json(
-            &fixture,
-            &["run", "trace", result["run_id"].as_str().unwrap(), "--json"],
-        );
-        let mut actual = Vec::new();
-        timeouts(&trace, &mut actual);
-        assert_eq!(
-            actual,
-            vec![expected * 1000],
-            "the engine enforces the bound the API admitted: {trace}"
-        );
-    }
-    let before: i64 = fixture
-        .db()
-        .query_row("SELECT count(*) FROM job_runs", [], |row| row.get(0))
-        .unwrap();
-    for seconds in [0, ceiling + 1] {
-        let output = fixture
-            .orbit()
-            .env("ORBIT_OPERATOR", "1")
-            .env_remove("RUST_LOG")
-            .args([
-                "run",
-                "agent",
-                "probe",
-                "--timeout",
-                &seconds.to_string(),
-                "--json",
-            ])
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let error: Value = serde_json::from_slice(
-            &output.stderr[String::from_utf8_lossy(&output.stderr).find('{').unwrap()..],
-        )
-        .unwrap();
-        assert_eq!(
-            error["code"], "invalid_input",
-            "invalid bounds must be refused by admission: {error}"
-        );
-    }
-    let after: i64 = fixture
-        .db()
-        .query_row("SELECT count(*) FROM job_runs", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(before, after, "invalid bounds must not submit a run");
-}
-
-fn agent_submissions_report_saturation_and_their_queue_position() {
-    let fixture = Fixture::init();
-    let limit = operator_json(
-        &fixture,
-        &["job", "show", "agent_invoke_pipeline", "--json"],
-    )["max_active_runs"]
-        .as_u64()
-        .unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    // A live unrelated process owns each seeded slot; reconciliation must not
-    // turn saturation into an orphan fixture. No cancellation targets that PID.
-    for index in 0..limit {
-        fixture.db().execute(
-            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid) VALUES (?1, ?2, 'agent_invoke_pipeline', 1, 'running', ?3, ?3, ?3, ?4)",
-            params![format!("jrun-occupied-{index}"), fixture.workspace_id(), now, std::process::id()],
-        ).unwrap();
-    }
-    let mut queued_runs = Vec::new();
-    for position in 1..=2 {
-        let queued = operator_json(
-            &fixture,
-            &[
-                "run",
-                "agent",
-                "queued probe",
-                "--provider-sandbox",
-                "read-only",
-                "--json",
-            ],
-        );
-        assert_eq!(queued["queued"], true, "{queued}");
-        assert_eq!(queued["state"], "queued");
-        assert_eq!(queued["queue_position"], position);
-        assert!(!queued["warnings"].as_array().unwrap().is_empty());
-        queued_runs.push(queued["run_id"].as_str().unwrap().to_string());
-    }
-    for run_id in queued_runs {
-        operator_json(&fixture, &["run", "cancel", &run_id, "--confirm", "--json"]);
-    }
 }
 
 fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
@@ -395,10 +80,7 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
             release.display()
         ),
     );
-    let submitted = operator_json(
-        &fixture,
-        &["run", "agent", "follow probe", "--timeout", "30", "--json"],
-    );
+    let submitted = operator_json(&fixture, &["run", "job", "observation_probe", "--json"]);
     let run_id = submitted["run_id"].as_str().unwrap();
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
     test_env::clear_inherited_authority(|name| {
@@ -539,15 +221,7 @@ fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
         .env("ORBIT_OPERATOR", "1")
         .env_remove("RUST_LOG")
         .env("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "4194304")
-        .args([
-            "run",
-            "agent",
-            "pipe probe",
-            "--wait",
-            "--timeout",
-            "30",
-            "--json",
-        ])
+        .args(["run", "job", "observation_probe", "--wait", "--json"])
         .timeout(AGENT_COMMAND_TIMEOUT)
         .output()
         .unwrap();
@@ -588,39 +262,11 @@ fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
 }
 
 #[test]
-fn agent_invocation_contracts_0() {
-    if !isolated_run_observation("run_observation::agent_invoke::agent_invocation_contracts_0") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "agent_wait_redacts_sensitive_warning_content_in_progress_and_output",
-            agent_wait_redacts_sensitive_warning_content_in_progress_and_output as fn(),
-        ),
-        (
-            "agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations",
-            agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations as fn(),
-        ),
-        (
-            "agent_timeout_admission_and_engine_use_the_same_ceiling",
-            agent_timeout_admission_and_engine_use_the_same_ceiling as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-    }
-}
-
-#[test]
 fn agent_invocation_contracts_1() {
     if !isolated_run_observation("run_observation::agent_invoke::agent_invocation_contracts_1") {
         return;
     }
     for (name, check) in [
-        (
-            "agent_submissions_report_saturation_and_their_queue_position",
-            agent_submissions_report_saturation_and_their_queue_position as fn(),
-        ),
         (
             "run_logs_follow_emits_live_output_once_and_stops_at_terminal",
             run_logs_follow_emits_live_output_once_and_stops_at_terminal as fn(),
@@ -673,15 +319,11 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
             &fixture,
             &[
                 "run",
-                "agent",
-                "effort probe",
-                "--crew",
-                "sol",
+                "job",
+                "observation_probe",
+                "--input",
+                "crew=sol",
                 "--wait",
-                "--timeout",
-                "30s",
-                "--provider-sandbox",
-                "danger-full-access",
                 "--json",
             ],
         );
@@ -830,15 +472,11 @@ fn crew_effort_reference_dispatches_and_records_the_overridden_effort() {
             .timeout(AGENT_COMMAND_TIMEOUT)
             .args([
                 "run",
-                "agent",
-                "effort reference probe",
-                "--crew",
-                crew,
+                "job",
+                "observation_probe",
+                "--input",
+                &format!("crew={crew}"),
                 "--wait",
-                "--timeout",
-                "30s",
-                "--provider-sandbox",
-                "danger-full-access",
                 "--json",
             ])
             .output()
@@ -860,10 +498,11 @@ fn crew_effort_reference_dispatches_and_records_the_overridden_effort() {
 
     let refused = dispatch("sol@ultra");
     assert!(!refused.status.success());
-    let stderr = String::from_utf8_lossy(&refused.stderr);
+    let refusal: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    let error = refusal["error"].as_str().unwrap();
     assert!(
-        stderr.contains("sol@ultra") && stderr.contains("low, medium, high, xhigh, max"),
-        "{stderr}"
+        error.contains("sol@ultra") && error.contains("low, medium, high, xhigh, max"),
+        "{refusal}"
     );
 }
 
@@ -897,15 +536,11 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
         &fixture,
         &[
             "run",
-            "agent",
-            "effort probe",
-            "--crew",
-            "sol",
+            "job",
+            "observation_probe",
+            "--input",
+            "crew=sol",
             "--wait",
-            "--timeout",
-            "30s",
-            "--provider-sandbox",
-            "danger-full-access",
             "--json",
         ],
     );

@@ -100,7 +100,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.pipeline.invoke"
         | "orbit.workflow.auto"
         | "orbit.routine.control"
-        | "orbit.agent.invoke"
         | "orbit.command.exec"
         | "orbit.workflow.land"
         | "orbit.workflow.run.resume"

@@ -57,10 +57,6 @@ fn plant_agent_cli_stub(bin: &Path, name: &str) {
     }
 }
 
-/// [ORB-13899] An answer using every part of the envelope `result` an
-/// operator reads: the named fields and one the prompt asked for.
-const AGENT_ANSWER_ENVELOPE: &str = r##"{"schemaVersion":1,"status":"success","result":{"summary":"remote probe complete","findings":["the clock restarts on reload"],"next_steps":["pin the reload interval"],"report_markdown":"# Probe\n\nAll clear."},"error":null}"##;
-
 /// Admit the synthetic credential in the workspace pass list when present;
 /// that list replaces the global list seeded by init.
 fn admit_fixture_claude_worker_token(workspace: &McpWorkspace) {
@@ -269,13 +265,50 @@ impl McpWorkspace {
     /// credential. Caller-specific argv and environment remain explicit.
     fn serve_agent(&self, script: &str, args: &[&str], env: &[(&str, &str)]) -> McpClient {
         plant_both_providers(self, script);
+        let resources = self.home.join(".orbit/resources");
+        for provider in ["codex", "claude"] {
+            let path = resources.join(format!("executors/{provider}.yaml"));
+            let mut executor: serde_yaml::Value =
+                serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            executor["spec"]["sandbox"] = serde_yaml::Value::String("off".to_string());
+            std::fs::write(path, serde_yaml::to_string(&executor).unwrap()).unwrap();
+        }
+
+        std::fs::write(
+            resources.join("activities/historical_invocation.yaml"),
+            r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: historical_invocation
+spec:
+  type: agent_loop
+  description: Exercise ordinary invocation observation.
+  instruction: Return the fixture response envelope.
+  require_completion_envelope: true
+  require_response_envelope: true
+  wall_clock_timeout_seconds: 30
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            resources.join("jobs/historical_invocation.yaml"),
+            r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: agent_invoke_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: invoke
+      target: activity:historical_invocation
+"#,
+        )
+        .unwrap();
         admit_fixture_claude_worker_token(self);
         let mut env = env.to_vec();
         env.push((FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN));
-        // `orbit.agent.invoke` is in the opt-in agent-invoke toolset.
-        let mut args = args.to_vec();
-        args.extend(["--toolset", "agent-invoke"]);
-        self.serve_with_args_and_env(&args, &env)
+        self.serve_with_args_and_env(args, &env)
     }
 
     /// A session marked as SSH-originated from machine `hm_caller`-style
@@ -980,14 +1013,13 @@ fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
 /// `machine.mcp.toolsets` host config restores exactly the named groups.
 #[test]
 fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
-    const OPT_IN: [(&str, &str); 9] = [
+    const OPT_IN: [(&str, &str); 8] = [
         ("orbit_lease_list", "leases"),
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
         ("orbit_orchestrator_show", "analytics"),
         ("orbit_crew_ladder", "analytics"),
         ("orbit_decision_digest", "decision-channel"),
-        ("orbit_agent_invoke", "agent-invoke"),
         ("orbit_notice_post", "notice"),
         ("orbit_notice_list", "notice"),
     ];
@@ -1027,7 +1059,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     let mut flagged = workspace.serve_with_args(&[
         "--operator",
         "--toolset",
-        "leases,experiments,analytics,decision-channel,agent-invoke,notice",
+        "leases,experiments,analytics,decision-channel,notice",
     ]);
     let listed = flagged.tools_list();
     let names = tool_names(&listed);
@@ -1082,15 +1114,15 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     // add to the host config rather than replace it.
     let mut stamped = workspace.serve_with_args_and_env(
         &["--operator"],
-        &[("ORBIT_ACTIVITY_MCP_TOOLSETS", "agent-invoke")],
+        &[("ORBIT_ACTIVITY_MCP_TOOLSETS", "notice")],
     );
     let listed = stamped.tools_list();
     let names = tool_names(&listed);
     for (tool, toolset) in OPT_IN {
         assert_eq!(
             names.contains(&tool),
-            matches!(toolset, "leases" | "agent-invoke"),
-            "a stamped agent-invoke toolset must add to the configured leases: {tool}"
+            matches!(toolset, "leases" | "notice"),
+            "a stamped notice toolset must add to the configured leases: {tool}"
         );
     }
 }
@@ -1248,15 +1280,15 @@ fn ambient_activity_mcp_toolset_does_not_change_default_tools_list() {
     // a managed parent still has it when this test spawns `orbit`.
     let _stamp = test_env::scoped([(
         orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
-        Some("agent-invoke"),
+        Some("notice"),
     )]);
 
     let (_workspace, mut client) = McpWorkspace::served();
     let response = client.tools_list();
     let names = tool_names(&response);
     assert!(
-        !names.contains(&"orbit_agent_invoke"),
-        "ambient ORBIT_ACTIVITY_MCP_TOOLSETS must not advertise orbit_agent_invoke: {names:?}"
+        !names.contains(&"orbit_notice_post"),
+        "ambient ORBIT_ACTIVITY_MCP_TOOLSETS must not advertise orbit_notice_post: {names:?}"
     );
     let tools = &response["result"]["tools"];
     let expected: Value = serde_json::from_slice(&original).expect("parse tools/list snapshot");
@@ -1450,11 +1482,8 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
         );
-        // agent.invoke has a separate managed-run explorer admission: its
-        // operator-only catalog row does not make it unconditionally denied.
-        let uncallable = canonical != "orbit.agent.invoke"
-            && governed_tool(canonical)
-                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
+        let uncallable = governed_tool(canonical)
+            .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
         assert_eq!(
             names.contains(&name.as_str()),
             !uncallable,
@@ -1940,163 +1969,6 @@ fn leftover_caller_authorization_files_are_ignored_rather_than_enforced() {
     );
 }
 
-/// [ORB-12564] Remote invoke crosses real MCP, workspace routing, durable
-/// submission and worker response, with argv authority and no caller files.
-fn a_remote_operator_session_invokes_an_agent_end_to_end() {
-    let workspace = McpWorkspace::init();
-    std::fs::write(workspace.work.join(".gitignore"), ".orbit/\n").unwrap();
-    crate::git_repo::run(&workspace.work, &["add", ".gitignore"]);
-    crate::git_repo::run(
-        &workspace.work,
-        &[
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.com",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-qm",
-            "seed",
-        ],
-    );
-    let linked = workspace.work.join(".orbit/state/worktrees/invoke");
-    crate::git_repo::run(
-        &workspace.work,
-        &["worktree", "add", "--detach", linked.to_str().unwrap()],
-    );
-    let linked = linked.canonicalize().unwrap();
-    let observed_cwd = workspace.home.join("provider-cwd");
-    // `model` attributes the caller; the workspace's frozen default crew picks
-    // the provider. Stub both possible selected providers, because an inherited
-    // host `claude` binary makes `opus` the default crew during fixture init.
-    let mut client = workspace.serve_agent(
-        &format!(
-            "#!/bin/sh\ncat > /dev/null\n/bin/pwd -P > {}\nprintf '%s\\n' '{AGENT_ANSWER_ENVELOPE}'\n",
-            orbit_common::process::shell::quote_posix_arg(observed_cwd.to_str().unwrap())
-        ),
-        &["--operator", "--remote-caller-machine-id", "hm_caller"],
-        &[SSH_ENV],
-    );
-
-    let submitted = client.call_tool_ok(
-        "orbit_agent_invoke",
-        json!({
-            "prompt": "read-only remote probe",
-            "cwd": linked,
-            "timeout_seconds": 30,
-            "wait_seconds": 30,
-            "model": "codex",
-        }),
-    );
-    assert_eq!(submitted["authorized_by"], "hm_caller");
-    assert_eq!(submitted["authorizer_provenance"], "session");
-    assert_eq!(submitted["caller_machine_id"], "hm_caller");
-    assert_eq!(submitted["workspace_path"], linked.display().to_string());
-    let run_id = submitted["run_id"].as_str().expect("run id").to_string();
-
-    let terminal = wait_for_run(&mut client, &run_id);
-    assert_eq!(terminal["state"], "success", "{terminal}");
-    assert_eq!(submitted["state"], "success", "{submitted}");
-    assert_eq!(submitted["waited"], true);
-    assert_eq!(submitted["agent_invocation"]["completed_envelope"], true);
-    assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
-    assert_eq!(
-        std::fs::read_to_string(&observed_cwd).unwrap().trim(),
-        linked.to_str().unwrap()
-    );
-    assert_eq!(
-        crate::git_repo::run(&workspace.work, &["status", "--porcelain"]),
-        ""
-    );
-
-    // The full run response keeps the parsed result fields and blob refs while
-    // dropping the duplicate raw final message and captured-stream preview.
-    let answer = &terminal["agent_invocation"]["answer"];
-    assert_eq!(answer["summary"], "remote probe complete", "{terminal}");
-    assert_eq!(answer["findings"], json!(["the clock restarts on reload"]));
-    assert_eq!(answer["next_steps"], json!(["pin the reload interval"]));
-    assert_eq!(
-        answer["extra"],
-        json!({ "report_markdown": "# Probe\n\nAll clear." }),
-        "only the agent's own extra fields, never Orbit's metadata"
-    );
-    assert!(answer.get("final_message").is_none(), "{terminal}");
-    assert!(
-        terminal["agent_invocation"].get("preview").is_none(),
-        "{terminal}"
-    );
-    assert!(terminal["agent_invocation"]["stdout_blob_ref"].is_string());
-
-    let bounded = client.call_tool_ok(
-        "orbit_workflow_run_show",
-        json!({ "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id }),
-    );
-    let bounded_invocation = &bounded["run"]["agent_invocation"];
-    assert_eq!(bounded_invocation["outcome"], "success", "{bounded}");
-    assert_eq!(
-        bounded_invocation["failure_reason"],
-        Value::Null,
-        "{bounded}"
-    );
-    assert_eq!(
-        bounded_invocation["answer"]["summary"],
-        "remote probe complete"
-    );
-    assert_eq!(bounded_invocation["answer"]["findings"], answer["findings"]);
-    assert_eq!(
-        bounded_invocation["answer"]["next_steps"],
-        answer["next_steps"]
-    );
-    assert_eq!(bounded_invocation["answer"]["extra"], answer["extra"]);
-    assert_eq!(bounded_invocation["answer"], *answer);
-    assert_eq!(bounded_invocation["answer_truncated"], false);
-    assert_eq!(bounded_invocation["answer_omitted_fields"], json!([]));
-
-    // The CLI reads the same answer, as JSON and as text.
-    let shown = workspace.run_ok(&["run", "show", &run_id, "--json"]);
-    let shown: Value = stdout_json(&shown);
-    assert_eq!(
-        shown["run"]["agent_invocation"]["answer"]["summary"],
-        answer["summary"]
-    );
-    assert_eq!(
-        shown["run"]["agent_invocation"]["answer"]["final_message"],
-        AGENT_ANSWER_ENVELOPE
-    );
-    let text = workspace.run_ok(&["run", "show", &run_id]);
-    let text = stdout(&text);
-    for expected in [
-        "summary: remote probe complete",
-        "findings:\n    - the clock restarts on reload",
-        "next_steps:\n    - pin the reload interval",
-        "report_markdown:\n    # Probe\n    \n    All clear.",
-        "final message: {\"schemaVersion\":1",
-    ] {
-        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
-    }
-
-    let connection = workspace.store();
-    let input_json: String = connection
-        .query_row(
-            "SELECT input_json FROM job_runs WHERE run_id = ?1",
-            [&run_id],
-            |row| row.get(0),
-        )
-        .expect("persisted invocation input");
-    let input: Value = serde_json::from_str(&input_json).expect("parse invocation input");
-    assert_eq!(
-        input["trusted_host_admission"]["caller_machine_id"],
-        "hm_caller"
-    );
-    assert_eq!(input["repo_root"], linked.to_str().unwrap());
-    assert_eq!(input["workspace_path"], linked.to_str().unwrap());
-    assert_eq!(
-        input["trusted_host_admission"]["workspace_path"],
-        linked.to_str().unwrap()
-    );
-}
-
 /// Compact reads bound the serialized answer even when the provider capture
 /// admits much more, while the full MCP read retains every structured value.
 #[test]
@@ -2126,12 +1998,12 @@ fn compact_agent_answers_have_a_serialized_budget() {
             json!({"schemaVersion": 1, "status": "success", "result": result, "error": null});
         std::fs::write(&response_file, serde_json::to_vec(&envelope).unwrap()).unwrap();
         let submitted = client.call_tool_ok(
-            "orbit_agent_invoke",
-            json!({"prompt": "oversized answer probe", "cwd": workspace.work,
-                "timeout_seconds": 30, "wait_seconds": 30, "model": "codex"}),
+            "orbit_pipeline_invoke",
+            json!({"job_name": "agent_invoke_pipeline", "input": {}, "model": "codex"}),
         );
-        assert_eq!(submitted["state"], "success", "{submitted}");
         let run_id = submitted["run_id"].as_str().unwrap();
+        let terminal = wait_for_run(&mut client, run_id);
+        assert_eq!(terminal["state"], "success", "{terminal}");
         let mut previous = None;
         for limit in [1, 50] {
             let bounded = client.call_tool_ok(
@@ -2209,13 +2081,8 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
         &[],
     );
     let submitted = client.call_tool_ok(
-        "orbit_agent_invoke",
-        json!({
-            "prompt": "probe without answering",
-            "cwd": workspace.work,
-            "timeout_seconds": 30,
-            "model": "codex",
-        }),
+        "orbit_pipeline_invoke",
+        json!({"job_name": "agent_invoke_pipeline", "input": {}, "model": "codex"}),
     );
     let run_id = submitted["run_id"].as_str().expect("run id").to_string();
 
@@ -2254,20 +2121,6 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
     assert!(
         stdout(&logs).contains("everything seems fine"),
         "`orbit run logs` must print the raw output"
-    );
-}
-
-/// A remote session the caller's own client served as an agent is refused the
-/// unsandboxed mode, exactly as a local agent is.
-fn a_remote_agent_session_cannot_invoke_an_agent() {
-    let workspace = McpWorkspace::init();
-
-    let mut client = workspace.serve_remote(&["--remote-caller-machine-id", "hm_caller"]);
-
-    client.assert_tool_error(
-        "orbit_agent_invoke",
-        json!({ "prompt": "must not run", "cwd": workspace.work, "timeout_seconds": 30, }),
-        "capability_denied",
     );
 }
 
@@ -5608,61 +5461,6 @@ mod transport_operations;
 mod internal_drain;
 mod tool_input_hints;
 
-#[cfg(unix)]
-#[test]
-fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
-    let workspace = McpWorkspace::init();
-    let mut client = workspace.serve_agent(
-        &format!("#!/bin/sh\ncat > /dev/null\nsleep 2\nprintf '%s\\n' '{AGENT_ANSWER_ENVELOPE}'\n"),
-        &["--operator"],
-        &[],
-    );
-    let tool = client.listed_tool("orbit_agent_invoke");
-    let properties = &tool["inputSchema"]["properties"];
-    assert_eq!(properties["wait_seconds"]["minimum"], 0);
-    assert_eq!(properties["wait_seconds"]["maximum"], 600);
-    assert_eq!(
-        properties["timeout_seconds"]["maximum"],
-        orbit_core::application::job::MAX_AGENT_INVOKE_TIMEOUT_SECONDS
-    );
-    assert!(
-        properties["timeout_seconds"]["default"].is_null(),
-        "timeout_seconds has no schema default because operator and explorer ceilings differ"
-    );
-    for invalid in [json!(601), json!(-1), json!(0.5), json!("1")] {
-        client.assert_tool_error(
-            "orbit_agent_invoke",
-            json!({"prompt":"invalid wait", "cwd":workspace.work,"wait_seconds":invalid}),
-            "invalid_input",
-        );
-    }
-    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({}));
-    assert_eq!(
-        listed["items"],
-        json!([]),
-        "invalid wait must not submit a run"
-    );
-    let request = json!({"prompt":"bounded wait", "cwd":workspace.work,"wait_seconds":0,"timeout_seconds":30,"idempotency_key":"bounded-wait"});
-    let pending = client.call_tool_ok("orbit_agent_invoke", request.clone());
-    assert_eq!(pending["answer"], Value::Null, "{pending}");
-    let run_id = pending["run_id"].as_str().unwrap();
-    let observed = client.call_tool_ok("orbit_workflow_run_show", json!({"id":run_id}));
-    let (machine_id, machine_name) = machine_identity(&workspace.home);
-    assert_eq!(observed["executed_on"]["machine_id"], machine_id);
-    assert_eq!(observed["executed_on"]["machine_name"], machine_name);
-    assert!(
-        matches!(observed["state"].as_str(), Some("pending" | "running")),
-        "a client deadline leaves the run active: {observed}"
-    );
-    let mut retry = request;
-    retry["wait_seconds"] = json!(30);
-    let answer = client.call_tool_ok("orbit_agent_invoke", retry);
-    assert_eq!(answer["run_id"], run_id);
-    assert_eq!(answer["deduplicated"], true);
-    assert_eq!(answer["state"], "success", "{answer}");
-    assert_eq!(answer["answer"]["summary"], "remote probe complete");
-}
-
 mod search;
 #[cfg(unix)]
 mod worker_routing;
@@ -5713,19 +5511,10 @@ fn forwarded_caller_authorization() {
 }
 
 #[test]
-fn agent_invocation_envelopes() {
-    rows!(
-        leftover_caller_authorization_files_are_ignored_rather_than_enforced,
-        a_remote_operator_session_invokes_an_agent_end_to_end,
-        an_invocation_without_a_response_envelope_fails_with_its_reason
-    );
-}
-
-#[test]
 fn session_authority_and_unbound_discovery() {
     rows!(
-        a_remote_agent_session_cannot_invoke_an_agent,
-        mcp_serve_lists_the_canonical_surface_outside_any_checkout
+        mcp_serve_lists_the_canonical_surface_outside_any_checkout,
+        leftover_caller_authorization_files_are_ignored_rather_than_enforced
     );
 }
 
@@ -6194,4 +5983,9 @@ fn mcp_scheduled_range_is_inclusive_and_validates_bounds() {
             assert_message_parts(&error, &[field, raw]);
         }
     }
+}
+
+#[test]
+fn invocation_response_envelope_failure_remains_observable() {
+    an_invocation_without_a_response_envelope_fails_with_its_reason();
 }

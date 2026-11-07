@@ -5,7 +5,7 @@ last_updated: 2026-11-07
 last_validated: 2026-11-07
 status: Draft
 stage: building
-next: "Remove explorer tooling (ORB-20383); the horizon decision-channel step remains unfiled"
+next: "The horizon decision-channel step remains unfiled"
 feature: experiments
 doc_role: scope
 type: design
@@ -34,8 +34,8 @@ those weights, with a shadow mode that records a factor without applying it. A t
 ladder (`crates/orbit-web/src/api/diagnostics/trend.rs`) behind the tokens-per-task
 ([ORB-18364]), diff-stats ([ORB-18383]), durations, completions and defects series, and the
 [agent scorecards](../agent-scorecards/2_design.md) count review rejects, recoveries and
-escaped regressions per run. The one cohort comparison Orbit ships,
-`application/job/explore_analytics.rs::explore_comparison` ([ORB-16814]), is observational.
+escaped regressions per run. The former explorer cohort comparison ([ORB-16814]) was observational; it
+was removed with explorer delegation.
 
 ## Problem
 
@@ -185,10 +185,9 @@ implementer's treatment stops being an independent check of it. The config excep
 whole delivery regardless of its declared roles. [ORB-19982] added that experiment
 surface; [ORB-22524] reconciled the config reference with both typed keys and this exception.
 
-**Pending retirement:** [ORB-20383] is approved in backlog to remove the explorer
-agent, `orbit.agent.invoke` and `workflow.explore.*`, including affected experiment
-surfaces. Those interfaces still exist at this checkout; the removal task owns their
-cleanup. Historical explorer readout fields may remain for concluded experiments.
+**Explorer removal:** [ORB-20383] removes the explorer agent, invocation tool
+and live configuration. The legacy experiment config key has no effect;
+historical explorer uptake fields remain readable for concluded experiments.
 
 ### Assignment
 

@@ -170,7 +170,6 @@ a full model ID is additionally retained once as `created_by_model`.
 | Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
 | Fleet notices | `orbit.notice.post`, `.close`, `.list` and `.show` on a server that enables the opt-in `notice` toolset; always through `orbit tool run` | `orbit notice post\|close\|list\|show`. Short, expiring, attributed announcements (incident, maintenance, info) for the whole fleet; see [Fleet notices](#fleet-notices) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
-| Host agent invocation | Deprecated; opt-in `agent-invoke` MCP toolset | `orbit run agent <prompt>` still works and warns; dispatch work through tasks and `orbit run ship`, or run your provider's CLI directly for a one-off question |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
@@ -376,10 +375,9 @@ subprocess, and external authentication checks.
   codebase, friction, search, the UI and visual tools, and command execution)
   is advertised. Named toolsets and toolsets stamped for a managed activity
   add to the selected role or default tier. `decision-channel` tools may be
-  called only by the bound channel plugin or the operator; a managed run
-  offered explorer delegation enables `agent-invoke` on its own server.
+  called only by the bound channel plugin or the operator.
 - `--toolset` takes a comma-separated list (`leases`, `experiments`,
-  `analytics`, `decision-channel`, `agent-invoke`, `notice`, `resident`,
+  `analytics`, `decision-channel`, `notice`, `resident`,
   `tasks-write`, `dispatch`; `default` names the default surface and `all`
   every toolset) advertised beside the role's, or beside the default surface
   without a role. It replaces the `machine.mcp.toolsets` host config for this
@@ -394,7 +392,7 @@ subprocess, and external authentication checks.
 the opt-in toolsets the host enables: `leases` (path leases), `experiments`
 (experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
 show, crew ladder), `decision-channel` (decision submit and digest; decision
-list and show stay default), `agent-invoke` (`orbit.agent.invoke`), `notice`
+list and show stay default), `notice`
 (`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
 mandates; widening their authority from an MCP session raises a decision
 request for the human). Enable them per server with
@@ -403,139 +401,18 @@ request for the human). Enable them per server with
 replaces the config. A call to a tool outside the server's toolsets is refused
 `toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
 config key. A federated mux filters every row the same way. The toolset of each
-tool is in `orbit tool show <name> --json` (`mcp_toolset`). A managed run
-offered explorer delegation gets `agent-invoke` added to its own server: the
-dispatch stamps it in `ORBIT_ACTIVITY_MCP_TOOLSETS`, which adds to the
-server's selection.
+tool is in `orbit tool show <name> --json` (`mcp_toolset`).
 
 Toolsets change only what an MCP server lists. `orbit tool run`, CLI commands,
 activity `required_tools` and task grants, and a decision-channel plugin's
 callback session reach every tool regardless.
 
-### Host agent invocation
+### Historical agent invocations
 
-**Deprecated for operators.** The operator path will be removed: it is in the
-opt-in `agent-invoke` toolset, which a default server does not list, and
-`orbit run agent` warns on every submission. Dispatch work through tasks and
-`orbit run ship`, or run your provider's CLI directly for a one-off question.
-A managed run offered read-only explorers (below) gets the toolset on its own
-server.
-
-`orbit_agent_invoke` submits one asynchronous agent run for exploration or
-debugging and returns its run ID. It is the surface for a question that cannot
-be answered from inside a managed run's sandbox — why a host is behaving the
-way it is.
-
-Be clear-eyed about what it does. The invoked agent runs **outside Orbit's
-filesystem sandbox**, as the same operating-system user as Orbit, so it can read
-and write anything that user can. Withholding capabilities from the child is not
-an isolation boundary, and neither is the activity's declared program list: the
-provider harness owns its own shell tool. Treat an invocation the way you would
-treat running a command yourself on that machine.
-
-What it is not:
-
-- It is **not** a task, and it performs no task transition. It does not commit,
-  push, open or merge a pull request, or dispatch further work.
-- It is **not** a trusted-host invocation for a managed run. Any operator session may admit one,
-  local or arriving over SSH: a remote caller reached this machine through an
-  SSH login that already lets it start any process it likes, so `operator` is
-  the whole test. Start the calling federated or remote-proxy server with
-  `--operator` and the invocation works; a session served as `agent` is
-  refused. Each admission covers one invocation only.
-- It is **not** resumable. A resumed run would carry an admission nobody granted
-  now; submit a new invocation instead.
-
-**Read-only explorers.** A managed `agent_implement` or `agent_review_repair`
-run may call the same tool when `workflow.explore.enabled` is on and
-`workflow.purpose_crews.explorer` has an eligible member. That call gets a
-different, narrower run: an `agent_explore_pipeline` explorer drawn from the
-explorer pool and sandboxed with no writes, starting in a `cwd` inside the
-caller's own worktree, with every task, lifecycle, dispatch, commit and
-invocation tool denied. Codex uses its read-only inner sandbox when Orbit's
-executor wrapper is off; a provider with no read-only mode is refused before
-it starts unless that wrapper is on. It never gets a
-trusted-host admission. The answer adds `paths_read`. Per-run call and
-concurrency budgets, a timeout ceiling and an answer-size cap apply; each
-refusal names its reason and setting, and the caller continues without
-delegating. Every other managed run is refused. See
-[CONFIG.md](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowexplore--read-only-exploration-for-implementing-agents).
-
-Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
-checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run
-(default 1800, enforced ceiling 7200, excluding queue time), and `idempotency_key` makes a resubmission resolve
-the run the first attempt created rather than starting a second agent.
-
-The CLI accepts `--wait` to block until terminal and print the same `answer`
-projection; a failed, timed-out, cancelled or interrupted run exits nonzero.
-`--timeout` bounds provider execution, accepts seconds or durations such as
-`30m` and `2h`, and excludes queue time. MCP `wait_seconds` is an optional
-integer from 0 to 600: a finished run returns `answer` and `agent_invocation`;
-an unfinished one returns its run ID and actual state for later observation.
-The wait deadline never cancels or changes the invocation outcome.
-
-Submissions report `queued` and `queue_position` (one-based among waiting
-runs, null if runnable) plus a warning when the concurrency limit is saturated.
-These describe admission time; the run may start before the response arrives.
-The shipped job retains eight concurrent provider processes as a host resource
-guard because these processes have no executor sandbox or memory budget.
-
-`orbit run logs <RUN_ID> --follow` streams retained redacted provider tracing
-lines and stops at any terminal outcome. JSON modes emit JSONL records
-`{run_id, provider, stream, text}`. Completed captures supply output not yet
-streamed; with `--step`, each capture is emitted when its invocation finishes.
-Provider lines are retained in the JSONL feed by default while stderr diagnostics
-stay at WARN. Explicit `RUST_LOG` and tracing retention limit live history;
-if the live feed differs from the capture, follow mode replays that capture with
-a diagnostic (some lines may repeat). Use the ordinary
-`orbit run logs` command to read durable captures. Ctrl-C ends observation
-without cancelling the run.
-
-`provider_sandbox` is an optional per-invocation override of the provider's own
-inner sandbox (not Orbit's executor sandbox — that is already off, reported as
-`sandboxed: false`). Pass a mode the provider accepts, such as Codex
-`read-only` or `workspace-write`, to run an exploration tighter than the crew
-default without editing config. Values the provider does not support are
-refused. The submission result and `orbit run show` report the effective mode
-as `provider:mode` (for example `codex:danger-full-access`, `claude:default`).
-When that mode is the provider's least-restrictive inner sandbox
-(`danger-full-access` for Codex), the result includes a `warnings` entry and
-Orbit logs the same at WARN: the provider may use host integrations (browser,
-computer use, …) beyond the working directory.
-
-An operator session tracks it with the ordinary run surfaces —
-`orbit_workflow_run_show` (operator authority; denied for agent sessions), or
-`orbit run show|logs|cancel <RUN_ID>`; a non-operator session with a shell on
-the owning host uses `orbit run show|logs|cancel <RUN_ID>`. The full MCP response puts
-`agent_invocation` at the top level; `view: "bounded"` and
-`orbit run show --json` put it at `.run.agent_invocation`:
-
-- `answer` is the result: `summary`, `findings`, `next_steps`, every other
-  field the agent put in its envelope `result` under `extra` (a
-  `report_markdown`, for instance), and a bounded `final_message` where the
-  surface includes it. The full MCP response omits `answer.final_message` and
-  the raw `preview` once an answer exists, while retaining
-  `final_message_blob_ref` and `stdout_blob_ref`; use `orbit run logs <RUN_ID>`
-  to read the complete captured output.
-- `progress` is what the agent is doing while it runs: its newest
-  `latest_message` and `last_activity_at`, sampled about every ten seconds
-  while it writes output. A provider that prints nothing until it exits shows
-  none.
-- `outcome`, `failure_reason`, `completed_envelope`, the effective
-  `provider_sandbox`, and `stdout_blob_ref`, the durable reference to the full
-  captured output — present for a failed invocation too.
-
-The response envelope is required. A provider that exits zero without
-terminating it stopped mid-turn, and one whose envelope has no `result` object
-returned no answer: either way the run records `failed` with a
-`failure_reason` naming why, and the exit code alone is never evidence the
-investigation succeeded.
-
-A session that arrived over SSH is admitted on the same terms as a local one.
-The durable admission and `trusted_host.execution_admitted` event retain the
-forwarded caller machine ID — attribution, not a grant — plus the workspace
-checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
-relaunch a server with more privileges to work around a denied call.
+Host invocation and explorer delegation have been removed. Dispatch work
+through tasks and `orbit run ship`, or use the provider's CLI for a one-off
+question. Historical invocation answers remain readable with
+`orbit run show <RUN_ID>` and `orbit run logs <RUN_ID>`.
 
 ### Task-pilot dependencies and retries
 

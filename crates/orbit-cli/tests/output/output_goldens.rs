@@ -613,9 +613,6 @@ enum Placement {
 
 /// Every governed tool operation paired with its expected MCP advertisement placement.
 const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
-    // Registered for MCP, but listed only by a server a managed run launched
-    // (explorer delegation); operator sessions no longer see it.
-    ("orbit.agent.invoke", Placement::Advertised),
     ("orbit.attention", Placement::Advertised),
     ("orbit.auto_task.delete", Placement::Unadvertised),
     ("orbit.auto_task.reset", Placement::Unadvertised),
@@ -1226,60 +1223,6 @@ fn config_reference_lists_every_registry_key() {
     );
 }
 
-/// The published answer-cap range must describe the values `orbit config set`
-/// accepts, including both inclusive endpoints and their adjacent rejections.
-#[test]
-fn config_reference_max_answer_bytes_matches_cli_bounds() {
-    const KEY: &str = "workflow.explore.max_answer_bytes";
-
-    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../website/src/content/docs/reference/config.md");
-    let page = std::fs::read_to_string(&page)
-        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
-    let row = page
-        .lines()
-        .find(|line| line.starts_with("| `workflow.explore.max_answer_bytes` |"))
-        .expect("config reference has a max_answer_bytes row");
-    let range = Regex::new(r"\(`(\d+)`(?:–|-|—)`(\d+)`\)").expect("range regex");
-    let captures = range
-        .captures(row)
-        .expect("max_answer_bytes row documents an inclusive numeric range");
-    let minimum: u64 = captures[1].parse().expect("numeric minimum");
-    let maximum: u64 = captures[2].parse().expect("numeric maximum");
-    assert!(minimum <= maximum, "documented minimum exceeds maximum");
-
-    let below_minimum = minimum
-        .checked_sub(1)
-        .expect("max_answer_bytes minimum must be positive");
-    let above_maximum = maximum
-        .checked_add(1)
-        .expect("max_answer_bytes maximum leaves room for an adjacent value");
-    let fixture = Fixture::new();
-    for (index, (value, accepted)) in [
-        (minimum, true),
-        (below_minimum, false),
-        (maximum, true),
-        (above_maximum, false),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let value = value.to_string();
-        let mut args = vec!["config", "set"];
-        if index == 0 {
-            args.push("--fresh");
-        }
-        args.extend([KEY, value.as_str()]);
-        let output = fixture.run_output(&args, &[]);
-        assert_eq!(
-            output.status.success(),
-            accepted,
-            "published bounds must match `orbit config set` for {KEY}={value}; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
 /// Inventory of record-output conversions in this change, and the remaining
 /// separately owned bypass that must not be treated as an omission here:
 /// `orbit doctor --fix-*` ([ORB-11597]). `orbit workspace init` now returns a
@@ -1735,4 +1678,59 @@ fn retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator() {
         foreign_before.stdout,
     );
     assert!(!unregistered.join(".orbit").exists());
+}
+
+/// Retired explorer settings must not invalidate a workspace or restore a pool.
+#[test]
+fn legacy_explorer_configuration_is_ignored_with_a_warning() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        r#"
+[workflow.explore]
+enabled = true
+max_calls_per_run = 0
+max_concurrent_per_run = 0
+timeout_seconds = 0
+max_answer_bytes = 0
+[workflow.purpose_crews]
+explorer = ["deleted-crew"]
+"#,
+    )
+    .expect("write legacy configuration");
+    let output = fixture.run_output(
+        &["config", "show", "--all", "--json"],
+        &[("RUST_LOG", "warn")],
+    );
+    assert!(
+        output.status.success(),
+        "legacy configuration still loads: {output:?}"
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("config projection");
+    let settings = shown["settings"].as_object().expect("settings");
+    assert!(
+        !settings
+            .keys()
+            .any(|key| key.starts_with("workflow.explore.")
+                || key == "workflow.purpose_crews.explorer"),
+        "retired settings must have no effective values"
+    );
+    let warnings = String::from_utf8_lossy(&output.stderr);
+    for key in [
+        "workflow.explore.enabled",
+        "workflow.explore.max_calls_per_run",
+        "workflow.explore.max_concurrent_per_run",
+        "workflow.explore.timeout_seconds",
+        "workflow.explore.max_answer_bytes",
+        "workflow.purpose_crews.explorer",
+    ] {
+        assert!(
+            warnings.contains(key),
+            "legacy key needs a deprecation warning: {key}: {warnings}"
+        );
+    }
+    assert!(
+        warnings.contains("deprecated") && warnings.contains("ignored"),
+        "{warnings}"
+    );
 }

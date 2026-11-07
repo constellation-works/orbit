@@ -102,7 +102,7 @@ grantable to a resident in v1.
 | Right | Tools the cycle may call (in covered workspaces) |
 |---|---|
 | none | read tools; `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact.put`; `orbit.friction.add`; `orbit.evolution.add`; `orbit.decision.raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
-| `dispatch` | `orbit.agent.invoke`, `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
+| `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
 | `merge` | `orbit.workflow.land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.retry_handoff`, `orbit.task.reconcile_review` |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |

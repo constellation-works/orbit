@@ -1217,7 +1217,6 @@ spec:
     - orbit.resident.relay
     - orbit.task.block_triage
     - orbit.visual.capture
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

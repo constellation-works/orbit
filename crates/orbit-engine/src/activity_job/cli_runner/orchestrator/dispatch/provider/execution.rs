@@ -46,24 +46,17 @@ pub(in super::super) fn dispatch_prepared_provider(
         &prepared.provider,
         fs_profile,
         prepared.source_checkout.subprocess_cwd.as_deref(),
-        prepared.trusted_host.as_ref(),
     )?;
-    let prepared_sandbox = prepare_dispatch_sandbox(
-        activity_name,
-        prepared.trusted_host.as_ref(),
-        resolved_sandbox.as_ref(),
-    )?;
+    let prepared_sandbox = prepare_dispatch_sandbox(resolved_sandbox.as_ref())?;
     let sandbox = prepared_sandbox.effective;
 
     let preparation::ProviderEnvelope {
         envelope_spec,
         staged_images,
-        explore_instruction,
         pinned_recovery_input,
     } = preparation::prepare_provider_envelope(context, &prepared)?;
     let dispatch_preparation::PreparedCliDispatch {
         provider,
-        trusted_host,
         mut cli_executor,
         inspection_tools,
         image_input: _,
@@ -101,7 +94,6 @@ pub(in super::super) fn dispatch_prepared_provider(
     let (config, agent) = preparation::prepare_provider_agent(
         context,
         &provider,
-        trusted_host.as_ref(),
         sandbox,
         resolved_sandbox.as_ref(),
         &mut cli_executor,
@@ -321,32 +313,6 @@ pub(in super::super) fn dispatch_prepared_provider(
         boundary.authorize_rebase_completion(host, input)?;
     }
 
-    if let Some(admission) = &trusted_host {
-        tracing::warn!(
-            target: "orbit.trusted_host",
-            run_id,
-            activity_name,
-            step_id,
-            provider = %provider,
-            authorized_by = %admission.authorized_by,
-            authorizer_provenance = %admission.authorizer_provenance,
-            caller_machine_id = admission.caller_machine_id.as_deref(),
-            workspace_path = %admission.workspace_path,
-            cwd = %admission.cwd,
-            "starting an operator-admitted provider subprocess outside the executor sandbox"
-        );
-        audit.emit_lossy(V2AuditEventKind::TrustedHostExecutionAdmitted {
-            provider: provider.clone(),
-            activity_name: step_id.to_string(),
-            authorized_by: admission.authorized_by.clone(),
-            authorizer_provenance: admission.authorizer_provenance.clone(),
-            caller_machine_id: admission.caller_machine_id.clone(),
-            authorized_at: admission.authorized_at.clone(),
-            workspace_path: admission.workspace_path.clone(),
-            cwd: admission.cwd.clone(),
-        });
-    }
-
     let model_redacted = agent.model_name().map(|m| redaction.apply_str(m));
     let task_scope_blob_ref = task_ctx.as_ref().and_then(|task| {
         let scope: serde_json::Map<String, serde_json::Value> = [
@@ -407,7 +373,6 @@ pub(in super::super) fn dispatch_prepared_provider(
         scratch: &scratch,
         tool_disallow_list: &tool_disallow_list,
         activity_tools: &activity_tools,
-        explore_instruction,
         orbit_env,
         subprocess_cwd: &subprocess_cwd,
         sandbox,

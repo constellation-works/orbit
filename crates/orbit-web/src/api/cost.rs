@@ -91,16 +91,8 @@ async fn served_cost(
             DASHBOARD_POLL_MEMO_TTL,
             move || {
                 let cost = runtime_for_compute.managed_execution_cost(window)?;
-                let mut body = serde_json::to_value(&cost)
+                let body = serde_json::to_value(&cost)
                     .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
-                // Implement runs with and without read-only explorer calls,
-                // per implementing crew, over the same window.
-                let since = window
-                    .duration()
-                    .map(|duration| chrono::Utc::now() - duration);
-                body["explore_comparison"] =
-                    serde_json::to_value(runtime_for_compute.explore_comparison(since)?)
-                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
                 Ok(body)
             },
         )

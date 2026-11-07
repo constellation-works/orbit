@@ -671,8 +671,6 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
     for activity in [
         "agent_implement",
         "agent_review_repair",
-        "agent_explore",
-        "agent_invoke",
         "task_pilot",
         "resident_cycle",
         "image_input_probe",
