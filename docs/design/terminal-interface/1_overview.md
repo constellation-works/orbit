@@ -2,7 +2,7 @@
 title: Terminal Interface — Overview
 owner: claude
 last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_validated: 2026-11-06
 status: Accepted
 stage: shipped
 next: "—"
