@@ -514,7 +514,20 @@ function routineCatalogue(payload, routines, workspaceId) {
   // repaint re-derives the state, so paging or filtering back to an open editor
   // disables the controls again.
   let pageButtons = [];
-  const focusEditor = () => groups.querySelector(".schedule-editor :is(input, select, button):not(:disabled)")?.focus();
+  // Focus the first enabled, visible control of the open editor. A cron-only
+  // editor disables its Trigger select, and a pending save disables every
+  // control, so with none available focus the editor itself, not the page.
+  const focusEditor = () => {
+    const editor = groups.querySelector(".schedule-editor");
+    if (!editor) return;
+    const control = [...editor.querySelectorAll("input, select, button")]
+      .find((node) => !node.disabled && node.checkVisibility());
+    if (control) control.focus();
+    else {
+      editor.tabIndex = -1;
+      editor.focus();
+    }
+  };
   const paintGroups = () => {
     groups.textContent = "";
     pageButtons = [];
