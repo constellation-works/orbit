@@ -804,6 +804,130 @@ fn deleting_a_pending_pilot_task_does_not_block_its_successor() {
     );
 }
 
+/// ORB-22622: a prepared file whose NUL-delimited diff path begins with
+/// whitespace is still stale; the comparison preserves exact filename bytes.
+/// Disjoint siblings still apply, and `Any` sensitivity still stales every
+/// task on a move disjoint from all selectors.
+fn a_leading_whitespace_prepared_path_is_stale_while_disjoint_siblings_apply() {
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    workspace.commit_file(" leading.rs", "fn leading() {}\n", "add leading");
+    workspace.commit_file("ordinary.rs", "fn ordinary() {}\n", "add ordinary");
+    workspace.commit_file("unrelated.rs", "fn unrelated() {}\n", "add unrelated");
+    let task = |title: &str, selector: &str| {
+        workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Prepare {title}."),
+                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+                plan: format!("Inspect {selector}."),
+                context_files: vec![selector.into()],
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let whitespace = task("whitespace", "file: leading.rs");
+    let ordinary = task("ordinary", "file:ordinary.rs");
+    let disjoint = task("disjoint", "file:unrelated.rs");
+    assert_eq!(
+        whitespace.context_files,
+        ["file: leading.rs"],
+        "the selector preserves the leading space"
+    );
+    let routine = pilot_routine();
+    evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
+    let attempt = workspace.admitted_batch(&[&whitespace, &ordinary, &disjoint], 2);
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["superseded_by_source"], json!([]), "{prepared}");
+    // Only the whitespace file changes, so it is the first diff path.
+    workspace.commit_file(
+        " leading.rs",
+        "fn leading() { changed() }\n",
+        "touch leading",
+    );
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 2, "{output}");
+    assert_eq!(output["superseded_count"], 1, "{output}");
+    let outcome = outcome_for(&output, &whitespace);
+    assert_eq!(outcome["reason"], "superseded_by_source");
+    let detail = outcome["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("` leading.rs`"),
+        "stale detail preserves the leading space: {detail}"
+    );
+    assert_eq!(outcome_for(&output, &ordinary)["outcome"], "applied");
+    assert_eq!(outcome_for(&output, &disjoint)["outcome"], "applied");
+    assert!(!pilot_applied(&workspace, &whitespace));
+    assert!(pilot_applied(&workspace, &ordinary));
+    assert!(pilot_applied(&workspace, &disjoint));
+
+    // `Any` sensitivity still stales every task on any move, even one
+    // disjoint from all selectors.
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    workspace.commit_file("a.rs", "fn a() {}\n", "add a");
+    workspace.commit_file("b.rs", "fn b() {}\n", "add b");
+    workspace.commit_file("other.rs", "fn other() {}\n", "add other");
+    let task = |title: &str, selector: &str| {
+        workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Prepare {title}."),
+                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+                plan: format!("Inspect {selector}."),
+                context_files: vec![selector.into()],
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let first = task("first", "file:a.rs");
+    let second = task("second", "file:b.rs");
+    let routine: RoutineDefinition = serde_json::from_value(json!({
+        "schemaVersion": 1, "name": "fixture-pilot", "enabled": true,
+        "target": "job:task_pilot_pipeline",
+        "trigger": {"state": {
+            "kind": "preparation_eligible", "owner_machine": "fixture-machine", "branch": "main",
+            "debounce_minutes": 2, "max_wait_minutes": 10, "max_items": 50,
+            "retries": 1, "deadline_minutes": 90,
+            "freshness": {"source_sensitivity": "any"},
+        }},
+    }))
+    .unwrap();
+    let routines = workspace.runtime.shared_root().join("routines");
+    std::fs::create_dir_all(&routines).unwrap();
+    std::fs::write(
+        routines.join("fixture-pilot.yaml"),
+        serde_yaml::to_string(&routine).unwrap(),
+    )
+    .unwrap();
+    evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
+    let attempt = workspace.admitted_batch(&[&first, &second], 2);
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["superseded_by_source"], json!([]), "{prepared}");
+    workspace.commit_file("other.rs", "fn other() { changed() }\n", "touch other");
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 0, "{output}");
+    assert_eq!(output["superseded_count"], 2, "{output}");
+    for task in [&first, &second] {
+        let outcome = outcome_for(&output, task);
+        assert_eq!(outcome["reason"], "superseded_by_source");
+        assert!(
+            outcome["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source_sensitivity is any"),
+            "{outcome}"
+        );
+        assert!(!pilot_applied(&workspace, task));
+    }
+}
+
 crate::scenario_table!(
     deleted_pending_member_scenarios,
     deleting_a_pending_pilot_task_does_not_block_its_successor
@@ -818,5 +942,6 @@ crate::scenario_table!(
     a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head,
     a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry,
     editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it,
-    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures
+    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures,
+    a_leading_whitespace_prepared_path_is_stale_while_disjoint_siblings_apply
 );
