@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
+use orbit_types::task::{self, SourceLocationEmptyComponents, Task};
 use orbit_types::workflow::handoff::FindingInvalidReport;
 use serde_json::{Value, json};
 
@@ -219,18 +219,9 @@ fn verify_citation(workspace: &Path, head: &str, location: &str) -> Result<(), O
             "evidence location {location:?} is not a repository-relative `path:line`"
         ))
     };
-    let (path, line) = location.trim().rsplit_once(':').ok_or_else(malformed)?;
-    let line = line
-        .parse::<usize>()
-        .ok()
-        .filter(|line| *line > 0)
-        .ok_or_else(malformed)?;
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.split('/').any(|part| part == ".." || part.is_empty())
-    {
-        return Err(malformed());
-    }
+    let (path, line) =
+        task::parse_source_location::<usize>(location, SourceLocationEmptyComponents::Reject)
+            .map_err(|_| malformed())?;
     let object = format!("{head}:{path}");
     if !git_command_success(workspace, &["cat-file", "-e", &object])? {
         return Err(FindingInvalid::refused(format!(
