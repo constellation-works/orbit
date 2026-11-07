@@ -35,10 +35,12 @@ orbit config keys                  # every registered key; machine.id and machin
 orbit config path
 ```
 
-`orbit config show` labels configured rows with their `workspace`, `global`, or
-`environment` source, and rows with no configured value show `default` or
-`unset`. `machine.id` and `machine.task_prefix` render as identity, not as
-settable rows. The text rows do not include file paths: see the `Layers (later
+`orbit config show` labels configured values by source: `workspace`, `global`,
+or `environment`; provider detection can supply `workflow.default_crew` from
+the environment. A value from a compiled-in default shows `default`; a key with
+no configured value and no compiled-in default shows `unset`. `machine.id` and
+`machine.task_prefix` render as identity, not as settable rows. The text rows
+do not include file paths: see the `Layers (later
 wins)` banner for layer paths, or use `orbit config show --json` for per-key
 path provenance. Reach for it before assuming a value. Use `orbit config show
 --all` to include unset advanced keys;
@@ -2003,9 +2005,12 @@ with no lines.
 **Inspect the effective lists.** `orbit config keys --json` confirms both keys
 (`array<string>`, section `delivery`). `orbit config get workflow.test_paths`
 prints the effective value, built-in default included, and
-`orbit config show --all` labels configured values `workspace` or `global` and
-values with no configured source `default`. File paths appear in the `Layers
-(later wins)` banner or in `--json` per-key provenance.
+`orbit config show --all` labels configured values by source (`workspace`,
+`global`, or `environment`); provider detection can supply
+`workflow.default_crew` from the environment. Values from compiled-in defaults
+show `default`; keys with no configured value and no compiled-in default show
+`unset`. File paths appear in the `Layers (later wins)` banner or in `--json`
+per-key provenance.
 
 **Verify a change on a new delivery.** The lists are compiled when a runtime
 opens the workspace, so restart long-running processes such as `orbit web serve`
