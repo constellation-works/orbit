@@ -202,6 +202,8 @@ export function revealDockStart() {
   const card = $("auto-drain-quick-start");
   if (dock?.dataset.revealStart !== "true" || !card || card.hidden || !card.getClientRects().length) return;
   delete dock.dataset.revealStart;
+  card.classList.add("drain-start-open");
+  $("auto-drain-start-toggle")?.setAttribute("aria-expanded", "true");
   card.scrollIntoView?.({ block: "nearest" });
 }
 

@@ -140,9 +140,10 @@ with a live drain, then the registry default (the workspace containing the
 server's current directory when available), then the first active workspace.
 Choosing **All workspaces** in the picker is remembered too.
 
-The header drain chip counts workspace/host pairs across registered hosts,
-for example **2 of 20 workspaces draining**. A workspace registered on two
-hosts counts twice. Click the chip to open the **All workspaces** fleet drains,
+The rail's **Drain** item shows a selected workspace's live drain from any view.
+Under **All workspaces** it counts live workspace/host pairs across registered
+hosts, for example **2 live**, and a workspace registered on two hosts counts
+twice. Open it under **All workspaces** to see the fleet drains,
 one tab per host (each with a dot for its liveliest drain, hollow when the host
 is unreachable) and one line per workspace; the dashboard remembers the host
 tab you chose. Select a workspace to inspect it on its host.
@@ -168,6 +169,7 @@ prove that a particular task or run succeeded.
 | Rail | Shows |
 |---|---|
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
+| **Drain** | The Tasks dock's Drain tab, at every width. On a narrow window it replaces the task list and lets you start and stop a window by touch. While a drain runs, the rail item shows its state on every view. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
@@ -552,8 +554,9 @@ The **Drain** tab in the Tasks dock contains the auto-drain card and
 **Start a window**: a time-bounded [delivery window](../continuous-delivery/)
 that ships approved backlog tasks in parallel. Select one active workspace to
 start a window. On a replica checkout, Start pulls work from its owner without
-leaving Tasks. The header drain indicator opens the dock's fleet overview in
-**All workspaces** mode.
+leaving Tasks. The rail's **Drain** item opens this tab, or the fleet overview in
+**All workspaces** mode. On a narrow window the dock takes the place of the task
+list, and **Back to tasks** returns to it.
 
 Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the
 auto-drain card, Start card or Log selected. The dock keeps the throttle as an
@@ -572,8 +575,9 @@ The card shows:
   window that has not started: if the live window ended and the queued one
   started in the meantime, Cancel is refused, the window keeps running, and
   the card refreshes to show it.
-- **Capacity.** Running tasks against the limit, free slots, and what a window
-  started now would admit.
+- **Capacity.** A bar of slots in use against the limit. Hover, focus or tap it
+  for free slots and each pipeline's share. A line under it says why nothing more
+  can start, when something holds it back.
 - **Admission forecast.** The last pass's forecast time, CPU and memory peaks
   against the admit thresholds (for example `85.6% / 98%`, with timing, amount and headroom in the tooltip), the tasks it
   admitted with the profile that priced each one, and any candidate enforce

@@ -1,8 +1,8 @@
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { revealDockStart } from './log-tail.js';
-import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, pinnedInfoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
 import { $, autoDrainNumber, feedback, operationsState, pendingOperations, selectedWorkspace } from './operations-shared.js';
-import { autoDrainCounts, autoDrainLiveWindow, autoDrainReasons, throttleNames, throttledResources } from './operations-drain-capacity.js';
+import { autoDrainCounts, autoDrainLiveWindow, autoDrainPhase, autoDrainReasons, throttleNames, throttledResources } from './operations-drain-capacity.js';
 
 let drainControlCallbacks = null;
 
@@ -492,7 +492,7 @@ export function autoDrainStopButton(payload) {
     }
   });
   return mode === "stop"
-    ? el("div", { class: "drain-stop-control" }, [button, infoHint(copy.description)])
+    ? el("div", { class: "drain-stop-control" }, [button, pinnedInfoHint(copy.description)])
     : button;
 }
 
@@ -515,6 +515,16 @@ export function autoDrainStopNote(payload) {
 // label; a refusal is visible text under the control.
 // A sunk footer sums the window up, warns when a throttle will hold its
 // admissions, and holds Start.
+// The fold lives on the card, which polls do not rebuild, so an open form stays open.
+function wireDrainStartToggle(card) {
+  const toggle = $("auto-drain-start-toggle");
+  if (!toggle || toggle.dataset.wired) return;
+  toggle.dataset.wired = "true";
+  toggle.addEventListener("click", () => {
+    toggle.setAttribute("aria-expanded", String(card.classList.toggle("drain-start-open")));
+  });
+}
+
 export function renderAutoDrainStart(payload, reasons) {
   const card = $("auto-drain-quick-start");
   const body = $("auto-drain-quick-start-body");
@@ -522,6 +532,9 @@ export function renderAutoDrainStart(payload, reasons) {
   body.textContent = "";
   card.hidden = Boolean(reasons.submit);
   if (card.hidden) return;
+  const { phase, pulling } = autoDrainPhase(payload);
+  card.classList.toggle("drain-start-live", pulling || phase !== "idle");
+  wireDrainStartToggle(card);
   const counts = autoDrainCounts(payload);
   const sub = $("auto-drain-quick-start-sub");
   if (sub) sub.textContent = `${counts.eligible} eligible now · ${counts.waiting} waiting`;

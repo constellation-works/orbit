@@ -2,7 +2,7 @@ import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, get
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
-import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet } from './operations-fleet.js';
+import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
@@ -18,6 +18,12 @@ let drainScopeGeneration = 0;
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
   updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
+  paintRailDrainReading({
+    phase: pulling ? "pulling" : phase,
+    used: capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs ?? null,
+    ceiling: capacity.max_active_leaf_runs ?? null,
+    held: Boolean(capacity.resource_throttle || (capacity.host_shutdown && capacity.host_shutdown_holding !== false)),
+  });
   const card = $("auto-drain-panel");
   if (card) {
     card.dataset.drainState = pulling ? "pulling" : phase;
@@ -316,6 +322,7 @@ registerOperationsReset(() => {
   announcedDrainState = null;
   clearDrainChrome();
   updateDrainIndicators("idle", "idle");
+  repaintRailDrainFromFleet();
   clearStartCard("auto-drain-quick-start");
 });
 

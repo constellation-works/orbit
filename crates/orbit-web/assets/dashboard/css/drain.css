@@ -54,9 +54,9 @@
    then why nothing more starts beside the count, and a mix of pipelines. */
 /* position: the hover help under a message spans the whole card. */
 .drain-capacity { display: flex; flex-direction: column; gap: 7px; min-width: 0; position: relative; }
-.drain-capacity-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
-.drain-capacity-count { flex: 0 0 auto; color: var(--fg-dim); font-size: 11.5px; white-space: nowrap; }
-.drain-capacity-count.full { color: var(--warn-fg); }
+/* The bar is its own hint: no icon, and a tap target taller than the bar's 8px. */
+.info-hint.info-hint-pinned.drain-capacity-hint { display: block; width: auto; height: auto; margin: -8px 0; padding: 8px 0; border-radius: 0; color: inherit; }
+.info-hint.info-hint-pinned.drain-capacity-hint::before { content: none; }
 .drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg-well); overflow: hidden; }
 .drain-capacity-bar.segmented { background: transparent; }
 .drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--bg-control); box-shadow: inset 0 0 0 1px var(--hair); }
@@ -202,16 +202,7 @@
 
 .drain-foot-row > .drain-stop-control { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .drain-stop-control > .drain-stop { flex: 0 0 auto; margin-left: 0; }
-.drain-stop-control > .info-hint { flex: 0 0 14px; margin-left: 0; }
-/* Make room above the footer while its bubble is open, keeping the whole
-   message in the scroll pane without covering the drain details. */
-.drain-foot-row:has(.drain-stop-control .info-hint:hover),
-.drain-foot-row:has(.drain-stop-control .info-hint:focus) { margin-top: 88px; }
-.drain-foot-row .drain-stop-control .info-hint:hover > .info-hint-text,
-.drain-foot-row .drain-stop-control .info-hint:focus > .info-hint-text {
-  top: auto;
-  bottom: calc(100% + 2px);
-}
+.drain-stop-control > .info-hint.info-hint-pinned { margin: -15px -15px -15px -9px; }
 .drain-stop-note { margin: 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 .drain-stop-note.disabled-reason { color: var(--warn-fg); }
 .drain-stop-note[hidden] { display: none; }
@@ -230,6 +221,10 @@
 .drain-queued-flag { margin: 0; padding: 7px 10px; border: 1px solid var(--warn-line); border-radius: 6px; background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
 
 /* Start a window. */
+.drain-start-toggle { display: none; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--fg-strong); font: 600 14px var(--font-sans); cursor: pointer; }
+.drain-start-toggle::after { content: "›"; color: var(--fg-dim); font-weight: 400; }
+.drain-start-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
+.drain-start-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
 .drain-start-sub { color: var(--fg-mute); font: 400 12.5px var(--font-sans); font-variant-numeric: tabular-nums; }
 #auto-drain-quick-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; }
 .drain-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

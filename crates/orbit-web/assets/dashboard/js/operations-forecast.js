@@ -317,9 +317,8 @@ export function refreshBacklogForecast() {
 
 // A retained forecast whose drain has ended, with no pull drain and no
 // winding-down children, is not a live window. Shared occupancy is read apart
-// from the drain's own phase, so the note claims nothing is running only when
-// that count is exactly zero. A positive count names the other work, and an
-// unknown count says only that the window ended.
+// from the drain's own phase. A positive count names the other work, an unknown
+// count says only that the window ended, and a zero count needs no note.
 function retainedWindowNote(payload, forecast) {
   if (forecast?.drain_live !== false) return null;
   const capacity = payload?.capacity || {};
@@ -327,7 +326,7 @@ function retainedWindowNote(payload, forecast) {
   const phase = capacity.drain_phase;
   if (phase != null && phase !== "idle") return null;
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
-  if (busy === 0) return "window ended · nothing running";
+  if (busy === 0) return null;
   if (busy > 0) return "window ended · other work running";
   return "window ended";
 }

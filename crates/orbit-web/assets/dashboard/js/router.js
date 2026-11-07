@@ -880,7 +880,7 @@ function initTabsImpl(ctx) {
     strip.addEventListener("scroll", () => syncRailScrollCues(), { passive: true });
   }
   if ($("tabs")) enableRailDragScroll($("tabs"));
-  for (const tab of document.querySelectorAll(".tab")) {
+  for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
         setActiveTabImpl(ctx, "jobs/live", { refresh: false });
