@@ -32,3 +32,11 @@ Proposed 2026-11-04 by the pilot-block-patterns pass (ORB-22099). These three ro
 | 2026-10-25 18:36 | ORB-18270 | jrun-20261025-1832-c3 | git spawn ENOENT at dispatch, then worktree_mismatch not a directory | human:daniel moved to proposed (forced) at 2026-10-25T19:02Z |
 | 2026-10-25 18:36 | ORB-18271 | jrun-20261025-1836-c3 | git spawn ENOENT at dispatch, then worktree_mismatch not a directory | human:daniel moved to backlog at 2026-10-25T19:02Z |
 | 2026-10-25 18:37 | ORB-18269 | jrun-20261025-1832-c1 | git spawn ENOENT at dispatch on mac-mini-1, then worktree_mismatch | human:daniel moved to backlog at 2026-10-25T19:03Z |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 3 occurrence(s) on 3 task(s) (ORB-18269, ORB-18270, ORB-18271); recurring; route `run_failure`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Covered by done ORB-22100 (landed 2026-11-04T18:21Z, filed by this auto-task); zero snapshot-Git run failures after it.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+3 of these occurrence(s) are already recorded in the rows above (ORB-18269, ORB-18270, ORB-18271); they are not re-added.

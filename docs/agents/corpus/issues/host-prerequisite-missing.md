@@ -43,3 +43,11 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | --- | --- | --- | --- | --- |
 | 2026-10-30T05:18:21.529016237Z | ORB-20007 | jrun-20261030-0500-c1 | criterion needs host tool, human labelers or funded policy the host lacks; source ORB-20007 history:blocked_triage@2026-10-30T05:18:21.529016237Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-30T05:45:18.279437651Z | ORB-20007 | jrun-20261030-0533-c3 | criterion needs host tool, human labelers or funded policy the host lacks; source ORB-20007 history:blocked_triage@2026-10-30T05:45:18.279437651Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 1 occurrence(s) on 1 task(s) (ORB-18438); below the recurrence threshold; route `setup`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Below threshold.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+1 of these occurrence(s) are already recorded in the rows above (ORB-18438); they are not re-added.

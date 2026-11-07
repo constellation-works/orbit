@@ -62,3 +62,11 @@ Durable sources: the task `history` and `comments` read with `orbit.task.show` a
 | 2026-11-02T03:30:22Z | ORB-21229 | jrun-20261102-0329-t1 | final_recovery decision=decide outcome=refused: task changed after the failure; the later decision stands; source ORB-21229 history:final_recovery_decided | correct stale-decision refusal; ORB-21229 done 2026-11-02T04:10Z |
 
 Not an escalated block; included for complete accounting. The preceding block was the SIGTERM interruption in `worker-killed-sigterm-before-landing`.
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 1 occurrence(s) on 1 task(s) (ORB-18052); below the recurrence threshold; route `recovery`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: held vs prior pass (ORB-22481 slice had 1). Below threshold; correct stale-decision refusal, not a real block.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+1 of these occurrence(s) are already recorded in the rows above (ORB-18052); they are not re-added.

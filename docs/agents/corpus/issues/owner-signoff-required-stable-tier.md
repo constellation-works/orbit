@@ -52,3 +52,11 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | 2026-10-28T21:30:07.355730890Z | ORB-19595 | not recorded in triage comment | criterion requires owner sign-off for stable-tier deletion; source ORB-19595 history:pilot_triage@2026-10-28T21:30:07.355730890Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-28T21:35:16.280809158Z | ORB-19593 | jrun-20261028-2131-c14 | criterion requires owner sign-off for stable-tier deletion; source ORB-19593 history:final_recovery@2026-10-28T21:35:16.280809158Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
 | 2026-10-28T21:39:40.067927550Z | ORB-19594 | jrun-20261028-2132-c5 | criterion requires owner sign-off for stable-tier deletion; source ORB-19594 history:blocked_triage@2026-10-28T21:39:40.067927550Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 3 occurrence(s) on 2 task(s) (ORB-18313, ORB-18751); recurring; route `authoring`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Deliberate owner gate. Done ORB-22430 (landed 2026-11-06T09:28Z) moves the owner-approval prerequisite before implementation, so a pre-promotion hold is the intended outcome; no further fix.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+3 of these occurrence(s) are already recorded in the rows above (ORB-18313, ORB-18751); they are not re-added.

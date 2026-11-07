@@ -54,3 +54,11 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | 2026-10-30T08:45:08.414981133Z | ORB-20129 | not recorded in triage comment | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20129 history:blocked_triage@2026-10-30T08:45:08.414981133Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-30T08:50:21.017930639Z | ORB-20137 | not recorded in triage comment | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20137 history:blocked_triage@2026-10-30T08:50:21.017930639Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-31T08:42:56.814446639Z | ORB-20455 | jrun-20261031-0836-c16 | executor returns incomplete examination/scan/audit early with no timeout; source ORB-20455 history:blocked_triage@2026-10-31T08:42:56.814446639Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 1 occurrence(s) on 1 task(s) (ORB-18950); below the recurrence threshold; route `run_failure`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Below threshold. Covered by done ORB-20625; no examination_incomplete run failure after it landed.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+1 of these occurrence(s) are already recorded in the rows above (ORB-18950); they are not re-added.

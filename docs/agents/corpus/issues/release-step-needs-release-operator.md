@@ -47,3 +47,11 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | --- | --- | --- | --- | --- |
 | 2026-10-28T15:56:04.480909669Z | ORB-19553 | not recorded in triage comment | release step needs release operator / release-check before publication; source ORB-19553 history:pilot_triage@2026-10-28T15:56:04.480909669Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
 | 2026-10-28T16:24:27.028899789Z | ORB-19553 | not recorded in triage comment | release step needs release operator / release-check before publication; source ORB-19553 history:pilot_triage@2026-10-28T16:24:27.028899789Z | pilot_triage disposition=decision recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 5 occurrence(s) on 4 task(s) (ORB-17913, ORB-18682, ORB-18782, ORB-18783); recurring; route `setup`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Deliberate release gate, not a defect: Daniel owns release timing (constellation AGENTS.md, Release rules). No fix task by design; no rejected task records that decision.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+5 of these occurrence(s) are already recorded in the rows above (ORB-17913, ORB-18682, ORB-18782, ORB-18783); they are not re-added.

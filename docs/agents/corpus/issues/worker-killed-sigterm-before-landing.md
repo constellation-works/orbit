@@ -78,3 +78,11 @@ Durable sources: the task `history` and `comments` read with `orbit.task.show` a
 | 2026-11-02T03:28:54Z | ORB-21229 | jrun-20261102-0328-c3 | same signature; pid 3239733 killed by SIGTERM from pid 3266805 (command `orbit`); source ORB-21229 history:workflow_run_interrupted | final recovery refused (task changed after failure); ORB-21229 done 2026-11-02T04:10Z |
 
 Post-landing check: `orbit run history -j task_pr_pipeline --since 2026-11-04T08:37:41Z --state interrupted --limit 200 --no-reconcile --json` listed 0 runs when ORB-22481 ran (2026-11-07, 2.8 days after ORB-21876 landed). Verdict stays `too early`; all seven episodes precede landing.
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 2 occurrence(s) on 2 task(s) (ORB-18010, ORB-18052); below the recurrence threshold; route `run_failure`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: shrank vs prior pass (ORB-22481 slice had 7). Below threshold in this slice. Covered by done ORB-21876 (landed 2026-11-04T08:37Z); zero worker_terminated interruptions of task_pr_pipeline after it.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+2 of these occurrence(s) are already recorded in the rows above (ORB-18010, ORB-18052); they are not re-added.
