@@ -1,5 +1,5 @@
 //! Changing the sweep cadence. The settings themselves live in
-//! `contracts::clock_settings`; these re-exports keep the `routines::clock`
+//! `crate::clock_settings`; these re-exports keep the `routines::clock`
 //! paths for this module's siblings and outer consumers.
 
 use std::path::Path;

@@ -221,8 +221,8 @@ Tests that call a supervisor directly are left out.
 | `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/retained_candidate.rs` (`git status`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-core/src/application/routines/clock/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
-| `orbit-core/src/application/routines/clock/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-clock/src/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
+| `orbit-clock/src/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-cmd/src/update/converge.rs` (install steps; probes) | `run_bounded_capped_typed`; `run_bounded_capped_complete_typed` | Spawn error kind (`ETXTBSY` retry); probes need both pipes at EOF |
 | `orbit-cmd/src/update/channel.rs` (`brew list`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-cmd/src/doctor/workspace.rs` (`git ls-files`) | `run_bounded_capped` | Deadline, prefix cap |
