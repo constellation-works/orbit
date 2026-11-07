@@ -97,7 +97,8 @@ fn evaluate_atom(atom: &str, render: &Render<'_>) -> Result<bool, OrbitError> {
     if atom == "false" {
         return Ok(false);
     }
-    // `!=` before `==` so the `=` inside `!=` is never taken as `==`.
+    // Order only matters for an atom holding both operators: `!=` is tried
+    // first, so `a == b != c` splits at `!=`.
     for (operator, equal) in [("!=", false), ("==", true)] {
         if let [lhs, rhs] = split_top_level(atom, operator)[..] {
             let lhs = render(lhs.trim())?;
