@@ -312,10 +312,9 @@ function buildGroupHeader(status, group) {
 // The legend's short word for each readiness pool; its title says it in full.
 const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capacity", other: "other" };
 
-// The Backlog card's readiness strip: one slim bar split by pool, a legend
-// whose entries filter the card to that pool, and a link to the Drain view that
-// explains each wait. Absent until the drain snapshot arrives, so the card
-// never claims a readiness it does not know.
+// The Backlog card's readiness strip: one slim bar split by pool and a legend
+// whose entries filter the card to that pool. It is absent until the drain
+// snapshot arrives, so the card never claims readiness it does not know.
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -354,9 +353,7 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
   ]);
-  const why = el("a", { class: "ready-why", text: "Why? See Tasks dock", title: "Open the Tasks dock: admission status and window controls" });
-  why.href = "#tasks?dock=drain";
-  const strip = el("div", { class: "group-readiness" }, [bar, legend, why]);
+  const strip = el("div", { class: "group-readiness" }, [bar, legend]);
   strip.dataset.key = "readiness-backlog";
   strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;
   return strip;
