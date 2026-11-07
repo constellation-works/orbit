@@ -21,7 +21,10 @@ use thiserror::Error;
 
 use orbit_common::OrbitError;
 
-use super::asset_loader::{ActivityAsset, AssetLoadError, load_activity_asset, load_job_asset};
+use super::asset_loader::{
+    ActivityAsset, AssetLoadError, declared_activity_name_in_yaml, load_activity_asset,
+    load_job_asset,
+};
 use orbit_types::workflow::activity_job::ActivityV2;
 use orbit_types::workflow::{JobV2, JobV2Step, JobV2StepBody, LoopBlock, TargetRef, TargetStep};
 use orbit_types::workflow::{
@@ -244,9 +247,11 @@ impl V2ActivityCatalog {
     /// [`Self::load_dir_skipping_retired_prefer_existing_where`]: a file that
     /// fails to parse (for example a stale copy declaring a removed key) is
     /// withdrawn alone instead of failing the whole catalog. The withdrawn
-    /// name (the file stem, matching the doctor scan) is recorded in
-    /// `unavailable` with the parse error — which names the file and the
-    /// specific remedy it carries — so a job referencing it is refused with
+    /// name — the activity's declared `metadata.name` when it is
+    /// recoverable from the refusal or the document, otherwise the file
+    /// stem — is recorded in `unavailable` with the parse error, which
+    /// names the file and the specific remedy it carries, so a job
+    /// referencing it is refused with
     /// [`ResolveError::ActivityUnavailable`] while unrelated jobs keep
     /// resolving. Non-parse failures (unreadable directories, duplicate
     /// names inside `dir`) remain hard errors. A name already withdrawn by
@@ -272,12 +277,8 @@ impl V2ActivityCatalog {
             &withdrawn,
         )?;
         for error in &errors {
-            if let CatalogError::Parse { path, .. } = error {
-                let name = path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or_default()
-                    .to_string();
+            if let CatalogError::Parse { path, source } = error {
+                let name = withdrawn_activity_name(path, source);
                 if !name.is_empty() && self.get(&name).is_none() {
                     self.unavailable.insert(name, error.to_string());
                 }
@@ -402,6 +403,26 @@ impl V2ActivityCatalog {
             None => Err(not_found()),
         }
     }
+}
+
+/// The name a parse refusal is withdrawn under: the declared
+/// `metadata.name` when the refusal or the file itself still yields it,
+/// otherwise the conservative file-stem fallback for identities that
+/// cannot be recovered.
+fn withdrawn_activity_name(path: &Path, source: &AssetLoadError) -> String {
+    if let Some(name) = source.declared_activity_name() {
+        return name.to_string();
+    }
+    if let Some(name) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|yaml| declared_activity_name_in_yaml(&yaml))
+    {
+        return name;
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 impl V2JobCatalog {
