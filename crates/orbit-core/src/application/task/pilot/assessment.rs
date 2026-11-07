@@ -230,7 +230,14 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
         Some(_) => false,
     };
 
+    let no_start_prerequisites = match assessment.get("start_prerequisites") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(findings)) => findings.is_empty(),
+        Some(_) => false,
+    };
+
     validation_tools_feasible
+        && no_start_prerequisites
         && no_contract_conflicts
         && matches!(
             assessment
@@ -359,6 +366,30 @@ pub(super) fn validate_recommendations(
                     format!("task {task_id} {field} finding must have a boolean holds_promotion"),
                 ));
             }
+        }
+    }
+    // Historical assessments lack this field. Every present prerequisite is
+    // a typed hold, independent of advisory warnings or task IDs in its text.
+    if let Some(findings) = assessment
+        .get("start_prerequisites")
+        .filter(|v| !v.is_null())
+    {
+        let findings = findings.as_array().ok_or_else(|| {
+            DispatchError::action_failed(
+                action,
+                format!("task {task_id} start_prerequisites must be an array"),
+            )
+        })?;
+        for finding in findings {
+            if !finding.is_object() || finding.get("holds_promotion").is_some() {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!(
+                        "task {task_id} start_prerequisites entries must be objects without holds_promotion"
+                    ),
+                ));
+            }
+            required_string(finding, "evidence", action)?;
         }
     }
     // `contract_conflicts` is optional for compatibility: absent or null

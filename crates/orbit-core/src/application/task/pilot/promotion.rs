@@ -24,7 +24,8 @@ use super::{CONTRACT_CONFLICTS, VALIDATION_TOOL_WARNINGS};
 /// acceptance check the implementation lane cannot run [ORB-11980].
 /// `contract_conflicts` is the pilot's typed per-criterion contradiction
 /// finding; it holds for the same reason and has no advisory opt-out.
-pub(super) const WARNING_FIELDS: [&str; 6] = [
+pub(super) const WARNING_FIELDS: [&str; 7] = [
+    "start_prerequisites",
     "blocked_by",
     "adr_conflicts",
     CONTRACT_CONFLICTS,

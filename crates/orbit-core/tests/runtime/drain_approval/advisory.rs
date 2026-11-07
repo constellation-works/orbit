@@ -624,8 +624,82 @@ fn foreign_prerequisite_warning_hold_releases_after_completion() {
     assert_eq!(workspace.status(&still_held), TaskStatus::Proposed);
 }
 
+// The public pilot/apply and drain boundary must not dispatch work before
+// explicit start prerequisites have been cleared by a fresh assessment.
+fn explicit_start_prerequisites_hold_until_repilot_clears_them() {
+    let workspace = Workspace::new();
+    let mut params = Workspace::proposed_params(
+        "Wait for experiment",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    params.description =
+        "Do not start before 2099-12-01T00:00:00Z and the experiment verdict.".into();
+    let task = workspace.add(params);
+    let rejected_drain = workspace.drain();
+    let rejected_pilot = workspace.pilot_child(&rejected_drain, &json!([task.id]));
+    let mut malformed = assessment(&task);
+    malformed["start_prerequisites"] =
+        json!([{"evidence": "Experiment verdict is unresolved", "holds_promotion": false}]);
+    let rejected = workspace.pilot(&rejected_drain, &rejected_pilot, vec![malformed]);
+    assert!(
+        rejected.is_err() || rejected.as_ref().unwrap()["applied_count"] == 0,
+        "{rejected:?}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+    let drain = workspace.drain();
+    let pilot = workspace.pilot_child(&drain, &json!([task.id]));
+    let mut assessed = assessment(&task);
+    assessed["start_prerequisites"] = json!([
+        {"evidence": "Not before 2099-12-01T00:00:00Z"},
+        {"evidence": "Experiment verdict is unresolved"}
+    ]);
+    assessed["utility_warnings"] =
+        json!([{"text": "Implementation approach is discretionary", "holds_promotion": false}]);
+    let applied = workspace.pilot_ok(&drain, &pilot, vec![assessed]);
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "withhold",
+        "{applied}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    let warnings = shown["pilot_warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "{shown}");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["text"].as_str().unwrap().contains("2099-12-01T00:00:00Z"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["text"].as_str().unwrap().contains("Experiment verdict"))
+    );
+    workspace.runtime.run_tool("orbit.task.update", json!({
+        "id": task.id, "description": "The operator lifted the start requirements.", "model": "codex"
+    })).unwrap();
+    let current = workspace.runtime.get_task(&task.id).unwrap();
+    let drain = workspace.drain();
+    let pilot = workspace.pilot_child(&drain, &json!([task.id]));
+    let mut assessed = assessment(&current);
+    assessed["start_prerequisites"] = json!([]);
+    assessed["utility_warnings"] =
+        json!([{"text": "Implementation approach is discretionary", "holds_promotion": false}]);
+    let applied = workspace.pilot_ok(&drain, &pilot, vec![assessed]);
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "promote",
+        "{applied}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+}
+
 crate::scenario_table!(
     advisory_promotion_scenarios,
+    explicit_start_prerequisites_hold_until_repilot_clears_them,
     advisory_findings_are_approved_and_reach_the_worker,
     both_promotion_authorities_keep_real_warning_holds,
     malformed_advisories_are_rejected_without_approval,

@@ -272,6 +272,18 @@ spec:
               type: array
               items:
                 type: string
+            start_prerequisites:
+              description: >
+                Explicit unresolved conditions forbidding implementation from
+                starting. Every entry holds admission and retains its evidence.
+              type: array
+              items:
+                type: object
+                required: [evidence]
+                properties:
+                  evidence:
+                    type: string
+                    minLength: 1
             contract_conflicts:
               description: >
                 Typed per-criterion contradictions: a criterion names
@@ -862,6 +874,15 @@ spec:
       for another task's delivery only here, never in utility or surface warnings.
       Prerequisites already in `dependencies` or `blocked_by` relations need no
       holding finding.
+    - `start_prerequisites`: report each explicit, unresolved condition that
+      forbids implementation from starting as `{"evidence":"<condition and
+      source>"}`. Include the concrete future instant and unresolved external
+      verdict when present. Every entry holds promotion; never use an advisory
+      warning for these conditions. A prior leaf refusal is a failure, not an
+      admission gate. Where a task already has an enforceable `not_before` or
+      real dependency, use that existing route; never invent task IDs. On
+      re-pilot clear a condition only when authoritative rescope or evidence
+      establishes it is satisfied.
     - `finding_invalid`: only for a review-filed bug (type `bug` tagged
       `code-review`, `delivery-code-review`, `qa-sweep`, `security-review` or
       `visual-review`). Read the cited code at `source_revision` and decide
@@ -1040,6 +1061,7 @@ spec:
         "validation_approach":"validation that would establish the repair",
         "reassessment_triggers":[],
         "blocked_by":[],
+        "start_prerequisites":[],
         "duplicate_of":null,
         "already_landed":null,
         "release_action_required":null,
