@@ -27,8 +27,8 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     let home = tempfile::tempdir().expect("isolated test home");
     let mut command = fixture_command(home.path());
     command
-        // Explicitly selected browser fixtures are ignored in the ordinary
-        // suite, but must still execute in their isolated child.
+        // Ignored tests are skipped in the ordinary suite, but a child
+        // re-executed by name must still run them.
         .args([
             "--exact",
             name,

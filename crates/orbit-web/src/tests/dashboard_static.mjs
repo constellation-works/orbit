@@ -1,6 +1,6 @@
 // Serves the dashboard asset tree the way `orbit web serve` does, for the
-// browser harnesses' disposable fixture servers and the workspace visual
-// fixture: `/static/<path>` and `/` map to assets/dashboard, and
+// workspace visual fixture (scripts/visual-fixture-front.mjs):
+// `/static/<path>` and `/` map to assets/dashboard, and
 // `/static/dashboard.css` joins css/ in the order `DASHBOARD_CSS` in lib.rs
 // lists the files. `dashboardCsp()` is the page policy `DASHBOARD_CSP` in
 // assets.rs sends. `dashboardDeclaredRoutes()` is the embedded route list.
