@@ -36,8 +36,9 @@ orbit config path
 ```
 
 `orbit config show` labels configured values by source: `workspace`, `global`,
-or `environment`; provider detection can supply `workflow.default_crew` from
-the environment. A value from a compiled-in default shows `default`; a key with
+or `environment`; `workflow.default_crew` shows `environment` when the
+`CONSTELLATION_DEFAULT_PROVIDER` variable supplies it (no provider detection
+runs at config load). A value from a compiled-in default shows `default`; a key with
 no configured value and no compiled-in default shows `unset`. `machine.id` and
 `machine.task_prefix` render as identity, not as settable rows. The text rows
 do not include file paths: see the `Layers (later
@@ -2006,8 +2007,9 @@ with no lines.
 (`array<string>`, section `delivery`). `orbit config get workflow.test_paths`
 prints the effective value, built-in default included, and
 `orbit config show --all` labels configured values by source (`workspace`,
-`global`, or `environment`); provider detection can supply
-`workflow.default_crew` from the environment. Values from compiled-in defaults
+`global`, or `environment`); `workflow.default_crew` shows `environment` when
+the `CONSTELLATION_DEFAULT_PROVIDER` variable supplies it (no provider
+detection runs at config load). Values from compiled-in defaults
 show `default`; keys with no configured value and no compiled-in default show
 `unset`. File paths appear in the `Layers (later wins)` banner or in `--json`
 per-key provenance.
