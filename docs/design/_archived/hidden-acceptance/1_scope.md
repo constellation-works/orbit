@@ -35,8 +35,7 @@ check, but today the implementer writes the exam:
 
 - **The scenarios live in the implementer's tree.** `scripts/qa-full-sweep-inventory.json`
   holds 89 scenarios: 52 are `cargo-test` pointers into the repository's own test
-  suites, 22 are commands (17 of which run in-repo test scripts such as
-  `crates/orbit-web/tests/http_api/dashboard_agents_browser.mjs`), 14 are harness
+  suites, 22 are commands (17 of which run in-repo test scripts), 14 are harness
   builtins and 1 is a recorded coverage gap. A worker that changes a behaviour can
   change the test that checks it in the same diff.
 - **A guard forces that co-edit.** The inventory pins `surface_contracts.sha256` over
