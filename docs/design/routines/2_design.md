@@ -57,6 +57,15 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+Automation > Routines filters names, job targets and descriptions locally and
+shows at most three cards per page in each Active or Paused group. Paused
+routines start collapsed behind a keyboard- and touch-operable disclosure;
+filtering opens it to show matching paused entries. Group counts include the
+total catalogue and summarize blocked, stalled and repeatedly failing routines
+even when their cards are on another page or collapsed. The failure warning
+and next-hour timeline always cover the full catalogue. Filter, page and
+disclosure choices survive status refreshes and reset on workspace or host
+changes. Close an open trigger editor before filtering or changing pages.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace
