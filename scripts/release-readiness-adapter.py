@@ -241,16 +241,27 @@ def judge_security(request):
     for finding in findings:
         if not isinstance(finding, dict) or not finding.get("task_id"):
             unavailable("finding-malformed", "a finding names no task")
+        disposition = finding.get("disposition", "new")
+        if disposition not in ("new", "duplicate"):
+            unavailable("finding-malformed", "a finding has an unknown disposition")
         task_id = finding["task_id"]
         cited.add(task_id)
-        task = spawned.get(task_id) or referenced.get(task_id)
+        task = referenced.get(task_id) if disposition == "duplicate" else (
+            spawned.get(task_id) or referenced.get(task_id)
+        )
         if task is None or task.get("status") == "missing":
             unavailable("finding-unresolved", f"finding task {task_id} does not exist")
         edge = any(
             relation.get("type") == "spawned_from" and relation.get("target") == bound
             for relation in task.get("relations", [])
         )
-        if not edge:
+        if disposition == "duplicate":
+            # Duplicates are read back through task_refs, retaining their
+            # original provenance. A current-review spawn cannot opt out of
+            # the new-finding contract by calling itself a duplicate.
+            if task_id in spawned or edge:
+                unavailable("finding-not-duplicate", f"finding task {task_id} belongs to this review")
+        elif not edge:
             unavailable("finding-unlinked", f"finding task {task_id} is not spawned from this review")
         severity = str(finding.get("severity", "")).lower()
         if (severity in BLOCKING_PRIORITIES or task.get("priority") in BLOCKING_PRIORITIES) and (
