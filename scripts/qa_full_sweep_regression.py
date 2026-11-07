@@ -69,7 +69,9 @@ elif mode.startswith("native-"):
     raise SystemExit(record.get("exit_code", 0))
 else:
     print("     Running tests/boundary.rs (target/debug/deps/boundary-fixture)", file=sys.stderr)
-    failed = mode in ("nonzero-notice", "suite-notice")
+    failed = mode in ("nonzero-notice", "suite-notice", "builtin-probe-available-eperm")
+    if mode == "builtin-probe-available-eperm":
+        print("fixture write: Operation not permitted (os error 1)", file=sys.stderr)
     print("running 1 test")
     if failed:
         print("test boundary::contracts ... FAILED")
@@ -222,6 +224,7 @@ def self_test():
     scratch_cleanup_race_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch, wire=True)
+    builtin_refusal_self_test(harness, scratch, nested=True)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -750,7 +753,7 @@ def self_test():
 
 
 
-def builtin_refusal_self_test(harness, scratch, wire=False, cases=None):
+def builtin_refusal_self_test(harness, scratch, wire=False, cases=None, nested=False):
     """Public main rejects incomplete refusals and fabricated wire/index evidence."""
     with tempfile.TemporaryDirectory(prefix="qa-builtin-refusal-", dir=scratch) as tmp:
         repo = Path(tmp)
@@ -762,6 +765,16 @@ from unittest import mock
 real_run = qa.run
 mode = json.loads((repo / "mode.json").read_text())
 def injected_run(argv, **kwargs):
+    if mode.startswith("builtin-probe-"):
+        capability = ("sandbox-apply" if argv[0] == "/usr/bin/sandbox-exec" else
+                      "protected-fixture-write" if len(argv) > 2 and argv[1] == "-c"
+                      and "qa-protected-write-" in argv[2] else None)
+        if capability and mode != "builtin-probe-native":
+            unavailable = mode == "builtin-probe-unavailable"
+            return {"command": argv, "exit_code": (71 if capability == "sandbox-apply" else 77) if unavailable else 0,
+                    "stdout": json.dumps({"denied": [{"errno": 1}]} if unavailable else {"denied": []}),
+                    "stderr": "sandbox_apply: Operation not permitted" if unavailable and capability == "sandbox-apply" else "",
+                    "outcome": "FAIL", "cleanup_verified": True}
     refusal = (("task" in argv and "show" in argv and "--workspace" in argv
                 and Path(argv[argv.index("--workspace") + 1]).name == "other-workspace")
                or ("config" in argv and "set" in argv
@@ -884,7 +897,7 @@ if "search" in args and "reindex" in args:
     print(json.dumps(body))
     raise SystemExit(0)
 if "init" in args and "workspace" not in args:
-    if root.name == "migration-root" and not mode.startswith("builtin-wire-"):
+    if root.name == "migration-root" and not mode.startswith(("builtin-wire-", "builtin-probe-")):
         raise SystemExit(1)  # Stop after all shared refusal callers under test.
     root.mkdir(parents=True, exist_ok=True)
     (root / "config.toml").write_text("identity")
@@ -915,6 +928,13 @@ elif "search" in args:
     body = {"id": "QAF-1", "title": "QA behavioral fixture"}
 elif "friction" in args:
     body = {"description": "qa isolated friction marker"}
+elif "recommend" in args or "qashapes.recommend" in args:
+    print("sandbox_apply: Operation not permitted", file=sys.stderr)
+    raise SystemExit(71)
+elif "fs-access" in args:
+    body = {"read": {"allowed": True}, "modify": {"allowed": False}}
+elif "providers" in args:
+    body = [{"sandbox": "fixture", "cli_available": True}]
 elif "log" in args:
     if "orbit.qa.absent" not in args:
         print(Path(args[args.index("--path") + 1]).read_text().splitlines()[-1])
@@ -928,6 +948,14 @@ print(json.dumps(body))
         names = ({"mcp-wire-boundary"} if wire else
                  {"workspace-boundary", "config-transaction", "machine-identity-transaction"})
         scenarios = [item for item in inventory["scenarios"] if item["id"] in names]
+        if nested:
+            names = {"definition-policy-boundary", "distributed-drain-owner-roundtrip", "workflow-process-boundary"}
+            scenarios = [item for item in inventory["scenarios"] if item["id"] == "definition-policy-boundary"]
+            scenarios.extend({"id": name, "required": True, "kind": "cargo-test", "capability": "local",
+                              "command": ["cargo", "test", "-p", "fixture", "--test", "boundary", "boundary::"],
+                              "assertions": ["original-boundary"], "required_tests": ["boundary::contracts"],
+                              "required_rows": ["original_boundary"]}
+                             for name in sorted(names - {"definition-policy-boundary"}))
         (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
         if wire:
             # Keep unrelated built-ins out of the inventory while executing the
@@ -944,14 +972,42 @@ print(json.dumps(body))
             "boolean-reindex", "string-reindex", "empty-stdout"]] if wire else
             ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"])
         valid_unrelated = None
+        if nested:
+            modes = ["probe-unavailable", "probe-available-eperm"]
+            if os.environ.get("QA_SWEEP_NATIVE_PROBES") == "1":
+                modes = ["probe-native"]
         for mode in (modes if cases is None else ["wire-" + case for case in cases]):
             (repo / "mode.json").write_text(json.dumps("builtin-" + mode))
-            child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate"],
+            child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate",
+                                    *(["--run-commands"] if nested else [])],
                                    cwd=repo, env={**os.environ,
                                                  "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
                                    capture_output=True, text=True, timeout=60)
             assert child.returncode == 0, (mode, child.stdout, child.stderr)
             report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            if nested:
+                unavailable = mode != "probe-available-eperm"
+                rows = [item for item in report["results"] if item["scenario"] in names]
+                assert {item["scenario"] for item in rows} == names, report
+                assert report["decision"] == "INCOMPLETE", report
+                assert all(item["outcome"] == ("NOT_RUN" if unavailable else "FAIL")
+                           for item in rows if unavailable or "capability_probe" in item
+                           and ("recommend" in item["command"] or "qashapes.recommend" in item["command"]
+                                or item["scenario"] != "definition-policy-boundary")), report
+                if unavailable:
+                    assert all(not item["assertions"] and item["exit_code"] is None for item in rows), report
+                    assert {item["scenario"] for item in report["capability_gaps"]} == names, report
+                    assert all(item["capability_probe"]["outcome"] == "NOT_RUN" for item in rows), report
+                else:
+                    failures = [item for item in rows if item["outcome"] == "FAIL"]
+                    assert {item["scenario"] for item in failures} == names, report
+                    assert all(item["capability_probe"]["outcome"] == "PASS" for item in failures), report
+                    assert all("Operation not permitted" in item["stderr"] for item in failures), report
+                    assert not report["capability_gaps"], report
+                if destination := os.environ.get("QA_SWEEP_PROBE_REPORT"):
+                    Path(destination).write_text(json.dumps(report, indent=2) + "\n")
+                print("nested-sandbox: " + mode + " passed", flush=True)
+                continue
             if wire:
                 case = mode.removeprefix("wire-")
                 reindex_bad = case in {"empty-reindex", "unrelated-reindex", "zero-reindex", "boolean-reindex", "string-reindex", "empty-stdout"}
