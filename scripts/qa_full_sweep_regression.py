@@ -9,6 +9,7 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import time
 
 
 # Substitute the repository/capability adapters, then invoke the actual public
@@ -25,8 +26,16 @@ qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
                                 "status": [], "diff_sha256": "fixture"}
-if not json.loads((repo / "mode.json").read_text()).startswith("builtin-"):
+_mode = json.loads((repo / "mode.json").read_text())
+if not _mode.startswith("builtin-"):
     qa.run_builtins = lambda *_: ([], None)
+if _mode == "local-cleanup-unverified":
+    _real_run = qa.run
+    def _run_with_unverified_cleanup(*args, **kwargs):
+        _evidence = _real_run(*args, **kwargs)
+        _evidence["cleanup_verified"] = False
+        return _evidence
+    qa.run = _run_with_unverified_cleanup
 qa.platform.system = lambda: "Darwin"
 qa.inspect_browser_capability = lambda *_: ({"command": ["probe"], "exit_code": 0,
                                             "stdout": "fixture browser", "stderr": ""}, "fixture browser")
@@ -297,6 +306,53 @@ def self_test():
         assert row(report, "macos-platform")["outcome"] == "NOT_RUN" and not row(report, "macos-platform")["assertions"], report
         report = sweep([rust], "complete")
         assert report["decision"] == "PASS" and row(report, "rust")["passing_rows"] == ["original_boundary"], report
+        # An exit-zero local command with unverified cleanup must not earn
+        # sign-off through the public --run-commands route. The driver runs
+        # the real bounded command, then injects cleanup_verified=False as
+        # the supervisor observation; raw evidence stays on the row.
+        local_started = time.perf_counter()
+        local = {"id": "local-command", "required": True, "capability": "local", "kind": "command",
+                 "command": [sys.executable, "-c",
+                             "import sys; print('local-command stdout'); "
+                             "print('local-command stderr', file=sys.stderr)"],
+                 "assertions": ["local-command-ran"]}
+        notice = "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"
+        local_notice = {**local, "command": [sys.executable, "-c",
+                                             "import sys; print('local-command stdout'); "
+                                             "print('local-command stderr', file=sys.stderr); "
+                                             f"print({notice!r}, file=sys.stderr)"]}
+        report = sweep([local], "complete")
+        result = row(report, "local-command")
+        assert report["decision"] == "PASS" and result["outcome"] == "PASS", report
+        assert result["assertions"] == ["local-command-ran"], result
+        assert result["exit_code"] == 0 and result["cleanup_verified"] is True, result
+        assert result["stdout"] == "local-command stdout\n", result
+        assert result["stderr"] == "local-command stderr\n", result
+        report = sweep([local], "local-cleanup-unverified")
+        result = row(report, "local-command")
+        assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
+        assert result["assertions"] == [], result
+        assert result["exit_code"] == 0 and result["cleanup_verified"] is False, result
+        assert result["stdout"] == "local-command stdout\n", result
+        assert result["stderr"] == "local-command stderr\n", result
+        # Cleanup refusal wins over a capability notice: still FAIL, never
+        # PASS or NOT_RUN, with the notice retained as a capability gap.
+        report = sweep([local_notice], "local-cleanup-unverified")
+        result = row(report, "local-command")
+        assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", report
+        assert result["assertions"] == [], result
+        assert result["exit_code"] == 0 and result["cleanup_verified"] is False, result
+        assert result["stdout"] == "local-command stdout\n", result
+        assert "local-command stderr" in result["stderr"] and notice in result["stderr"], result
+        assert notice in result["missing_capabilities"], result
+        # The notice alone, with verified cleanup, remains NOT_RUN.
+        report = sweep([local_notice], "complete")
+        result = row(report, "local-command")
+        assert report["decision"] == "INCOMPLETE" and result["outcome"] == "NOT_RUN", report
+        assert result["assertions"] == [], result
+        assert result["exit_code"] == 0 and result["cleanup_verified"] is True, result
+        assert notice in result["missing_capabilities"], result
+        print(f"qa local-command cleanup rows: {time.perf_counter() - local_started:.3f}s", flush=True)
         for mode in ["seatbelt", "ps"]:
             report = sweep([rust], mode)
             result = row(report, "rust")
