@@ -365,6 +365,21 @@ body {
   }
 }
 
+/* Ordinary tables (anything without a specialized class) keep short inline
+   code chips fully readable at phone widths. The prose rule sizes code as a
+   local scroll box (max-width minus 3ch for trailing punctuation, nowrap,
+   overflow-x auto), which gives the table's auto layout a near-zero
+   min-content width for the cell, so a narrow column such as a Status column
+   clips even short labels. Let ordinary-table code use its cell width and
+   wrap at token boundaries instead, like the specialized tables. Prose
+   outside tables keeps the punctuation reservation and scroll behavior, and
+   the config-keys and cli-commands overrides above stay authoritative. */
+.sl-markdown-content table:not(.orbit-config-keys):not(.orbit-cli-commands) code:not(pre code) {
+  max-width: 100%;
+  overflow-x: visible;
+  white-space: normal;
+}
+
 .sl-markdown-content table th,
 .sl-markdown-content table td {
   border-bottom: 1px solid var(--sl-color-hairline-light);
