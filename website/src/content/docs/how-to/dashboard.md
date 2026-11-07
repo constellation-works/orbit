@@ -1476,12 +1476,20 @@ the longer fields.
 ### Routines
 
 
-![Automation → Routines: the next hour's fires on a timeline, then each routine with its switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group paged at three routines per page, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+
+The toolbar filters routine names, job targets, and descriptions. The Active
+and Paused groups paginate independently, with up to three routines on each
+page. The Paused group starts collapsed; open it to find paused routines.
+Typing a filter opens Paused to show matching routines. Close an open trigger
+editor before filtering or changing pages; these controls stay disabled while
+the editor is open.
+
 A **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
-Each row's switch writes the routine's `enabled` field. It does not start or
+Each routine's switch writes its `enabled` field. It does not start or
 stop the host scheduler clock.
 
 ### Scheduler clock
