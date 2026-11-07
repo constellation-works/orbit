@@ -945,7 +945,7 @@ auto-task step.
 | `wait_until` | CEL readiness predicate: false or unknown waits, true is ready. Absent means ready when the job reaches the step. |
 | `expire_when` | CEL predicate: true ends the unfinished step as `timeout`. |
 | `reuse_when` | CEL predicate over the named auto-task's latest accepted `result`; true lets the step settle on it, after Orbit checks it, instead of minting. |
-| `require_result` | Typed result contract; `release-readiness/v1` is the one registered. |
+| `require_result` | Typed result contract; it must match the auto-task definition's `completion.contract`. See the [evidence guide](../scheduling-yaml/#completion-evidence) for manifest and adapter examples. |
 | `spec.expire_when` | Required on a job with auto-task steps: `now >= job.started_at + duration('<d>')` or `now >= timestamp('<RFC3339>')`, positive and at most 168h after admission. |
 
 The CEL fields use the condition-trigger language with its 4 KiB, 200-node

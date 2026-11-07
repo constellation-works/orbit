@@ -144,6 +144,223 @@ If the ref or the cursor cannot be read, no completed sweep matches, or the prob
 
 `completion` declares the evidence a job step with `require_result` must see: `contract`, `adapter` (a granted script), `form`, `evidence_artifact`, `max_age_minutes`, and optional `read_task_tags` and `evidence_instructions`. A definition without it behaves as before. Adding it makes older Orbit versions refuse the file.
 
+### Completion evidence
+
+A completion contract is opt-in. A job step that targets the definition must set
+`require_result` to the same `contract`; without a matching declaration and a
+granted adapter, the step waits and mints nothing. The contract name and `form`
+are labels shared by the definition, step and adapter. Orbit does not decide
+what a form means: the adapter applies the workspace's policy.
+
+Before the step is ready to mint, Orbit checks that the workspace's base
+branch still points at the revision pinned for this job. If it moved, the step
+is held; start a fresh job run for the updated source. `max_age_minutes` must
+be positive and limits how long a later step may rely on an accepted result.
+
+For example, add this block to a definition you author. This example is not a
+seeded auto-task; `enabled: false` keeps it from firing until an operator
+reviews and enables it.
+
+```yaml
+schemaVersion: 1
+name: example-evidence-check
+description: Check a team's evidence bundle.
+enabled: false
+schedule:
+  every_minutes: 60
+template:
+  title: Assemble evidence for the team check
+  description: Attach the evidence files required by the team policy.
+  acceptance_criteria:
+    - Attach the evidence files and the completion manifest.
+  task_type: chore
+completion:
+  contract: example-evidence/v1
+  adapter: evidence-check
+  form: review-summary
+  evidence_artifact: completion-evidence.json
+  max_age_minutes: 1440
+  read_task_tags:
+    - qa-evidence
+  evidence_instructions: >-
+    Attach review.json and any other files the adapter needs to judge this
+    evidence form.
+dedupe: skip_if_open
+```
+
+Set a job step's `require_result` to `example-evidence/v1` and its target to
+`auto-task:example-evidence-check`. A definition that declares completion
+requires the matching `require_result`; a different or missing contract holds
+the step. See [Auto-task steps](../activity-job-yaml/#auto-task-steps).
+
+The `adapter` names a workspace script. Create its manifest at
+`.orbit/resources/scripts/evidence-check.yaml` and point `entry` to a program
+file inside the workspace, for example:
+
+```yaml
+schemaVersion: 1
+kind: Script
+metadata:
+  name: evidence-check
+spec:
+  description: Apply the workspace policy to completion evidence.
+  entry: tools/evidence-check.py
+  interpreter: [python3]
+  requests:
+    network: none
+    timeout_seconds: 30
+```
+
+Write the adapter policy in that entry file. Orbit sends one JSON object to the
+script's standard input and expects one JSON verdict on standard output. Review
+and grant the script on the workspace owner host with
+`orbit script grant evidence-check`. A grant records the manifest and entry
+digests on that host; editing either file makes the grant stale, so an operator
+must review and grant the changed script again. An absent, stale or ungranted
+adapter holds admission before task minting; if it becomes unavailable later,
+completion stays held. See [Script steps](../activity-job-yaml/#script-steps)
+for manifest paths, script input/output and grant behavior.
+
+The adapter input contains the candidate under `evidence.manifest`, the
+referenced files under `evidence.artifacts`, owner-verified task facts under
+`tasks`, and a `trusted` object with the workspace, definition and digest,
+task and run IDs, pinned source revision, recorded completion time, and
+execution machine when known. A JSON artifact entry has its SHA-256 and its
+parsed JSON value (or `null` when the bytes are not JSON). For example, an
+adapter receives fields shaped like this:
+
+```json
+{
+  "schema_version": 1,
+  "contract": "example-evidence/v1",
+  "form": "review-summary",
+  "trusted": {
+    "workspace_id": "<workspace id>",
+    "definition": "example-evidence-check",
+    "definition_digest": "<definition digest>",
+    "task_id": "<task id>",
+    "run_id": "<run id>",
+    "source_revision": "<pinned source revision>",
+    "completed_at": "<owner-recorded RFC 3339 time>",
+    "execution_machine": null,
+    "release_survey": null
+  },
+  "evidence": {
+    "manifest": {
+      "schema_version": 1,
+      "contract": "example-evidence/v1",
+      "binding": {
+        "workspace_id": "<workspace id>",
+        "definition": "example-evidence-check",
+        "definition_digest": "<definition digest>",
+        "task_id": "<task id>",
+        "run_id": "<run id>",
+        "source_revision": "<pinned source revision>"
+      },
+      "artifacts": [
+        {"path": "review.json", "sha256": "<sha256 of the file bytes>"}
+      ],
+      "task_refs": []
+    },
+    "artifacts": {
+      "review.json": {
+        "sha256": "<sha256 of the file bytes>",
+        "json": {"checks_passed": true}
+      }
+    }
+  },
+  "tasks": {
+    "bound": {
+      "id": "<task id>",
+      "title": "Assemble evidence for the team check",
+      "status": "done",
+      "priority": "medium",
+      "type": "chore",
+      "tags": [],
+      "description": "Attach the evidence files required by the team policy.",
+      "context_files": [],
+      "relations": []
+    },
+    "spawned": [],
+    "tagged": [],
+    "referenced": []
+  }
+}
+```
+
+Before finishing the task, attach the evidence files and then the JSON file
+named by `evidence_artifact` (`completion-evidence.json` in this example) with
+`orbit.task.artifact.put`. The candidate manifest has this shape:
+
+```json
+{
+  "schema_version": 1,
+  "contract": "example-evidence/v1",
+  "binding": {
+    "workspace_id": "<workspace id from Required evidence>",
+    "definition": "example-evidence-check",
+    "definition_digest": "<definition digest from Required evidence>",
+    "task_id": "<this task id>",
+    "run_id": "<this run id>",
+    "source_revision": "<pinned revision from Required evidence>"
+  },
+  "artifacts": [
+    {"path": "review.json", "sha256": "<sha256 of the exact file bytes>"}
+  ],
+  "task_refs": []
+}
+```
+
+The auto-task step adds a **Required evidence** block to its task with the
+owner-supplied binding values. Copy those values exactly; the owner compares
+all six fields with its own records. Replace each angle-bracket placeholder
+with the supplied value or the digest of the exact attached file bytes. List
+evidence files in `artifacts`, not the completion manifest itself. The
+manifest must be valid JSON with `schema_version: 1`, the declared contract,
+and at least one evidence file. Do not add `status` or `completed_at`: the
+owner reads the task's recorded move to `done` for its completion time. It
+also checks that the bound task was created for this definition digest and
+pinned revision, and that the evidence files existed by completion and still
+match their SHA-256 digests. A task being `done` by itself is not accepted
+evidence.
+
+The script returns a verdict about those same identifiers. For example, a
+passing verdict is:
+
+```json
+{
+  "schema_version": 1,
+  "contract": "example-evidence/v1",
+  "form": "review-summary",
+  "task_id": "<task id from trusted input>",
+  "source_revision": "<pinned revision from trusted input>",
+  "status": "passed",
+  "reasons": []
+}
+```
+
+`status` is `passed`, `blocked` or `unavailable`. Include `reasons` as
+`[{"code":"...","detail":"..."}]` when the evidence is blocked or the
+adapter cannot judge it. Orbit accepts only a valid verdict with matching
+schema, contract, form, task ID and source revision, after a clean script
+exit. `blocked`, `unavailable`, malformed output, a nonzero exit, missing or
+changed artifacts, and binding mismatches hold the step; they never become a
+passed result. Holds are checked again until the step expires.
+
+The owner stores the latest accepted receipt per definition. Its completion
+time, task and run identity, definition digest, source revision, and adapter
+digest come from owner records, not the candidate manifest, adapter verdict or
+agent's final message. A later reuse or prerequisite proof is accepted only
+while the task is still done at the owner-recorded time, the definition digest
+and pinned source still match, the receipt is within `max_age_minutes`, and
+its artifacts are unchanged. Reuse also runs the current adapter against the
+evidence again. Conditions can read the latest accepted time as
+`self.last_succeeded_at` or
+`auto_tasks['<name>'].last_succeeded_at`; see [condition result history](#what-an-expression-reads).
+To inspect a held step, run `orbit run show <run-id> -s <step-id>`; use
+`orbit automation explain job:<name>` to inspect the job's resolved auto-task
+and readiness guards.
+
 ## Delivery triggers
 
 `schedule.deliveries_landed` on an auto-task and `trigger.deliveries_landed` on a routine use the same object. The consumer watches verified landings on one branch and files work when the debt is due. It is opt-in.
