@@ -550,7 +550,6 @@ export function renderAutoDrainStart(payload, reasons) {
     ]),
     autoDrainConcurrencyControl(payload, form),
     form.problem,
-    el("div", { class: "drain-divider", role: "separator", "aria-label": "After a task ships" }, [el("span", { text: "After a task ships" })]),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
     autoDrainAutoFixControl(payload, reasons),
