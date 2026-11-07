@@ -22,8 +22,8 @@ admission algorithm and audit record. It then maps each office app approval acti
 allowed or refused, gives the migration for existing consents, and lists the
 implementation slices. The original refusal snapshot is `9a03c7cc5` (2026-11-01).
 Orbit slices 1-5 have since shipped as [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042]; §1 describes current
-admission, while §6 retains the original office action map. Line numbers refer to the
-original layout and are for orientation; the symbols are the anchors. orbit-office
+admission, while §6 retains the original office action map. Line numbers are for orientation
+and drift between revisions; the symbols are the anchors. orbit-office
 paths are from that repository at `b5654763e`, written as `orbit-office/<path>`.
 
 ## 1. What admission does today
@@ -75,15 +75,15 @@ Other crates are named explicitly.
 
 Admission runs before the capability chokepoint in `authorize_registered_tool`
 (`crates/orbit-runtime/src/tool_exec.rs:175`), in `run_tool_with_context_and_role_and_capability`
-(`crates/orbit-core/src/adapter/tool_execution.rs:118-129`) and on every plugin callback
-(`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:493-499`).
+(`crates/orbit-core/src/adapter/tool_execution.rs:133-142`) and on every plugin callback
+(`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:513-520`).
 App-bound completion callbacks are sent to the host, because the witness is hidden from
 plugin sandboxes. `routes_on_host` in
 `crates/orbit-tools/src/plugin/callback/host_route.rs` routes every application callback
 listed by `application_callback_tool` in the ceiling table: task updates, exact decision
 answers, constrained task/artifact reads and payload-bound auto-task add/update calls.
 A plugin child's session record carries the bound invocation (`bind_application`,
-`crates/orbit-tools/src/plugin/callback/session.rs:121-140`, limited to 8 KiB). A
+`crates/orbit-tools/src/plugin/callback/session.rs:152-177`, limited to 8 KiB). A
 long-lived MCP backend is keyed by the serialized invocation
 (`crates/orbit-tools/src/plugin/mcp.rs:167-185`).
 
