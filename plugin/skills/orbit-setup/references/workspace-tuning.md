@@ -279,6 +279,21 @@ crew, usually at `hard`. Every member must be a defined, enabled crew with a
 positive weight; remove a key instead of leaving it empty. Untyped work and
 unlisted tiers keep the complexity pool.
 
+### Automatic effort: `<crew>@auto` members
+
+A pool member written `<crew>@auto` (in the implementer, task-pilot and
+review pools only) lets each draw pick the crew's effort from its
+`workflow.auto_effort.bands` instead of fixing one effort per member. Reach
+for it when one crew should run cheap on small, low-tier work and strong on
+hard work, rather than splitting the pool into fixed `<crew>@<effort>`
+members per tier. Order bands from the strongest claim to the weakest: the
+first band whose conditions the draw's signal meets wins, and unmatched
+draws fall back to the crew's configured effort. Tune band cut-offs from the
+implementer scorecard's size curves once deliveries accumulate, and keep
+`workflow.auto_effort.explore_share` at its default while a cutover settles
+so both efforts keep getting data. Bands, signals, refusals and readback
+verification: [Automatic effort selection](configuration.md#automatic-effort-selection-crewauto).
+
 ### Draw policy: `workflow.crew_selection` and `workflow.crew_performance`
 
 - **`crew_selection`**: `static` draws on the configured weights.
