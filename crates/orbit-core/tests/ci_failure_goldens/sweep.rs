@@ -562,6 +562,82 @@ fn declared_infrastructure_signature_files_no_sweep_task() {
 }
 
 #[test]
+fn declared_infrastructure_signature_in_complete_diagnostic_suppresses_truncated_display() {
+    if !isolated_with_fake_gh(
+        "sweep::declared_infrastructure_signature_in_complete_diagnostic_suppresses_truncated_display",
+    ) {
+        return;
+    }
+    let attributed = |payload: &str| {
+        format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {payload}\n")
+    };
+    let mut log = String::new();
+    log.push_str(&attributed(
+        "HEAD is now at {checkout} Merge into agent-main",
+    ));
+    log.push_str(&attributed("##[group]Run scripts/ci-download-verified.sh"));
+    log.push_str(&attributed("##[endgroup]"));
+    for i in 0..100 {
+        log.push_str(&attributed(&format!(
+            "ordinary output line {i:03} {}",
+            "x".repeat(100)
+        )));
+    }
+    log.push_str(&attributed(
+        "ci-download: outcome=failed class=transient attempts=9 total_seconds=57.1 budget_seconds=60.0",
+    ));
+    for i in 100..200 {
+        log.push_str(&attributed(&format!(
+            "ordinary output line {i:03} {}",
+            "x".repeat(100)
+        )));
+    }
+    log.push_str(&attributed("##[error]Process completed with exit code 1."));
+
+    let mut undeclared = Workspace::new();
+    undeclared.push_red_run(8_201, 9_301, &log);
+    let (evidence, filed) = undeclared.sweep();
+    let current = evidence["current_failures"].as_array().unwrap();
+    assert_eq!(current.len(), 1, "{evidence:#}");
+    assert!(
+        !current[0]["log_excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("ci-download: outcome=failed"),
+        "bounded display must omit the middle signature: {evidence:#}"
+    );
+    assert!(
+        current[0]["diagnostic_unit"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ci-download: outcome=failed"),
+        "complete diagnostic must retain the signature: {evidence:#}"
+    );
+    assert_eq!(filed.unwrap()["filed_count"], json!(1));
+
+    let mut declared = Workspace::with_config(
+        "[workflow]\nci_infrastructure_signatures = \
+         [\"ci-download: outcome=failed class=transient\"]\n",
+    );
+    declared.push_red_run(8_201, 9_301, &log);
+    let (_, filed) = declared.sweep();
+    let filed = filed.unwrap();
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["outcome"], json!("current_failures"), "{filed:#}");
+    assert_eq!(filed["audit"]["infrastructure"], json!(1), "{filed:#}");
+    let held = &filed["infrastructure"][0];
+    assert_eq!(held["run_id"], json!(8_201), "{filed:#}");
+    assert_eq!(held["job_id"], json!(9_301), "{filed:#}");
+    assert_eq!(
+        held["signature"],
+        json!("ci-download: outcome=failed class=transient"),
+        "{filed:#}"
+    );
+    assert!(open_sweep_tasks(&declared.runtime).is_empty());
+}
+
+#[test]
 fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     if !isolated_with_fake_gh(
         "sweep::ci_retired_ref_candidates_do_not_starve_an_agent_main_failure",

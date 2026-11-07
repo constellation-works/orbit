@@ -2,7 +2,11 @@
 //! (`workflow.ci_infrastructure_signatures`): reported, not filed.
 
 use orbit_engine::ci_log_signature::declared_infrastructure_signature;
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
+
+use super::evidence::selected_diagnostic;
+use super::fields::value_string;
 
 /// Separate the failures a declared signature names. Each keeps only its
 /// identity and the matched signature: the log has no repair to brief.
@@ -13,10 +17,14 @@ pub(super) fn split_declared_infrastructure(
     let mut remaining = Vec::new();
     let mut infrastructure = Vec::new();
     for failure in failures {
-        let matched = failure
-            .get("log_excerpt")
-            .and_then(Value::as_str)
-            .and_then(|log| declared_infrastructure_signature(log, signatures));
+        // Prefer the validated complete diagnostic (same provenance as
+        // clustering) so a truncated display cannot hide a declared
+        // signature; fall back to the bounded display otherwise.
+        let raw = selected_diagnostic(&failure)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value_string(&failure, "log_excerpt"));
+        let log = strip_ansi_sequences(&raw);
+        let matched = declared_infrastructure_signature(&log, signatures);
         match matched {
             Some(signature) => infrastructure.push(json!({
                 "run_id": failure.get("run_id"),
