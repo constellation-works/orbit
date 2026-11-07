@@ -454,9 +454,9 @@ fn admission_receipts(runtime: &OrbitRuntime, compact: bool) -> CommandOut {
         storage.claim_mutation_receipts.count,
         storage.claim_mutation_receipts.logical_payload_bytes,
     );
-    Ok(Payload::detail(
+    Ok(Payload::blocks(
         json!({"compacted_receipts": compacted_receipts, "storage": storage}),
-        text,
+        vec![Block::prose(text)],
     )
     .into())
 }
