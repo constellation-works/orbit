@@ -454,11 +454,10 @@ pub(super) fn run_cli_on_terminal_at_width(
     };
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
     let mut actual = dimensions;
-    // SAFETY: openpty returned a live descriptor and actual is a writable winsize.
-    assert_eq!(
-        unsafe { libc::ioctl(slave, libc::TIOCGWINSZ, &mut actual) },
-        0
-    );
+    // SAFETY: `slave` is the live pty descriptor openpty returned above, and `actual`
+    // is a writable winsize that TIOCGWINSZ fills in for the duration of the call.
+    let read_size = unsafe { libc::ioctl(slave, libc::TIOCGWINSZ, &mut actual) };
+    assert_eq!(read_size, 0, "read PTY window size");
     assert_eq!(actual.ws_col, dimensions.ws_col, "PTY width readback");
     // SAFETY: successful openpty returned owned, distinct file descriptors.
     let mut master = unsafe { std::fs::File::from_raw_fd(master) };

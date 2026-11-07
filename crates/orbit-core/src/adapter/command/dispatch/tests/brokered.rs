@@ -595,7 +595,9 @@ fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
     // request: here, that the named task does not exist.
     let cycle = dispatching.job_run_id.clone().expect("cycle run");
     let serving = serve(&fixture, dispatching);
-    // SAFETY: as above.
+    // SAFETY: the fixture's ScopedEnv holds the process-wide env lock until it drops,
+    // so no other guarded test mutates the environment; on drop it restores
+    // ORBIT_PLUGIN_BROKER and ORBIT_RUN_ID to their prior values.
     unsafe {
         std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
         std::env::set_var("ORBIT_RUN_ID", &cycle);
@@ -759,7 +761,9 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
     // With the right, the same forwarded calls run: a task with no pull request
     // completes, and has nothing to land.
     let serving = serve(&fixture, merging);
-    // SAFETY: as above.
+    // SAFETY: the fixture's ScopedEnv holds the process-wide env lock until it drops,
+    // so no other guarded test mutates the environment; on drop it restores
+    // ORBIT_PLUGIN_BROKER and ORBIT_RUN_ID to their prior values.
     unsafe {
         std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path());
         std::env::set_var("ORBIT_RUN_ID", &merging_run);
