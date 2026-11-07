@@ -24,7 +24,7 @@ recorded here per CONVENTIONS.md §11. If the folder grows specs or a glossary i
 graduates to the full track in that change (Problem and Goal become `1_overview.md`).
 Bearing: block triage
 (`crates/orbit-core/src/application/task/blocked_recovery/triage.rs`), task-pilot
-admission holds (`crates/orbit-core/src/application/task/pilot/admission.rs`), the
+admission holds (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`), the
 human update path (`update_task_as_human`,
 `crates/orbit-core/src/application/task/update/entry.rs`), the authorization catalog
 (`crates/orbit-common/src/governance/authorization/`), state and cron triggers

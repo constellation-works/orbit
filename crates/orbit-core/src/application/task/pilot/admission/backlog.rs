@@ -14,10 +14,14 @@ use orbit_types::tool::McpCapability;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::positive_validation_tools;
+use super::super::super::positive_validation_tools;
 
-use super::super::helpers::is_automation_actor;
-use super::super::legacy_decisions;
+use super::super::super::helpers::is_automation_actor;
+use super::super::super::legacy_decisions;
+use super::holds::{
+    HostOperationalHold, NativeOsHold, OperatorValidationHold, OperatorValidationRequirement,
+    PilotAdmissionHold,
+};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
@@ -108,7 +112,7 @@ pub(crate) fn invoked_operator_requirements(
 
 /// Status, priority, attribution, comments and execution evidence are not
 /// assessed validation material; editing them must not release a hold.
-pub(super) fn validation_material(task: &Task) -> String {
+pub(in super::super) fn validation_material(task: &Task) -> String {
     sha256_hex(
         json!({
             "title": task.title, "description": task.description,
@@ -124,7 +128,7 @@ pub(super) fn validation_material(task: &Task) -> String {
 
 /// The `no-pilot` tag changes pilot policy, not the owner-side work a
 /// `host_operational` finding requires, so it cannot rescope that hold.
-pub(super) fn host_operational_material(task: &Task) -> String {
+pub(in super::super) fn host_operational_material(task: &Task) -> String {
     let mut assessed = task.clone();
     assessed.tags.retain(|tag| tag != "no-pilot");
     validation_material(&assessed)
@@ -132,7 +136,7 @@ pub(super) fn host_operational_material(task: &Task) -> String {
 
 /// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
 /// re-scope that releases it.
-pub(super) fn criteria_digest(task: &Task) -> String {
+pub(in super::super) fn criteria_digest(task: &Task) -> String {
     sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
 }
 
@@ -249,7 +253,7 @@ impl OrbitRuntime {
         // newest first, so a legacy override on a non-pilot comment newer
         // than the receipt still counts. The newest receipt settles the
         // read; an undecodable body is an error, not a skip.
-        let mut receipts = super::pilot_receipts(comments).peekable();
+        let mut receipts = super::super::pilot_receipts(comments).peekable();
         for comment in comments.iter().rev() {
             // An override written as a comment before typed decisions, after
             // this receipt. Operator validation additionally requires its
@@ -271,18 +275,18 @@ impl OrbitRuntime {
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
-            if super::freshness::pilot_requirements_stale(
+            if super::super::freshness::pilot_requirements_stale(
                 task,
                 &audit,
                 receipt.operation_id,
                 history,
             )? {
-                if super::skip::skips_pilot(&task.tags) {
+                if super::super::skip::skips_pilot(&task.tags) {
                     return Ok(None);
                 }
                 return Ok(Some(PilotAdmissionHold::StaleAssessment(format!(
                     "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new assessment completes. {}",
-                    super::skip::pilot_hold_remedies(task)
+                    super::super::skip::pilot_hold_remedies(task)
                 ))));
             }
             let operation_id = receipt.operation_id;
@@ -339,7 +343,7 @@ impl OrbitRuntime {
                     return Ok(Some(PilotAdmissionHold::HostOperational(hold)));
                 }
             }
-            if super::skip::skips_pilot(&task.tags) {
+            if super::super::skip::skips_pilot(&task.tags) {
                 return Ok(None);
             }
             let operator_decision = operator_resolved(
@@ -348,7 +352,7 @@ impl OrbitRuntime {
                 operation_id,
                 ("material", &material),
             );
-            let post_deploy = super::post_deploy::requirements_from_audit(task, &audit)?;
+            let post_deploy = super::super::post_deploy::requirements_from_audit(task, &audit)?;
             let is_candidate_requirement = |requirement: &OperatorValidationRequirement| {
                 !post_deploy
                     .iter()
@@ -461,7 +465,7 @@ impl OrbitRuntime {
                 };
                 let comments = self.get_task_comments(task_id)?;
                 let operation_id =
-                    super::latest_pilot_operation_id(&comments).ok_or_else(|| {
+                    super::super::latest_pilot_operation_id(&comments).ok_or_else(|| {
                         OrbitError::Execution("operator handoff has no pilot receipt".into())
                     })?;
                 let Some((mut event, header)) = hold.operator_handoff(operation_id) else {
@@ -483,7 +487,7 @@ impl OrbitRuntime {
                 event.by = "system".into();
                 self.stores().task_records().update(
                     task_id,
-                    super::super::TaskRecordUpdateParams {
+                    super::super::super::TaskRecordUpdateParams {
                         actor: "system".into(),
                         expected_status: Some(vec![TaskStatus::Backlog]),
                         append_comments: vec![TaskComment {
@@ -515,7 +519,7 @@ impl OrbitRuntime {
         hold: &PilotAdmissionHold,
     ) -> Result<bool, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
-        let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
+        let Some(operation_id) = super::super::latest_pilot_operation_id(&comments) else {
             return Ok(false);
         };
         let Some((event, _)) = hold.operator_handoff(operation_id) else {
@@ -566,7 +570,7 @@ impl OrbitRuntime {
                     return Ok(());
                 };
                 let comments = self.get_task_comments(task_id)?;
-                let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
+                let Some(operation_id) = super::super::latest_pilot_operation_id(&comments) else {
                     return Ok(());
                 };
                 let history = self.get_task_history(task_id)?;
@@ -597,7 +601,7 @@ impl OrbitRuntime {
                 .with_category(&self.workspace_id()?);
                 self.stores().task_records().update(
                     task_id,
-                    super::super::TaskRecordUpdateParams {
+                    super::super::super::TaskRecordUpdateParams {
                         actor: "task-pilot".into(),
                         append_history: vec![request.history_entry("task-pilot")],
                         ..Default::default()
@@ -632,7 +636,7 @@ impl OrbitRuntime {
     pub(in crate::application::task) fn pilot_hold_resolution(
         &self,
         task: &Task,
-        params: &super::super::TaskUpdateParams,
+        params: &super::super::super::TaskUpdateParams,
         actor: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let stated = params.comment.as_deref().and_then(stated_verdict);
@@ -688,7 +692,7 @@ impl OrbitRuntime {
             }
         }
         let comments = self.get_task_comments(&task.id)?;
-        let operation_id = super::latest_pilot_operation_id(&comments).ok_or_else(|| {
+        let operation_id = super::super::latest_pilot_operation_id(&comments).ok_or_else(|| {
             OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
         })?;
         let verdict = match stated {
@@ -732,11 +736,6 @@ impl OrbitRuntime {
     /// prepare, so admission stops waiting for it.
     pub(crate) fn task_pilot_assessed(&self, task_id: &str) -> Result<bool, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
-        Ok(super::pilot_receipts(&comments).next().is_some())
+        Ok(super::super::pilot_receipts(&comments).next().is_some())
     }
 }
-
-pub(crate) use super::admission_holds::{
-    HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement,
-    OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
-};
