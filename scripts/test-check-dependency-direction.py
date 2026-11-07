@@ -275,60 +275,6 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::application::distributed::claim_receipt;\n",
         }, rejected=False)
 
-    def test_lower_modules_reach_visual_delivery_only_through_owned_ports(self):
-        # [ORB-22624] Review and distributed called visual_delivery directly
-        # while it called back into each; task and job climbed through it.
-        method = {
-            "visual_delivery/handoff.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_visual_method(&self) {}\n}\n",
-        }
-        for module in ("task", "job", "review", "distributed"):
-            self.check_files({
-                **method,
-                f"{module}/probe.rs":
-                    "impl OrbitRuntime {\n    fn probe(&self) {\n"
-                    "        self.fresh_visual_method();\n    }\n}\n",
-            }, rejected=True)
-            for relative, source in (
-                (f"{module}/probe.rs", "use crate::application::visual_delivery::Probe;\n"),
-                (f"{module}/deep/probe.rs",
-                 "fn probe() { crate::application::visual_delivery::step(); }\n"),
-                (f"{module}/probe.rs",
-                 "use crate::application::{\n    visual_delivery::Probe,\n};\n"),
-                (f"{module}/mod.rs", "use super::visual_delivery::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::visual_delivery::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::{visual_delivery::Probe};\n"),
-                (f"{module}/deep/probe.rs", "use super::super::super::{visual_delivery::Probe};\n"),
-            ):
-                with self.subTest(relative=relative, source=source):
-                    self.check_files({relative: source}, rejected=True)
-        self.check_files({
-            **method,
-            "review/visual_port.rs":
-                "pub(in crate::application) trait ReviewVisualPort {\n"
-                "    fn review_manifest_visual_findings(&self);\n}\n",
-            "distributed/visual_port.rs":
-                "pub(in crate::application) trait DistributedVisualPort {\n"
-                "    fn claim_visual_review_contract(&self);\n}\n",
-            "review/gate/admit.rs":
-                "impl OrbitRuntime {\n    fn admit(&self) {\n"
-                "        self.review_manifest_visual_findings();\n    }\n}\n",
-            "distributed/serve/admission.rs":
-                "impl OrbitRuntime {\n    fn admit(&self) {\n"
-                "        self.claim_visual_review_contract();\n    }\n}\n",
-            "visual_delivery/review_port.rs":
-                "impl ReviewVisualPort for OrbitRuntime {\n"
-                "    fn review_manifest_visual_findings(&self) {\n"
-                "        self.fresh_visual_method();\n    }\n}\n",
-            "visual_delivery/settle.rs": "use crate::application::review::run_review_admission;\n",
-            "visual_delivery/claim.rs": "use crate::application::distributed::claim_receipt;\n",
-            "visual_delivery/pool.rs": "use crate::application::job::crew_pools::visual_review_pool;\n",
-            "visual_delivery/claimed.rs": "use crate::application::experiment::capture;\n",
-            "landing/context.rs":
-                "impl OrbitRuntime {\n    fn land(&self) {\n"
-                "        self.fresh_visual_method();\n    }\n}\n",
-        }, rejected=False)
-
     def test_lower_modules_reach_landing_only_through_owned_port(self):
         # [ORB-22708] Task and job resolved claims through landing, and review
         # dispatched it directly; the missing guard admitted these cycles.
@@ -376,7 +322,6 @@ class RelativeImportTests(unittest.TestCase):
                 "impl OrbitRuntime {\n    fn land(&self) { self.landing_claim(); }\n}\n",
             "landing/dispatch.rs": "use crate::application::job::pipeline;\n",
             "landing/identity.rs": "use crate::application::distributed::claim_receipt;\n",
-            "landing/visual.rs": "use crate::application::visual_delivery::capture;\n",
         }, rejected=False)
 
     def test_landing_store_reads_do_not_allow_runtime_calls(self):

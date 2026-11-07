@@ -120,8 +120,6 @@ pub struct ResolvedConfig {
     /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
     /// guard under which a candidate carrying `<tag>` skips agent review.
     pub review_skip_tags: crate::ReviewSkipSettings,
-    /// `[visual_review]`: view manifests and the default mock width.
-    pub visual_review: crate::VisualReviewSettings,
 }
 
 impl ResolvedConfig {
@@ -163,7 +161,6 @@ impl ResolvedConfig {
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
             review_skip_tags: crate::ReviewSkipSettings::default(),
-            visual_review: crate::VisualReviewSettings::default(),
             snapshot,
         }
     }
@@ -372,8 +369,6 @@ impl ResolvedConfig {
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
         let review_skip_tags =
             crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
-        let visual_review =
-            crate::visual_review::visual_review_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
@@ -409,7 +404,6 @@ impl ResolvedConfig {
             plugin_enablement,
             tag_instructions,
             review_skip_tags,
-            visual_review,
             snapshot,
         })
     }

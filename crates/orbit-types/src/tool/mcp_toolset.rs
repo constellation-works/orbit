@@ -42,7 +42,8 @@ pub enum McpToolset {
     Codebase,
     /// Lexical search over tasks and frictions.
     Search,
-    /// Visual capture.
+    /// UI tools. Empty since `orbit.visual.capture` was removed
+    /// [ORB-22807]; kept so a server or role that names `ui` still loads.
     Ui,
     /// Command execution.
     Exec,

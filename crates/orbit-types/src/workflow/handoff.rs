@@ -168,13 +168,10 @@ pub struct TaskHandoff {
     /// accepts the handoff.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regression_from: Vec<String>,
-    /// The capture of record (`visual/capture.json`) for shadow claims, or
-    /// the negotiated `visual/resolution.json` bundle for live claims,
-    /// already attached on the owner by the system writer.
-    /// The owner checks it, and every image it names, against the claim's
-    /// visual review contract (`visual_capture_mismatch` in shadow,
-    /// `delivery_visual_review_unresolved` in live). Absent when the
-    /// claim captured no visual review contract.
+    /// [ORB-22807] Visual review was removed. A follower on an earlier build
+    /// may still name its capture or resolution bundle here for a claim an
+    /// earlier owner admitted; the owner accepts and ignores it. Delete the
+    /// field after 2026-12-07.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visual: Option<HandoffArtifactRef>,
 }

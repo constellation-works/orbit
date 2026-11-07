@@ -167,65 +167,6 @@ pub(super) fn path_list(paths: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// A task's `visual/review.json` as scorecard facts (§11.4): only
-/// findings a verifier decided are judged; `unverified` findings and a
-/// review that never ran score nothing. `fallback_at` dates a record
-/// written before records carried their own time.
-pub(in crate::application::agents) fn visual_review_facts(
-    content: &[u8],
-    fallback_at: chrono::DateTime<chrono::Utc>,
-) -> Option<super::model::VisualReviewFacts> {
-    use orbit_types::task::{VisualReviewRecord, VisualVerdictKind};
-
-    use crate::application::task::FindingVerdict;
-
-    let record = VisualReviewRecord::parse(content).ok()?;
-    if record.purpose != orbit_types::task::VISUAL_REVIEW_PURPOSE {
-        return None;
-    }
-    let at = chrono::DateTime::parse_from_rfc3339(&record.recorded_at)
-        .map(|at| at.with_timezone(&chrono::Utc))
-        .unwrap_or(fallback_at);
-    let findings = record
-        .findings
-        .iter()
-        .filter_map(|finding| {
-            let verdict = match finding.verdict.verdict {
-                VisualVerdictKind::Confirmed => FindingVerdict::Confirmed,
-                VisualVerdictKind::Rejected => FindingVerdict::Rejected,
-                VisualVerdictKind::Unverified => return None,
-            };
-            let severity = finding
-                .verified_severity
-                .clone()
-                .unwrap_or_else(|| finding.severity.clone());
-            Some((verdict, severity, finding.title.clone()))
-        })
-        .collect();
-    let mismatched: std::collections::BTreeSet<&str> = record
-        .findings
-        .iter()
-        .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
-        .filter(|finding| {
-            orbit_types::task::visual_severity_rank(finding.severity_of_record())
-                .is_some_and(|rank| rank >= 2)
-        })
-        .map(|finding| finding.mock.as_str())
-        .collect();
-    let mocks_matched = record
-        .budget
-        .shown
-        .iter()
-        .filter(|shown| !mismatched.contains(shown.mock.as_str()))
-        .count();
-    Some(super::model::VisualReviewFacts {
-        at,
-        reviewer_crew: record.reviewer_crew.clone(),
-        findings,
-        mocks_matched,
-    })
-}
-
 /// The gate escalation of reviewer fixes that failed owner revalidation.
 pub(super) fn failed_fix(comment: &TaskComment) -> bool {
     comment.message.contains("## Review gate escalation")

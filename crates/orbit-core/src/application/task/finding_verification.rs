@@ -49,12 +49,11 @@ pub(crate) const UNVERIFIED_REVIEW_FINDING: &str = "unverified_review_finding";
 pub const FINDING_VERIFICATION_SCHEMA_VERSION: u32 = 1;
 
 /// Tags a review job files its findings with.
-pub const REVIEW_FINDING_TAGS: [&str; 5] = [
+pub const REVIEW_FINDING_TAGS: [&str; 4] = [
     "code-review",
     "delivery-code-review",
     "security-review",
     "qa-sweep",
-    orbit_types::task::VISUAL_REVIEW_TAG,
 ];
 
 /// Statuses in which a finding is verified and held: those before promotion
@@ -182,7 +181,9 @@ pub enum VerdictSource {
     /// An implementer's `finding-invalid.json` report at its claim base.
     Implementer,
     /// A delivery's in-line visual verification, carried to the follow-up
-    /// filed for a confirmed visual finding after landing.
+    /// filed for a confirmed visual finding after landing. Visual review
+    /// was removed [ORB-22807]: nothing writes this source any more, and it
+    /// stays so verdicts recorded before then still load.
     VisualReview,
 }
 
@@ -201,10 +202,10 @@ impl VerdictSource {
     }
 }
 
-/// One cited location: `path:line` at the verified revision, or — the
-/// visual review extension (visual-review design §11.2) — an image
-/// region `<image>#<x>,<y>,<w>,<h>` in a delivery's capture, and why
-/// it matters.
+/// One cited location, `path:line` at the verified revision, and why it
+/// matters. A verdict recorded before visual review was removed
+/// [ORB-22807] may cite an image region instead; it still loads, but a new
+/// report must cite a source line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingEvidence {
     pub location: String,
@@ -230,20 +231,8 @@ impl FindingEvidence {
             })
     }
 
-    /// The image and `[x, y, w, h]` region `location` names when it is
-    /// a visual evidence location (§11.2), else `None`. Whether the
-    /// image is in a delivery's capture and the region inside it is
-    /// the caller's check against that delivery's catalog
-    /// (`validate_visual_region_location`).
-    pub(crate) fn visual_region(&self) -> Option<(String, [u32; 4])> {
-        orbit_types::task::parse_visual_region_location(&self.location)
-    }
-
-    /// Whether `location` is either evidence form this schema admits.
+    /// Whether `location` is the evidence form this schema admits.
     fn well_formed(&self) -> Result<(), String> {
-        if self.visual_region().is_some() {
-            return Ok(());
-        }
         self.path_and_line().map(|_| ())
     }
 }
@@ -280,8 +269,7 @@ pub struct VerifierReport {
 
 impl VerifierReport {
     /// The structural contract of a verdict. A CONFIRMED verdict cites at
-    /// least one evidence location — `path:line`, or an image region for
-    /// a visual finding (§11.2) — and rates severity; a REJECTED one
+    /// least one `path:line` evidence location and rates severity; a REJECTED one
     /// names its reason, with the fixing commit or the duplicate task it
     /// needs.
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -294,9 +282,7 @@ impl VerifierReport {
         match self.verdict {
             FindingVerdict::Confirmed => {
                 if self.evidence.is_empty() {
-                    return Err(
-                        "a CONFIRMED verdict must cite `path:line` or image-region evidence".into(),
-                    );
+                    return Err("a CONFIRMED verdict must cite `path:line` evidence".into());
                 }
                 if self.severity.is_none() {
                     return Err("a CONFIRMED verdict must rate severity".into());

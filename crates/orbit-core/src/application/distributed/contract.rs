@@ -341,7 +341,7 @@ impl crate::OrbitRuntime {
             // claimed PR leaves [ORB-13908].
             review_gate: true,
             selective_review: true,
-            visual_resolution: orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),

@@ -867,8 +867,8 @@ spec:
       re-pilot clear a condition only when authoritative rescope or evidence
       establishes it is satisfied.
     - `finding_invalid`: only for a review-filed bug (type `bug` tagged
-      `code-review`, `delivery-code-review`, `qa-sweep`, `security-review` or
-      `visual-review`). Read the cited code at `source_revision` and decide
+      `code-review`, `delivery-code-review`, `qa-sweep` or `security-review`).
+      Read the cited code at `source_revision` and decide
       whether the defect exists there. Return `{"evidence":"..."}` with
       `path:line` citations at `source_revision` only when it does not: the
       code does not do what the finding claims, or the claimed consequence
@@ -1100,7 +1100,6 @@ spec:
     - orbit.resident.grant
     - orbit.resident.relay
     - orbit.task.block_triage
-    - orbit.visual.capture
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

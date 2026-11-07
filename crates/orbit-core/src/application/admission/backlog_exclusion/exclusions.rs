@@ -101,23 +101,6 @@ pub(super) fn browser_kit_exclusion(
     })
 }
 
-/// The exclusion for a `verify-mock-ui` task whose mocks fail validation
-/// against the manifest at the base revision. Shared by automatic
-/// selection and the readiness snapshot, like [`browser_kit_exclusion`].
-pub(super) fn mock_validation_exclusion(
-    runtime: &OrbitRuntime,
-    task: &Task,
-) -> Option<BacklogTaskExclusion> {
-    let detail = runtime.mock_admission_check(task).err()?;
-    Some(BacklogTaskExclusion {
-        id: task.id.clone(),
-        reason: BacklogTaskExclusionReason::MockValidationFailed,
-        conflicts: Vec::new(),
-        crew: None,
-        detail: Some(detail),
-    })
-}
-
 /// The exclusion for a task carrying the reserved `no-drain` tag. Automatic
 /// selection only: the explicit ship override in `listing.rs` deliberately
 /// does not apply it, so `orbit run ship <id>` still runs the task.

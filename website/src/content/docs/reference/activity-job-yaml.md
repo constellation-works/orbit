@@ -61,8 +61,8 @@ set, a covered requirement refuses the run before launch. `final_recovery`,
 `review_reconciliation_review` and `task_pilot` drop that
 requirement from the requested list and record a note; it stays out of the
 callable set. The shipped `verify_finding`,
-`image_input_probe`, `resident_cycle`, `triage_escalation`, `visual_review` and
-`visual_verify` activities use the same non-implementer rule.
+`image_input_probe`, `resident_cycle` and `triage_escalation` activities use
+the same non-implementer rule.
 
 An operator's task grant is a narrow exception for `agent_implement`: it can
 lift an exact deny entry for a read/repeat-safe tool, but a mutating grant
@@ -1126,8 +1126,8 @@ Artifacts follow the task artifact rules:
 - Each file must be at most 1048576 bytes (1 MiB), the task artifact limit.
 - The artifact path, including any `path_prefix`, must be a relative path with
   no `..` segments.
-- Orbit's own writers keep some paths: `mocks/`, `visual/`,
-  `mutation-proposals/`, `mutation-receipts/`, and any name that starts with
+- Orbit's own writers keep some paths: `mutation-proposals/`,
+  `mutation-receipts/`, and any name that starts with
   `review-` in any case. The one exception is `review-report.json`, which must
   parse as a review report.
 

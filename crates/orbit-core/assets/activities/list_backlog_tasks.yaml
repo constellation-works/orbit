@@ -46,7 +46,7 @@ spec:
     is withheld as `browser_kit_missing`, after any `host_os_mismatch`, with
     `detail` naming `orbit config browser-kit install`. The kit is read every pass.
     A review-filed bug (type `bug`, tagged `code-review`,
-    `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`)
+    `delivery-code-review`, `security-review` or `qa-sweep`)
     without a CONFIRMED verdict from `finding_verification_pipeline` is withheld as
     `unverified_review_finding`, with `detail` naming the job to run. A
     CONFIRMED verdict, or an operator retyping or retagging the task, clears

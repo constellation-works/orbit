@@ -550,7 +550,7 @@ policy:
 
 `hm_example` and `main` stand in for the machine id and base branch init already wrote. Copying this block into a second file creates a second routine.
 
-Enabled, the routine finds each review-filed bug (type `bug`, tagged `code-review`, `delivery-code-review`, `security-review`, `qa-sweep`, or `visual-review`) that still has no verification verdict and is in `proposed`, `someday`, or `backlog`. After the debounce, or the max wait, it submits one batch. Approval, promotion, and drain admission keep refusing that bug until the job records a confirmed verdict. A recorded verdict drops the task from observation. Editing the finding's title, description, criteria, tags, type, or selectors releases a failed claim so it can be verified again. An explicit `orbit run job finding_verification_pipeline` does not use this gate.
+Enabled, the routine finds each review-filed bug (type `bug`, tagged `code-review`, `delivery-code-review`, `security-review`, or `qa-sweep`) that still has no verification verdict and is in `proposed`, `someday`, or `backlog`. After the debounce, or the max wait, it submits one batch. Approval, promotion, and drain admission keep refusing that bug until the job records a confirmed verdict. A recorded verdict drops the task from observation. Editing the finding's title, description, criteria, tags, type, or selectors releases a failed claim so it can be verified again. An explicit `orbit run job finding_verification_pipeline` does not use this gate.
 
 ### Opt in to pilot-warning triage
 

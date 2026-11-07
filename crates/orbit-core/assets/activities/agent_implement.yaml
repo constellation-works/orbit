@@ -489,7 +489,7 @@ spec:
       old, missing, failed or unavailable check rules this path out: report
       a validation blocker.
     - Invalid review finding: for a `bug` tagged `code-review`,
-      `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`, confirm the
+      `delivery-code-review`, `security-review` or `qa-sweep`, confirm the
       defect at your base before editing. If it does not exist there (the
       code does not do what the finding claims, or the consequence cannot
       happen; not "already fixed", not "not worth fixing"), change nothing,

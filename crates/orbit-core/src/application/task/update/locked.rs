@@ -23,7 +23,7 @@ use super::super::lifecycle::{
     ensure_status_change_not_run_owned,
 };
 use super::super::params::TaskUpdateParams;
-use super::artifacts::admit_task_artifact_as;
+use super::artifacts::admit_task_artifact;
 use super::entry::{
     LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
 };
@@ -142,18 +142,11 @@ impl OrbitRuntime {
         // Only the trusted system entry point may write them; an actor label
         // or artifact/tool field cannot opt into that authority. Normalize
         // before checking exactly the key the store will persist.
-        // Only an operator surface may write under `mocks/` (§2.4): no
-        // agent identity and no agent envelope, as `operator_write` below
-        // derives from the same facts.
-        let allow_mocks = operator_decision_authority
-            && canonical_agent.is_none()
-            && canonical_model.is_none()
-            && !agent_context_declared();
         for artifact in &mut params.upsert_artifacts {
             if system_writer {
                 artifact.path = canonical_artifact_path(&artifact.path)?;
             } else {
-                admit_task_artifact_as(self, &task, artifact, allow_mocks)?;
+                admit_task_artifact(self, &task, artifact)?;
             }
         }
         if let Some(expected_status) = expected_status
@@ -253,23 +246,6 @@ impl OrbitRuntime {
             && gate_authority == StatusAuthority::Lifecycle
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
-        }
-        // Promotion to backlog validates a `verify-mock-ui` task's mocks
-        // against the manifest at the base (visual-review §2.3), over the
-        // tags and artifacts this update would leave stored.
-        if requested_status == Some(TaskStatus::Backlog) && !system_writer {
-            let mut effective = task.clone();
-            if let Some(tags) = &params.tags {
-                effective.tags = tags.clone();
-            }
-            if orbit_types::task::has_verify_mock_ui_tag(&effective.tags) {
-                let mut artifacts = self.get_task_artifacts(id).unwrap_or_default();
-                for upsert in &params.upsert_artifacts {
-                    artifacts.retain(|stored| stored.path != upsert.path);
-                    artifacts.push(upsert.clone());
-                }
-                self.ensure_backlog_mock_admission(&effective, Some(artifacts))?;
-            }
         }
         if params.discard_candidate && task.status == TaskStatus::InProgress {
             return Err(OrbitError::InvalidInput(format!(

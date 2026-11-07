@@ -551,12 +551,6 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
-            // Visual capture is registry-driven like codebase; its Write
-            // effect (serving the checkout and writing captures) makes its
-            // runtime need required through the registry operation.
-            Commands::Visual(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Visual))
-            }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
                 use super::super::agents::AgentsSubcommand;

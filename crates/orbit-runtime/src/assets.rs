@@ -27,16 +27,6 @@ pub const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] = &[
         TagInstructionRole::Review,
         include_str!("../../orbit-core/assets/tag_instructions/ui/review.md"),
     ),
-    (
-        "verify-mock-ui",
-        TagInstructionRole::Implement,
-        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/implement.md"),
-    ),
-    (
-        "verify-mock-ui",
-        TagInstructionRole::Review,
-        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/review.md"),
-    ),
 ];
 
 /// Shippable default activity assets, seeded under
@@ -235,42 +225,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "review_gate_settle",
         include_str!("../../orbit-core/assets/activities/review_gate_settle.yaml"),
-    ),
-    (
-        "visual_capture",
-        include_str!("../../orbit-core/assets/activities/visual_capture.yaml"),
-    ),
-    (
-        "visual_checks",
-        include_str!("../../orbit-core/assets/activities/visual_checks.yaml"),
-    ),
-    (
-        "visual_review_prepare",
-        include_str!("../../orbit-core/assets/activities/visual_review_prepare.yaml"),
-    ),
-    (
-        "visual_review",
-        include_str!("../../orbit-core/assets/activities/visual_review.yaml"),
-    ),
-    (
-        "visual_verify_prepare",
-        include_str!("../../orbit-core/assets/activities/visual_verify_prepare.yaml"),
-    ),
-    (
-        "visual_verify",
-        include_str!("../../orbit-core/assets/activities/visual_verify.yaml"),
-    ),
-    (
-        "visual_settle",
-        include_str!("../../orbit-core/assets/activities/visual_settle.yaml"),
-    ),
-    (
-        "visual_recapture",
-        include_str!("../../orbit-core/assets/activities/visual_recapture.yaml"),
-    ),
-    (
-        "visual_landed",
-        include_str!("../../orbit-core/assets/activities/visual_landed.yaml"),
     ),
     (
         "review_reconciliation_prepare",

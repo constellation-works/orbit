@@ -331,10 +331,3 @@ The mandate format and the authority rules are described in [Resident mandates](
 
 See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
 listener authentication and examples.
-
-### Visual capture
-
-| Command | Purpose |
-|---|---|
-| `orbit visual capture --id <ID>` | Capture the working tree beside each of a task's mocks. For each mock it writes `<out>/<mock-name>/mock.png`, `capture.png` and `side-by-side.png`, plus `<out>/rules.json` with the workspace's UI rule results. `--mock <MOCK>` captures one mock artifact instead of all of them. Needs a verified browser kit (`orbit config browser-kit install`) and a view manifest in `visual_review.manifests`. The captures are a self-check aid, not evidence of record. See [Visual review configuration](../config/#visual-review). |
-| `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>` | Accept a disputed blocking visual finding in `visual_review.mode = "live"` so the held delivery can land once resumed. Managed runs are refused. See [Visual review configuration](../config/#visual-review). |

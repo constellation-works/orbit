@@ -12,8 +12,7 @@ use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    DistributedAdmissionPort, DistributedExperimentPort, DistributedVisualPort,
-    owner_binary_version,
+    DistributedAdmissionPort, DistributedExperimentPort, owner_binary_version,
 };
 use crate::application::host_labels;
 use crate::application::task::PilotAdmissionHold;
@@ -177,13 +176,6 @@ impl OrbitRuntime {
             {
                 admission_holds.entry(task.id.clone()).or_insert(why);
             }
-            // A `verify-mock-ui` task whose mocks fail validation is held
-            // from pull admission just as the backlog snapshot excludes it
-            // locally: a claimed leaf must start from mocks the owner could
-            // freeze at this admission.
-            if let Err(detail) = self.mock_admission_check(task) {
-                admission_holds.entry(task.id.clone()).or_insert(detail);
-            }
             // [ORB-15573] A standing provider hold keeps the task from an
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
@@ -241,15 +233,6 @@ impl OrbitRuntime {
             &admission_holds,
             &self.baseline_held_tasks(&backlog),
             &|task, comments, history| {
-                // Only a mutually supported resolution bundle can authorize
-                // live claimed delivery; captures alone cannot.
-                if self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
-                    && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
-                    && (request.visual_resolution != orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA
-                        || request.ship.mode != "pr")
-                {
-                    return Ok(Some("visual_live_claim_unsupported: executor or delivery route has no supported owner-verifiable visual-resolution contract".into()));
-                }
                 if let Some(hold) = no_drain_pull_hold(task) {
                     return Ok(Some(hold));
                 }
@@ -298,16 +281,7 @@ impl OrbitRuntime {
             &|task| {
                 Ok(AdmissionTaskGuidance {
                     experiments: self.capture_pull_experiments(task, &request.ship)?,
-                    // Freeze the claimed task's mock digests on the owner,
-                    // where its artifacts live, in the same commit as the
-                    // claim: an ordinary write is refused once the claim
-                    // protects the task, and a replay never reaches this
-                    // callback, so it cannot rewrite the baseline.
-                    artifacts: self
-                        .mock_digest_artifact_for_pull_admission(task, &request.request_id)?
-                        .into_iter()
-                        .collect(),
-                    visual_review: self.claim_visual_review_contract(task)?,
+                    artifacts: Vec::new(),
                 })
             },
         )

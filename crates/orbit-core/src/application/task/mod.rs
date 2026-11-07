@@ -50,8 +50,6 @@ mod lint;
 mod list_result;
 mod listing;
 pub(crate) mod metadata;
-mod mock_admission;
-pub(in crate::application) use mock_admission::MockDigestFreezeMode;
 mod mutation_proposals;
 mod os_readout;
 mod params;
@@ -84,8 +82,6 @@ mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
-mod visual_review_json;
-pub(in crate::application) use visual_review_json::read_visual_record;
 mod workspace_auto_port;
 mod write_response;
 
@@ -147,9 +143,9 @@ pub use final_recovery::{
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
 pub(crate) use finding_verification::{
-    AnalyzedFinding, InvalidFinding, STATUS_NOT_VERIFIABLE, UNVERIFIED_REVIEW_FINDING,
-    VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment, crew_named_by, finding_fingerprint,
-    latest_verification, needs_verification, next_tier,
+    AnalyzedFinding, InvalidFinding, UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite,
+    VerifierAssignment, crew_named_by, finding_fingerprint, latest_verification,
+    needs_verification, next_tier,
 };
 pub use finding_verification::{
     FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingVerdict,

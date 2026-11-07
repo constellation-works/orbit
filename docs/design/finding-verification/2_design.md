@@ -1,7 +1,7 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-07
 last_validated: 2026-11-05
 status: Implemented
 feature: finding-verification
@@ -27,7 +27,7 @@ Why each exists is in [4_decisions.md](4_decisions.md).
 
 `is_review_finding` is true for a task of type `bug` carrying one of
 `REVIEW_FINDING_TAGS`: `code-review`, `delivery-code-review`,
-`security-review`, `qa-sweep`, `visual-review`. A finding is verified, and held, only in
+`security-review`, `qa-sweep`. A finding is verified, and held, only in
 `proposed`, `someday` or `backlog` (`VERIFIABLE_STATUSES`). A finding needs
 verification there until its latest verification record is CONFIRMED and its
 `finding_fingerprint` matches the current task material (§7).
@@ -72,7 +72,7 @@ A verifier returns one **report** per task:
 | `task_id` | string | Matches a task of the partition. |
 | `verdict` | `CONFIRMED` \| `REJECTED` | Required. |
 | `confidence` | `high` \| `medium` \| `low` | Required. |
-| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. Visual review's in-line verifier extends this one way ([visual-review §11.2](../visual-review/2_design.md#112-verification)): a location may instead be an image region, `<image>#<x>,<y>,<w>,<h>`, where the image is in that delivery's `visual/capture.json` and the box is inside it; `visual_settle` checks it against the capture, as apply checks a line against the pinned revision. |
+| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. Records written by the retired visual review's in-line verifier ([visual-review §11.2](../_archived/visual-review/2_design.md#112-verification)) may cite an image region, `<image>#<x>,<y>,<w>,<h>`, instead; they still load, but a new report must cite `path:line` [ORB-22807]. |
 | `reasoning` | string | Non-empty. |
 | `reproduction` | string? | Optional. |
 | `severity` | `critical` \| `high` \| `medium` \| `low` \| `nit` | Required for CONFIRMED. |
@@ -95,7 +95,8 @@ verdicts.
 The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 
 - `source`: the route that decided it, `task_pilot` or `implementer` (§8),
-  absent for this job;
+  absent for this job; records from the retired visual review may carry
+  `visual_review`, which still parses but is no longer written;
 - `verdict`, `confidence`, `severity`, `evidence`, `reasoning`,
   `reproduction` and `rejection` from the deciding report, with free text
   redacted;
@@ -274,7 +275,6 @@ rewritten, whatever status the route observed.
 | Dedicated verification | Preparation checkpoint | Preparation checkpoint |
 | Task pilot | The pilot write's sealed receipt (`applied_material`) | That receipt |
 | Implementer | `finding_fingerprint` in the prompt, echoed by the report; always `in-progress` | The write (no verifier runs on an `in-progress` task) |
-| Visual review | The follow-up as filed | The filing step's read |
 
 - **Task pilot.** For a review finding the pilot reads the cited code at
   `source_revision` and may return `finding_invalid: {"evidence": "..."}`
@@ -352,5 +352,6 @@ rewritten, whatever status the route observed.
 - ORB-19409 — the five-level severity scale shared with regression links.
 - ORB-19635 — the task-pilot and implementer default rejection routes.
 - ORB-20390 — verified normalized finding material on the guarded-start route.
+- ORB-22807 — removed visual review: its `visual-review` finding tag, its verdict route and image-region evidence for new reports.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

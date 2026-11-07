@@ -109,13 +109,13 @@ impl KitStatus {
             Some(PIXEL_HELPER_VERSION) => {}
             Some(version) => problems.push(install(
                 format!(
-                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} {version} is installed; this Orbit release pins {PIXEL_HELPER_VERSION}, so visual capture is unavailable"
+                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} {version} is installed; this Orbit release pins {PIXEL_HELPER_VERSION}, so screenshot pixel checks are unavailable"
                 ),
                 "orbit config browser-kit install",
             )),
             None => problems.push(install(
                 format!(
-                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} is missing from kit/, so visual capture is unavailable"
+                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} is missing from kit/, so screenshot pixel checks are unavailable"
                 ),
                 "orbit config browser-kit install",
             )),

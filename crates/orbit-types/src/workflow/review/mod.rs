@@ -18,7 +18,6 @@ mod refusal;
 mod report;
 mod selective;
 mod verdict;
-mod visual;
 
 #[cfg(test)]
 mod tests;
@@ -33,4 +32,3 @@ pub use refusal::*;
 pub use report::*;
 pub use selective::*;
 pub use verdict::*;
-pub use visual::*;

@@ -43,9 +43,10 @@ CLI command only.
 - If a treatment sets a `config` overlay, list every key it sets under
   `experiments.config_keys` (default `[]`). Starting refuses an arm that
   sets any other key. The overlay itself only admits keys Orbit has opted
-  in for experiments; the active key is `visual_review.reviewer`. The legacy
-  `workflow.explore.max_calls_per_run` key is retained for historical records and ignored,
-  with its former integer bounds of `1` to `100`.
+  in for experiments. Both remaining keys are retained for historical
+  records and ignored: `workflow.explore.max_calls_per_run`, with its former
+  integer bounds of `1` to `100`, and `visual_review.reviewer` (boolean),
+  whose visual review feature has been removed.
 - For a `live` experiment, have the treatment ready at the base revision:
   instruction files must exist there and pass the instruction admission
   rules, skill bundle directories must exist there, added tools must be
@@ -77,14 +78,7 @@ orbit experiment create brief-v2 \
   --mode shadow
 ```
 
-`create` makes a draft. A draft assigns nothing. `--template visual-review`
-fills the definition Orbit ships for measuring the mock comparison reviewer:
-a control arm with `visual_review.reviewer = false` against a treatment with
-it on, enrolling `verify-mock-ui` tasks, read on
-`visual_landed_mismatches` with cost, lead time and delivery done-rate
-guardrails. Any field you also pass replaces the template's, and the
-treatment's key still has to be listed under `experiments.config_keys`
-before you start it. Names are unique in the
+`create` makes a draft. A draft assigns nothing. Names are unique in the
 workspace, for the experiment and for each arm: 1–64 characters of letters,
 digits, `-`, `_`, or `.`, starting with a letter or digit, and an experiment
 name may not start with `exp-`, which experiment IDs use.
@@ -150,10 +144,8 @@ key is refused.
 `total_tokens`, `cost_usd`, `lead_time`, `first_pass_acceptance`,
 `review_repairs`, `step_recoveries`, `final_recoveries`, `failed_checks`,
 `merge_conflicts`, `delivery_done_rate`, `escaped_regressions`,
-`lines_changed`, `cost_per_line`, `lead_time_per_line`,
-`visual_landed_mismatches`, `visual_review_repairs`, or
-`visual_verified_finding_rate`. Lower is better except for
-`first_pass_acceptance`, `delivery_done_rate`, and `visual_verified_finding_rate`.
+`lines_changed`, `cost_per_line`, or `lead_time_per_line`. Lower is better
+except for `first_pass_acceptance` and `delivery_done_rate`.
 
 `cost_per_line` and `lead_time_per_line` divide an arm's total cost, or its
 total lead time in hours, by that arm's total reviewable lines. Lead time
@@ -179,16 +171,6 @@ exploratory: a treatment can move work between steps without improving the
 whole task. They cannot be primary, but remain available for guardrails and
 `readout --metric`. Existing experiments with a step-local primary retain
 all their data; their verdict is withheld. Unknown metrics are refused.
-
-The three visual metrics read a `verify-mock-ui` task's visual review
-records. `visual_landed_mismatches` is the severity-weighted count of
-confirmed mismatches the post-landing comparison found on the landed head,
-which a task enrolled in an experiment that sets `visual_review.reviewer`
-gets in every arm; its reviewer and verifier invocations are excluded from
-the task's cost. `visual_review_repairs` counts the delivery's confirmed
-findings that were fixed or filed as follow-ups, and
-`visual_verified_finding_rate` is the share of the comparison reviewer's
-verdicts that were confirmed.
 
 `--guardrails` maps a metric name to the threshold its difference from
 control may not pass, as a signed number with an optional `pt` or `%`

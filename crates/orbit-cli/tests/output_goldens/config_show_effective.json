@@ -1338,13 +1338,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.purpose_crews.visual_review": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",

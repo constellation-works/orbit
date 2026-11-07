@@ -51,7 +51,6 @@ Advanced:
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
   resident     Grant, narrow and inspect resident orchestrator mandates
-  visual       Capture the working tree beside a task's mocks
 
 Options:
       --root <ROOT>

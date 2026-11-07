@@ -305,7 +305,7 @@ impl crate::OrbitRuntime {
             // This binary's claimed PR leaves run the before-PR gate.
             review_gate: true,
             selective_review: true,
-            visual_resolution: orbit_types::task::CLAIMED_VISUAL_RESOLUTION_SCHEMA,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

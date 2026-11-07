@@ -8,7 +8,7 @@ spec:
     Select the review-filed bug findings a finding verification run judges
     and assign each its verifier. With task_ids it verifies those tasks; a
     named task that is not a proposed, someday or backlog bug tagged
-    code-review, delivery-code-review, security-review, qa-sweep or visual-review, or one
+    code-review, delivery-code-review, security-review or qa-sweep, or one
     another live verification run holds, settles superseded with its reason.
     Without task_ids it selects every such finding still owed a CONFIRMED
     verdict, oldest first, up to max_tasks, and counts the rest in

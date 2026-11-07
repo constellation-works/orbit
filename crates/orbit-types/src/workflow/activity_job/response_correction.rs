@@ -65,7 +65,6 @@ const MUTATING_TOOLS: &[&str] = &[
     "orbit.task.review_reset",
     "orbit.task.revoke_handoff",
     "orbit.task.update",
-    "orbit.visual.capture",
     "orbit.workflow.auto",
     "orbit.workflow.land",
     "orbit.workflow.run.resume",

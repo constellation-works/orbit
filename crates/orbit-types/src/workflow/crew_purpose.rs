@@ -38,9 +38,6 @@ pub enum CrewPurpose {
     /// Tasks the CI failure, Dependabot and code-scanning sweeps file, and
     /// merged-head repairs a review reconciliation files.
     SweepTasks,
-    /// The mock comparison reviewer and its in-line verifier. Only crews
-    /// whose executor declares `image_input` are drawn.
-    VisualReview,
     /// Escalation triage of a task's held pilot assessment. Only crews whose
     /// executor declares `inspection_args` are drawn.
     PilotWarningTriage,
@@ -53,7 +50,7 @@ const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
@@ -61,7 +58,6 @@ impl CrewPurpose {
         Self::Review,
         Self::BaselineRedRepair,
         Self::SweepTasks,
-        Self::VisualReview,
         Self::PilotWarningTriage,
     ];
 
@@ -76,7 +72,6 @@ impl CrewPurpose {
             Self::Review => "review",
             Self::BaselineRedRepair => "baseline_red_repair",
             Self::SweepTasks => "sweep_tasks",
-            Self::VisualReview => "visual_review",
             Self::PilotWarningTriage => "pilot_warning_triage",
         }
     }
@@ -102,7 +97,6 @@ impl CrewPurpose {
             Self::Review => "workflow.purpose_crews.review",
             Self::BaselineRedRepair => "workflow.purpose_crews.baseline_red_repair",
             Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
-            Self::VisualReview => "workflow.purpose_crews.visual_review",
             Self::PilotWarningTriage => "workflow.purpose_crews.pilot_warning_triage",
         }
     }
@@ -129,7 +123,7 @@ impl CrewPurpose {
             Self::TaskPilot | Self::AutoFix => Some("workflow.low_complexity_crews"),
             Self::FailureRecovery => Some("workflow.medium_complexity_crews"),
             Self::FinalRecovery | Self::Review => None,
-            Self::BaselineRedRepair | Self::SweepTasks | Self::VisualReview => {
+            Self::BaselineRedRepair | Self::SweepTasks => {
                 Some("the task's complexity pool, then workflow.default_crew")
             }
             Self::PilotWarningTriage => Some("workflow.hard_complexity_crews"),

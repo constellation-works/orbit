@@ -79,7 +79,6 @@ impl TaskCommitBoundary {
         for candidate in candidates {
             let guidance = guidance_capture(candidate.task)?;
             receipt.experiments = Some(guidance.experiments);
-            receipt.visual_review = guidance.visual_review;
             if self.commit_repair_claim(
                 screen,
                 receipt_key,

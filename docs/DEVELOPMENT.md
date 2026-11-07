@@ -1044,8 +1044,6 @@ Browser checks need Playwright and Chromium, plus Chromium's shared libraries an
 - each attached with `orbit.task.artifact.put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
 - each under the 1 MiB artifact limit (`MAX_TASK_ARTIFACT_CONTENT_BYTES`): prefer a viewport capture to a full-page one, or JPEG or WebP when a PNG is too large.
 
-In a workspace with `visual_review.mode = "live"`, the mocked views of a `verify-mock-ui` task are the exception: Orbit's `visual_capture` captures them beside their mocks as the evidence of record, so the implementer attaches no screenshots for them. Every other changed view, including an unmocked view of the same task, still needs them.
-
 When the host has no browser kit or the view cannot render, say so in the handoff instead of claiming visual verification. A claimed leaf on another host attaches the same way; the broker forwards the put to the owner.
 
 ### Website changelog validation

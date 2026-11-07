@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fixture server for the view manifest (visual-review 2_design.md §3.3).
+# Fixture server for the view manifest (archived visual-review 2_design.md §3.3).
 #
 #   scripts/visual-fixture-server.sh <fixture>
 #

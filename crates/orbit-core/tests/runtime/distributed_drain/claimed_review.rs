@@ -217,7 +217,6 @@ impl ReviewedLeaf {
             .unwrap();
         }
         let report = ReviewReport {
-            visual_resolutions: Vec::new(),
             external_evidence: Vec::new(),
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.into(),
@@ -343,7 +342,6 @@ impl ReviewedLeaf {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn reviewer_holds_for(&self, attempt_id: &str, command: &str) {
         let report = ReviewReport {
-            visual_resolutions: Vec::new(),
             external_evidence: vec![ReviewEvidenceRequirement {
                 kind: ReviewEvidenceKind::CodeQl,
                 name: "Rust CodeQL (Linux)".into(),

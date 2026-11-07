@@ -99,7 +99,6 @@ impl TaskCommitBoundary {
                         assignments: Vec::new(),
                     },
                     artifacts: Vec::new(),
-                    visual_review: None,
                 })
             },
         )
@@ -276,7 +275,6 @@ impl TaskCommitBoundary {
             gates: ordering.gates.clone(),
             tag_instructions: ordering.tag_instructions.clone(),
             experiments: None,
-            visual_review: None,
             affinity: None,
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
@@ -361,7 +359,6 @@ impl TaskCommitBoundary {
                 artifacts: guidance.artifacts,
                 ..ClaimEvidence::default()
             };
-            receipt.visual_review = guidance.visual_review;
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),

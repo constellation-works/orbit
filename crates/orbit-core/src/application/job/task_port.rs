@@ -21,7 +21,6 @@ use crate::application::contracts::{
     RetryKey,
 };
 use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
-use crate::runtime::run_input::recorded_task_ids;
 
 impl TaskJobPort for OrbitRuntime {
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
@@ -337,27 +336,5 @@ impl TaskJobPort for OrbitRuntime {
         limits: &BTreeMap<String, ExecutorOsLimit>,
     ) -> Option<String> {
         self.task_host_os_wait(task, pools, limits)
-    }
-
-    fn live_delivery_runs_carrying_task(&self, task_id: &str) -> Result<Vec<JobRun>, OrbitError> {
-        let delivery_jobs = self.task_delivery_job_ids()?;
-        // Ownership must consider every matching run: a live delivery can
-        // outlast arbitrarily many newer, unrelated completed jobs.
-        let runs = self.list_job_runs(super::JobRunListParams {
-            task_id: Some(task_id.to_string()),
-            ..Default::default()
-        })?;
-        Ok(runs
-            .into_iter()
-            .filter(|run| !run.state.is_terminal() && delivery_jobs.contains(&run.job_id))
-            .filter(|run| {
-                run.input
-                    .as_ref()
-                    .map(recorded_task_ids)
-                    .into_iter()
-                    .flatten()
-                    .any(|candidate| candidate == task_id)
-            })
-            .collect())
     }
 }

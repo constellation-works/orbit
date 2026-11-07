@@ -16,7 +16,6 @@ pub mod pipeline;
 mod resident;
 pub mod search;
 pub mod task;
-mod visual;
 mod workflow;
 pub mod workspace_claim;
 

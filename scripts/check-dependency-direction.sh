@@ -889,29 +889,7 @@ if rg -n 'crate::application::experiment\b' \
   fail=1
 fi
 
-# [ORB-22624] `visual_delivery` sits outside the order, above `distributed`,
-# beside `experiment`: it takes review admission from `review`, the claim receipt
-# from `distributed`, and the claimed leaf and reviewer pools from `job`. `task`
-# owns the two pure reads it used to serve downward, and `review` and
-# `distributed` reach the rest only through `review::ReviewVisualPort` and
-# `distributed::DistributedVisualPort`, which it implements on `OrbitRuntime`. A
-# path, a grouped tree, a `super::` chain into `visual_delivery`, or a call to an
-# inherent method it defines (names derived, so port methods keep distinct names)
-# is a reintroduced edge. Its edges up into those modules and `experiment` stay
-# legal.
-for lower_module in task job review distributed; do
-  if rg -n 'crate::application::visual_delivery\b' \
-    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    rg -n -U 'crate::application::\{[^}]*\bvisual_delivery\b' \
-      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    ! inherent_calls_into "$app_src" "$lower_module" visual_delivery '' '' ||
-    ! super_chains_into "$app_src" "$lower_module" visual_delivery; then
-    echo "orbit-core ${lower_module} must not name visual_delivery or call its inherent methods; task owns the pure reads, and review and distributed reach it through review::ReviewVisualPort and distributed::DistributedVisualPort"
-    fail=1
-  fi
-done
-
-# [ORB-22708] Landing sits above distributed, beside visual_delivery. Task
+# [ORB-22708] Landing sits above distributed. Task
 # owns the pure handoff-to-claim read; review records authority and reaches
 # dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
 # grouped trees, relative chains and calls into landing's inherent methods.

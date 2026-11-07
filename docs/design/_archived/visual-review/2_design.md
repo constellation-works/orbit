@@ -1,20 +1,28 @@
 ---
 title: Visual Review — Design
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-07
 last_validated: 2026-11-03
-status: Draft
+status: Deprecated
 feature: visual-review
 doc_role: design
 type: design
 summary: Design for mock-driven visual review — verify-mock-ui tasks carry mocks named by view, state, theme and width; the implementer compares its working tree with each mock through orbit visual capture; Orbit captures the mocked views on the final candidate, runs the workspace's UI rules, and a vision crew compares capture with mock under a precedence rule, with in-line verification, configurable blocking and an experiment gating the default.
 tags: [visual-review, ui, mocks, review-gate, task-artifacts, finding-verification, experiments, browser-kit, ux-rules]
-paths: ["crates/orbit-core/assets/tag_instructions/ui/**", "crates/orbit-core/assets/tag_instructions/verify-mock-ui/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/executors/**", "crates/orbit-web/visual/**", "scripts/ux-rules/**"]
 related_features: [ux-rules, review-gate, task-artifacts, finding-verification, experiments, agent-scorecards, distributed-drain, user-interface]
 related_artifacts: [ORB-19397, ORB-19304, ORB-11365, ORB-18351, ORB-13989, ORB-14849]
 ---
 
 # Visual Review — Design
+
+Retired in [ORB-22807] (2026-11-07): Daniel removed visual review while simplifying Orbit's
+configuration. No delivery validates, freezes, captures or compares mocks any more, the
+`verify-mock-ui` tag has no special handling, `mocks/` and `visual/` are ordinary artifact
+names, and `orbit visual` and the `orbit.visual.*` tools are gone. `visual_review.*` and
+`workflow.purpose_crews.visual_review` load with a deprecation warning and are ignored until
+2026-12-07. Stored `visual/*` artifacts and recorded visual refusals stay readable. The view
+manifests and the ux-rules runner this design introduced stay. The text below is the record of
+the design as it stood.
 
 This doc specifies the mechanisms of [1_scope.md](./1_scope.md): where visual review sits in
 delivery, mocks and how they name views, the view manifest, capture, the implementer's
@@ -30,7 +38,7 @@ shipping its machinery. Configuration keys are in
 [1_scope.md › Configuration](./1_scope.md#configuration).
 
 The view manifest (§3) and browser-context settings (§4.2) landed in [ORB-19975],
-on the [UX rules](../ux-rules/1_scope.md) runner; its UI rules are this design's
+on the [UX rules](../../ux-rules/1_scope.md) runner; its UI rules are this design's
 deterministic checks (§7).
 
 ## 1. Placement in delivery
@@ -60,7 +68,7 @@ the landing review, before `landing_review_gate_admit`, on the head that review 
   forces that pool to be vision-capable or silently reviews images with a lane that cannot see
   them. A separate step draws its own crew (§9.4) and can be measured on its own (§12).
 - **Not a second review with its own verdict.** The review gate has one review per candidate
-  and one reviewer fix commit ([review gate](../review-gate/1_overview.md), [ORB-13989]).
+  and one reviewer fix commit ([review gate](../../review-gate/1_overview.md), [ORB-13989]).
   `visual_settle` hands the code reviewer the confirmed findings, and the code reviewer
   decides and fixes, as it does for its own findings.
 
@@ -145,7 +153,7 @@ admission, against the manifest at the delivery's base revision:
 | `invalid_mock_name` | A name does not parse (§2.2), naming the artifact and the part. |
 | `unknown_mock_view` | The view id is not in the manifest. |
 | `undeclared_mock_variant` | The state is not in the view's `states`, the theme not in its app's `themes`, or a width other than the default on a view with `responsive = false`. |
-| `invalid_mock_image` | The artifact is not a byte-checked image presentation ([task artifacts §5a](../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)), for example an HTML or SVG export. |
+| `invalid_mock_image` | The artifact is not a byte-checked image presentation ([task artifacts §5a](../../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)), for example an HTML or SVG export. |
 
 A refusal is a readiness reason in `orbit run readiness` and on the task, naming every
 failing artifact, so the person who attached the mocks can rename or re-export them. A
@@ -307,7 +315,7 @@ a new view cannot ship unmeasured. Later entries added `notices` (fixture `fleet
 open notice and none closed in the last 24 hours), `knowledge` and `plugins`; `leases` is
 exempt until a fixture enables path leases.
 
-The dashboard is dark-only ([browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)),
+The dashboard is dark-only ([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)),
 so `themes = ["dark"]`, and `color_scheme_invariant = true` turns "both themes" into a check
 that the light colour preference changes nothing (§7). The website gets `themes = ["light",
 "dark"]`.
@@ -439,7 +447,7 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
   `recapture`. The `visual/` prefix is reserved for the system writer: an agent or operator
   write to it is refused.
 - **Size.** Each image must stay under the 1 MiB artifact limit
-  ([task artifacts §5a](../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)).
+  ([task artifacts §5a](../../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)).
   Viewport captures of the dashboard are well under it (the ORB-19304 shots were 57–192 KB as
   PNG). The driver encodes PNG first; over the limit, WebP at quality 1; still over, WebP at
   quality 0.9. Chromium's canvas encoder is lossy at every quality, so both WebP encodings
@@ -602,7 +610,7 @@ otherwise. The review step does not need the kit, so it may run wherever its cre
 `visual_checks` runs before any model call, on the candidate captures' live pages (the
 driver keeps each context open until its checks have run). Two kinds of check:
 
-- **The workspace's UI rules.** Every [UX rule](../ux-rules/1_scope.md) with surface `ui`
+- **The workspace's UI rules.** Every [UX rule](../../ux-rules/1_scope.md) with surface `ui`
   whose targets include the mock's view, run at the mock's state, theme and width. A rule's
   `fail` is a finding with the rule's severity, measurements and region. The same rules the
   scheduled routine runs; no second implementation.
@@ -722,7 +730,7 @@ it.
 | `codex` | `attach_args`: `codex exec` accepts image attachments on its command line (`--image`). | Shipped declaration; phase 1 Linux probe passed; `view_image` supports the self-check. |
 | `gemini` | `native_read` is expected (the Gemini CLI's file read returns image data). | Not verified; declared only after a probe passes. |
 | `antigravity`, `grok`, `copilot` | Unknown. | No declaration; refused until probed. |
-| `muse` | `attach_args --image {path}`, PNG only ([Muse Code CLI](../../CONFIG.md#muse-code-cli)). | Shipped declaration; phase 1 Linux probe passed on Muse Code 1.4.14. |
+| `muse` | `attach_args --image {path}`, PNG only ([Muse Code CLI](../../../CONFIG.md#muse-code-cli)). | Shipped declaration; phase 1 Linux probe passed on Muse Code 1.4.14. |
 | `ollama` | CLI runtime (`crates/orbit-agent/src/providers/ollama/ollama_runtime.rs`), without a shipped image-input declaration. | Visual use needs an image-input declaration and a passing crew probe. |
 | `openai_compat` | No CLI runtime. | Unsupported, as for every activity. |
 
@@ -742,7 +750,7 @@ envelope must return the code in `canary`. A missing or wrong code on a delivery
 the result as `image_not_seen`, a retryable failure. The probe runs the same check outside
 a delivery and records a miss on that crew's row; the probe run itself still completes, so
 one crew does not fail the batch. A crew that fails the canary twice in a row is held
-for visual review like a [provider failure hold](../../CONFIG.md#provider-failure-holds).
+for visual review like a [provider failure hold](../../../CONFIG.md#provider-failure-holds).
 
 This is the one place visual review reads agent output as truth, and it is bounded: the
 canary proves delivery, not judgement. Judgement is checked by verification (§11).
@@ -817,7 +825,7 @@ Every finding, check findings included, is verified in-line by `visual_verify` w
 other than the reviewer's (§9.4), before `visual_settle`. In-line, not through the
 asynchronous `finding_verification_pipeline`, because a blocking finding must be settled
 before the code review starts, and the images are already staged. The verifier uses the
-existing verdict schema ([finding verification §3](../finding-verification/2_design.md#3-verdict-schema)),
+existing verdict schema ([finding verification §3](../../finding-verification/2_design.md#3-verdict-schema)),
 with one extension: an evidence location may be an image region (`visual/<…>.png#x,y,w,h` or
 `mocks/<…>.png#x,y,w,h`) from this delivery instead of `path:line`. It returns CONFIRMED or
 REJECTED, a confidence, and for CONFIRMED a severity, which may differ from the reviewer's.
@@ -855,7 +863,7 @@ In `shadow` mode nothing in this table happens except recording.
 
 The comparison reviewer is a reviewer: its confirmed findings count as findings that held,
 weighted 8, 4, 2, 1 and 0.25 by verified severity, and its rejected findings count as other
-rejected review findings do ([agent scorecards](../agent-scorecards/2_design.md)). Records
+rejected review findings do ([agent scorecards](../../agent-scorecards/2_design.md)). Records
 carry the purpose `visual_review`. The implementer of a `verify-mock-ui` task is credited
 for mocks with no confirmed finding at `medium` or above on the first candidate, which is
 the measure of how well the self-check worked.
@@ -864,7 +872,7 @@ the measure of how well the self-check worked.
 
 ### 12.1 The experiment
 
-One experiment ([experiments](../experiments/1_scope.md)) in each workspace that runs it:
+One experiment ([experiments](../../experiments/1_scope.md)) in each workspace that runs it:
 
 - **Population:** tasks tagged `verify-mock-ui`, excluding `no-diff-expected`.
 - **Arms:** `control` with `visual_review.reviewer = false` (self-check, capture and checks
@@ -1009,7 +1017,7 @@ with this design unchanged.
 
 **`ui/implement.md` and `ui/review.md`** change only to point at `verify-mock-ui` for tasks
 with mocks. The workspace guide's screenshot rule and
-[browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
+[browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
 the implementer's capture duty is dropped for mocked views of a `verify-mock-ui` task in a
 workspace with visual review `live`, and remains for everything else.
 

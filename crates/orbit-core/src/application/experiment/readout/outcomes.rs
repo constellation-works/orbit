@@ -386,23 +386,6 @@ impl OrbitRuntime {
                 "lines_changed",
                 settled(lines.get(id).filter(|_| done).map(|lines| *lines as f64)),
             );
-            let visual = self.visual_outcomes(id)?;
-            values.insert(
-                "visual_landed_mismatches",
-                match visual.landed_mismatches.filter(|_| done) {
-                    Some(weighted) => Outcome::Value(weighted),
-                    None if terminal => Outcome::Unmeasured,
-                    None => Outcome::Open,
-                },
-            );
-            values.insert(
-                "visual_review_repairs",
-                settled(visual.repairs.filter(|_| done)),
-            );
-            values.insert(
-                "visual_verified_finding_rate",
-                settled(visual.verified_rate),
-            );
             let reviewable = if !done {
                 ReviewableDenominator::NotDone
             } else {
@@ -467,13 +450,6 @@ impl OrbitRuntime {
     ) -> Result<BTreeMap<String, Spend>, OrbitError> {
         let mut spend: BTreeMap<String, Spend> = BTreeMap::new();
         for invocation in self.invocation_spend(Some(since))? {
-            // [visual-review §12.3] The post-landing comparison measures the
-            // arms; it is not a cost either arm's delivery pays.
-            if invocation.activity_id.as_deref().is_some_and(|activity| {
-                orbit_types::task::VISUAL_MEASURE_INVOCATION_IDS.contains(&activity)
-            }) {
-                continue;
-            }
             for id in invocation.task_ids.iter().filter(|id| ids.contains(*id)) {
                 let task = spend.entry(id.clone()).or_default();
                 if let Some(cost) = invocation.provider_cost_usd.or(invocation.derived_cost_usd) {

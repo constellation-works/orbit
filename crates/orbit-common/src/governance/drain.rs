@@ -183,7 +183,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
             "visual_resolution",
             ParamType::Integer,
             false,
-            "Supported claimed live visual-resolution bundle schema. Schema 1 returns owner-verifiable evidence for the exact final candidate. Omitted or zero declares no support; unsupported live claims stay held.",
+            "Retired with visual review: accepted from an executor on an earlier build and ignored. Omit it.",
         ),
         param(
             "caller_review_policy",

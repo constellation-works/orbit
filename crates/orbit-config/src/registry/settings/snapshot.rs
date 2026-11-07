@@ -216,10 +216,6 @@ impl ConfigSnapshot {
                 &mut self.workflow_purpose_crews_sweep_tasks,
                 "workflow.purpose_crews.sweep_tasks",
             ),
-            (
-                &mut self.workflow_purpose_crews_visual_review,
-                "workflow.purpose_crews.visual_review",
-            ),
         ] {
             admit_crew_pool(pool, crews, setting, AutoEntries::Refused)?;
         }
@@ -364,10 +360,6 @@ impl ConfigSnapshot {
             (
                 CrewPurpose::SweepTasks,
                 self.workflow_purpose_crews_sweep_tasks.clone(),
-            ),
-            (
-                CrewPurpose::VisualReview,
-                self.workflow_purpose_crews_visual_review.clone(),
             ),
             (
                 CrewPurpose::PilotWarningTriage,

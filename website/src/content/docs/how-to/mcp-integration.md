@@ -122,7 +122,7 @@ toolsets it enables. `orbit tool list` shows each tool's toolset.
 | `automation` | `orbit.auto_task.*`, `orbit.routine.control` and `orbit.automation.explain` |
 | `codebase` | `orbit.codebase.*` |
 | `search` | `orbit.search` |
-| `ui` | `orbit.visual.capture` |
+| `ui` | None. `orbit.visual.capture` was removed; the name is kept so selections that list `ui` still load |
 | `exec` | `orbit.command.exec` |
 | `plugins` | Plugin tools |
 | `leases` | `orbit.lease.*` |

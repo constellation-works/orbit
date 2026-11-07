@@ -58,7 +58,6 @@ This matrix records behavior of agent-visible and operator-only MCP tools. The `
 | orbit_workflow_run_show | S-resume, I-runs | I-runs | S-resume, I-runs | I-runs | Retry lineage read after server restart; unavailable evidence fixtures |
 | orbit_workflow_ship | — | S-governed, I-runs | — | S-governed, I-runs | Refusals only; dispatch, in-flight guard and provider/GitHub delivery untested |
 | orbit_workspace_list | S-federated | S-selector | — | S-federated, S-replica | Production stdio proves local machine-qualified routing and crews rows; live SSH destinations untested |
-| orbit_visual_capture | — | — | — | — | No named behavior evidence mapped in this matrix |
 
 Named proofs are below. Suite totals are supporting execution evidence; the named assertion determines what each row claims. Schema snapshots and parser tests do not count as a successful business operation.
 

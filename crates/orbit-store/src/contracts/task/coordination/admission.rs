@@ -14,12 +14,9 @@ pub use orbit_types::task::ExecutionLocation;
 pub struct AdmissionTaskGuidance {
     pub experiments: orbit_types::workflow::CapturedExperiments,
     /// System artifacts the owner publishes in the same commit as the
-    /// claim (for example the frozen `verify-mock-ui` mock digests). They
-    /// ride the claim commit's evidence because an ordinary task write is
-    /// refused once the claim protects the task.
+    /// claim. They ride the claim commit's evidence because an ordinary task
+    /// write is refused once the claim protects the task.
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
-    /// The admitted `verify-mock-ui` task's visual review contract.
-    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
 }
 
 /// Owner-side facts admission reads, separate from the executor's wire
@@ -555,8 +552,11 @@ pub struct AdmissionRequest {
     /// selective policy refuses it rather than dropping the policy.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selective_review: bool,
-    /// Supported claimed live visual-resolution bundle schema. Zero or absent
-    /// declares no support. This participates in the request fingerprint.
+    /// [ORB-22807] The claimed visual-resolution bundle schema an executor
+    /// on an earlier build declares. Visual review was removed and nothing
+    /// reads it, but it participates in the request fingerprint, so it stays
+    /// until 2026-12-07 for those executors' requests to verify. Zero or
+    /// absent from this build.
     #[serde(default, skip_serializing_if = "is_zero_visual_resolution")]
     pub visual_resolution: u32,
     pub run_context: AdmissionRunContext,
@@ -693,14 +693,6 @@ pub struct AdmissionReceipt {
     /// capture: followers refuse claims without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiments: Option<orbit_types::workflow::CapturedExperiments>,
-    /// The owner's visual review contract for an admitted `verify-mock-ui`
-    /// task: its `visual_review` settings, manifests at the base revision
-    /// and the mock digests frozen at admission. The claimed leaf captures
-    /// against this, never its replica's settings, and the owner checks
-    /// the returned capture against it. Outside the request fingerprint,
-    /// like `gates`; absent when the visual phase does not apply.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
     /// [ORB-17304] How the executor census the owner ordered against classes
     /// the admitted task, and the census's machine ids. Absent from an idle
     /// or repair receipt, from an order taken without a census, and from a

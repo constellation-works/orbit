@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// the same Orbit version runs the same browser build.
 pub const PLAYWRIGHT_VERSION: &str = "1.64.0";
 
-/// The npm package the visual capture driver decodes PNGs with, pinned in
+/// The npm package screenshot pixel checks decode PNGs with, pinned in
 /// the kit's npm project so every host compares pixels with the same code.
 pub const PIXEL_HELPER_PACKAGE: &str = "pngjs";
 /// The exact [`PIXEL_HELPER_PACKAGE`] release this Orbit release installs.
@@ -269,7 +269,7 @@ impl KitInspection {
     }
 
     /// The installed pixel helper is the version this release pins, and the
-    /// recorded smoke test ran against it. Visual capture requires this on
+    /// recorded smoke test ran against it. Pixel checks require this on
     /// top of [`Self::is_verified`]: a kit verified before the helper was
     /// pinned keeps serving ordinary browser checks until `install` adds it.
     pub fn pixel_helper_verified(&self) -> bool {

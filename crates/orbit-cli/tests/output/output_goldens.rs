@@ -673,7 +673,6 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.retry_handoff", Placement::Advertised),
     ("orbit.task.revoke_handoff", Placement::Advertised),
     ("orbit.task.review_reset", Placement::Advertised),
-    ("orbit.visual.accept_dispute", Placement::Unadvertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.workflow.land", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),

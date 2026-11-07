@@ -22,7 +22,6 @@ impl OrbitRuntime {
     ) -> Result<HandoffLandingContext, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(handoff_id)?;
-        self.check_handoff_live_visual_resolution(&accepted.handoff)?;
         // [ORB-15677] The hosted checks the accepted review owed the owner,
         // read from the certificate the handoff pinned and acceptance judged.
         let owed_hosted_checks = self
@@ -250,7 +249,6 @@ impl OrbitRuntime {
                 update.handoff_id
             )));
         }
-        self.check_handoff_live_visual_resolution(&accepted.handoff)?;
         if matches!(
             accepted.handoff.candidate.delivery,
             orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }

@@ -635,9 +635,7 @@ Dependabot, code-scanning and merged-head repair sweeps file),
 `pilot_warning_triage` (the triager of each held task-pilot assessment:
 drawn from its pool when set and inspection-capable, else from
 `workflow.hard_complexity_crews` as before, recorded as
-`purpose:pilot_warning_triage`) and `visual_review` (the mock comparison
-reviewer and its in-line verifier: drawn from its pool when set and
-vision-capable, else from the task's complexity pool), plus
+`purpose:pilot_warning_triage`), plus
 `final_recovery` and `review`, which keep their own rules: final recovery
 draws only from its pool, and `[]` turns it off; automatic review needs its
 pool set and avoids the crew that implemented the reviewed work. For the
@@ -705,45 +703,14 @@ warning, but is ignored. Orbit no longer defines a built-in `system` crew, so a
 template or job still naming `crew: system` routes through the pools with a
 warning. A `[crews.system]` table you define is an ordinary crew.
 
-## Visual review
-
-`[visual_review]` controls the visual checks that run for UI deliveries. To opt
-in to live review, set `mode` to `"live"` and list the repository-relative view
-manifests the checks should use:
-
-```toml
-[review]
-timing = "before_landing"
-
-[visual_review]
-manifests = ["views.json"]
-mode = "live"
-```
-
-`review.timing = "before_landing"` supplies the review layer that can resolve
-blocking findings for PR-route deliveries. Live mode alone does not make
-landing conditional: with `review.timing = "off"` and selective enforcement
-off (the defaults), or when the review is skipped or not required, confirmed
-findings at or above `block_at` are filed as high-priority follow-ups after
-landing instead of holding it. With timing off, enforced selective review
-(`review.selective_before_landing.mode = "enforce"`) can provide that layer
-for PR-route deliveries.
-
-- **`visual_review.manifests`** — Default: `[]`. Repository-relative view manifests. An empty list refuses a `verify-mock-ui` task with `no_view_manifest`. `orbit visual capture` reads these same manifests from the working tree in every mode.
-- **`visual_review.default_width`** — Default: `1440`. Width used when a mock name has no width. Non-responsive views allow only this width.
-- **`visual_review.mode`** — Default: `"off"`. `off` does not run delivery capture. `shadow` runs capture and checks without blocking on findings or filing follow-ups; `visual_review.require_established = true` can still hold a delivery whose capture is not established. In `live`, confirmed findings at or above `visual_review.block_at` block landing when a review layer can resolve them; otherwise they become high-priority follow-ups. Blocking findings must be fixed or an operator must accept the dispute with `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>`. Resume the held run after accepting a dispute.
-- **`visual_review.block_at`** — Default: `"high"`. In `live` mode with a review layer, the lowest confirmed-finding severity that blocks landing. Values: `critical`, `high`, `medium`, `low` or `never`.
-- **`visual_review.file_at`** — Default: `"low"`. In `live` mode, the lowest unfixed finding severity filed as a follow-up after landing. Values: `critical`, `high`, `medium`, `low`, `nit` or `never`. Configuration fails to load if this severity is above `visual_review.block_at`.
-- **`visual_review.reviewer`** — Default: `true`. Runs the mock comparison reviewer after capture and checks. Set to `false` to keep capture and checks only. The reviewer comes from [`workflow.purpose_crews.visual_review`](#workflow-purpose-crews-visual-review).
-- **`visual_review.max_mocks`** — Default: `12`. Maximum mocks captured in one delivery (`1`–`100`).
-- **`visual_review.max_images`** — Default: `32`. Maximum images sent in one review (`2`–`200`).
-- **`visual_review.max_image_tokens`** — Default: `48000`. Estimated image-token limit for one review (`1`–`1000000`).
-- **`visual_review.max_findings`** — Default: `15`. Maximum findings accepted from one comparison review (`1`–`100`).
-- **`visual_review.require_established`** — Default: `false`. When `true`, holds a delivery whose capture is not established. To release the hold, clear this setting and resume the held run.
-
-Delivery capture needs a verified browser kit; install one with
-`orbit config browser-kit install`. Without a verified kit, capture is recorded as not
-established, never as a pass.
+Visual review has been removed. Existing `[visual_review]` keys
+(`manifests`, `default_width`, `mode`, `block_at`, `file_at`, `reviewer`,
+`max_mocks`, `max_images`, `max_image_tokens`, `max_findings` and
+`require_established`) and `workflow.purpose_crews.visual_review` load with a
+deprecation warning and have no effect. They are recognised until 2026-12-07,
+after which they are reported as unknown settings; delete the `[visual_review]`
+table and that pool from the `config.toml` that sets them. A `verify-mock-ui`
+tag is an ordinary tag, and `mocks/` and `visual/` are ordinary artifact names.
 
 Explorer delegation has been removed. Existing `workflow.explore.*` and
 `workflow.purpose_crews.explorer` settings load with a deprecation warning
@@ -774,7 +741,6 @@ readouts remain readable.
 | `workflow.purpose_crews.review` | string or array · **Default:** Unset<br>Crew for automatic review: every review task the after-landing auto-task mints, and the reviewer `review.timing` runs while `workflow.purpose_crews.pre_landing_review` is unset. Unset, after-landing review uses that auto-task's template crew. An array is a pool written like the complexity pools (`["sol", "grok"]` or `["sol:3", "grok:1"]`, all bare or all weighted): each review draws one crew by weight, skipping crews that are disabled or at a provider usage limit and then preferring one that did not implement the reviewed work, each step falling back to the pool when it would leave none. A distributed owner resolves its pool to one crew per claim. `[]` unsets it; a crew the registry does not define fails the load. Replaces the deprecated `operation.review_crew`. |
 | `workflow.purpose_crews.sweep_tasks` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for every task a sweep files: the CI failure sweep, the Dependabot and code-scanning sweeps, and the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their matching type pool, then their complexity pool. Replaces the deprecated `ci_failure_sweep`, `dependabot` and `merged_head_repair` pools, which still load into it; a file whose old pools differ fails to load until you merge them here. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the task pilot. Unset or `[]`, it draws from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.visual_review` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the mock comparison reviewer and its in-line verifier. Only crews whose executor declares `image_input` and that do not set `vision = false` are drawn, seeded by task and candidate; the verifier passes over the reviewer's and the implementer's crews. Unset or `[]`, both draw from the task's complexity pool under the same filter. With no such crew the review records `not_established: no_vision_crew`. See [purpose pools](#purpose-pools). <span id="workflow-purpose-crews-visual-review"></span> |
 | `workflow.provider_limit_max_used_pct` | **Advanced.** integer · **Default:** `90`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `100` skips only on exhaustion. |
 | `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`. |
 | `workflow.provider_limit_budgets` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>`, such as `["grok:30usd/5h"]`. Counts this host's Orbit runs only. |
@@ -970,7 +936,7 @@ readouts remain readable.
 | `review.selective_before_landing.paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Positive repository-relative globs matched against old and new names in the complete pinned diff; a stated list replaces the lower layer's. |
 | `review.selective_before_landing.unknown_risk` | **Advanced.** string · **Default:** `review`<br>When the risk predicate has no usable estimate: `review` or `skip`. Never applies to an unreadable path diff. |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. The list is captured when a delivery or claim is admitted. |
-| `review.verify_findings` | **Advanced.** bool · **Default:** `false`<br>Review findings must be verified before approval. When on, a review-filed bug (tagged `code-review`, `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`) is refused at approval and promotion and kept out of drains until `finding_verification_pipeline` confirms it. When off, verification state is ignored. Read each time the gate is checked; toggle it with `orbit config set` or the dashboard's Settings › Effective switch. Turning it on does not enable the `finding_verification` routine. |
+| `review.verify_findings` | **Advanced.** bool · **Default:** `false`<br>Review findings must be verified before approval. When on, a review-filed bug (tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) is refused at approval and promotion and kept out of drains until `finding_verification_pipeline` confirms it. When off, verification state is ignored. Read each time the gate is checked; toggle it with `orbit config set` or the dashboard's Settings › Effective switch. Turning it on does not enable the `finding_verification` routine. |
 
 Agent stdout/stderr relay uses `~/.orbit/state/logs/orbit-agent.jsonl` with a separate 200 MiB archive budget and 50 MiB file limit. Its output cannot evict operational events from `orbit.jsonl`. A full agent queue blocks the relay instead of dropping lines; the operational feed can still drop a line when its own queue is full. The dashboard log dock, `/api/log`, `/api/log/stream`, and `orbit log tail` merge the two active feeds; per-run captures remain available separately. `runtime.log_retention_days` applies to both feeds. Size limits still take precedence over age when either feed's own budget is exhausted; seven days of operational history requires its non-relay volume to fit the operational budget.
 
