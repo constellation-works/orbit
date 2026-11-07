@@ -32,9 +32,9 @@ evidence when the code disproves the finding.
 
 - **Agent:** ask your agent to pilot the proposed tasks.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
-  `task_pilot_pipeline`. To pilot eligible new tasks automatically, turn on
-  the `task_pilot` routine in **Automation → Routines**. It is off by default
-  and runs on the host scheduler clock.
+  `task_pilot_pipeline`. For automatic piloting of eligible new tasks, the
+  `task_pilot` routine is enabled by default, as is `worktree-gc`; both run on
+  the host scheduler clock.
 - **CLI:**
 
   ```bash

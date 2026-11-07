@@ -591,8 +591,9 @@ The pilot agent inspection is read-only; its deterministic apply step mutates
 validated task selectors. It runs five
 partitions concurrently, and returns selector proposals plus duplicate,
 already-landed, dependency, and conflicting-decision warnings. The shipped
-workspace routine is disabled by default and uses a `preparation_eligible`
-state trigger, not a periodic cron: each tick fingerprints eligible tasks and
+`task_pilot` workspace routine seeds enabled by default, as does `worktree-gc`.
+It uses a `preparation_eligible` state trigger, not a periodic cron: each tick
+fingerprints eligible tasks and
 queues only tasks without an applied assessment after the 2-minute debounce or
 the 10-minute maximum wait. Once assessed, a task stays quiet across routine
 windows until a certified description or acceptance-criteria edit makes its assessment stale; it then gets a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds it. Edits to other material or policy never queue one; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
