@@ -3,8 +3,7 @@
 use orbit_types::task::{RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::application::codebase::{BlockCause, classify_block};
-use crate::application::task::TaskRow;
+use crate::application::task::{BlockCause, TaskRow, classify_block};
 
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 

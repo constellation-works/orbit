@@ -13,6 +13,7 @@ pub(in crate::application) mod base_revision;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) mod batch_prepare;
+mod block_cause;
 pub(crate) mod candidate_checkpoint;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 pub(crate) mod blocked_recovery;
@@ -95,6 +96,9 @@ pub use artifact_export::TaskArtifactRead;
 pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
+pub(in crate::application) use block_cause::{
+    Anchor, BlockCause, SettledFailure, actor_kind, classify_block, entry_marks_run,
+};
 pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
@@ -221,6 +225,22 @@ pub(crate) use lifecycle::{
 pub(crate) use paths::context_workspace_root;
 pub(crate) use resolves::pull_request_delivery;
 pub(crate) use update::admit_agent_artifact;
+
+/// What a task write needs from `codebase` [ORB-22625]: the transition into
+/// done records the landed delivery's diff stats. `codebase` owns the landed
+/// rows and sits above `task`, so a direct call from here would climb into
+/// it; `codebase` implements this port on [`OrbitRuntime`](crate::OrbitRuntime),
+/// so composing the runtime binds it.
+pub(in crate::application) trait TaskCodebasePort {
+    /// On `task`'s transition into done from `previous_status`, record the
+    /// diff stats of the landing its history's receipt names. Never fails
+    /// the write: a missing commit or a store error is logged.
+    fn record_landed_diff_stats_on_done(
+        &self,
+        previous_status: orbit_types::task::TaskStatus,
+        task: &orbit_types::task::Task,
+    );
+}
 
 #[cfg(test)]
 mod tests;
