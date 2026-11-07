@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
-use orbit_types::tool::{McpRole, McpToolsetSelection};
+use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
@@ -281,6 +281,21 @@ pub(super) fn resolve_mcp_toolsets(
     }
 }
 
+/// Warn once per retired `--toolset` entry, which [`McpToolsetSelection`]
+/// ignores so existing launch scripts keep serving the live surface.
+fn warn_retired_flagged_toolsets(names: &[&str]) {
+    for name in names {
+        if McpToolset::is_retired_toolset_name(name) {
+            tracing::warn!(
+                target: "orbit.mcp",
+                value = name.trim(),
+                note = McpToolset::RETIRED_AGENT_INVOKE_NOTE,
+                "--toolset entry 'agent-invoke' was removed and is ignored; remove it from the invocation",
+            );
+        }
+    }
+}
+
 fn configured_mcp_toolsets(
     global_root: &Path,
     role_flag: Option<&str>,
@@ -329,9 +344,11 @@ fn configured_mcp_toolsets(
         McpToolsetSelection::for_role,
     );
     match flagged_toolsets {
-        Some(names) => base
-            .with_names(names)
-            .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}"))),
+        Some(names) => {
+            warn_retired_flagged_toolsets(&names);
+            base.with_names(names)
+                .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}")))
+        }
         None => base
             .with_names(
                 config

@@ -71,5 +71,6 @@ include!("plugin_config.rs");
 include!("crew_performance.rs");
 include!("provider_limit.rs");
 include!("retired_system_crew.rs");
+include!("mcp_toolsets.rs");
 include!("review_layers.rs");
 include!("unknown_keys.rs");
