@@ -6,13 +6,16 @@
 //! overlapping task to a follower, and a grant just before the wave could be
 //! missed by its snapshot. Each wave therefore passes the same exclusive
 //! section a pull admission takes: a candidate a live claim holds, or whose
-//! footprint overlaps one, is refused, and every admitted footprint is
+//! footprint overlaps an ordinary claim, is refused. Known no-diff claims
+//! fence only their own task. Every admitted footprint is
 //! published as a coordination row the pull's screen honours until its gate
 //! has had time to reserve it.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskStatus, is_no_diff_expected, validate_orb_task_id};
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
@@ -36,9 +39,10 @@ struct OwnerWaveRow {
 impl TaskCommitBoundary {
     /// Admit `candidates` for the owner's local drain inside the partition's
     /// admission section, in order. A candidate whose task a live execution
-    /// claim holds, or whose footprint overlaps one, comes back with that
-    /// claim; every other candidate's footprint is visible to each pull grant
-    /// that enters the section after this one.
+    /// claim holds, or whose footprint overlaps a claim without a known
+    /// no-diff exemption, comes back with that claim; every other candidate's
+    /// footprint is visible to each pull grant that enters the section after
+    /// this one.
     pub fn admit_owner_wave(
         &self,
         candidates: &[OwnerWaveCandidate],
@@ -48,6 +52,26 @@ impl TaskCommitBoundary {
         }
         self.with_admission(|| {
             let claims = self.execution_claims()?;
+            // Read tags under the same admission boundary as the claim check.
+            // No-diff claims fence their task, but hold no context locks.
+            // Missing or unsettled task metadata grants no exemption.
+            let mut no_diff_task_ids = BTreeSet::new();
+            for claim in claims
+                .iter()
+                .filter(|claim| claim.phase.protects_footprint())
+            {
+                if validate_orb_task_id(&claim.task_id).is_err() {
+                    continue;
+                }
+                let envelope = match self.bundle_store.read_envelope_if_settled(&claim.task_id) {
+                    Ok(envelope) => envelope,
+                    Err(OrbitError::NotFound { .. }) => None,
+                    Err(error) => return Err(error),
+                };
+                if envelope.is_some_and(|task| is_no_diff_expected(&task.tags)) {
+                    no_diff_task_ids.insert(claim.task_id.as_str());
+                }
+            }
             let lock_modes = self.store.footprint_lock_modes();
             let expires_at = Utc::now() + Duration::seconds(OWNER_WAVE_VISIBILITY_SECONDS);
             let mut admissions = Vec::with_capacity(candidates.len());
@@ -56,7 +80,9 @@ impl TaskCommitBoundary {
                 if let Some(claim) = claims.iter().find(|claim| {
                     claim.phase.protects_footprint()
                         && (claim.task_id == candidate.task_id
-                            || lock_modes.footprints_block(&candidate.footprint, &claim.footprint))
+                            || (!no_diff_task_ids.contains(claim.task_id.as_str())
+                                && lock_modes
+                                    .footprints_block(&candidate.footprint, &claim.footprint)))
                 }) {
                     admissions.push(OwnerWaveAdmission {
                         task_id: candidate.task_id.clone(),

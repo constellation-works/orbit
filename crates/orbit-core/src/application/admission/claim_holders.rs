@@ -2,12 +2,14 @@
 //!
 //! Frozen claim footprints remain authoritative independently of the owner's
 //! task envelopes and local leaf runs. Admission and readiness include those
-//! surfaces and name the claim behind each lock wait.
+//! surfaces, except for known no-diff holders, and name the claim behind each
+//! lock wait. Every claim still fences admission of its own task.
 
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutionClaim;
+use orbit_types::task::{Task, is_no_diff_expected};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -45,8 +47,19 @@ impl ClaimHolders {
     }
 
     /// Include frozen surfaces even when no active task envelope holds them.
-    pub(crate) fn extend_lock_holders(&self, holders: &mut BTreeMap<String, Vec<String>>) {
+    /// Known no-diff tasks hold no context lock; an unknown owner still does.
+    pub(crate) fn extend_lock_holders(
+        &self,
+        holders: &mut BTreeMap<String, Vec<String>>,
+        task_lookup: &BTreeMap<String, Task>,
+    ) {
         for claim in self.by_task.values() {
+            if task_lookup
+                .get(&claim.task_id)
+                .is_some_and(|task| is_no_diff_expected(&task.tags))
+            {
+                continue;
+            }
             for selector in &claim.footprint {
                 let tasks = holders.entry(selector.clone()).or_default();
                 if let Err(index) = tasks.binary_search(&claim.task_id) {
@@ -54,6 +67,11 @@ impl ClaimHolders {
                 }
             }
         }
+    }
+
+    /// A protecting claim still fences its own task, including no-diff work.
+    pub(crate) fn protecting_task_claim(&self, task_id: &str) -> Option<&ExecutionClaim> {
+        self.by_task.get(task_id)
     }
 
     /// The claims holding `task_ids`, as readiness reports them.

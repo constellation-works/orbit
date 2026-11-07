@@ -251,6 +251,11 @@ work. Explicit task selection passes through the owner-wave admission
 section too: an overlapping live claim defers the task as a lock conflict
 before a leaf run is created, naming the claiming task and run. Releasing
 the claim makes the task eligible on the next pass, subject to other gates.
+Claims whose task is known to carry `no-diff-expected` hold no context lock
+in backlog admission, readiness or the owner-wave section, even when their
+frozen footprint is nonempty. Their same-task admission and write fences
+remain in force. A claim whose task metadata is unavailable retains its
+frozen surface as a conservative lock holder.
 A coordinated record update that starts work (`started`, `pulled_by` or
 `resume_readmitted` into `in-progress`) runs the ordinary footprint guard
 before its companion artifact, document and history writes, against the
