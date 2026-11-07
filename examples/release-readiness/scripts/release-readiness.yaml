@@ -11,7 +11,15 @@ spec:
   files:
     inputs:
       - from: scripts/qa-full-sweep-inventory.json
-        as: qa-full-sweep-inventory.json
+        as: scripts/qa-full-sweep-inventory.json
+      - from: scripts/test-qa-full-sweep.py
+        as: scripts/test-qa-full-sweep.py
+      - from: scripts/check_npm_package.py
+        as: scripts/check_npm_package.py
+      - from: scripts/check-ci-macos.sh
+        as: scripts/check-ci-macos.sh
+      - from: .github/workflows/ci-macos.yml
+        as: .github/workflows/ci-macos.yml
   requests:
     network: none
     timeout_seconds: 60

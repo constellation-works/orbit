@@ -51,7 +51,11 @@ definition would split that sign-off, so the owner adds one block to the native 
        - `capability-gap-evidence.json`: `candidate_id`, `source_revision` and `surfaces`,
          giving each required capability gap in the inventory an `outcome` and `evidence`.
 
-       macOS evidence comes from the native macOS check of this revision. Linux evidence
+       macOS evidence comes from the native macOS check of this revision. Each required
+       macOS row retains its full `native_evidence` certificate: matching command and
+       assertions, passing outcome, GitHub Actions producer, candidate source-file
+       digests, and every required native command's completed passing execution record.
+       The adapter uses the QA harness's native certificate validator. Linux evidence
        never stands in for it. Record what is missing rather than filling it in: a gap
        leaves the step unavailable.
    ```
@@ -86,7 +90,10 @@ A step holds, and times out at its expiry, until each of these is in place:
 - the adapter manifest is installed with a current grant;
 - this host can start a script sandbox. A process already inside a sandbox cannot, so an
   agent run does not exercise the adapter launch;
-- `python3` and `scripts/qa-full-sweep-inventory.json` are in the checkout;
+- `python3` is available and every declared manifest input is in the checkout:
+  the inventory, QA harness, its `check_npm_package.py` helper, macOS check script
+  and macOS workflow. The input tree preserves their repository paths so native
+  source digests and required execution commands are checked against candidate files;
 - the required Mac, Linux, browser and other capability evidence exists for this revision;
 - accepted-result history is readable. Orbit reports a corrupt file rather than treating
   it as empty, and leaves it in place for inspection.

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import sys
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def load_inventory():
     root = os.environ.get("ORBIT_SCRIPT_IN")
     if not root:
         unavailable("inventory-unavailable", "no inventory file was mounted for the adapter")
-    path = Path(root) / QA_INVENTORY
+    path = Path(root) / "scripts" / QA_INVENTORY
     try:
         raw = path.read_bytes()
         return json.loads(raw), hashlib.sha256(raw).hexdigest()
@@ -125,12 +126,19 @@ def judge_qa_results(inventory, report, candidate_id):
         if observed != set(scenario.get("assertions", [])):
             unavailable("assertions-mismatch", f"required scenario {name} has different assertions")
         capability = scenario.get("capability")
-        if capability == "macos" and not all(
-            row.get("native_evidence", {}).get("source_revision") == report["candidate"]["source_revision"]
-            and row.get("native_evidence", {}).get("platform") == "macos"
-            for row in rows
-        ):
-            unavailable("platform-evidence-missing", f"{name} has no matching macOS evidence")
+        if capability == "macos":
+            # Use the harness's complete certificate and native-execution
+            # contract, against declared candidate files rather than report labels.
+            repo = Path(os.environ["ORBIT_SCRIPT_IN"])
+            try:
+                validate_native = runpy.run_path(str(repo / "scripts/test-qa-full-sweep.py"))[
+                    "validate_hosted_macos_evidence"]
+                candidate = {"head": report["candidate"]["source_revision"],
+                             "status": report["source_state"]["status"]}
+                for row in rows:
+                    validate_native(row.get("native_evidence", {}), scenario, candidate, repo)
+            except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
+                unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
         if capability == "linux" and report.get("environment", {}).get("os") != "Linux" and not all(
             row.get("imported_from") and row.get("evidence_sha256") for row in rows
         ):
