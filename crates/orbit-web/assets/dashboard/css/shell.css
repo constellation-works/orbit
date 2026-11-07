@@ -312,7 +312,7 @@
 }
 
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
-.topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
+.topbar .refresh-btn { flex: 0 0 auto; white-space: nowrap; }
 
 /* Shrinks only while the bar is tight. From 1900px the per-window usage
    chips are shown, and the group stays rigid so a longer list takes the
@@ -505,8 +505,11 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 @media (max-width: 1240px) {
   .topbar { padding: 0 14px; gap: 10px; }
 }
-/* Below 1024px the bar may wrap, but only to two rows: crumb, drain and
-   Refresh on the first, the host chips on the second (scrolling if they must). */
+/* Below 1025px the bar drops the host warning and provider usage. */
+@media (max-width: 1024px) {
+  .topbar .host-resource-group { display: none; }
+}
+/* Below 1024px the bar may wrap if its controls don't fit. */
 @media (max-width: 1023px) {
   .topbar {
     height: auto;
@@ -514,9 +517,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     row-gap: 6px;
     padding: 8px 12px;
   }
-  .topbar .host-resource-group { order: 1; flex: 1 1 100%; overflow-x: auto; }
   .topbar-spacer { order: 0; }
-  .topbar .rail-brand, .topbar .global-drain-state, .topbar .refresh-btn { order: 0; }
+  .topbar .rail-brand, .topbar .refresh-btn { order: 0; }
 }
 
 .refresh-btn {
@@ -555,9 +557,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .topbar .notify-btn[hidden] { display: none; }
 
 /* On phones the top bar is one scrolling row: the brand stays at the start,
-   followed by Notify (when available), Refresh and the host group; the fleet
-   drain pill and provider usage are omitted at this width, and anything that
-   overflows is reachable by swiping or tabbing across. Scope pickers and
+   followed by the Tasks controls and Notify (when available), and anything that overflows
+   is reachable by swiping or tabbing across. Scope pickers and
    navigation keep their own rows below, leaving most of the viewport for the
    current pane. */
 @media (max-width: 760px) {
@@ -570,7 +571,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .rail {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
-    grid-template-rows: auto auto auto;
+    grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
@@ -584,19 +585,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 30px; width: 100%; max-width: 100%; }
-  .rail-foot {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-    position: static;
-    margin: 0;
-    padding: 0 2px;
-  }
-  .rail-conn { flex: 1 1 auto; padding: 0; }
-  .rail-foot .clock-zone { width: auto; flex: 0 0 auto; }
-  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 3px 10px; }
+  /* The host block, refresh line and UTC/Local control are desktop readings. */
+  .rail-foot { display: none; }
   .rail .tabs {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -610,8 +600,10 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     scrollbar-width: none;
   }
   .rail .tabs::-webkit-scrollbar,
-  .rail .rail-subtabs::-webkit-scrollbar,
-  .topbar .host-resource-group::-webkit-scrollbar { display: none; }
+  .rail .rail-subtabs::-webkit-scrollbar { display: none; }
+  .rail .tabs { cursor: grab; }
+  .rail .tabs.is-drag-scrolling,
+  .rail .tabs.is-drag-scrolling * { cursor: grabbing; user-select: none; }
   .rail-group { display: contents; }
   .rail-group-label { display: none; }
   .rail .tab {
@@ -672,21 +664,11 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .topbar :is(button, a) { scroll-margin-inline: 8px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
-  /* The narrow bar drops the fleet pill and provider usage to keep its row
-     clear. Both readings and their entry points stay on wider layouts. */
-  .topbar .global-drain-state,
-  .topbar .provider-usage-chips { display: none; }
+  .topbar .topbar-task-actions { order: 2; flex: 0 0 auto; }
+  .topbar .topbar-task-actions .task-search-wrap { flex: 0 0 180px; width: 180px; }
   .topbar .refresh-btn { order: 3; }
-  .topbar .host-resource-group {
-    order: 4;
-    flex: 0 0 auto;
-    overflow: visible;
-    padding: 2px;
-  }
-  /* A scope note takes room only while it says something. The host block
-     is a desktop reading; at this width the warning chip is the alarm. */
-  .rail-workspace .workspace-scope-note.is-inactive,
-  .host-block { display: none; }
+  /* A scope note takes room only while it says something. */
+  .rail-workspace .workspace-scope-note.is-inactive { display: none; }
   /* Tighter readings keep all three in view at 375px. */
   .host-resource { gap: 5px; padding: 0 4px; }
   .host-resource-bar { width: 20px; }

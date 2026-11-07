@@ -273,7 +273,7 @@ function render({ scorecard, rerender }) {
     return nodes;
   }
   if (curves.failed) {
-    nodes.push(el("p", { class: "agents-error", role: "status", text: "Size curves unavailable. Refresh to retry." }));
+    nodes.push(el("p", { class: "agents-error", role: "status", text: "Size curves unavailable. Reload the page to retry." }));
     return nodes;
   }
   nodes.push(el("p", { class: "agents-muted agents-curves-cohort", text: cohortText() }));

@@ -144,7 +144,7 @@ let lastCleanRefresh = null;
 // The Tasks page paints its rows, running runs, locks and drain phase live.
 // The reads it shows but which rarely change (crews, the Health summary, the
 // doctor and routine peeks, the backlog forecast) run when the page is
-// entered, on Refresh, after a scope change, and otherwise on this cadence.
+// entered, after a scope change, and otherwise on this cadence.
 const TASKS_SLOW_READS_INTERVAL_MS = 5 * 60_000;
 let tasksSlowReads = { at: 0, scope: null };
 let lastRefreshTab = null;
@@ -1510,14 +1510,14 @@ function persistWorkspaceToUrl(id) {
 }
 
 // Whether this refresh makes the Tasks page's slow reads: always off the Tasks
-// page, and on it when the page was just entered, on an explicit Refresh,
+// page, and on it when the page was just entered,
 // after a host or workspace change, or once the slow cadence has elapsed.
-function tasksSlowReadsDue(explicit) {
+function tasksSlowReadsDue() {
   const entered = lastRefreshTab !== activeTab;
   lastRefreshTab = activeTab;
   if (activeTab !== "tasks") return true;
   const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
-  const due = explicit || entered || tasksSlowReads.scope !== scope
+  const due = entered || tasksSlowReads.scope !== scope
     || Date.now() - tasksSlowReads.at >= TASKS_SLOW_READS_INTERVAL_MS;
   if (due) tasksSlowReads = { at: Date.now(), scope };
   return due;
@@ -1546,14 +1546,14 @@ function taskLocksShown() {
   return activeStatuses.has("in-progress") || activeStatuses.has("blocked") || locksPanelShown();
 }
 
-function activeRefreshJobs({ poll = false, explicit = false } = {}) {
+function activeRefreshJobs({ poll = false } = {}) {
   // ORB-00039: in the aggregate "All workspaces" view there is no concrete
   // workspace to scope per-workspace endpoints to, so skip every per-workspace
   // fetch (they'd 400) and render placeholders for the panels they feed. Only
   // the cross-workspace aggregate task list (/api/tasks/all) is fetched.
   const aggregate = isAggregateView();
   const entered = lastRefreshTab !== activeTab;
-  const slowReads = tasksSlowReadsDue(explicit);
+  const slowReads = tasksSlowReadsDue();
   const routinePeek = slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate);
   const failurePeek = slowReads && metricsJobFailurePeekDue(entered)
     && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate);
@@ -1562,7 +1562,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   const combineChrome = activeTab === "tasks" || activeTab === "knowledge" || activeTab === "run-detail"
     || (activeTab === "jobs" && activeJobsSubtab === "catalogue")
     || (activeTab === "analytics" && activeAnalyticsSubtab === "metrics");
-  const chrome = combineChrome && poll && !explicit && !aggregate && getWorkspace() && (routinePeek || failurePeek)
+  const chrome = combineChrome && poll && !aggregate && getWorkspace() && (routinePeek || failurePeek)
     ? fetchDashboardChrome({ routines: routinePeek, failures: failurePeek, since: summaryReadWindow() }) : null;
 
   // The health strip is global; refresh on every tick alongside the active tab,
@@ -1573,8 +1573,8 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
   // The chips also read every 5 s on their own (initHostResources), so the
   // Tasks page's tick leaves them to that.
-  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources({ shareRecent: poll && !explicit }).catch(error => console.error(error));
-  void fetchAndRenderNoticeBanner({ shareRecent: poll && !explicit, read: chrome?.notices }).catch(error => console.error(error));
+  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources({ shareRecent: poll }).catch(error => console.error(error));
+  void fetchAndRenderNoticeBanner({ shareRecent: poll, read: chrome?.notices }).catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   if (slowReads) void peekDoctor().catch(error => console.error(error));
@@ -1699,7 +1699,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   }
 
   if (activeTab === "notices") {
-    add("Notices", fetchAndRenderNotices({ shareRecent: poll && !explicit }));
+    add("Notices", fetchAndRenderNotices({ shareRecent: poll }));
     return jobs;
   }
 
@@ -2063,7 +2063,7 @@ function markRefreshStale(stale) {
   const suffix = lastCleanRefresh
     ? `Stale · as of ${formatClock(lastCleanRefresh, { seconds: false })}`
     : "Stale · no successful refresh yet";
-  for (const node of document.querySelectorAll(".rail-count, #global-drain-state")) {
+  for (const node of document.querySelectorAll(".rail-count")) {
     const previous = node.dataset.refreshStaleSuffix;
     if (previous && node.title.endsWith(previous)) {
       node.title = node.title.slice(0, -previous.length).replace(/ · $/, "");
@@ -2135,8 +2135,8 @@ function showHostUnavailable(now) {
 }
 
 // `poll` marks the visible tab's 30 s tick, whose re-reads of loaded panels are
-// quiet; `explicit` marks the Refresh button, which also makes the slow reads.
-async function refreshDashboard({ poll = false, explicit = false } = {}) {
+// quiet.
+async function refreshDashboard({ poll = false } = {}) {
   const sequence = ++refreshSequence;
   const host = getHost();
   setMetaText("fetching…");
@@ -2151,7 +2151,7 @@ async function refreshDashboard({ poll = false, explicit = false } = {}) {
   }
   const revision = getWorkspaceRevision();
   // Refresh stays available so a slow request never locks navigation or retry.
-  const jobs = runPanelPoll(poll, () => activeRefreshJobs({ poll, explicit }));
+  const jobs = runPanelPoll(poll, () => activeRefreshJobs({ poll }));
   const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
   const errors = results.flatMap((result, index) => result.status === "rejected"
@@ -2259,7 +2259,6 @@ function wireClockControls() {
   syncClockControls();
 }
 
-$("refresh-btn").addEventListener("click", () => refreshDashboard({ explicit: true }));
 wireClockControls();
 initHostResources();
 wireChangeStream();

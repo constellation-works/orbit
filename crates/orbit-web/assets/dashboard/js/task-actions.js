@@ -134,7 +134,7 @@ async function shipTask(task, detail, btnNode, context) {
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
     detail.prepend(actionErrorNode(dispatched
-      ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+      ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
       : `ship failed: ${error.message || String(error)}`));
   }
 }
@@ -200,7 +200,7 @@ function showCommentForm(task, detail, actions, context) {
       submit.disabled = posted;
       cancel.disabled = false;
       detail.prepend(actionErrorNode(posted
-        ? `Comment was posted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+        ? `Comment was posted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
         : `comment failed: ${error.message || String(error)}`));
     }
   });
@@ -303,7 +303,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
     if (!accepted && opts.onFailure) opts.onFailure();
     detail.prepend(actionErrorNode(accepted
-      ? `${kind} was accepted, but the view could not refresh: ${err.message || String(err)}. Use Refresh to update it.`
+      ? `${kind} was accepted, but the view could not refresh: ${err.message || String(err)}. Reload the page to update it.`
       : String(err.message || err), err && err.remedy));
   }
 }

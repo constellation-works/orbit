@@ -557,7 +557,7 @@ function panelMessage(bodyId, state) {
     // instead of the API path and the retry advice.
     const { message, remedy } = state.error.routeMissing
       ? { message: "This host's Orbit does not offer this view yet", remedy: "Upgrade it to see this view." }
-      : { message: state.error.message, remedy: state.error.remedy || "Use Refresh to retry." };
+      : { message: state.error.message, remedy: state.error.remedy || "Reload the page to retry." };
     note.textContent = `${label}: ${message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";

@@ -451,7 +451,7 @@ async function cancelRunInVisit(run, btn, host, visit) {
     ]);
   } catch (e) {
     if (!visit.isCurrent()) return;
-    showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Use Refresh to update it.`);
+    showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Reload the page to update it.`);
     console.error(e);
   }
   if (visit.isCurrent() && notice && host && host.id !== "runs-body") {
@@ -603,7 +603,7 @@ async function resumeRun(run, btn, host) {
   } catch (e) {
     if (!visit.isCurrent()) return;
     // The resume was accepted; only the list is stale.
-    showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Use Refresh to update it.`);
+    showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Reload the page to update it.`);
     console.error(e);
   }
 }

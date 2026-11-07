@@ -1,4 +1,4 @@
-import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, fleetDrainTooltip, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
 import { setDrainReadiness } from './drain-waits.js';
 import { $, operationsState } from './operations-shared.js';
 
@@ -34,11 +34,9 @@ export function paintAggregateFleet(payload) {
   if (label) label.textContent = "Fleet";
   const when = $("auto-drain-when");
   if (when) when.textContent = "";
-  renderFleetIndicator(payload);
 }
 
 function paintFleetSurfaces(payload) {
-  renderFleetIndicator(payload);
   const card = $("auto-drain-panel");
   if (card?.dataset.drainState !== "fleet") return;
   const body = $("auto-drain-body");
@@ -86,23 +84,4 @@ export function startFleetIndicatorRefresh() {
     paintFleetSurfaces(payload);
     return payload;
   });
-}
-
-export function renderFleetIndicator(payload) {
-  const global = $("global-drain-state");
-  if (!global) return;
-  global.hidden = false;
-  const label = fleetDrainLabel(payload);
-  const tooltip = fleetDrainTooltip(payload);
-  const active = payload.items.some(row => ['draining', 'pulling'].includes(row.phase));
-  global.dataset.drainState = active ? 'draining' : payload.items.some(row => row.phase === 'winding_down') ? 'winding_down' : 'idle';
-  global.setAttribute('aria-label', `${label}. ${tooltip}`);
-  global.title = tooltip;
-  global.querySelector('.global-drain-label').textContent = label;
-  global.querySelector('.global-drain-running').textContent = '';
-  // Open the fleet through the same scope switch used by its rows.
-  if (!global.dataset.fleetWired) {
-    global.addEventListener('click', () => operationsState.context.selectFleetScope(null, null));
-    global.dataset.fleetWired = 'true';
-  }
 }

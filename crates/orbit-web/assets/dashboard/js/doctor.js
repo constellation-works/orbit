@@ -454,7 +454,7 @@ function renderBody() {
   const nodes = [];
   if (failure && failure.visit.isCurrent()) {
     const prefix = visitIsCurrent(current) ? "Doctor failed; showing the previous result" : "Doctor failed";
-    nodes.push(stateNode("doctor-error", `${prefix}: ${failure.message}. Use Refresh to retry.`, "panel-placeholder action-error"));
+    nodes.push(stateNode("doctor-error", `${prefix}: ${failure.message}. Reload the page to retry.`, "panel-placeholder action-error"));
   }
   if (!visitIsCurrent(current)) {
     if (!nodes.length) {

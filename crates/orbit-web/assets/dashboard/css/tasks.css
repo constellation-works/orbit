@@ -18,33 +18,15 @@
 /* The Tasks column is frameless: its title, search and status chips sit on
    the canvas, and each status group below is its own card. */
 #tasks-panel { background: transparent; border: 0; border-radius: 0; overflow: visible; }
-/* Head: the title and how many tasks show, then the search box and the
-   primary New task button on the right. Search and New task are 30px tall;
-   the transparent Clear button overflows the box so its target stays above
-   40px at any sub-pixel offset. */
-.panel > header.tasks-head {
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  align-items: center;
-  gap: 12px;
-  padding: 0 0 16px;
-  border-bottom: 0;
-}
-.tasks-heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin-right: auto; }
-.panel > header.tasks-head .panel-title {
-  font-size: 24px;
-  line-height: 32px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--fg-strong);
-}
-.panel > header.tasks-head .count { font-size: 13.5px; line-height: 20px; color: var(--fg-mute); }
-.panel > header.tasks-head .task-search-wrap { flex: 1 1 220px; max-width: 300px; min-width: 0; }
+/* The search box, Settle and New task sit in the top bar while Tasks is open.
+   Search and New task are 30px tall; the transparent Clear button overflows
+   the box so its target stays above 40px at any sub-pixel offset. */
+.topbar-task-actions { display: none; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; }
+.shell:has(.tab-pane[data-tab="tasks"].active) .topbar-task-actions { display: flex; }
+.topbar-task-actions .task-search-wrap { flex: 1 1 260px; width: 260px; min-width: 120px; }
+.topbar-task-actions .action { flex: none; white-space: nowrap; }
 .task-search-wrap { position: relative; }
 
-@media (max-width: 1201.98px) {
-  .panel > header.tasks-head { display: none; }
-}
 .task-search-wrap #task-search {
   width: 100%;
   height: 30px;
@@ -787,9 +769,6 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    a laptop the panel is often narrower than that while the window is wide. */
 #tasks-panel { container: tasks-panel / inline-size; }
 @container tasks-panel (max-width: 620px) {
-  /* The title takes its own line; the search and New task share the next. */
-  .tasks-heading { flex: 1 1 100%; }
-  .panel > header.tasks-head .task-search-wrap { flex: 1 1 160px; max-width: none; }
   .row {
     /* Line 1 is the title, line 2 the ID and its wait or run, and the crew
        and the action wrap under them. The action column keeps the desktop

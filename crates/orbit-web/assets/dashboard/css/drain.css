@@ -29,18 +29,6 @@
 .dock-drain-state { color: var(--state-running); font-size: 11px; }
 .dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--warn-fg); }
 .dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
-.global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: 999px; background: color-mix(in srgb, var(--state-running) 10%, var(--bg)); color: var(--state-running); padding: 5px 11px; cursor: pointer; font: 600 12px var(--font-sans); white-space: nowrap; text-decoration: none; }
-.global-drain-state[hidden] { display: none; }
-.global-drain-state[data-drain-state="winding_down"] { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
-.global-drain-state[data-drain-state="winding_down"] > .drain-dot { background: var(--warn-fg); }
-.global-drain-state[data-drain-state="pulling"] { color: var(--accent); border-color: var(--accent); border-style: dashed; background: var(--bg); }
-.global-drain-state[data-drain-state="pulling"] > .drain-dot { background: var(--accent); }
-.global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); background: var(--bg); }
-.global-drain-running { color: var(--fg-dim); font-weight: 400; }
-.global-drain-running:empty { display: none; }
-.global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.global-drain-state.refresh-stale { border-style: dashed; }
-.global-drain-state.refresh-stale > .drain-dot { animation: none; box-shadow: none; }
 
 #auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
 

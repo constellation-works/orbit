@@ -792,6 +792,48 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
 // can move it when the dock rewrites the hash without the router.
 let routedHref = null;
 
+// Touch scrolls the rail's row natively; a mouse drags it. A press that barely
+// moves stays a click, and a real drag swallows the click it ends on, so
+// scrolling never changes the route.
+function enableRailDragScroll(row) {
+  const threshold = 4;
+  row.addEventListener("pointerdown", (down) => {
+    if (down.pointerType !== "mouse" || down.button !== 0) return;
+    const inner = down.target.closest(".rail-subtabs");
+    const strip = inner && inner.scrollWidth > inner.clientWidth + 1 ? inner : row;
+    if (strip.scrollWidth <= strip.clientWidth + 1) return;
+    let startLeft = null;
+    const move = (event) => {
+      const moved = event.clientX - down.clientX;
+      if (startLeft === null) {
+        if (Math.abs(moved) < threshold) return;
+        // Read here, not on press: pressing a part-hidden entry focuses it,
+        // and that focus can already have scrolled the row.
+        startLeft = strip.scrollLeft;
+        row.classList.add("is-drag-scrolling");
+      }
+      strip.scrollLeft = startLeft - moved;
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (startLeft === null) return;
+      row.classList.remove("is-drag-scrolling");
+      const swallow = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      row.addEventListener("click", swallow, { capture: true, once: true });
+      // A release off the row fires no click, so don't eat the next real one.
+      setTimeout(() => row.removeEventListener("click", swallow, { capture: true }), 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  });
+}
+
 function initTabsImpl(ctx) {
   // A late count on any preceding entry shifts the selection, even when the
   // destination itself keeps its width. Observe entries as well as the row so
@@ -837,6 +879,7 @@ function initTabsImpl(ctx) {
   for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
     strip.addEventListener("scroll", () => syncRailScrollCues(), { passive: true });
   }
+  if ($("tabs")) enableRailDragScroll($("tabs"));
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
