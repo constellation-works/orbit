@@ -476,7 +476,7 @@ Each held or skipped fire records `guard_false` or `guard_unknown`.
 | `task` (task scope) | `id`, `title`, `status`, `tags`, `type`, `priority`, `complexity`, `crew` (optional), `parent_id` (optional), `dependencies`, `created_at`, `updated_at`, `status_since`, `origin` (optional: `trigger`, `fire_id`, `depth`) |
 | `tasks['<ID>']` | The same fields for one task. The index must be a string literal. |
 | `board` | `by_status['<status>']`, `by_tag['<tag>']` (a literal tag), `drain_running`, and `eligible`, `backlog`, `in_progress`, `blocked`, `review` and `open_runs`, each with `count` and `empty` |
-| `self` | `last_fired` (optional), `fires_24h`; an auto-task also has `last_minted` and `last_minted_task` (optional) |
+| `self` | `last_fired` (optional), `fires_24h`; an auto-task also has `last_minted` and `last_minted_task` (optional), and `last_succeeded_at` (optional) when it declares a completion contract: when that contract last accepted a result. It is absent until one is accepted; when the history cannot be read, a clause that reads it is unknown, not "never". A task that merely finished, or a probe that found nothing to do, does not advance it |
 | `now` | The evaluation time |
 
 Statuses are spelled as stored: `proposed`, `backlog`, `in_progress`, `review`, `done`, `blocked`, `archived`, `rejected`, `someday`. Read an optional field only after testing it, as in `has(task.origin) && task.origin.depth < 3`. A value that cannot be read, such as a `tasks['<ID>']` that does not exist, makes the evaluation unknown, never false.

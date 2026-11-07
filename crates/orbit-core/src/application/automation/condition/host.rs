@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::condition::{
-    CheckedCondition, ConditionEvaluator, ConditionHost, ConditionObservation, SubjectObservation,
-    TaskFacts, Truth, own_task_ids, self_facts,
+    CheckedCondition, ConditionEvaluator, ConditionHost, ConditionObservation, SelfFacts,
+    SubjectObservation, TaskFacts, Truth, own_task_ids, self_facts,
 };
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskHistoryEntry};
@@ -35,6 +35,14 @@ pub(crate) enum Target<'a> {
 }
 
 impl Target<'_> {
+    /// The auto-task a mint targets; a job has no accepted-result history.
+    pub(crate) fn auto_task(&self) -> Option<&AutoTaskDefinition> {
+        match self {
+            Self::Mint(definition) => Some(definition),
+            Self::Job(_) => None,
+        }
+    }
+
     pub(crate) fn trigger_label(&self) -> String {
         match self {
             Self::Mint(definition) => format!("auto-task:{}", definition.name),
@@ -67,6 +75,17 @@ impl Host<'_> {
                 if task.tags.contains(&auto_task_tag(&definition.name)))
     }
 
+    /// `self` as the next pass reads it: the fire records, plus the accepted-
+    /// result history when the condition reads `self.last_succeeded_at`.
+    fn self_facts(&self, state: &ConditionState, now: DateTime<Utc>) -> SelfFacts {
+        let facts = self_facts(Some(state), now);
+        if self.checked.reads.self_last_succeeded {
+            facts::with_accepted_history(self.runtime, self.target.auto_task(), facts)
+        } else {
+            facts
+        }
+    }
+
     /// Observe without committing anything: the same view explain shows.
     pub(crate) fn observe_view(
         &self,
@@ -80,9 +99,12 @@ impl Host<'_> {
             } else {
                 own.clone()
             },
-            self_facts: self_facts(Some(state), now),
+            self_facts: self.self_facts(state, now),
         };
-        let gathered = facts::gather(self.runtime, &self.checked.reads, now, &inputs)?;
+        let mut gathered = facts::gather(self.runtime, &self.checked.reads, now, &inputs)?;
+        gathered
+            .unavailable
+            .extend(facts::unreadable_history_note(&inputs.self_facts));
         let evaluator = ConditionEvaluator::new(&gathered.facts);
         let rearm = |subject: Option<&TaskFacts>| {
             self.checked

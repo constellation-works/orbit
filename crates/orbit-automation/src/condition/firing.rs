@@ -122,6 +122,8 @@ pub fn self_facts(state: Option<&ConditionState>, now: DateTime<Utc>) -> SelfFac
         last_fired,
         last_minted: last_minted.as_ref().map(|(at, _)| *at),
         last_minted_task: last_minted.map(|(_, task)| task),
+        last_succeeded_at: None,
+        last_succeeded_unreadable: None,
         fires_24h: i64::try_from(admitted.filter(|fire| fire.observed_at > day_ago).count())
             .unwrap_or(i64::MAX),
     }

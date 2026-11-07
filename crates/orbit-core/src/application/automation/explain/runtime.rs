@@ -85,9 +85,19 @@ impl OrbitRuntime {
             } else {
                 own.clone()
             },
-            self_facts: self_facts(state.as_ref(), now),
+            self_facts: {
+                let facts = self_facts(state.as_ref(), now);
+                if checked.reads.self_last_succeeded {
+                    facts::with_accepted_history(self, condition.target.auto_task(), facts)
+                } else {
+                    facts
+                }
+            },
         };
-        let gathered = facts::gather(self, &checked.reads, now, &inputs)?;
+        let mut gathered = facts::gather(self, &checked.reads, now, &inputs)?;
+        gathered
+            .unavailable
+            .extend(facts::unreadable_history_note(&inputs.self_facts));
         let evaluator = ConditionEvaluator::new(&gathered.facts);
         let tracking = condition_status(self, &condition, now)?;
         let subject_state = SubjectState {

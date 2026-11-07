@@ -176,6 +176,9 @@ impl Checker<'_> {
                 if field.name == "origin" {
                     self.reads.origin = true;
                 }
+                if kind == ObjectKind::SelfAutoTask && field.name == "last_succeeded_at" {
+                    self.reads.self_last_succeeded = true;
+                }
                 Ok(CelType::Bool)
             }
             CelType::Map(key, _) if *key == CelType::String => {
@@ -242,6 +245,9 @@ impl Checker<'_> {
                 }
                 if field.name == "origin" {
                     self.reads.origin = true;
+                }
+                if kind == ObjectKind::SelfAutoTask && field.name == "last_succeeded_at" {
+                    self.reads.self_last_succeeded = true;
                 }
                 Ok(field.ty.cel_type())
             }

@@ -87,6 +87,9 @@ pub struct ConditionReads {
     pub origin: bool,
     /// Whether `self` is read.
     pub self_history: bool,
+    /// Whether `self.last_succeeded_at` is read, which needs the definition's
+    /// accepted-result history.
+    pub self_last_succeeded: bool,
 }
 
 /// A condition that passed every load-time check.

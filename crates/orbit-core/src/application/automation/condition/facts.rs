@@ -12,8 +12,8 @@ use orbit_automation::condition::{
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::automation::{CONDITION_FIRED_EVENT, ConditionOrigin};
+use orbit_types::workflow::{AutoTaskAcceptedHistory, AutoTaskDefinition, JobRunState};
 use serde::Serialize;
 
 use super::super::AutomationBoardPort;
@@ -25,6 +25,38 @@ use crate::OrbitRuntime;
 pub(crate) struct FactInputs {
     pub(crate) own_tasks: BTreeSet<String>,
     pub(crate) self_facts: SelfFacts,
+}
+
+/// `self` with the definition's accepted-result history added. Only an
+/// auto-task that declares a completion contract has such a history; any other
+/// definition keeps `self` as its fire records give it. Missing history leaves
+/// `last_succeeded_at` absent; unreadable history is recorded apart, so a read
+/// of the field is unknown rather than "never succeeded".
+pub(crate) fn with_accepted_history(
+    runtime: &OrbitRuntime,
+    definition: Option<&AutoTaskDefinition>,
+    mut facts: SelfFacts,
+) -> SelfFacts {
+    let Some(definition) = definition.filter(|definition| definition.completion.is_some()) else {
+        return facts;
+    };
+    match runtime.auto_task_accepted_history(&definition.name) {
+        AutoTaskAcceptedHistory::Latest(receipt) => {
+            facts.last_succeeded_at = Some(receipt.accepted_at)
+        }
+        AutoTaskAcceptedHistory::Missing => {}
+        AutoTaskAcceptedHistory::Unreadable(why) => facts.last_succeeded_unreadable = Some(why),
+    }
+    facts
+}
+
+/// Why `self.last_succeeded_at` is unavailable, in the form the `unavailable`
+/// list carries.
+pub(crate) fn unreadable_history_note(facts: &SelfFacts) -> Option<String> {
+    facts
+        .last_succeeded_unreadable
+        .as_ref()
+        .map(|why| format!("self.last_succeeded_at: {why}"))
 }
 
 /// The facts plus every task the workspace lists.

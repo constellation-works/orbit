@@ -67,6 +67,13 @@ pub struct SelfFacts {
     pub last_fired: Option<DateTime<Utc>>,
     pub last_minted: Option<DateTime<Utc>>,
     pub last_minted_task: Option<String>,
+    /// When the definition's declared completion contract last accepted a
+    /// result; absent when it has accepted none or declares no contract.
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the accepted-result history could not be read. Distinct from an
+    /// absent `last_succeeded_at`: a read of the field is then unknown, never
+    /// "never succeeded".
+    pub last_succeeded_unreadable: Option<String>,
     pub fires_24h: i64,
 }
 
@@ -176,6 +183,9 @@ pub struct TopLevelClause {
 /// Binds facts as CEL variables once per explain, and the subject per call.
 pub struct ConditionEvaluator {
     context: Context<'static, 'static>,
+    /// Set when `self.last_succeeded_at` could not be read: any clause that
+    /// reads it is unknown.
+    unreadable: Option<String>,
 }
 
 impl ConditionEvaluator {
@@ -199,7 +209,10 @@ impl ConditionEvaluator {
             ),
         );
         context.add_variable_from_value("self", self_value(&facts.self_facts));
-        Self { context }
+        Self {
+            context,
+            unreadable: facts.self_facts.last_succeeded_unreadable.clone(),
+        }
     }
 
     /// Bind a job wait's facts [ORB-20158]. Evaluate with `truth(_, None)`.
@@ -252,14 +265,17 @@ impl ConditionEvaluator {
                     .map(|(id, step)| (id.clone(), step_value(step))),
             ),
         );
-        Self { context }
+        Self {
+            context,
+            unreadable: None,
+        }
     }
 
     /// The whole expression's value for one subject (`None` for workspace
     /// scope).
     pub fn truth(&self, expression: &CheckedExpression, subject: Option<&TaskFacts>) -> Truth {
         let scope = self.scope(subject);
-        resolve(&expression.ast, &scope)
+        resolve(&expression.ast, &scope, self.unreadable.as_deref())
     }
 
     /// Each top-level `&&` conjunct's value, for closest-miss ranking.
@@ -274,7 +290,7 @@ impl ConditionEvaluator {
             .into_iter()
             .map(|conjunct| TopLevelClause {
                 text: text.of(conjunct),
-                value: resolve(conjunct, &scope),
+                value: resolve(conjunct, &scope, self.unreadable.as_deref()),
             })
             .collect()
     }
@@ -287,7 +303,7 @@ impl ConditionEvaluator {
     ) -> ClauseNode {
         let scope = self.scope(subject);
         let text = SourceText::new(expression);
-        clause_node(&expression.ast, &scope, &text)
+        clause_node(&expression.ast, &scope, &text, self.unreadable.as_deref())
     }
 
     fn scope(&self, subject: Option<&TaskFacts>) -> Context<'_, 'static> {
@@ -299,7 +315,23 @@ impl ConditionEvaluator {
     }
 }
 
-fn resolve(expr: &IdedExpr, context: &Context<'_, '_>) -> Truth {
+/// `self.last_succeeded_at` as an expression reads it, bare or under `has()`.
+const LAST_SUCCEEDED_READS: [&str; 2] = ["self.last_succeeded_at", "has(self.last_succeeded_at)"];
+
+fn reads_last_succeeded(expr: &IdedExpr) -> bool {
+    let mut reads = Vec::new();
+    collect_reads(expr, &mut Vec::new(), &mut reads);
+    reads
+        .iter()
+        .any(|(path, _)| LAST_SUCCEEDED_READS.contains(&path.as_str()))
+}
+
+fn resolve(expr: &IdedExpr, context: &Context<'_, '_>, unreadable: Option<&str>) -> Truth {
+    if let Some(why) = unreadable
+        && reads_last_succeeded(expr)
+    {
+        return Truth::Unknown(format!("self.last_succeeded_at is unavailable: {why}"));
+    }
     match Value::resolve(expr, context) {
         Ok(Value::Bool(true)) => Truth::True,
         Ok(Value::Bool(false)) => Truth::False,
@@ -315,8 +347,13 @@ fn unknown_reason(error: &cel::ExecutionError) -> String {
     }
 }
 
-fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) -> ClauseNode {
-    let truth = resolve(expr, context);
+fn clause_node(
+    expr: &IdedExpr,
+    context: &Context<'_, '_>,
+    text: &SourceText,
+    unreadable: Option<&str>,
+) -> ClauseNode {
+    let truth = resolve(expr, context, unreadable);
     let chain = ["_&&_", "_||_"].into_iter().find(|operator| {
         matches!(&expr.expr, Expr::Call(call)
                 if call.target.is_none() && call.func_name == *operator)
@@ -326,11 +363,11 @@ fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) ->
             Some(if operator == "_&&_" { "and" } else { "or" }),
             flatten(expr, operator)
                 .into_iter()
-                .map(|operand| clause_node(operand, context, text))
+                .map(|operand| clause_node(operand, context, text, unreadable))
                 .collect(),
             Vec::new(),
         ),
-        None => (None, Vec::new(), operands(expr, context)),
+        None => (None, Vec::new(), operands(expr, context, unreadable)),
     };
     ClauseNode {
         text: text.of(expr),
@@ -346,7 +383,11 @@ fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) ->
 const ROOTS: &[&str] = &["task", "tasks", "board", "self", "now"];
 
 /// The maximal reads in a leaf clause, each with its value.
-fn operands(expr: &IdedExpr, context: &Context<'_, '_>) -> Vec<OperandValue> {
+fn operands(
+    expr: &IdedExpr,
+    context: &Context<'_, '_>,
+    unreadable: Option<&str>,
+) -> Vec<OperandValue> {
     let mut reads = Vec::new();
     collect_reads(expr, &mut Vec::new(), &mut reads);
     let mut seen = Vec::<String>::new();
@@ -357,6 +398,15 @@ fn operands(expr: &IdedExpr, context: &Context<'_, '_>) -> Vec<OperandValue> {
                 return None;
             }
             seen.push(path.clone());
+            if let Some(why) = unreadable
+                && LAST_SUCCEEDED_READS.contains(&path.as_str())
+            {
+                return Some(OperandValue {
+                    path,
+                    value: serde_json::Value::Null,
+                    unavailable: Some(why.to_string()),
+                });
+            }
             let (value, unavailable) = match Value::resolve(read, context) {
                 Ok(value) => (json_value(&value), None),
                 Err(cel::ExecutionError::NoSuchKey(_)) => {
@@ -652,6 +702,9 @@ fn self_value(facts: &SelfFacts) -> Value {
     }
     if let Some(task) = &facts.last_minted_task {
         fields.push(("last_minted_task".to_string(), string(task)));
+    }
+    if let Some(at) = facts.last_succeeded_at {
+        fields.push(("last_succeeded_at".to_string(), timestamp(at)));
     }
     map_value(fields)
 }
