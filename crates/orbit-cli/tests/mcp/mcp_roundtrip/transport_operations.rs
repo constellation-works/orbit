@@ -812,7 +812,20 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
             "the start names the unset variable once: {receipt}"
         );
     }
-    assert!(shipped.get("note").is_none(), "{shipped}");
+    // A ship names no required-validation note. A macOS host still reports its
+    // worker-containment note [ORB-19251], an independent informational line.
+    let ship_notes = shipped["note"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .collect::<Vec<_>>();
+    assert!(
+        ship_notes.len() == usize::from(cfg!(target_os = "macos"))
+            && ship_notes
+                .iter()
+                .all(|note| !note.contains("workflow.required_validation_commands")),
+        "the ship's only note is the host's worker-containment note: {shipped}"
+    );
     for receipt in [&started, &shipped] {
         let run_id = receipt["run_id"].as_str().expect("the run starts");
         let deadline = Instant::now() + Duration::from_secs(20);

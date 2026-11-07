@@ -388,9 +388,18 @@ mod unix {
                 && warning.contains("source: launcher_fallback"),
             "the submission names the disabled resolution and its fallback: {submitted}"
         );
+        // A macOS host still reports its worker-containment note [ORB-19251]; only that independent note may appear.
+        let notes = submitted["note"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .collect::<Vec<_>>();
         assert!(
-            submitted["note"].is_null(),
-            "configured required validation needs no note: {submitted}"
+            notes.len() == usize::from(cfg!(target_os = "macos"))
+                && notes
+                    .iter()
+                    .all(|note| !note.contains("workflow.required_validation_commands")),
+            "configured required validation needs no note, and a macOS host adds only its worker-containment note: {submitted}"
         );
         let run_id = submitted["run_id"]
             .as_str()
