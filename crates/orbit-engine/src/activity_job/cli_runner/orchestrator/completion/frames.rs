@@ -1,6 +1,9 @@
 //! Provider-owned stdout frames and structured failures.
 
-use orbit_agent::{provider_authentication_failure, provider_content_refusal};
+use orbit_agent::{
+    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
+    provider_usage_limit,
+};
 use serde_json::Value;
 
 /// Stdout's JSON frames, for the provider-owned failure readers below.
@@ -35,6 +38,87 @@ pub(in super::super) fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Val
 /// Did the provider report any failure of its own, recognized or not?
 pub(super) fn provider_reported_failure(provider: &str, stdout: &[u8]) -> bool {
     stdout_frames(stdout).any(|frame| provider_failure(provider, &frame).is_some())
+}
+
+/// Claude's exact formatting-only terminal, never quoted assistant/tool content.
+/// Unlike diagnostic frame readers, this requires a complete JSON stream with
+/// the terminal as its last value and no earlier provider failure or result.
+/// Its caller must also refuse truncated captures before admitting correction.
+pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8]) -> Option<String> {
+    if provider != "claude" {
+        return None;
+    }
+    let mut frames = serde_json::Deserializer::from_slice(stdout).into_iter::<Value>();
+    let mut terminal = frames.next()?.ok()?;
+    for frame in frames {
+        if provider_failure(provider, &terminal).is_some()
+            || terminal.get("type").and_then(Value::as_str) == Some("result")
+        {
+            return None;
+        }
+        terminal = frame.ok()?;
+    }
+    if terminal.get("schemaVersion").is_some()
+        || terminal.get("type").and_then(Value::as_str) != Some("result")
+        || terminal.get("is_error").and_then(Value::as_bool) != Some(true)
+        || terminal.get("subtype").and_then(Value::as_str)
+            != Some("error_max_structured_output_retries")
+        || terminal.get("terminal_reason").and_then(Value::as_str)
+            != Some("structured_output_retry_exhausted")
+    {
+        return None;
+    }
+    // A contradictory terminal is not proof of a formatting-only failure.
+    // In particular Claude's errors array must not hide a second terminal
+    // cause behind the expected first formatting error.
+    if ["api_error_status", "error", "stop_reason"]
+        .iter()
+        .any(|key| terminal.get(*key).is_some_and(|value| !value.is_null()))
+    {
+        return None;
+    }
+    let errors = terminal.get("errors").filter(|value| !value.is_null());
+    let error_messages = match errors {
+        Some(errors) => errors
+            .as_array()?
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<Vec<_>>>()?,
+        None => Vec::new(),
+    };
+    if ["result", "message", "text"]
+        .into_iter()
+        .filter_map(|key| terminal.get(key).and_then(Value::as_str))
+        .chain(error_messages.iter().copied())
+        .any(|message| {
+            message.to_ascii_lowercase().contains("api error")
+                || [
+                    provider_authentication_failure as fn(&str) -> bool,
+                    provider_usage_limit,
+                    provider_capacity_exhausted,
+                    provider_content_refusal,
+                ]
+                .into_iter()
+                .any(|matches| matches(message))
+        })
+    {
+        return None;
+    }
+    let cause = terminal
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| {
+            terminal
+                .get("errors")?
+                .as_array()?
+                .iter()
+                .find_map(|error| error.as_str().filter(|text| !text.trim().is_empty()))
+        })
+        .unwrap_or("Failed to provide valid structured output");
+    Some(format!(
+        "claude provider structured_output_retry_exhausted (error_max_structured_output_retries): {cause}"
+    ))
 }
 
 /// The failure a provider wrote in its own control-plane `frame`, never

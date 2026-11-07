@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 last_validated: 2026-10-31
 status: Draft
 feature: activity-job
@@ -1169,11 +1169,20 @@ in `task_pr_pipeline`:
   message, and starts nothing when the parser named an abnormal wrapper ending, the
   capture was truncated, a sandbox write was denied, or the provider's stderr or
   terminal reports authentication, a usage limit, capacity, a refusal or a background
-  task still running. The step entry
+  task still running. Claude's exact `error_max_structured_output_retries`
+  terminal with `is_error: true` and
+  `terminal_reason: structured_output_retry_exhausted` is a separate, narrow correction route for
+  exit 1. It requires a complete, untruncated JSON stream ending in that terminal,
+  with no earlier provider failure or result, and no timeout, stall, sandbox write
+  denial, authentication, usage limit, capacity, refusal or API/schema rejection.
+  The process still fails, with the redacted terminal cause ahead of unrelated
+  stderr warnings. Only that diagnostic enters the correction input; prior
+  StructuredOutput tool arguments never supply an answer. Missing, truncated or
+  quoted terminal markers and other nonzero failures stay closed. The step entry
   (`cli_runner/orchestrator/response_correction.rs`) then starts a fresh invocation
   through the ordinary per-invocation dispatch (same crew, tool grant and sandbox),
   with `input.response_correction` carrying the round, the remaining budget, the
-  parser error, the `rejection` kind and the redacted reply, bounded to 64 KiB. It refuses once
+  failure diagnostic, the `rejection` kind and the redacted reply, bounded to 64 KiB. It refuses once
   `max_rounds` corrections have run or when less than `min_remaining_seconds` of the
   original wall-clock budget is unspent; each correction's timeout is that remainder.
   Only a reply that itself parses succeeds. Otherwise the step returns the latest

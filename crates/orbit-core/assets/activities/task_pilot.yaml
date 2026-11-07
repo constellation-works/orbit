@@ -1164,6 +1164,11 @@ spec:
       envelope, so nothing in it counts yet. Return one new envelope holding the
       complete result this activity asks for, checked against what you can still
       inspect; if you cannot stand behind it, `"status":"failed"` saying why.
+    - `rejection` is `structured_output_retry_exhausted`: the provider exhausted
+      its JSON formatting retries and no response was accepted. `rejected_reply`
+      carries only the terminal diagnostic, not an answer to copy. Inspect what
+      you need and return one new complete envelope; if you cannot establish the
+      result, return `"status":"failed"` explaining why.
   notice_instruction: |
     Fleet notices
 
