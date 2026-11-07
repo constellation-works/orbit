@@ -328,6 +328,10 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
   editor.initial ??= JSON.stringify(value(editor.draft).value ?? null);
   const root = el("div", { class: "schedule-editor" });
   root.dataset.editing = "schedule";
+  // Each build owns a root, but the draft, pending flag and refusal live in the
+  // shared `editor`. A repaint (paging or filtering back to this editor) builds
+  // a newer root while an older save is still in flight, so completion
+  // repaints the newest root, never the detached one the click came from.
   const render = () => {
     const draft = editor.draft;
     const status = el("div", { class: "schedule-preview" });
@@ -373,7 +377,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
         if (editors.get(key) !== editor) return;
         editor.pending = false;
         editor.error = failure.message || String(failure);
-        render();
+        editor.paint();
         return;
       }
       if (closeEditor(key, editor)) onClose(true);
@@ -395,6 +399,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
     }
     sync();
   };
+  editor.paint = render;
   render();
   root.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !editor.pending && closeEditor(key, editor)) onClose(false);

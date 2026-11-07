@@ -510,9 +510,11 @@ function routineCatalogue(payload, routines, workspaceId) {
 
   // Filter and paging are refused only while an editor is on screen: an open
   // editor whose routine is on another page or filtered out has nothing to
-  // close here, so the controls stay usable to navigate back to it.
-  let editing = false;
+  // close here, so the controls stay usable to navigate back to it. Every
+  // repaint re-derives the state, so paging or filtering back to an open editor
+  // disables the controls again.
   let pageButtons = [];
+  const focusEditor = () => groups.querySelector(".schedule-editor :is(input, select, button):not(:disabled)")?.focus();
   const paintGroups = () => {
     groups.textContent = "";
     pageButtons = [];
@@ -571,7 +573,9 @@ function routineCatalogue(payload, routines, workspaceId) {
             const controls = groups.querySelector(`[aria-label="${title} routine pages"]`);
             const next = controls.querySelector(`[aria-label="${direction} ${kind} routines"]`);
             // Paging onto a page that shows an open editor disables the controls: focus the editor instead.
-            (next.disabled ? controls.querySelector("button:not(:disabled)") ?? groups.querySelector(".schedule-editor input, .schedule-editor select, .schedule-editor button") : next)?.focus();
+            const enabled = next.disabled ? controls.querySelector("button:not(:disabled)") : next;
+            if (enabled) enabled.focus();
+            else focusEditor();
           });
           page.appendChild(button);
         }
@@ -582,7 +586,9 @@ function routineCatalogue(payload, routines, workspaceId) {
       }
       groups.appendChild(container);
     }
-    editing = Boolean(groups.querySelector(".schedule-editor"));
+    const editing = Boolean(groups.querySelector(".schedule-editor"));
+    search.disabled = editing;
+    search.title = editing ? "Close the trigger editor to filter routines." : "";
     clear.disabled = editing || !routineList.query;
     for (const { button, atEnd } of pageButtons) {
       button.disabled = atEnd || editing;
@@ -593,17 +599,18 @@ function routineCatalogue(payload, routines, workspaceId) {
     routineList.query = search.value;
     routineList.activePage = routineList.pausedPage = 0;
     if (routineList.query.trim()) routineList.pausedOpen = true;
+    const typing = document.activeElement === search;
     paintGroups();
+    // Filtering onto a page that shows an open editor disables the field: hand focus to the editor.
+    if (typing && search.disabled) focusEditor();
   });
   clear.addEventListener("click", () => {
     search.value = "";
     search.dispatchEvent(new Event("input"));
-    search.focus();
+    if (search.disabled) focusEditor();
+    else search.focus();
   });
   paintGroups();
-  // Set once per catalogue so typing never disables the field being typed in.
-  search.disabled = editing;
-  if (editing) search.title = "Close the trigger editor to filter routines.";
   return catalogue;
 }
 
