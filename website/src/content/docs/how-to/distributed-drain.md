@@ -175,12 +175,27 @@ ask for a reason.
 
 A follower leaf runs on its own host, so the owner's run history never holds
 it. What the owner knows of its job, build, and failing step is the claim's
-`run_evidence` in `orbit run settlements --no-reconcile`. When that evidence
-is `unrecorded`, the claim settled before the owner recorded leaf-run
-evidence, or its follower sent none, and no operator has hydrated it since.
-The owner does not fill the gap by guessing: `unrecorded` is never inferred
-from the owner's runs, from any current build, or from the settlement's text.
-A missing build means the run record held no build.
+`run_evidence` in `orbit run settlements --no-reconcile`. Read it in two parts.
+
+- `provenance` says whether the owner holds the follower's run record at all.
+  `null` means it holds none: the claim settled before the owner recorded
+  leaf-run evidence, or its follower sent none, and no operator has hydrated
+  it since. `settlement` means the follower sent the record with the
+  settlement. `hydrated` means an operator observed it afterwards.
+- `build_state` and `root_cause_state` say whether the held record has a build
+  and a failing step. `unrecorded` there means that the record lacks the field.
+  By itself it neither proves that evidence is missing nor proves that
+  hydration never ran. A settlement or hydrated record can still have an
+  unrecorded build or failing step.
+
+Only a present record says what the run held. With `provenance` `null`, the
+build and failing step are unknown on the owner: `build` is `null`, and both
+states are `unrecorded` because there is no record to read. Hydration may
+recover them, so a `null` build there does not show that the run held none.
+The owner does not fill the gap by guessing: nothing is inferred from its own
+runs, from any current build, or from the settlement's text. When a record is
+present, a `null` build with `build_state` `unrecorded` does mean the run
+record held no build.
 
 Run this recovery on the owner, as operator. Agents and claimed workers are
 refused; they read `orbit run settlements --no-reconcile` instead:
