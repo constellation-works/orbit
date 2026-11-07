@@ -4,13 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{CompletionPolicy, OrbitRuntime, ShipMode};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{MOCK_DIGESTS_ARTIFACT, MockDigestRecord, TaskStatus, mock_sha256_hex};
-use orbit_types::workflow::JobRunTrigger;
+use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::json;
 
 use super::engine_support::runtime_with_workspace_config;
@@ -195,14 +195,18 @@ fn write_ship_job_asset(runtime: &OrbitRuntime) {
     std::fs::write(jobs_dir.join("task_auto_pipeline.yaml"), yaml).expect("write ship job asset");
 }
 
-fn seed_running_ship_run(runtime: &OrbitRuntime, task_id: &str) -> String {
+fn seed_running_ship_run(runtime: &OrbitRuntime, task_id: &str, admission_id: &str) -> String {
     let jobs = crate::admission_audit::store_support::jobs(runtime);
     let run = jobs
         .insert_job_run(
             "task_auto_pipeline",
             1,
             Utc::now(),
-            Some(json!({"task_ids": [task_id], "mode": "local"})),
+            Some(json!({
+                "task_ids": [task_id],
+                "mode": "local",
+                "__mock_admissions": {task_id: admission_id},
+            })),
             None,
         )
         .expect("insert running ship run");
@@ -228,13 +232,13 @@ fn ship(
 }
 
 /// An explicit ship freezes the named task's digests keyed to its run, and
-/// a duplicate ship refused as already in flight cannot rewrite that
-/// baseline with newer mock bytes.
+/// workflow admission preserves it beyond recent unrelated history, and
+/// a duplicate ship refused as already in flight cannot rewrite it.
 #[test]
-fn explicit_ship_freezes_and_a_refused_duplicate_cannot_rewrite_it() {
+fn explicit_ship_freeze_survives_newer_history_and_refused_duplicate() {
     if !crate::admission_audit::isolate(
         module_path!(),
-        "explicit_ship_freezes_and_a_refused_duplicate_cannot_rewrite_it",
+        "explicit_ship_freeze_survives_newer_history_and_refused_duplicate",
     ) {
         return;
     }
@@ -282,9 +286,9 @@ fn explicit_ship_freezes_and_a_refused_duplicate_cannot_rewrite_it() {
     );
     let frozen_bytes = digest_record_bytes(&runtime, &id);
 
-    // The delivery is in flight; a duplicate ship with newer mock bytes
-    // is refused and leaves the baseline byte-identical.
-    seed_running_ship_run(&runtime, &id);
+    // Keep the existing refused-duplicate guarantee, then exercise the
+    // same delivery's workflow admission after unrelated history grows.
+    let live_run_id = seed_running_ship_run(&runtime, &id, &admission_id);
     attach_mock(&runtime, &repo, &id, "mocks/checkout.png", PNG_TWO);
     let refused = ship(&runtime, &id).expect_err("duplicate ship is refused");
     assert!(
@@ -296,4 +300,58 @@ fn explicit_ship_freezes_and_a_refused_duplicate_cannot_rewrite_it() {
         frozen_bytes,
         "a refused duplicate rewrote the active baseline"
     );
+
+    let jobs = crate::admission_audit::store_support::jobs(&runtime);
+    let live_run = jobs
+        .get_job_run(&live_run_id)
+        .expect("read live run")
+        .expect("live run exists");
+    let store = runtime.sqlite_store().expect("sqlite store");
+    let workspace = runtime.workspace_id().expect("workspace id");
+    // Seed completed history with explicit creation times: no workers,
+    // sleeps, or concurrent jobs are needed to hide this live delivery.
+    for index in 1..=201 {
+        let at = live_run.created_at + Duration::seconds(index);
+        let mut newer = jobs
+            .insert_job_run("unrelated-job", 1, at, Some(json!({"task_ids": []})), None)
+            .expect("seed newer unrelated run");
+        newer.created_at = at;
+        newer.state = JobRunState::Success;
+        newer.finished_at = Some(at);
+        store
+            .upsert_job_run_for_workspace(&workspace, &newer, None)
+            .expect("persist completed history");
+    }
+    RuntimeHost::admit_task_for_workflow(&runtime, &id, "worktree_setup")
+        .expect("admit delivery after newer completed history");
+    assert_eq!(
+        digest_record(&runtime, &id).expect("frozen admission identity"),
+        frozen,
+        "workflow admission replaced the original ship baseline behind newer history"
+    );
+    assert_eq!(digest_record_bytes(&runtime, &id), frozen_bytes);
+    RuntimeHost::admit_task_for_workflow(&runtime, &id, "worktree_setup")
+        .expect("retry the active delivery");
+    assert_eq!(digest_record_bytes(&runtime, &id), frozen_bytes);
+    assert_eq!(
+        jobs.get_job_run(&live_run_id)
+            .expect("read preserved run")
+            .expect("preserved run exists")
+            .state,
+        JobRunState::Running,
+        "reconciliation must keep the seeded live owner"
+    );
+    jobs.finalize_job_run(&live_run_id, JobRunState::Success, Utc::now(), None)
+        .expect("complete the original delivery");
+    run_tool_as_operator(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "status": "backlog"}),
+    )
+    .expect("return task for a genuinely later delivery");
+    RuntimeHost::admit_task_for_workflow(&runtime, &id, "worktree_setup")
+        .expect("admit later delivery after the original completed");
+    let refrozen = digest_record(&runtime, &id).expect("later baseline");
+    assert_eq!(refrozen.mocks[0].sha256, mock_sha256_hex(PNG_TWO));
+    assert_ne!(refrozen.admission_id, frozen.admission_id);
 }
