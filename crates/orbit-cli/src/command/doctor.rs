@@ -343,7 +343,9 @@ fn report_output(
             .iter()
             .find(|row| row.check_name == check)
             .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("no workspace diagnostic named '{check}'"))
+                OrbitError::InvalidInput(format!(
+                    "no workspace diagnostic named '{check}'; run `orbit doctor --json` to list valid check names"
+                ))
             })?;
         let failed = row.status == WorkspaceDoctorStatus::Error;
         let mut payload = Payload::detail(
