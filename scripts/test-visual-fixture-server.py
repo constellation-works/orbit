@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise dashboard fixture setup through the real CLI and its failure boundary."""
+import errno
 import hashlib
 import json
 import os
@@ -840,17 +841,94 @@ class VisualFixtureServerTest(unittest.TestCase):
         self.assertGreater(end, start + len(marker), text[start:start + 80])
         return text[start:end]
 
+    def test_port_closed_rejects_live_error_and_timeout_and_accepts_refusal(self):
+        # Native transport regression: a live error response or a silent
+        # listener is not closure; only a refused connection is.
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            status = 503
+
+            def do_GET(self):
+                self.send_response(type(self).status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        for status in (503, 404):
+            Handler.status = status
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(AssertionError, msg=f"live HTTP {status} passed as closed"):
+                    self._assert_port_closed(f"http://127.0.0.1:{server.server_address[1]}/")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        held = []
+
+        def hold_connections():
+            while True:
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                held.append(conn)
+
+        holder = threading.Thread(target=hold_connections, daemon=True)
+        holder.start()
+        try:
+            with self.assertRaises(AssertionError, msg="timed-out listener passed as closed"):
+                self._assert_port_closed(f"http://127.0.0.1:{listener.getsockname()[1]}/")
+        finally:
+            listener.close()
+            for conn in held:
+                self._close_socket(conn)
+
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        refused_port = probe.getsockname()[1]
+        probe.close()
+        self._assert_port_closed(f"http://127.0.0.1:{refused_port}/")
+
     def _assert_port_closed(self, url):
+        # Only a transport-level refusal proves the listener is gone. An
+        # HTTP response (even 404/503) or a timeout means a server may
+        # still be listening, so both fail instead of passing as closed.
         deadline = time.monotonic() + 5
-        closed = False
+        last = "no response"
         while time.monotonic() < deadline:
             try:
-                urllib.request.urlopen(url, timeout=1)
-            except Exception:
-                closed = True
-                break
+                with urllib.request.urlopen(url, timeout=1) as response:
+                    last = f"HTTP {response.status}"
+            except urllib.error.HTTPError as error:
+                last = f"HTTP {error.code}"
+                error.close()
+            except urllib.error.URLError as error:
+                reason = error.reason
+                if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) == errno.ECONNREFUSED:
+                    return
+                last = f"unverified ({reason!r})"
+            except (TimeoutError, socket.timeout):
+                last = "unverified (timeout)"
+            except ConnectionRefusedError:
+                return
+            except OSError as error:
+                if error.errno == errno.ECONNREFUSED:
+                    return
+                last = f"unverified ({error!r})"
             time.sleep(0.1)
-        self.assertTrue(closed, url)
+        self.fail(f"port not closed ({last}): {url}")
 
 
 if __name__ == "__main__":
