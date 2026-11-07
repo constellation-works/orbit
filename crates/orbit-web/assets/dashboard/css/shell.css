@@ -1007,6 +1007,10 @@ footer {
 /* One state for the selected host when it cannot be shown. It replaces every
    panel; the rail, the picker and the way back stay in place. */
 .main-col.host-unavailable > .tab-pane { display: none !important; }
+/* The top bar lives outside .main-col, so the rule above cannot withdraw its
+   task actions: hide them while the Tasks pane they feed cannot be shown.
+   The :has() argument outranks the .active rule that shows them. */
+.shell:has(.main-col.host-unavailable .tab-pane[data-tab="tasks"].active) .topbar-task-actions { display: none; }
 .host-state {
   margin: 24px;
   max-width: 720px;
