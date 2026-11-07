@@ -1002,7 +1002,7 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 
 ## Dashboard HTTP integration fixtures
 
-`cargo test -p orbit-web --test http_api` drives the public dashboard server over loopback HTTP; helpers and cases are in `crates/orbit-web/tests/http_api/`. Put routine API coverage there. `orbit-web` unit tests are for admitted security safeguards and deterministic shutdown and cache-publication races; dashboard JavaScript behavior belongs in a JS runner, not Rust tests that launch Node.
+`cargo test -p orbit-web --test http_api` drives the public dashboard server over loopback HTTP; helpers and cases are in `crates/orbit-web/tests/http_api/`. Put routine API coverage there. `orbit-web` unit tests are for admitted security safeguards and deterministic shutdown and cache-publication races. Dashboard JavaScript has no automated test layer: the workspace guide forbids browser, Playwright and DOM-stub UI tests, so check UI changes through manual QA and the screenshots described in [Browser checks on a prepared host](#browser-checks-on-a-prepared-host).
 
 - Each mutable fixture re-executes its exact test with inherited authority cleared and launches `serve_from_env` against a disposable registry and workspace, under the [shared hang guard](#fixtures-on-a-loaded-host). Readiness and each HTTP request are bounded by `FIXTURE_STEP_DEADLINE` (120 s) with host load reported on expiry, and process guards reap servers after a failed assertion.
 - Servers bind port zero and the launcher reads the address from the child's listening announcement. Never reserve and release a port: a concurrent fixture can take it and receive your first request.

@@ -9,8 +9,8 @@ use super::auto_tasks;
 use super::support::{Fixture, isolated, json_ok};
 
 /// The dashboard's whole-value timing edits keep guards in durable definitions;
-/// stale editors cannot overwrite them. The browser fixture supplies these same
-/// six carrier shapes through the real Operations editors.
+/// stale editors cannot overwrite them. These six carrier shapes are posted
+/// straight to the API; no automated test drives the Operations editors.
 #[test]
 fn dashboard_timing_edits_persist_guards_and_refuse_stale_values() {
     isolated(

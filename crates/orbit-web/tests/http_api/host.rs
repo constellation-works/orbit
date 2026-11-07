@@ -273,9 +273,9 @@ fn resolve_module(base: &str, spec: &str) -> String {
     parts.join("/")
 }
 
-/// The browser harnesses serve dashboard assets from disk, so a module left
-/// out of the embedded file table passes them and breaks the page `orbit web
-/// serve` sends. Every module the page's import graph reaches is served.
+/// Dashboard assets are served from the embedded file table, so a module left
+/// out of it breaks the page `orbit web serve` sends even when the checkout
+/// still has the file. Every module the page's import graph reaches is served.
 #[test]
 fn every_module_the_dashboard_imports_is_served() {
     isolated("host::every_module_the_dashboard_imports_is_served", || {
