@@ -714,6 +714,63 @@ fn trusted_task_facts(
     }))
 }
 
+/// Independently verified pinned release survey for a `release-prep`
+/// adapter: the latest reachable tag and no-merge range come from Git at the
+/// pinned revision, and the breaking classification from owner task records
+/// (a surveyed commit whose subject names a task the owner records with the
+/// `breaking-change` tag). Candidate evidence is never consulted, so a
+/// handoff and a canonical task that merely agree with each other cannot
+/// invent a tag, a range or a version. A Git failure holds the step.
+fn trusted_release_survey(runtime: &OrbitRuntime, pinned: &str) -> Result<Value, String> {
+    let source = Source::new(&runtime.paths().repo_root);
+    let survey = source
+        .release_survey(pinned)
+        .map_err(|error| format!("the pinned release survey is unavailable: {error}"))?;
+    let tasks = runtime
+        .list_tasks()
+        .map_err(|error| format!("the task board is unreadable: {error}"))?;
+    let breaking = survey.commits.iter().any(|commit| {
+        surveyed_task_ids(&commit.subject).iter().any(|id| {
+            tasks.iter().any(|task| {
+                task.id.as_str() == id.as_str()
+                    && task
+                        .tags
+                        .iter()
+                        .any(|tag| tag.as_str() == "breaking-change")
+            })
+        })
+    });
+    Ok(json!({
+        "latest_tag": survey.latest_tag,
+        "head": pinned,
+        "commits": survey.commits.iter().map(|commit| &commit.sha).collect::<Vec<_>>(),
+        "breaking": breaking,
+    }))
+}
+
+/// Task IDs a commit subject names, in `[ORB-123]` bracket form.
+fn surveyed_task_ids(subject: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = subject;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(']') else { break };
+        let candidate = &after[..close];
+        if let Some((prefix, number)) = candidate.rsplit_once('-')
+            && !prefix.is_empty()
+            && prefix
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+        {
+            ids.push(candidate.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    ids
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_adapter(
     runtime: &OrbitRuntime,
@@ -732,6 +789,16 @@ fn run_adapter(
         )
     };
     let tasks = trusted_task_facts(runtime, contract, candidate, task).map_err(&unavailable)?;
+    // Only release preparation needs pinned survey facts; obtaining them is
+    // read-only Git and owner records, never candidate evidence.
+    let release_survey = if contract.form == "release-prep" {
+        Some(
+            trusted_release_survey(runtime, &trusted.binding.source_revision)
+                .map_err(&unavailable)?,
+        )
+    } else {
+        None
+    };
     let input = json!({
         "schema_version": AUTO_TASK_EVIDENCE_SCHEMA_VERSION,
         "contract": contract.contract,
@@ -745,6 +812,7 @@ fn run_adapter(
             "source_revision": trusted.binding.source_revision,
             "completed_at": trusted.completed_at,
             "execution_machine": trusted.execution_machine,
+            "release_survey": release_survey,
         },
         "evidence": {"manifest": candidate, "artifacts": artifacts},
         "tasks": tasks,

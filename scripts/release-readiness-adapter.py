@@ -287,6 +287,30 @@ def expected_version(latest_tag, breaking):
     return f"{major}.{minor + 1}.0" if breaking else f"{major}.{minor}.{patch + 1}"
 
 
+def trusted_prep_survey(trusted):
+    """Pinned survey facts the owner obtained independently of the candidate.
+
+    Core derives them from Git at the pinned revision and from owner task
+    records (see `run_adapter` in completion.rs) and supplies them in the
+    trusted block; a handoff without them has nothing to be checked against.
+    """
+    survey = trusted.get("release_survey")
+    if not isinstance(survey, dict):
+        unavailable("trusted-survey-missing",
+                    "the owner supplied no independently verified release survey")
+    if survey.get("head") != trusted.get("source_revision"):
+        unavailable("trusted-survey-malformed", "the trusted survey does not end at the pinned revision")
+    commits = survey.get("commits")
+    if not isinstance(commits, list) or not all(
+            isinstance(commit, str) and SHA_RE.fullmatch(commit) for commit in commits):
+        unavailable("trusted-survey-malformed", "the trusted survey has no valid commit range")
+    if not isinstance(survey.get("breaking"), bool):
+        unavailable("trusted-survey-malformed", "the trusted survey has no breaking classification")
+    if not isinstance(survey.get("latest_tag"), str):
+        unavailable("trusted-survey-malformed", "the trusted survey has no latest tag")
+    return survey
+
+
 def judge_prep(request):
     trusted = request["trusted"]
     body = artifact_json(request, PREP_EVIDENCE)
@@ -305,10 +329,25 @@ def judge_prep(request):
         unavailable("survey-malformed", "the handoff has no commit survey")
     if survey.get("head") != trusted["source_revision"]:
         unavailable("evidence-stale", "the survey does not end at the pinned revision")
+    # Agreement between the candidate evidence and the canonical task (both
+    # agent-authored) is not proof: the tag, range and breaking classification
+    # must equal the owner's independently verified pinned facts, and the
+    # version is derived from those facts, not from the candidate's fields.
+    trusted_survey = trusted_prep_survey(trusted)
+    if not trusted_survey["commits"]:
+        unavailable("survey-mismatch", "the trusted survey is empty; there is nothing to release")
+    if survey.get("latest_tag") != trusted_survey["latest_tag"]:
+        unavailable("survey-mismatch",
+                    f"the handoff tag is {survey.get('latest_tag')!r}; "
+                    f"the pinned source gives {trusted_survey['latest_tag']}")
+    if sorted(survey.get("commits")) != sorted(trusted_survey["commits"]):
+        unavailable("survey-mismatch", "the handoff commit range does not match the pinned source")
+    if (survey.get("breaking") is True) != trusted_survey["breaking"]:
+        unavailable("survey-mismatch", "the handoff breaking classification does not match the pinned source")
     version = body.get("version")
-    expected = expected_version(survey.get("latest_tag"), survey.get("breaking") is True)
+    expected = expected_version(trusted_survey["latest_tag"], trusted_survey["breaking"])
     if version != expected:
-        unavailable("version-mismatch", f"the handoff names {version!r}; the survey gives {expected}")
+        unavailable("version-mismatch", f"the handoff names {version!r}; the pinned survey gives {expected}")
 
     canonical = sorted(
         (task for task in request["tasks"]["tagged"]
