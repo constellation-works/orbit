@@ -312,6 +312,38 @@ on the operator-only `orbit.workflow.run.show`.
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
 
+## Task lifecycle and listing
+
+The `--status` values on `orbit task list`, `orbit task lint` and the
+minted-task `--status` on `orbit auto-task add`/`update` name the same
+lifecycle:
+
+- `proposed` — awaiting human approval before entering the backlog.
+- `backlog` — approved and queued for work; not yet started.
+- `in-progress` — actively being worked on.
+- `review` — implementation complete; awaiting review/merge.
+- `done` — accepted and closed. Terminal: reopening requires a human
+  operator to use `task update --force`.
+- `blocked` — temporarily paused (waiting on a dependency or decision).
+- `archived` — soft-deleted. Terminal: restoration requires a human
+  operator to use `task update --force`.
+- `rejected` — declined. Ordinary edits may return it to backlog or
+  in-progress; other transitions require a human operator to use
+  `task update --force`.
+- `someday` — future-scoped, wanted but not yet actionable; agents skip
+  someday tasks.
+
+`orbit task list` ordering: with no `--status`, tasks of every status are
+listed with non-terminal tasks first and terminal tasks after, each group
+newest first; an explicit `--status` filter is newest first. `--limit`
+(default 50, at least 1) caps the rows; `total` counts all matching tasks
+and `truncated` reports whether the limit omitted any. `--scheduled`
+keeps only future `not_before` schedules, soonest first, including
+proposed tasks. `--path` keeps tasks whose `context_files` selectors
+apply to the path (`file:`, `dir:`, `symbol:` and bare paths, with
+bidirectional containment: a directory matches every selector under it).
+`--all` is a deprecated no-op, accepted and ignored.
+
 ## Human CLI task update
 
 `orbit task update -h` keeps one line per flag; these are the rules behind

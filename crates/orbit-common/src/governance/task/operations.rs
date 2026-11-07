@@ -186,26 +186,14 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
         aliases: &["in_progress"],
     },
     EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
-    EnumValue::helped(
-        "done",
-        "Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`",
-    ),
+    EnumValue::helped("done", "Accepted and closed (terminal)"),
     EnumValue::helped(
         "blocked",
         "Temporarily paused (waiting on a dependency or decision)",
     ),
-    EnumValue::helped(
-        "archived",
-        "Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`",
-    ),
-    EnumValue::helped(
-        "rejected",
-        "Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`",
-    ),
-    EnumValue::helped(
-        "someday",
-        "Future-scoped — wanted but not yet actionable. Agents skip someday tasks",
-    ),
+    EnumValue::helped("archived", "Soft-deleted (terminal)"),
+    EnumValue::helped("rejected", "Declined"),
+    EnumValue::helped("someday", "Future-scoped — wanted but not yet actionable"),
 ];
 
 /// The statuses a task can be eligible from: work nobody has taken yet.
@@ -246,7 +234,7 @@ const LIST: TaskOperation = TaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Examples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
+            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
         ),
         flag_order: &[
             "status",
@@ -285,7 +273,7 @@ const LIST: TaskOperation = TaskOperation {
                     value_name: None,
                     multiple: false,
                 },
-                "Filter by one or more statuses (comma-separated). Opt-in: with no `--status`, tasks of every lifecycle status are listed under a status-aware rule (non-terminal tasks first, then terminal tasks)",
+                "Filter by one or more statuses (comma-separated)",
             ),
             aliased(
                 both(
@@ -396,7 +384,7 @@ const LIST: TaskOperation = TaskOperation {
                 ParamType::String,
                 "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
                 CliArgKind::flag("path"),
-                "Filter to tasks whose `context_files` selectors apply to this path. Selector forms supported: `file:`, `dir:`, `symbol:`, and bare paths. Bidirectional containment — passing a directory matches every selector under it",
+                "Filter to tasks whose `context_files` selectors apply to this path",
             ),
             defaulted(
                 both(
@@ -404,7 +392,7 @@ const LIST: TaskOperation = TaskOperation {
                     ParamType::Integer,
                     "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
                     CliArgKind::flag("limit"),
-                    "Maximum number of tasks to return (default 50). Must be at least 1. Under the default status-aware rule, non-terminal tasks are listed first (newest first), followed by terminal tasks (newest first)",
+                    "Maximum number of tasks to return (default 50). Must be at least 1",
                 ),
                 "50",
             ),
@@ -445,7 +433,7 @@ const LIST: TaskOperation = TaskOperation {
                 "all",
                 ParamType::Switch,
                 CliArgKind::flag("all"),
-                "Deprecated no-op: task listing is status-neutral by default, so `--all` is no longer required to see every lifecycle status. Accepted for backward compatibility and ignored",
+                "Deprecated no-op; accepted and ignored",
             ),
             cli_only(
                 "ops",
@@ -641,7 +629,7 @@ const LINT: TaskOperation = TaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Examples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
+            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
         ),
         flag_order: &[],
     },

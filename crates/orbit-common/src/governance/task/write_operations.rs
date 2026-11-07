@@ -166,7 +166,9 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
-        after_help: None,
+        after_help: Some(
+            "Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md`.",
+        ),
         flag_order: &[
             "parent_id",
             "title",
@@ -251,7 +253,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
-                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown). Only `agent_implement` reads a grant: it lifts an exact deny entry only for a read/repeat-safe tool; a mutating grant stays denied",
+                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only)",
             ),
             both(
                 "requires_labels",
@@ -272,14 +274,14 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
                 flag_with_delimiter("context", &[], Some("CONTEXT")),
-                "Task context selectors. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up",
+                "Task context selectors (`file:`, `dir:`, `symbol:path#name:kind`); repeat or comma-separate",
             )),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
                 "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default.",
                 CliArgKind::flag("allow-missing-context"),
-                "Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent for the task",
+                "Accept context selectors for files this task will create",
             ),
             defaulted(
                 both(

@@ -18,11 +18,11 @@ Options:
           - backlog:     Approved and queued for work; not yet started
           - in-progress: Actively being worked on
           - review:      Implementation complete; awaiting review/merge
-          - done:        Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`
+          - done:        Accepted and closed (terminal)
           - blocked:     Temporarily paused (waiting on a dependency or decision)
-          - archived:    Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`
-          - rejected:    Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`
-          - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
+          - archived:    Soft-deleted (terminal)
+          - rejected:    Declined
+          - someday:     Future-scoped — wanted but not yet actionable
 
   -h, --help
           Print help (see a summary with '-h')
@@ -33,6 +33,8 @@ Global options (see 'orbit --help' for descriptions):
   --format <MODE>
   --json
   --header
+
+Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.
 
 Examples:
   orbit task lint <TASK_ID>                   # findings for one task

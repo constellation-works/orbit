@@ -425,7 +425,8 @@ follower holds no such run; legacy evidence stays `unrecorded`), `unreachable`
 limit, `remaining` counts the rest and `next_after_claim_id` names the page's
 last claim; repeat with `--after <that claim-id>` and the same filters to
 visit them all, unsuccessful outcomes and `--recheck` alike. A live run is a
-`mismatch`: hydrate after the leaf has ended.
+`mismatch`: hydrate after the leaf has ended. The JSON report is
+`{"rows":[{"task_id","claim_id","machine_id","leaf_run_id","outcome","detail"}],"remaining","next_after_claim_id"}`.
 
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then

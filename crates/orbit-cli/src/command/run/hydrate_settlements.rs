@@ -19,25 +19,11 @@ use crate::parse::parse_since;
 
 #[derive(Args)]
 #[command(
-    after_help = "Operator-only. Reads the run record of each selected settled claim's leaf from \
-its follower, through this machine's registered, authenticated operator route to that host, and \
-keeps what it says (job, build, failing step) as the claim's immutable evidence with `hydrated` \
-provenance. Run it on the owner; `orbit run settlements --no-reconcile` then reports the evidence \
-as run_evidence.\n\
-Only a claim's own leaf is accepted: the follower's record must name the claim's run, machine, \
-task and a claimed-leaf job, be terminal, and its admitting drain must belong to this owner. \
-Outcomes per claim: hydrated, replayed (the claim already held the same evidence), conflict (it \
-holds different evidence, which stands), unreachable (the follower could not be asked), absent \
-(the follower holds no such run), mismatch (the follower's record is not this claim's) and \
-no_leaf_run. A build or step the follower's record never held stays unrecorded; nothing is \
-guessed from this owner's or any current build. Nothing is cancelled, retried or rewritten: no \
-task, claim or run changes. Followers must support the read-only observation route.\n\
-When more claims are selected than one run observes, the report's remaining counts them and \
-next_after_claim_id names the last claim visited; pass it back as --after with the same filters \
-to visit the next page, including claims whose outcome was absent, unreachable, mismatch or \
-no_leaf_run, and with --recheck the whole selection alike.\n\
-JSON shape: {\"rows\":[{\"task_id\",\"claim_id\",\"machine_id\",\"leaf_run_id\",\"outcome\",\
-\"detail\"}],\"remaining\",\"next_after_claim_id\"}\n\
+    after_help = "Operator-only; run it on the owner. Reads each selected settled claim's leaf \
+run record from its follower and keeps it as the claim's immutable `hydrated` evidence; \
+`orbit run settlements --no-reconcile` then reports it as run_evidence.\n\
+Outcomes, claim matching, paging and the JSON shape: installed Orbit skill \
+`references/setup/distributed-drain.md`.\n\
 Examples:\n  orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
 orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>\n  \
 orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck --json"
@@ -74,8 +60,7 @@ pub struct RunHydrateSettlementsArgs {
     #[arg(long)]
     pub limit: Option<usize>,
 
-    /// Continue after this claim, as the previous run's
-    /// `next_after_claim_id` reported it, with the same filters
+    /// Continue after this claim (the previous run's `next_after_claim_id`)
     #[arg(long, value_name = "CLAIM_ID")]
     pub after: Option<String>,
 }
