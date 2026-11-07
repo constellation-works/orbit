@@ -1,7 +1,7 @@
 //! Repository reads pinned to a commit: the revision a run's worktree was cut
 //! from, the workspace's current base revision, and file and directory reads
-//! at a commit. Tag instructions, mock admission, precedent auto-answer,
-//! experiment overlays, the agent corpus and visual delivery share them.
+//! at a commit. Tag instructions, precedent auto-answer,
+//! experiment overlays and the agent corpus share them.
 //!
 //! They sit in `task` so task code reads them without climbing into a higher
 //! module; the run record comes through [`TaskJobPort::stored_run_state`].

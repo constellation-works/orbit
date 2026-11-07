@@ -10,7 +10,6 @@ mod fields_updated;
 mod granted_tools;
 mod host_labels;
 mod light_delivery;
-mod mock_review;
 mod model;
 mod mutation_proposal;
 mod os_requirement;
@@ -25,7 +24,6 @@ mod show_fields;
 mod source_location;
 mod tags_changed;
 mod ui_requirement;
-mod visual;
 mod work_class;
 pub use error::TaskError;
 pub use resolves::{
@@ -97,14 +95,6 @@ pub use artifacts::{
     task_id_prefix, validate_orb_task_id, validate_relative_artifact_path,
     validate_task_relations_for_source,
 };
-pub use mock_review::{
-    MOCK_DEVIATIONS_ARTIFACT, MOCK_DIGESTS_ARTIFACT, MOCK_EXTENSIONS, MOCK_STATES,
-    MOCKS_ARTIFACT_PREFIX, ManifestApp, ManifestView, MockDeviation, MockDeviationBasis,
-    MockDeviations, MockDigest, MockDigestRecord, MockRefusal, MockRefusalCode, ResolvedMock,
-    VERIFY_MOCK_UI_TAG, ViewManifestSet, changed_mock_artifacts, has_verify_mock_ui_tag,
-    is_mock_artifact, mock_refusals_detail, mock_sha256_hex, parse_mock_name, record_mock_digests,
-    record_mock_digests_for_admission, validate_task_mocks,
-};
 pub use model::{
     AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
     CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT,
@@ -165,31 +155,6 @@ pub use source_location::{
 pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_at};
 pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
-};
-pub use visual::{
-    CLAIMED_VISUAL_RESOLUTION_SCHEMA, ClaimedVisualResolution, DEFAULT_VISUAL_MAX_MOCKS,
-    VISUAL_ARTIFACT_PREFIX, VISUAL_CAPTURE_ARTIFACT, VISUAL_CAPTURE_MISMATCH,
-    VISUAL_CHECKS_ARTIFACT, VISUAL_MAX_IMAGE_BYTES, VISUAL_RESOLUTION_ARTIFACT,
-    VISUAL_SETTLE_ARTIFACT, VisualCaptureError, VisualCaptureExpectation, VisualCaptureImage,
-    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
-    VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
-    VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
-    VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
-    visual_capture_mismatches, visual_review_summary, visual_review_summary_with_review,
-};
-pub use visual::{
-    DEFAULT_VISUAL_BLOCK_AT, DEFAULT_VISUAL_FILE_AT, DEFAULT_VISUAL_MAX_FINDINGS,
-    DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES, VISUAL_DISPUTE_ACCEPTED_EVENT,
-    VISUAL_IMAGE_TOKEN_CONSTANT, VISUAL_MEASURE_INVOCATION_IDS, VISUAL_MEASURE_PURPOSE,
-    VISUAL_NO_VISION_CREW, VISUAL_REVIEW_ARTIFACT, VISUAL_REVIEW_PURPOSE, VISUAL_REVIEW_TAG,
-    VISUAL_VERIFY_BATCH_SIZE, VisualBudgetMock, VisualBudgetSelection, VisualDeviationRecord,
-    VisualDisposition, VisualEvidence, VisualFindingVerdict, VisualImageCatalog,
-    VisualNotShownMock, VisualPass, VisualRecaptureRecord, VisualResolution,
-    VisualReviewBudgetRecord, VisualReviewFinding, VisualReviewRecord, VisualShownForm,
-    VisualShownMock, VisualThreshold, VisualVerdictKind, parse_visual_region_location,
-    select_visual_budget, validate_visual_evidence, validate_visual_region_location,
-    visual_disposition, visual_image_catalog, visual_image_dimensions, visual_image_tokens,
-    visual_region_inside, visual_severity_rank, visual_severity_weight,
 };
 pub use work_class::{
     CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,

@@ -79,8 +79,6 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.review_skip_tags]`: mapped tags whose candidates may
     /// skip agent review under their own paths and guard.
     review_skip_tags: orbit_config::ReviewSkipSettings,
-    /// `[visual_review]`: view manifests and the default mock width.
-    visual_review: orbit_config::VisualReviewSettings,
     attention: orbit_config::AttentionSettings,
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
@@ -161,7 +159,6 @@ impl OrbitRuntimeSettings {
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
         review_skip_tags: orbit_config::ReviewSkipSettings,
-        visual_review: orbit_config::VisualReviewSettings,
         attention: orbit_config::AttentionSettings,
         unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
         footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
@@ -217,7 +214,6 @@ impl OrbitRuntimeSettings {
             mid_run_steering,
             tag_instructions,
             review_skip_tags,
-            visual_review,
             attention,
             unlocked_context_paths,
             footprint_lock_modes,
@@ -294,10 +290,6 @@ impl OrbitRuntimeSettings {
     /// Shared admitted attention configuration.
     pub fn attention_settings(&self) -> &orbit_config::AttentionSettings {
         &self.attention
-    }
-
-    pub(crate) fn visual_review(&self) -> &orbit_config::VisualReviewSettings {
-        &self.visual_review
     }
 
     pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {

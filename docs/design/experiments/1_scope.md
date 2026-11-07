@@ -90,8 +90,7 @@ config keep their meaning; an experiment layers on top of them for the tasks it 
 Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
 `first_pass_acceptance`, `review_repairs`, `step_recoveries`,
 `final_recoveries`, `failed_checks`, `merge_conflicts`, `delivery_done_rate`,
-`escaped_regressions`, `lines_changed`, `visual_landed_mismatches`,
-`visual_review_repairs`, and `visual_verified_finding_rate`. `cost_per_line`
+`escaped_regressions`, and `lines_changed`. `cost_per_line`
 and `lead_time_per_line` are whole-task too (lower is better) and may be
 the primary; [ORB-20646] added these per-line metrics and their attributed
 denominator. Each is a ratio of sums: the arm's total cost, or its total
@@ -176,14 +175,15 @@ activities themselves.
 | Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
 | Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
-| Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean) | Key is on both the code list and the workspace allowlist |
+| Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean); both are inert and kept so historical experiments still validate | Key is on both the code list and the workspace allowlist |
 
 Each overlay entry names the roles it applies to; the default is `implement` only. Review and
 recovery overlays are allowed but are opt-in per entry, because a reviewer that shares the
-implementer's treatment stops being an independent check of it. The config exception is
-`visual_review.reviewer`: it controls the mock comparison reviewer and verifier for the
-whole delivery regardless of its declared roles. [ORB-19982] added that experiment
-surface; [ORB-22524] reconciled the config reference with both typed keys and this exception.
+implementer's treatment stops being an independent check of it. [ORB-19982] added the
+`visual_review.reviewer` key, which controlled visual review's mock comparison reviewer
+regardless of an entry's declared roles; [ORB-22524] documented that exception. Visual
+review was removed in [ORB-22807]: the key is retained only so historical experiments
+still validate, and it has been ignored since.
 
 **Explorer removal:** [ORB-20383] removes the explorer agent, invocation tool
 and live configuration. The legacy experiment config key has no effect;
@@ -530,5 +530,7 @@ Policy only. Experiment definitions are store records.
 - [ORB-22445] — loads the experiment record independently and reduces readout cost
 - [ORB-22475] — preserves a stale-readout notice and Retry in each result-bearing tab
 - [ORB-22524] — documents both typed config keys and the visual-review role exception
+- [ORB-22807] — removed visual review: the `visual-review` template, the visual metrics, and the
+  effect of `visual_review.reviewer`, which stays allowlisted for historical experiments
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

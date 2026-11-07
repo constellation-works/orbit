@@ -6,7 +6,7 @@
 #
 # Approval, promotion to backlog and drain admission refuse a review-filed
 # bug (type `bug`, tagged `code-review`, `delivery-code-review`,
-# `security-review`, `qa-sweep` or `visual-review`) until `finding_verification_pipeline`
+# `security-review` or `qa-sweep`) until `finding_verification_pipeline`
 # records a CONFIRMED verdict for it. Enabled, this routine finds each such
 # task still owed a verdict in proposed, someday or backlog and, once it has
 # settled for debounce_minutes or waited max_wait_minutes, submits up to

@@ -1,8 +1,7 @@
 //! Crew admission and task-local workflow values from the frozen arm capture.
 
 use orbit_common::OrbitError;
-use orbit_config::{CrewPoolEntry, ExperimentConfigKey, canonical_crew_pool_entries};
-use orbit_types::workflow::CapturedExperiments;
+use orbit_config::{CrewPoolEntry, canonical_crew_pool_entries};
 use serde_json::Value;
 
 use super::definition::ExperimentOverlay;
@@ -163,58 +162,4 @@ impl OrbitRuntime {
         }
         Ok(())
     }
-
-    /// `visual_review.reviewer` for `task_id`'s delivery: a live arm's
-    /// config overlay, whatever roles it names, else `fallback` (§12.1).
-    pub(crate) fn experiment_visual_reviewer(
-        &self,
-        task_id: &str,
-        fallback: bool,
-    ) -> Result<bool, OrbitError> {
-        Ok(self
-            .experiment_visual_reviewer_arm(task_id)?
-            .unwrap_or(fallback))
-    }
-
-    /// The `visual_review.reviewer` value a live experiment arm assigns
-    /// `task_id`, or `None` when the task is in no such experiment. The
-    /// owner reads the task's sticky assignments, a claimed leaf its
-    /// receipt's capture.
-    pub(crate) fn experiment_visual_reviewer_arm(
-        &self,
-        task_id: &str,
-    ) -> Result<Option<bool>, OrbitError> {
-        let capture = match self.existing_task_experiment_capture(task_id) {
-            Ok(capture) => capture,
-            // A leaf whose receipt carries no experiments, or a store with
-            // none, runs the contract's setting.
-            Err(_) => return Ok(None),
-        };
-        captured_visual_reviewer(&capture)
-    }
-}
-
-/// The reviewer switch from an immutable owner capture, used by the leaf and
-/// by the owner's later verification of that same claim.
-pub(crate) fn captured_visual_reviewer(
-    capture: &CapturedExperiments,
-) -> Result<Option<bool>, OrbitError> {
-    let key = ExperimentConfigKey::VisualReviewReviewer;
-    for entry in capture.assignments.iter().filter(|entry| entry.live) {
-        let overlay = ExperimentOverlay::parse(
-            &entry.arm,
-            serde_json::from_str(&entry.overlay_json).map_err(|error| {
-                OrbitError::Store(format!("invalid experiment overlay: {error}"))
-            })?,
-        )?;
-        if let Some(value) = overlay
-            .config
-            .as_ref()
-            .and_then(|config| config.values.get(key.config_key()))
-        {
-            key.validate_experiment_value(value)?;
-            return Ok(value.as_bool());
-        }
-    }
-    Ok(None)
 }

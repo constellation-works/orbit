@@ -20,8 +20,8 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 // Compatibility shim: the commit-pinned readers moved to
 // `task::base_revision` so task code no longer routes through this module.
-// Retire it by re-pointing the remaining importers (visual delivery,
-// experiment overlays, the agent corpus) at the new home in a follow-up.
+// Retire it by re-pointing the remaining importers (experiment overlays,
+// the agent corpus) at the new home in a follow-up.
 pub(crate) use crate::application::task::base_revision::{commit_at, read_blob_at};
 use crate::runtime::assets::DEFAULT_TAG_INSTRUCTIONS;
 use crate::runtime::run_input::singular_task_id_from_input;

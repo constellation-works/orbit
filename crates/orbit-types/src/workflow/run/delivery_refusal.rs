@@ -45,15 +45,12 @@ pub enum DeliveryRefusal {
     /// after transport recovers. A task already in progress follows ordinary
     /// run failure handling, or claim settlement for a claimed leaf, instead.
     OriginUnavailable,
-    /// A `verify-mock-ui` delivery's capture is not established and
-    /// `visual_review.require_established` holds it until an operator
-    /// releases it or a host with a verified browser kit captures it.
+    /// A `verify-mock-ui` delivery's capture was not established. Visual
+    /// review was removed [ORB-22807]: nothing raises this any more, and it
+    /// stays so runs recorded before then still read their refusal.
     VisualNotEstablished,
-    /// A `verify-mock-ui` delivery in `visual_review.mode = "live"` still has
-    /// a confirmed finding at or above `visual_review.block_at` the code
-    /// reviewer did not fix, or disputed without the operator accepting the
-    /// dispute, or lacks complete visual evidence for its budgeted mocks; the
-    /// candidate is held for the operator.
+    /// A live visual review left a finding unresolved. Retired with visual
+    /// review [ORB-22807], like [`Self::VisualNotEstablished`].
     VisualReviewUnresolved,
 }
 

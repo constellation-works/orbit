@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-05
+last_updated: 2026-11-07
 last_validated: 2026-11-01
 ---
 
@@ -751,7 +751,7 @@ excluded landings with their certificate and assurance label.
 The same routine sweep now accepts `trigger.state` with one of four kinds.
 `finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
 It observes review-filed bug findings (type `bug` tagged `code-review`,
-`delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`) in `proposed`,
+`delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
 `someday` or `backlog` that carry no CONFIRMED verdict. Its fingerprint is the
 finding as filed: title, description, criteria, tags, type and selectors. It
 takes no `eligibility` or `freshness` block. The seeded

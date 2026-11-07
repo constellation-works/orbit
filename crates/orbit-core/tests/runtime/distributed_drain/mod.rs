@@ -88,7 +88,6 @@ mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
 mod metadata;
-mod mock_pull;
 mod no_diff;
 mod ordering;
 #[cfg(unix)]
@@ -111,7 +110,6 @@ mod settlement_review;
 mod single_pass;
 mod unavailable_hold;
 mod usage_pressure;
-mod visual_capture;
 mod waiting;
 mod window_extension;
 #[cfg(unix)]

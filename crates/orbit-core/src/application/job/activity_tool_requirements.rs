@@ -27,8 +27,6 @@ const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
     "task_pilot",
     "triage_escalation",
     "verify_finding",
-    "visual_review",
-    "visual_verify",
 ];
 
 /// Whether a deny-mode activity omits covered task requirements rather than

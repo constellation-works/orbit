@@ -11,7 +11,6 @@ use orbit_common::governance::notice::NOTICE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::resident::RESIDENT;
 use orbit_common::governance::task::TASK;
-use orbit_common::governance::visual::VISUAL;
 use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
@@ -84,5 +83,4 @@ pub fn register(registry: &mut ToolRegistry) {
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);
     // The implementer's mock self-check capture.
-    operation::register_noun(registry, &VISUAL);
 }

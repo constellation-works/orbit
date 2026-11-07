@@ -676,8 +676,6 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
         "image_input_probe",
         "review_reconciliation_review",
         "triage_escalation",
-        "visual_verify",
-        "visual_review",
         "verify_finding",
     ] {
         let yaml = std::fs::read_to_string(

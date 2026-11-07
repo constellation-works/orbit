@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-07
 last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
@@ -282,6 +282,10 @@ accept-dispute`. Accepting a disputed blocking visual finding overrides the revi
 verifier's confirmation and lets a held candidate land, so an agent session is refused at
 the row, and the tool entry also refuses a managed run and a claimed worker.
 `GOVERNED_TOOL_PLACEMENT` records it unadvertised.
+
+Surface removal (2026-11-07): `orbit.visual.accept_dispute`, its `orbit visual
+accept-dispute` CLI and the `orbit.visual.capture` tool were removed with visual review
+[ORB-22807]; their governed rows and placement entries went with them.
 
 ### Rejected alternatives
 
@@ -1026,5 +1030,7 @@ different contracts; a future equivalent surface can use this shape.
 
 - [ORB-21745] — repaired the authorization catalog source anchors after the
   catalog split.
+- [ORB-22807] — removed the visual review tools, including the governed
+  `orbit.visual.accept_dispute` row.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

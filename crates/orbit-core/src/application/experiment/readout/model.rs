@@ -453,30 +453,6 @@ pub(super) const METRIC_SPECS: &[MetricSpec] = &[
         "hours_per_line",
         true,
     ),
-    // Visual review §12.3: the post-landing comparison's severity-weighted
-    // confirmed findings, the visual fixes and follow-ups of the delivery,
-    // and its reviewer's CONFIRMED / (CONFIRMED + REJECTED).
-    spec(
-        "visual_landed_mismatches",
-        Kind::Mean,
-        Better::Lower,
-        "weighted_findings",
-        true,
-    ),
-    spec(
-        "visual_review_repairs",
-        Kind::Mean,
-        Better::Lower,
-        "count",
-        true,
-    ),
-    spec(
-        "visual_verified_finding_rate",
-        Kind::Mean,
-        Better::Higher,
-        "rate",
-        true,
-    ),
 ];
 
 pub(super) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {

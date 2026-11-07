@@ -326,7 +326,7 @@ rerun validation before attaching the evidence.
 ### Invalid review finding
 
 A review-filed bug (type `bug` tagged `code-review`, `delivery-code-review`,
-`security-review`, `qa-sweep` or `visual-review`) can be wrong. Confirm the defect at your
+`security-review` or `qa-sweep`) can be wrong. Confirm the defect at your
 base before editing. When it does not exist there (the code does not do what
 the finding claims, or the claimed consequence cannot happen), change
 nothing, run no workspace gates, and attach `finding-invalid.json` with

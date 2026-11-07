@@ -1,7 +1,7 @@
 # Verify review-filed defect findings before they can be promoted.
 #
 # A review job files what it believes is a defect as a `bug` task tagged
-# `code-review`, `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`.
+# `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`.
 # Until this job records a CONFIRMED verdict for it, approval, promotion to
 # backlog and drain admission refuse the task and name this job. Design and
 # verdict schema: docs/design/finding-verification/2_design.md.

@@ -169,9 +169,6 @@ pub(super) fn project_readiness_tasks(
                     // A verified kit on this host, or a host that has
                     // one, clears it; the detail names the install.
                     | BacklogTaskExclusionReason::BrowserKitMissing
-                    // Renaming, re-exporting or re-declaring the mock
-                    // clears it; the detail names every failing artifact.
-                    | BacklogTaskExclusionReason::MockValidationFailed
                     // [ORB-14168] The drain records the same snake_case
                     // reason. The detail names the deciding layer and the
                     // remedy the admission refusal already uses.

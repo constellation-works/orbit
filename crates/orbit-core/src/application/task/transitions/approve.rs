@@ -194,10 +194,6 @@ impl OrbitRuntime {
 
             if task.status == TaskStatus::Proposed {
                 self.ensure_finding_verified(&task)?;
-                // Tool, operator and drain approvals land here, so the mock
-                // check runs over the stored artifacts and tags. The desktop
-                // edit path repeats the check in `desktop_task_write`.
-                self.ensure_backlog_mock_admission(&task, None)?;
             }
 
             result = Some(match task.status {

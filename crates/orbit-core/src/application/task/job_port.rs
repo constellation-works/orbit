@@ -322,9 +322,4 @@ pub(in crate::application) trait TaskJobPort {
         pools: &Self::CrewPools,
         limits: &BTreeMap<String, ExecutorOsLimit>,
     ) -> Option<String>;
-
-    /// All non-terminal delivery runs carrying `task_id`, newest first,
-    /// without a recent-history cap that could omit an older live holder.
-    /// These are the same holders the ship in-flight guard keys on.
-    fn live_delivery_runs_carrying_task(&self, task_id: &str) -> Result<Vec<JobRun>, OrbitError>;
 }

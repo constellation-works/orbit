@@ -18,7 +18,6 @@ use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::resident::ResidentVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
@@ -152,8 +151,6 @@ pub enum OrbitBuiltinAction {
     Resident(ResidentVerb),
     /// Capability-gap costs and evolution records.
     Evolution(orbit_common::governance::evolution::EvolutionVerb),
-    /// Visual capture verbs: the implementer's mock self-check.
-    Visual(VisualVerb),
 }
 
 impl From<DecisionVerb> for OrbitBuiltinAction {
@@ -177,12 +174,6 @@ impl From<CodebaseVerb> for OrbitBuiltinAction {
 impl From<AutomationVerb> for OrbitBuiltinAction {
     fn from(verb: AutomationVerb) -> Self {
         Self::Automation(verb)
-    }
-}
-
-impl From<VisualVerb> for OrbitBuiltinAction {
-    fn from(verb: VisualVerb) -> Self {
-        Self::Visual(verb)
     }
 }
 

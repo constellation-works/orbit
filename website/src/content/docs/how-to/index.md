@@ -62,10 +62,6 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Run an Experiment</h3>
     <p>Compare control and treatment arms, read intervals and the verdict, and conclude without changing configuration automatically.</p>
   </a>
-  <a class="orbit-card" href="./visual-review/">
-    <h3>Author Visual View Manifests and Mocks</h3>
-    <p>Write the TOML view manifest for one visual view, name its mocks, run the self-check capture, and attach mocks to a task.</p>
-  </a>
 </div>
 
 ## Operate

@@ -9,7 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
 related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
-last_updated: 2026-10-26
+last_updated: 2026-11-07
 ---
 
 # Spec: Host routing
@@ -52,8 +52,8 @@ table is read from the host file and never from a probe.
 **Id-routed tools** take exactly one task id as their target and accept an optional
 `workspace`. Today these are `orbit.task.show`, `orbit.task.update`, `orbit.task.reject`,
 `orbit.task.delete`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,
-`orbit.task.review_reset`, `orbit.task.reconcile_review`, `orbit.task.repilot`,
-`orbit.task.requeue`, `orbit.visual.capture` and `orbit.visual.accept_dispute`.
+`orbit.task.review_reset`, `orbit.task.reconcile_review`, `orbit.task.repilot` and
+`orbit.task.requeue`.
 
 Each builtin declares its route at its definition site, in `OperationSpec::id_route` or
 `Tool::declared_id_route` for hand-written tools. The registry's MCP definition build rejects

@@ -52,7 +52,6 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
             T::Codebase
         }
         "orbit.search" => T::Search,
-        "orbit.visual.capture" => T::Ui,
         "orbit.command.exec" => T::Exec,
         _ if name.starts_with("orbit.lease.") => T::Leases,
         _ if name.starts_with("orbit.notice.") => T::Notice,

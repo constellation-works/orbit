@@ -1103,7 +1103,7 @@ fn probe_records_a_returned_canary_and_a_miss_without_failing_the_probe()
     assert_eq!(miss.audit_seen, Some(false));
 
     let delivery = dispatch_canary(
-        "visual_review",
+        "image_delivery",
         "delivery-miss",
         "misser",
         CANARY_MISS_SCRIPT,

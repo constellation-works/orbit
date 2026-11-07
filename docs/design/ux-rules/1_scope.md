@@ -1,7 +1,7 @@
 ---
 title: "Scope: UX rules"
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-07
 last_validated: 2026-11-05
 status: Draft
 stage: building
@@ -10,7 +10,7 @@ feature: ux-rules
 doc_role: scope
 type: design
 summary: "Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work"
-tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit, visual-review]
+tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit]
 ---
 
 # Scope: UX rules
@@ -25,9 +25,9 @@ network-`none` script step cannot reach host loopback, so live-dashboard UI
 measurement waits for script steps' network phase; CLI and fixture-mode UI
 runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
 on a list of rules ... break it down into rules, and automate the validation", and the same
-for the CLI. This is the first slice of the shared visual infrastructure: the view manifest
-and capture driver it introduces are the ones [visual review](../visual-review/1_scope.md)
-reuses, and its UI rules become visual review's deterministic checks.
+for the CLI. The view manifest and capture settings it uses were originally defined by
+the visual review design, now archived ([visual review](../_archived/visual-review/1_scope.md));
+visual review was removed in [ORB-22807], and ux-rules keeps the manifest and capture driver.
 
 Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
 [ORB-19682]. The two auto-tasks in `ws_orbit` review the user-facing surfaces by hand, each every
@@ -126,7 +126,7 @@ export async function check(ctx) {        // ctx.page: Playwright page at the ta
   returns stdout, stderr, the exit code and, for PTY targets, the rendered screen at a
   verified width.
 - **Targets.** UI targets are views from the view manifest
-  ([visual review §3](../visual-review/2_design.md#3-the-view-manifest)) × widths × the
+  (format originally defined in [visual review §3](../_archived/visual-review/2_design.md#3-the-view-manifest)) × widths × the
   view's themes and states. CLI targets are argv lists, or `"*"` for every command the
   binary lists, × widths for PTY rules.
 - **Results.** `pass`, `fail` with measurements and evidence (a screenshot or a captured
@@ -202,8 +202,8 @@ node scripts/ux-rules/run.mjs --surface cli --orbit "$(command -v orbit)" \
 - **Website** targets run against `npm run preview` in `website/`, light and dark.
 - **CLI in scratch.** CLI rules run against a fresh `orbit init` under the output
   directory, with `--root` pointing at a scratch Orbit root, never the live store.
-- **Determinism.** UI contexts use the capture driver's settings
-  ([visual review §4.2](../visual-review/2_design.md#42-determinism)): fixed viewport and
+- **Determinism.** UI contexts use the capture driver's settings, originally defined in
+  [visual review §4.2](../_archived/visual-review/2_design.md#42-determinism): fixed viewport and
   device scale, `reducedMotion`, animations off, UTC and `en-US`. PTY rules set the width
   through the PTY and record the width the renderer reported, not `COLUMNS` alone.
 - **Output.** `ux-rules.json` plus evidence files:
@@ -248,7 +248,7 @@ with `files.outputs: {max_files: 64, max_file_bytes: 1048576}`. Read/network gra
 surface, rule, version and key as an opaque group identity. Each result remains a separate
 member observation with its original target, fingerprint, status, measurements, severity
 and screenshot references. UI member results keep the former aggregate fingerprint in
-`original_fingerprint`; the aggregate API used by visual review stays stable.
+`original_fingerprint`; the aggregate API stays stable.
 
 The producer must prove equivalence: unique semantic element/component identity plus a
 fixed check discriminator for layout; bounded method, endpoint, status/failure class and
@@ -374,9 +374,8 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 
 - **A rule DSL.** Rules are code. A declarative format would need its own engine and would
   still need an escape hatch for every second rule.
-- **Rules in the delivery gate.** They run on a schedule. Visual review's delivery-time
-  checks reuse the UI rules on a candidate ([visual review §7](../visual-review/2_design.md#7-deterministic-checks)),
-  in shadow first, but the gate itself gets no new required check.
+- **Rules in the delivery gate.** They run on a schedule; the delivery gate gets no
+  required check from them.
 - **Rules in Orbit core.** Rules and the runner are workspace files. Core gets only the
   generic results schema and `file_rule_findings`.
 - **Replacing the judgement reviews.** The auto-tasks stay; they get smaller.
@@ -405,7 +404,7 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
    (**scripts/ux-rules/run.mjs**), results schema, PTY driver and CLI rules are
    landed. The operator prompt handoff for `ux-review-cli` remains pending.
 2. **UI rules and the view manifest — delivered by [ORB-19975].** The view manifest format and Orbit's dashboard and
-   website manifests ([visual review §3](../visual-review/2_design.md#3-the-view-manifest)),
+   website manifests (format originally defined in [visual review §3](../_archived/visual-review/2_design.md#3-the-view-manifest)),
    the capture driver's browser-context settings, and the UI rule set, including the
    forecast fixture rule are landed. The operator prompt handoff for
    `ux-review-ui` remains pending.
@@ -463,5 +462,6 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 - [ORB-21236] — reconciled the scope's filing promises with producer-declared defect groups.
 - [ORB-21634] — compared short and long help content without layout-padding false positives.
 - [ORB-21637] — added Notices coverage and a dashboard-route manifest guard.
+- [ORB-22807] — removed visual review; ux-rules keeps the view manifests and capture driver.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

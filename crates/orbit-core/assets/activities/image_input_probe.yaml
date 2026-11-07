@@ -10,7 +10,7 @@
 #
 # The response envelope is required because the canary code is this
 # activity's only product: no task, git or review artifact can show that a
-# model saw an image. It is the one place visual review reads agent output
+# model saw an image. It is the one place image input reads agent output
 # as truth, and it proves delivery only.
 schemaVersion: 2
 kind: Activity

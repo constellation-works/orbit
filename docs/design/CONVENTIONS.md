@@ -293,7 +293,6 @@ Retired features are removed from this table along with their folder.
 | Terminal Interface | [docs/design/terminal-interface/](./terminal-interface/) | claude |
 | Usage Pressure | [docs/design/usage-pressure/](./usage-pressure/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
-| Visual Review | [docs/design/visual-review/](./visual-review/) | claude |
 | Backlog Forecast | [docs/design/backlog-forecast/](./backlog-forecast/) | claude |
 | Condition Triggers | [docs/design/condition-triggers/](./condition-triggers/) | claude |
 | Conflict Budget | [docs/design/conflict-budget/](./conflict-budget/) | claude |

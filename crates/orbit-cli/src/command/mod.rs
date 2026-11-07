@@ -38,7 +38,6 @@ pub mod sweep;
 pub mod task;
 pub mod tool;
 pub mod update;
-pub mod visual;
 pub mod web;
 pub mod workspace;
 
@@ -138,7 +137,6 @@ Advanced:
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
   resident     Grant, narrow and inspect resident orchestrator mandates
-  visual       Capture the working tree beside a task's mocks
 
 Options:
 {options}";
@@ -215,7 +213,6 @@ pub enum Commands {
     Experiment(experiment::ExperimentCommand),
     Lease(lease::LeaseCommand),
     Resident(resident::ResidentCommand),
-    Visual(visual::VisualCommand),
 
     // ── plugin-derived command groups ──
     //

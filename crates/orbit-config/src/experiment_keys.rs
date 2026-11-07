@@ -8,8 +8,8 @@ use serde_json::Value;
 pub enum ExperimentConfigKey {
     /// Legacy explorer call budget (1–100), retained for stored experiments; inert.
     ExploreMaxCallsPerRun,
-    /// Whether a `verify-mock-ui` delivery runs the comparison reviewer and
-    /// its verifier (a boolean); the visual review experiment's arms.
+    /// Former visual review switch (a boolean), retained for stored
+    /// experiments; inert since visual review was removed [ORB-22807].
     VisualReviewReviewer,
 }
 

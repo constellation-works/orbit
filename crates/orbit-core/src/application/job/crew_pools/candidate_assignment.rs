@@ -184,7 +184,7 @@ impl OrbitRuntime {
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
-            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+            let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
@@ -201,7 +201,7 @@ impl OrbitRuntime {
         {
             let source = route.crew_source();
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
-            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+            let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
@@ -219,7 +219,7 @@ impl OrbitRuntime {
         {
             let source = format!("pool:{complexity}");
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
-            let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
+            let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
@@ -286,30 +286,16 @@ impl OrbitRuntime {
     }
 
     /// A creation draw's positive-weight members without this host's limited
-    /// providers, or `None` when none remain. Then prefer image-capable members
-    /// for `verify-mock-ui` (§5.3), falling back only among available members.
-    /// Admission re-applies these filters and records an image fallback as
-    /// `implementer_without_vision` on the run; the task keeps its pool source.
+    /// providers, or `None` when none remain. Admission re-applies the
+    /// filter; the task keeps its pool source.
     fn creation_pool_filtered(
         &self,
-        tags: &[String],
         mut candidates: Vec<CrewCandidate>,
-    ) -> Result<Option<Vec<CrewCandidate>>, OrbitError> {
+    ) -> Option<Vec<CrewCandidate>> {
         let gate = self.provider_limit_gate(chrono::Utc::now());
         candidates
             .retain(|candidate| candidate.weight > 0 && gate.limit_for(&candidate.crew).is_none());
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-        if !orbit_types::task::has_verify_mock_ui_tag(tags) {
-            return Ok(Some(candidates));
-        }
-        let (capable, _) = self.partition_image_reading(candidates.clone())?;
-        Ok(Some(if capable.is_empty() {
-            candidates
-        } else {
-            capable
-        }))
+        (!candidates.is_empty()).then_some(candidates)
     }
 
     /// A creation-seam pool draw's members, weighed by usage pressure

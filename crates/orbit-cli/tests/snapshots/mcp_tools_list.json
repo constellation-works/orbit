@@ -2391,43 +2391,6 @@
     }
   },
   {
-    "name": "orbit_visual_capture",
-    "description": "Render the current working tree (uncommitted changes included) for each of a task's `mocks/` artifacts and write, per mock, `mock.png`, `capture.png` and `side-by-side.png` plus one `rules.json` with the workspace's UI rule results for those captures, under the output directory. Each mock name gives the view, state, theme and width, resolved against the view manifests configured in `visual_review.manifests`, whose fixture serves the app. This is the implementer's self-check: it attaches nothing and records nothing on the task, and its output is not evidence of record. Needs a verified browser kit on the host and a configured manifest; without either it fails naming what is missing. A mock whose view never renders is reported per mock as `render_timeout`, and one whose app's setup fails as `setup_failed`.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Task ID whose `mocks/` artifacts name the views to capture."
-        },
-        "mock": {
-          "type": "string",
-          "description": "Capture only this one mock artifact (its full `mocks/…` path) instead of every mock of the task."
-        },
-        "out": {
-          "type": "string",
-          "description": "Directory the captures are written under, one subdirectory per mock. Defaults to `.orbit/tmp/visual/<task-id>` in the checkout."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false
-    }
-  },
-  {
     "name": "orbit_workspace_list",
     "description": "List active workspaces with a checkout registered on this machine, optionally with each one's configured crews.",
     "inputSchema": {

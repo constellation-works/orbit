@@ -31,7 +31,7 @@ const SMOKE_SCRIPT: &str = r#"
 import http from "node:http";
 import { createRequire } from "node:module";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
-// The visual capture driver decodes PNGs with the kit's pinned pngjs;
+// Screenshot pixel checks decode PNGs with the kit's pinned pngjs;
 // prove here that it resolves from the kit and decodes a real screenshot.
 const kitRequire = createRequire(process.env.PLAYWRIGHT_MODULE);
 const { PNG } = kitRequire("pngjs");

@@ -31,9 +31,6 @@ pub const EXPERIMENT_METRICS: &[&str] = &[
     "lines_changed",
     "cost_per_line",
     "lead_time_per_line",
-    "visual_landed_mismatches",
-    "visual_review_repairs",
-    "visual_verified_finding_rate",
 ];
 
 /// Metrics confined to an implementation step; these are exploratory.

@@ -13,10 +13,7 @@ spec:
     passes that review's evidence, which must name the candidate handed off;
     the owner judges it against the review contract the claim captured.
     A NoDiff handoff rechecks its clean-base verifier report and needs no
-    before-PR reviewer; owner completion authority still applies. A
-    `verify-mock-ui` claim names its shadow capture or negotiated live
-    resolution bundle, which the owner independently checks against the
-    claim's visual review contract and exact final candidate.
+    before-PR reviewer; owner completion authority still applies.
   input_schema_json:
     type: object
     required: [workspace_path, candidate, validation]
@@ -60,15 +57,6 @@ spec:
       # in the same shape. Absent unless the claim captured
       # `review.timing = before_landing`; never set together with `review_evidence`.
       landing_review_evidence:
-        type: [object, "null"]
-      # The `visual_capture` output for a `verify-mock-ui` claim whose
-      # contract applies: the capture of record it attached on the owner.
-      # The owner checks it against the claim's visual review contract.
-      visual:
-        type: [object, "null"]
-      # A negotiated live leaf's visual_recapture output. When present, its
-      # resolution bundle reference replaces the initial capture reference.
-      visual_resolution:
         type: [object, "null"]
   output_schema_json:
     type: object

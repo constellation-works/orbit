@@ -283,11 +283,36 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("workflow.explore_brief.enabled", EXPLORE_BRIEF_REMOVED_NOTE),
     ("workflow.explore_brief.tags", EXPLORE_BRIEF_REMOVED_NOTE),
     ("workflow.explore_brief.deliver", EXPLORE_BRIEF_REMOVED_NOTE),
+    // [ORB-22807] Visual review was removed on 2026-11-07. Each key loads,
+    // warns and is ignored; code-health-sweep deletes these entries after
+    // 2026-12-07, when they become ordinary unknown settings.
+    ("visual_review.manifests", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.default_width", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.mode", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.max_mocks", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.reviewer", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.max_images", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.max_image_tokens", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.max_findings", VISUAL_REVIEW_REMOVED_NOTE),
+    (
+        "visual_review.require_established",
+        VISUAL_REVIEW_REMOVED_NOTE,
+    ),
+    ("visual_review.block_at", VISUAL_REVIEW_REMOVED_NOTE),
+    ("visual_review.file_at", VISUAL_REVIEW_REMOVED_NOTE),
+    (
+        "workflow.purpose_crews.visual_review",
+        VISUAL_REVIEW_REMOVED_NOTE,
+    ),
 ];
 
 const REGRESSION_RISK_REMOVED_NOTE: &str = "ignored: regression-risk prompt marks were removed; \
      task riskiness scores use a fixed 30-day window and a minimum support of 5. Delete the \
      [workflow.regression_risk] table. This key stops being recognised after 2026-12-07";
+
+const VISUAL_REVIEW_REMOVED_NOTE: &str = "ignored: visual review (mock comparison, `verify-mock-ui` \
+     capture and review) was removed; delete the [visual_review] table and \
+     workflow.purpose_crews.visual_review. This key stops being recognised after 2026-12-07";
 
 const EXPLORE_BRIEF_REMOVED_NOTE: &str = "ignored: the task pilot's explore brief was removed; \
      delete the [workflow.explore_brief] table. This key stops being recognised after 2026-12-07";

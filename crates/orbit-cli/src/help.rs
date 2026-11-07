@@ -395,7 +395,6 @@ const ROOT_ADVANCED: &[GroupedRow] = &[
         "resident",
         "Grant, narrow and inspect resident orchestrator mandates",
     ),
-    ("visual", "Capture the working tree beside a task's mocks"),
 ];
 
 /// Display width of a row name in terminal columns (character count is the

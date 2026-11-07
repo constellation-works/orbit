@@ -9,7 +9,6 @@ use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
-use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
@@ -54,13 +53,6 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
-        },
-        // Capture renders the checkout it runs in, so a claimed leaf
-        // captures locally rather than routing to the owner. Accepting a
-        // dispute is the owner's operator decision, refused below.
-        OrbitBuiltinAction::Visual(verb) => match verb {
-            VisualVerb::Capture => false,
-            VisualVerb::AcceptDispute => true,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
@@ -391,16 +383,6 @@ pub(crate) fn execute(
             AutomationVerb::ClearStall => {
                 return Err(OrbitError::PolicyDenied(
                     "claimed worker operation requires its lifecycle boundary".into(),
-                ));
-            }
-        },
-        OrbitBuiltinAction::Visual(verb) => match verb {
-            VisualVerb::Capture => return Ok(None),
-            VisualVerb::AcceptDispute => {
-                return Err(OrbitError::PolicyDenied(
-                    "a claimed worker cannot accept a visual finding's dispute; the owner's \
-                     operator does"
-                        .into(),
                 ));
             }
         },

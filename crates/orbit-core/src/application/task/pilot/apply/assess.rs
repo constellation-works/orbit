@@ -95,7 +95,6 @@ pub(super) fn assess_with(
     // An operator-only tool the pilot classified as the change's subject is
     // no validation the lane must run, so its reserved-operation finding goes.
     validation_tools::drop_subject_operator_warnings(&mut assessment, &lane, &current);
-    warn_mocks_without_tag(context, &current, &mut assessment);
     Ok(Assessed {
         assessment,
         after: scope.after,
@@ -105,42 +104,6 @@ pub(super) fn assess_with(
         post_deploy,
         user_facing_ui,
     })
-}
-
-/// `mocks_without_tag`: the task carries `mocks/` artifacts but no
-/// `verify-mock-ui` tag, so nothing will validate or compare them. The
-/// pilot warns and the operator decides; it never adds the tag
-/// (visual-review §2.1). Advisory: it holds no promotion.
-fn warn_mocks_without_tag(context: &ApplyContext<'_>, current: &Task, assessment: &mut Value) {
-    if orbit_types::task::has_verify_mock_ui_tag(&current.tags) {
-        return;
-    }
-    let Ok(artifacts) = context.runtime.get_task_artifacts(&current.id) else {
-        return;
-    };
-    let mocks: Vec<&str> = artifacts
-        .iter()
-        .map(|artifact| artifact.path.as_str())
-        .filter(|path| orbit_types::task::is_mock_artifact(path))
-        .collect();
-    if mocks.is_empty() {
-        return;
-    }
-    let Some(warnings) = assessment
-        .get_mut("utility_warnings")
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-    warnings.push(json!({
-        "text": format!(
-            "mocks_without_tag: task has mocks/ artifacts ({}) but no `verify-mock-ui` tag; \
-             they will not be validated or compared. Add the tag to make them the visual \
-             specification, or leave them as plain attachments.",
-            mocks.join(", ")
-        ),
-        "holds_promotion": false,
-    }));
 }
 
 /// The pilot never sees the deterministic findings — the lane's

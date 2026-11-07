@@ -106,7 +106,7 @@ pub fn install(
         }
     }
 
-    // The visual capture driver's pixel-compare helper, pinned beside
+    // The kit's pixel-compare helper, pinned beside
     // Playwright so every host compares pixels with the same code.
     match before.pixel_helper_version.as_deref() {
         Some(PIXEL_HELPER_VERSION) => steps.push(format!(

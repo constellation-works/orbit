@@ -150,7 +150,6 @@ fn execute_admitted(
         OrbitBuiltinAction::Automation(verb) => {
             super::automation_tools::dispatch(runtime, verb, input)
         }
-        OrbitBuiltinAction::Visual(verb) => super::visual_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Decision(verb) => super::decision_tools::dispatch(
             runtime,
             verb,

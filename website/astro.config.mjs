@@ -201,7 +201,6 @@ export default defineConfig({
             { slug: 'how-to/continuous-delivery', label: 'Run a delivery window' },
             { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
             { slug: 'how-to/experiments', label: 'Run an experiment' },
-            { slug: 'how-to/visual-review', label: 'Author visual view manifests and mocks' },
             { slug: 'how-to/write-activity', label: 'Write an activity' },
             { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },

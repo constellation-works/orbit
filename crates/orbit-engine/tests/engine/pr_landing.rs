@@ -27,8 +27,7 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use orbit_types::workflow::handoff::{
-    HandoffArtifactRef, HandoffDelivery, HandoffReviewDisposition, HandoffValidationLog,
-    TaskHandoff,
+    HandoffDelivery, HandoffReviewDisposition, HandoffValidationLog, TaskHandoff,
 };
 use orbit_types::workflow::{
     AgentBlocker, BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold,
@@ -4407,18 +4406,6 @@ fn claimed_validation_without_commands_is_a_recorded_no_op(sandbox: &Path) {
         !handoffs[0].execution_summary.contains("validation passed"),
         "a handoff that ran no check must not report one passing: {}",
         handoffs[0].execution_summary
-    );
-    drop(handoffs);
-    handoff_input["visual"] = json!({"applies":true,"capture_artifact":"visual/capture.json","capture_sha256":"1".repeat(64)});
-    handoff_input["visual_resolution"] = json!({"applies":true,"capture_artifact":"visual/resolution.json","capture_sha256":"2".repeat(64)});
-    action_ok(&host, "claim_handoff", &handoff_input);
-    assert_eq!(
-        locked(&host.handoffs)[1].visual,
-        Some(HandoffArtifactRef {
-            path: "visual/resolution.json".into(),
-            sha256: "2".repeat(64)
-        }),
-        "a live handoff must pin final resolution rather than its initial capture"
     );
 }
 /// A leaf that ran the before-PR gate hands its review off as typed evidence for the exact candidate, and a leaf without it reports `not_required` rather than inventing a review [ORB-13895].

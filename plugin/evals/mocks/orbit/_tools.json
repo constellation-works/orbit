@@ -1320,10 +1320,6 @@
             "type": "string",
             "description": "A name unique among this workspace's experiments."
           },
-          "template": {
-            "type": "string",
-            "description": "Start from a definition Orbit ships; any definition field given as well replaces the template's. `visual-review` compares delivering `verify-mock-ui` tasks without (control) and with (treatment) the visual comparison reviewer: 1:1, live, 30 tasks per arm, 60 days, primary metric visual_landed_mismatches. The workspace must also list `visual_review.reviewer` in `experiments.config_keys` before it starts."
-          },
           "hypothesis": {
             "type": "string",
             "description": "What the experiment expects the treatment arms to change, and why."
@@ -1351,7 +1347,7 @@
           },
           "primary_metric": {
             "type": "string",
-            "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line, lead_time_per_line, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails."
+            "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails."
           },
           "guardrails": {
             "anyOf": [
@@ -1474,7 +1470,7 @@
           },
           "metric": {
             "type": "string",
-            "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line, lead_time_per_line, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate."
+            "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line."
           },
           "model": {
             "type": "string",
@@ -1693,7 +1689,7 @@
           },
           "primary_metric": {
             "type": "string",
-            "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line, lead_time_per_line, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails."
+            "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails."
           },
           "guardrails": {
             "anyOf": [
@@ -4903,43 +4899,6 @@
             }
           ]
         }
-      }
-    },
-    {
-      "name": "orbit_visual_capture",
-      "description": "Render the current working tree (uncommitted changes included) for each of a task's `mocks/` artifacts and write, per mock, `mock.png`, `capture.png` and `side-by-side.png` plus one `rules.json` with the workspace's UI rule results for those captures, under the output directory. Each mock name gives the view, state, theme and width, resolved against the view manifests configured in `visual_review.manifests`, whose fixture serves the app. This is the implementer's self-check: it attaches nothing and records nothing on the task, and its output is not evidence of record. Needs a verified browser kit on the host and a configured manifest; without either it fails naming what is missing. A mock whose view never renders is reported per mock as `render_timeout`, and one whose app's setup fails as `setup_failed`.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Task ID whose `mocks/` artifacts name the views to capture."
-          },
-          "mock": {
-            "type": "string",
-            "description": "Capture only this one mock artifact (its full `mocks/\u2026` path) instead of every mock of the task."
-          },
-          "out": {
-            "type": "string",
-            "description": "Directory the captures are written under, one subdirectory per mock. Defaults to `.orbit/tmp/visual/<task-id>` in the checkout."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false
       }
     },
     {

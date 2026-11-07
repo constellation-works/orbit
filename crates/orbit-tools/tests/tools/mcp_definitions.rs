@@ -133,7 +133,6 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.revoke_handoff",
             "orbit.task.show",
             "orbit.task.update",
-            "orbit.visual.capture",
             "orbit.workflow.auto",
             "orbit.workflow.land",
             "orbit.workflow.run.list",
@@ -223,8 +222,6 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
         "orbit.task.review_reset",
         "orbit.task.reconcile_review",
         "orbit.task.requeue",
-        "orbit.visual.capture",
-        "orbit.visual.accept_dispute",
     ];
     for name in task_routed {
         assert_eq!(

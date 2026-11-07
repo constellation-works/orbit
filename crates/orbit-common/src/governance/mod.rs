@@ -15,7 +15,6 @@ pub mod orchestrator;
 pub mod resident;
 pub mod search;
 pub mod task;
-pub mod visual;
 pub mod workflow;
 pub mod workspace_claim;
 
