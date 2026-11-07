@@ -132,14 +132,25 @@ impl OrbitRuntime {
         } else {
             self.host_provider_holds(now)
         };
-        self.frozen_activity_crew(input, key, &mut |allowlist| {
+        let crew = self.frozen_activity_crew(input, key, &mut |allowlist| {
             let (candidates, source) =
                 self.purpose_draw_candidates(purpose, tier, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
             Ok(self
                 .draw_crew_pool(candidates, &source, random)?
                 .into_activity_draw())
-        })
+        })?;
+        // A run that drew a task-pilot `<crew>@auto` member runs each
+        // partition at the effort its filed complexity (or its escalation)
+        // resolves to, frozen per partition.
+        if purpose == CrewPurpose::TaskPilot
+            && let Some(family) = self.frozen_activity_draw(input, key)?
+            && let Some(choice) = family.auto_effort.clone()
+            && let Some((partition_key, draw)) = self.pilot_partition_draw(input, &family, &choice)
+        {
+            return self.frozen_activity_crew(input, &partition_key, &mut |_| Ok(draw.clone()));
+        }
+        Ok(crew)
     }
 
     /// What a purpose activity draw chooses from before host provider holds
@@ -387,6 +398,7 @@ impl OrbitRuntime {
                 Ok(CrewCandidate {
                     crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
                     weight: entry.weight,
+                    auto_effort: None,
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;

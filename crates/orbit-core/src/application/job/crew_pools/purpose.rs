@@ -72,20 +72,11 @@ impl OrbitRuntime {
         let settings = self.context.settings();
         let registry = settings.crews();
         let pool = canonical_crew_pool(settings.purpose_crews().pool(purpose), registry, key)?;
-        let enabled = pool
-            .entries
-            .iter()
-            .filter(|entry| {
-                orbit_types::identity::find_crew(&entry.name, registry)
-                    .is_some_and(|crew| crew.enabled)
-            })
-            .map(|entry| {
-                Ok(CrewCandidate {
-                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
-                    weight: entry.weight,
-                })
-            })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
+        let mut enabled = Vec::with_capacity(pool.entries.len());
+        for entry in &pool.entries {
+            enabled.extend(self.pool_entry_candidate(&entry.name, entry.weight, None)?);
+        }
+        let enabled = super::auto_effort::merge_same_crew(enabled);
         if enabled.is_empty() {
             if !pool.entries.is_empty() {
                 tracing::info!(

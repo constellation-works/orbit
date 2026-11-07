@@ -25,6 +25,7 @@ use super::super::evidence::{
     satisfied_external_evidence as satisfied_external_evidence_on,
 };
 use crate::OrbitRuntime;
+use crate::application::contracts::AutoEffortSubject;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::application::task::light_delivery::{
@@ -589,7 +590,13 @@ fn admit(
     };
     let reviewer = match &received {
         Some((_, certificate)) => held_reviewer(&certificate.reviewer),
-        None => resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?,
+        None => resolve_reviewer_crew(
+            runtime,
+            admission,
+            context,
+            &candidate.base.commit,
+            &candidate.head.commit,
+        )?,
     };
     // [ORB-15630] Linux CodeQL a macOS host cannot run, whose rule names the
     // pull request's hosted check that runs it [ORB-15677], is owed to the
@@ -781,6 +788,7 @@ fn resolve_reviewer_crew(
     runtime: &OrbitRuntime,
     admission: &ReviewAdmission,
     context: &GateContext,
+    base: &str,
     head: &str,
 ) -> Result<ReviewGateReviewer, OrbitError> {
     let run = runtime.get_job_run_backend(&context.run_id)?;
@@ -801,6 +809,17 @@ fn resolve_reviewer_crew(
                      can be resolved on this host: {error}"
                 ))
             })?;
+        // A `<crew>@auto` member runs at the effort the reviewable diff and
+        // the tasks' settled complexity choose.
+        let candidates = if candidates
+            .iter()
+            .any(|candidate| candidate.auto_effort.is_some())
+        {
+            let subject = review_auto_effort_subject(runtime, context, base, head);
+            runtime.reresolve_auto_candidates(candidates, &subject)?
+        } else {
+            candidates
+        };
         let mut excluded = None;
         let permitted = candidates
             .into_iter()
@@ -836,6 +855,14 @@ fn resolve_reviewer_crew(
         )?;
         let mut reviewer = admitted_reviewer(&draw.crew, pool_source(&admission.crew_source));
         reviewer.eligible_pool = draw.eligible_pool;
+        if let Some(choice) = &draw.auto_effort {
+            reviewer.crew_source = format!(
+                "{}; {}",
+                reviewer.crew_source,
+                crate::application::contracts::auto_effort_note(choice)
+            );
+        }
+        reviewer.auto_effort = draw.auto_effort;
         return Ok(reviewer);
     }
     let name = admission.crew.as_deref().ok_or_else(|| {
@@ -872,6 +899,38 @@ fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
         model: crew.assignment.model.clone(),
         reasoning_effort: crew.assignment.effort.map(|effort| effort.to_string()),
         eligible_pool: Vec::new(),
+        auto_effort: None,
+    }
+}
+
+/// What a reviewer's `<crew>@auto` resolves against: the candidate's
+/// reviewable lines and changed files, and the highest settled complexity of
+/// the reviewed tasks. Seeded by the run and head, so a resumed admission
+/// resolves alike.
+fn review_auto_effort_subject(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    base: &str,
+    head: &str,
+) -> AutoEffortSubject {
+    let size = runtime.candidate_review_size(&context.workspace_path, base, head);
+    let complexity = context
+        .tasks
+        .iter()
+        .filter_map(|task| task.complexity.filter(|tier| tier.is_assessed()))
+        .max_by_key(|tier| {
+            ["low", "medium", "hard", "xhard"]
+                .iter()
+                .position(|name| *name == tier.as_str())
+        });
+    AutoEffortSubject {
+        signal: orbit_types::identity::AutoEffortSignal {
+            complexity,
+            lines: size.map(|(lines, _)| lines),
+            files: size.map(|(_, files)| files),
+        },
+        seed: Some(format!("review-auto-effort:{}:{head}", context.run_id)),
+        forced: None,
     }
 }
 
@@ -884,6 +943,7 @@ fn held_reviewer(reviewer: &ReviewerIdentity) -> ReviewGateReviewer {
         model: reviewer.model.clone(),
         reasoning_effort: reviewer.reasoning_effort.clone(),
         eligible_pool: Vec::new(),
+        auto_effort: None,
     }
 }
 

@@ -47,6 +47,7 @@ use super::resolve::{
     resolve_worker_tasks_max,
 };
 use super::snapshot::AdmissionScope;
+use crate::crew_auto_effort::AutoEffortBand;
 use crate::crew_performance::CrewPerformanceType;
 use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;

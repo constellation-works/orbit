@@ -11,6 +11,7 @@ use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::non_empty;
 
+use super::auto_effort::task_auto_effort_subject;
 use super::draw::{
     DrawWeighting, auto_task_id, permitted_candidates, pools_from_input, weighted_candidates,
     weighted_draw,
@@ -322,11 +323,13 @@ impl OrbitRuntime {
         let planned = if explicit.is_none()
             && let Some(pool) = &experiment_pool
         {
-            let (mut members, _) = self
+            let (members, _) = self
                 .pool_member_candidates(&pool.entries, &pool.source, None)?
                 .ok_or_else(|| {
                     OrbitError::PolicyDenied(format!("{} has no runnable crew", pool.source))
                 })?;
+            let mut members =
+                self.reresolve_auto_candidates(members, &task_auto_effort_subject(task))?;
             weighted_candidates(
                 &mut members,
                 &self.provider_limit_policy().usage_pressure,
@@ -372,6 +375,7 @@ impl OrbitRuntime {
                 && let Some((pool, pool_source)) =
                     self.complexity_pool_candidates(task.complexity, &pools)?
             {
+                let pool = self.reresolve_auto_candidates(pool, &task_auto_effort_subject(task))?;
                 let (capable, _) = self.partition_image_reading(pool.clone())?;
                 if !capable.is_empty() {
                     crews = pool;
@@ -495,6 +499,12 @@ impl OrbitRuntime {
         if let Some(limit) = provider_limit {
             input[SELECTION_KEY]["provider_limit"] = json!(limit);
         }
+        // A `<crew>@auto` member records how it resolved: the band or
+        // fallback, the signal, and whether the exploration share chose an
+        // effort other than the policy's. `crew` above is already resolved.
+        if let Some(choice) = &selected.auto_effort {
+            input[SELECTION_KEY]["auto_effort"] = json!(choice);
+        }
         // A `verify-mock-ui` implementer that cannot read images — an
         // unfiltered pool fallback above, or an explicit/experiment crew
         // without a native image read — is recorded on the run (§5.3), so
@@ -612,6 +622,8 @@ impl OrbitRuntime {
         let Some((pool, _)) = self.complexity_pool_candidates(Some(plan.complexity), pools)? else {
             return Ok(false);
         };
+        let pool = self
+            .reresolve_auto_candidates(pool, &task_auto_effort_subject(&self.get_task(task_id)?))?;
         let Some(replacement_candidate) = pool
             .iter()
             .find(|candidate| candidate.weight > 0 && candidate.crew.name == replacement)

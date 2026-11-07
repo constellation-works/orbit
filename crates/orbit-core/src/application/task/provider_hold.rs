@@ -147,6 +147,7 @@ impl OrbitRuntime {
                 vec![CrewCandidate {
                     crew: default,
                     weight: 1,
+                    auto_effort: None,
                 }],
                 held("default"),
             )));

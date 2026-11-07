@@ -319,6 +319,7 @@ fn readiness_counts_recorded_draws_instead_of_the_task_crew() {
                                     crew: crew.into(),
                                     source: key.into(),
                                     eligible_pool: Vec::new(),
+                                    auto_effort: None,
                                 },
                             );
                         }

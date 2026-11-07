@@ -68,6 +68,7 @@ impl crate::OrbitRuntime {
         let selected = weighted_draw(&candidates, source, random)?;
         Ok(CrewPoolDraw {
             crew: selected.crew.clone(),
+            auto_effort: selected.auto_effort.clone(),
             source: if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
                 format!("{source}; usage pressure")
             } else {
@@ -236,7 +237,11 @@ impl crate::OrbitRuntime {
 pub(crate) const IMPLEMENTER_WITHOUT_VISION: &str = "implementer_without_vision";
 
 pub(super) fn sole_candidate(crew: Crew) -> CrewCandidate {
-    CrewCandidate { crew, weight: 1 }
+    CrewCandidate {
+        crew,
+        weight: 1,
+        auto_effort: None,
+    }
 }
 
 /// The members this run may actually draw, renormalised over the allowlist.

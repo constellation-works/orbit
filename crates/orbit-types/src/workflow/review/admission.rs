@@ -498,6 +498,10 @@ pub struct ReviewGateReviewer {
     /// when the reviewer was pinned rather than drawn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub eligible_pool: Vec<crate::workflow::ActivityCrewPoolMember>,
+    /// The effort a `<crew>@auto` pool member resolved to for this review,
+    /// from the reviewable diff and the settled complexity; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_effort: Option<crate::identity::AutoEffortChoice>,
 }
 
 impl ReviewGateReviewer {

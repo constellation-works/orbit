@@ -555,6 +555,51 @@ still follows: `hard_complexity_crews = ["opus@medium:100", "opus:100"]`.
   values. Unlike a crew table's `effort`, it is never silently ignored.
 - Crew names cannot contain `@` or `:`.
 
+#### Effort chosen per draw (`@auto`)
+
+A pool entry can leave the effort to each draw: `opus@auto`, or `opus@auto:100`
+in a weighted pool. Only the complexity and type pools, the task-pilot purpose
+pool and the two review pools accept it, and only for a crew with bands in
+`workflow.auto_effort.bands`. Anywhere else, including `--crew` and a task's
+`crew`, it is refused.
+
+```toml
+[workflow.auto_effort]
+explore_share = 0.1
+bands.opus = [
+  { complexity = ["hard", "xhard"], effort = "xhigh" },
+  { below_files = 4, effort = "medium" },
+  { below_lines = 400, effort = "medium" },
+]
+```
+
+The first band whose every condition matches chooses the effort. A band sets an
+`effort` and at least one of `complexity` (tiers), `below_files` and
+`below_lines`. Each role matches with the signal it has when it is admitted:
+
+- **Implementers:** the task's complexity and the number of files its
+  `context_files` declare. The final diff never feeds it, so `below_lines`
+  never matches an implementer.
+- **Task pilots:** the filed complexity only.
+- **Reviewers:** the candidate's reviewable lines, its changed files and the
+  reviewed tasks' highest complexity.
+
+No signal, or no matching band, runs the crew's own `effort`. Runs, the
+Implementers, Pilots and Reviewers analytics tables and experiment readouts
+record the resolved `<crew>@<effort>`, never `@auto`, and the run's crew
+selection or draw records which band chose it.
+
+`workflow.auto_effort.explore_share` sends that share of draws (default 10%) to
+another effort the crew can run at, so both sides of each cutover keep getting
+data. Those draws are recorded with `explored: true` and the effort the bands
+would have chosen.
+
+**Pilot escalation.** A pilot run splits its partitions so each runs at one
+effort. When a pilot that ran at an `@auto` effort raises the task to a tier
+whose band maps to a higher effort, or reports confidence `medium` or `low`,
+Orbit re-pilots that task once at the higher effort and applies that
+assessment instead.
+
 ### System work
 
 Orbit's own work draws its crew from the complexity pools, like a task with no
@@ -738,6 +783,8 @@ established, never as a pass.
 | `workflow.crew_performance_strength` | **Advanced.** number · **Default:** `3`<br>The strength `k` of the crew-performance factor. At least `0`; `0` disables the factor. |
 | `workflow.crew_performance_cap` | **Advanced.** number · **Default:** `4`<br>The crew-performance factor is clamped to `[1/cap, cap]`. At least `1`. |
 | `workflow.crew_performance_window_days` | **Advanced.** integer · **Default:** `30`<br>Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. The seeded `crew_performance_refresh` routine rebuilds the snapshot hourly over this window; `orbit run readiness` shows its age, window and type list, or why it is unusable (`missing`, `stale` after 24 hours, or `type_list_changed`). |
+| `workflow.auto_effort.bands` | **Advanced.** table · **Default:** `{}`<br>Per crew, the ordered bands a `<crew>@auto` pool entry resolves through. Each band has an `effort` the crew accepts and at least one of `complexity`, `below_files`, `below_lines`. See [effort chosen per draw](#effort-chosen-per-draw-auto). |
+| `workflow.auto_effort.explore_share` | **Advanced.** number · **Default:** `0.1`<br>Share of `@auto` draws, `0`–`0.5`, dispatched at another effort the crew can run at. |
 | `workflow.crew_ladder.mode` | **Advanced.** string · **Default:** `off`<br>`off` or `shadow`. With `shadow`, each tier listed in `workflow.crew_ladder.tiers` (none by default) whose floor (the cheapest rung that is an enabled, weighted member of its complexity pool) has a rung below it keeps one shadow experiment owned by `system:crew-ladder`: a `control` arm with no overlay and a `candidate` arm whose crew overlay is that one rung, weighted `1 − explore_rate` and `explore_rate`. Trials are reconciled at delivery admission while `experiments.enabled` is true, count toward `experiments.max_running`, and yield to a running operator crew experiment on the tier; a changed candidate, weight or population concludes the old trial with no winner and starts a new one. Shadow trials record assignments and change no task's crew. `propose` and `auto` are refused at load. Read with `orbit agents ladder`. The model is in [Crew ladder](../../concepts/agents/#crew-ladder). |
 | `workflow.crew_ladder.rungs` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Crews, cheapest first. Each must be a defined, enabled crew, named once; an unknown or disabled crew fails load naming this key. See [Crew ladder](../../concepts/agents/#rungs-floor-and-candidate). |
 | `workflow.crew_ladder.tiers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Complexity tiers (`low`, `medium`, `hard`, `xhard`) that may run a ladder trial, each once. Empty means no tier runs a trial: the ladder is opt-in per tier. See [Turn on shadow mode](../../concepts/agents/#turn-on-shadow-mode). |

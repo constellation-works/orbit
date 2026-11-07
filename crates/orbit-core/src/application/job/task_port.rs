@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::CapturedExploreBrief;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
@@ -18,7 +18,8 @@ use super::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 use super::{RunOwnerLiveness, run_owner_liveness, running_run_has_verified_owner};
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
+    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    RetryKey,
 };
 use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
 use crate::runtime::run_input::recorded_task_ids;
@@ -85,6 +86,14 @@ impl TaskJobPort for OrbitRuntime {
 
     fn random_crew_draw_ticket(&self) -> Result<u64, OrbitError> {
         random_crew_ticket()
+    }
+
+    fn auto_effort_crew_choice(
+        &self,
+        crew: &Crew,
+        subject: &AutoEffortSubject,
+    ) -> AutoEffortChoice {
+        self.resolve_auto_effort(crew, Some(subject))
     }
 
     fn seeded_crew_draw_tickets(

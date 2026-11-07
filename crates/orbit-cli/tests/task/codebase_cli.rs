@@ -415,6 +415,7 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
                 crew: "luna".into(),
                 source: key.into(),
                 eligible_pool: Vec::new(),
+                auto_effort: None,
             },
         );
         runtime.write_run_state(&run.run_id, &state).unwrap();

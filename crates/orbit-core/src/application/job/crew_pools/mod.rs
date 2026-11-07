@@ -29,6 +29,7 @@
 
 mod activity;
 mod admission;
+mod auto_effort;
 mod candidate_assignment;
 mod candidates;
 mod claims;

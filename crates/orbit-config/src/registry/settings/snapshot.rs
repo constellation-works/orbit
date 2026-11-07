@@ -212,31 +212,45 @@ impl ConfigSnapshot {
             Some(self.runtime_log_max_total_mb),
             Some(self.runtime_log_max_file_mb),
         )?;
-        admit_crew_pool(
-            &mut self.workflow_low_complexity_crews,
-            crews,
-            "workflow.low_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_medium_complexity_crews,
-            crews,
-            "workflow.medium_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_hard_complexity_crews,
-            crews,
-            "workflow.hard_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_xhard_complexity_crews,
-            crews,
-            "workflow.xhard_complexity_crews",
-        )?;
+        crate::crew_auto_effort::admit_auto_effort_bands(&self.workflow_auto_effort_bands, crews)?;
+        // `<crew>@auto` needs bands for its crew. A single-file view may
+        // take them from the other layer, so it checks only where the entry
+        // may appear; the layered load checks the bands.
+        let auto_bands = self.workflow_auto_effort_bands.clone();
+        let auto = AutoEntries::Admitted((scope == AdmissionScope::Layered).then_some(&auto_bands));
+        for (pool, setting) in [
+            (
+                &mut self.workflow_low_complexity_crews,
+                "workflow.low_complexity_crews",
+            ),
+            (
+                &mut self.workflow_medium_complexity_crews,
+                "workflow.medium_complexity_crews",
+            ),
+            (
+                &mut self.workflow_hard_complexity_crews,
+                "workflow.hard_complexity_crews",
+            ),
+            (
+                &mut self.workflow_xhard_complexity_crews,
+                "workflow.xhard_complexity_crews",
+            ),
+            (
+                &mut self.workflow_purpose_crews_task_pilot,
+                "workflow.purpose_crews.task_pilot",
+            ),
+        ] {
+            admit_crew_pool(pool, crews, setting, auto)?;
+        }
         crate::crew_pools::admit_type_complexity_crews(
             &mut self.workflow_type_complexity_crews,
             (scope == AdmissionScope::Layered)
                 .then_some(self.workflow_crew_performance_types.as_slice()),
             crews,
+            match auto {
+                AutoEntries::Admitted(bands) => bands,
+                AutoEntries::Refused => None,
+            },
         )?;
         for (pool, setting) in [
             (
@@ -264,21 +278,22 @@ impl ConfigSnapshot {
                 "workflow.purpose_crews.sweep_tasks",
             ),
             (
-                &mut self.workflow_purpose_crews_task_pilot,
-                "workflow.purpose_crews.task_pilot",
-            ),
-            (
                 &mut self.workflow_purpose_crews_visual_review,
                 "workflow.purpose_crews.visual_review",
             ),
         ] {
-            admit_crew_pool(pool, crews, setting)?;
+            admit_crew_pool(pool, crews, setting, AutoEntries::Refused)?;
         }
         if let Some(pool) = self.workflow_purpose_crews_review.as_mut() {
-            admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
+            admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY, auto)?;
         }
         if let Some(pool) = self.workflow_purpose_crews_pre_landing_review.as_mut() {
-            admit_crew_pool(pool, crews, crate::operation::PRE_LANDING_REVIEW_CREW_KEY)?;
+            admit_crew_pool(
+                pool,
+                crews,
+                crate::operation::PRE_LANDING_REVIEW_CREW_KEY,
+                auto,
+            )?;
         }
         self.workflow_purpose_crews_final_recovery = Some(admit_final_recovery_crews(
             self.workflow_purpose_crews_final_recovery.take(),
@@ -431,6 +446,15 @@ impl ConfigSnapshot {
         ])
     }
 
+    /// The admitted `workflow.auto_effort.*` policy that resolves
+    /// `<crew>@auto` pool entries.
+    pub fn auto_effort(&self) -> crate::AutoEffortPolicy {
+        crate::AutoEffortPolicy::new(
+            self.workflow_auto_effort_bands.clone(),
+            self.workflow_auto_effort_explore_share,
+        )
+    }
+
     /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
     pub fn type_complexity_crews(&self) -> crate::TypeComplexityCrewPools {
         crate::TypeComplexityCrewPools::from_table(&self.workflow_type_complexity_crews)
@@ -493,15 +517,32 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
     crate::crew_defaults::builtin_default_crews()
 }
 
+/// Whether a pool's key admits `<crew>@auto` entries, and the bands they
+/// need (`None`: a single-file view, whose bands the layered load checks).
+#[derive(Clone, Copy)]
+enum AutoEntries<'a> {
+    Admitted(Option<&'a BTreeMap<String, Vec<crate::AutoEffortBand>>>),
+    Refused,
+}
+
 /// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value
 /// in place, replacing it with its canonical `name[:weight]` rendering.
 fn admit_crew_pool(
     pool: &mut Vec<String>,
     crews: &BTreeMap<String, Crew>,
     setting: &str,
+    auto: AutoEntries<'_>,
 ) -> Result<(), OrbitError> {
     *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
-    Ok(())
+    match auto {
+        AutoEntries::Refused => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, None)
+        }
+        AutoEntries::Admitted(Some(bands)) => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, Some(bands))
+        }
+        AutoEntries::Admitted(None) => Ok(()),
+    }
 }
 
 /// Admit `workflow.purpose_crews.final_recovery`.
@@ -528,10 +569,14 @@ fn admit_final_recovery_crews(
             .map(ToString::to_string)
             .collect(),
     };
-    Ok(
-        crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
-            .to_setting_value(),
-    )
+    let pool = crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
+        .to_setting_value();
+    crate::crew_auto_effort::check_auto_effort_entries(
+        &pool,
+        "workflow.purpose_crews.final_recovery",
+        None,
+    )?;
+    Ok(pool)
 }
 
 impl ConfigSnapshot {

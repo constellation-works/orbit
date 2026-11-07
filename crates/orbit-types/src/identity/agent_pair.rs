@@ -340,6 +340,13 @@ fn crew_at_effort(mut crew: Crew, raw: &str, reference: &str) -> Result<Crew, Id
     if raw.is_empty() {
         return Err(refusal("names no effort after '@'".to_string()));
     }
+    if raw == super::AUTO_EFFORT {
+        return Err(refusal(
+            "names `@auto`, which only a crew pool entry may use: the pool resolves it to a \
+             concrete effort at admission"
+                .to_string(),
+        ));
+    }
     let effort = raw
         .parse::<ReasoningEffort>()
         .map_err(|_| refusal(format!("names unknown effort '{raw}'")))?;

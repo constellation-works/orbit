@@ -219,6 +219,7 @@ fn save_pilot_run(
             crew: drawn.into(),
             source: LOW.into(),
             eligible_pool: Vec::new(),
+            auto_effort: None,
         },
     );
     save_run(workspace, &run, Some(&pipeline));
@@ -1045,6 +1046,7 @@ model = "fixture-c"
                     crew: "claude_c".into(),
                     source: "fixture".into(),
                     eligible_pool: Vec::new(),
+                    auto_effort: None,
                 },
             );
         } else {

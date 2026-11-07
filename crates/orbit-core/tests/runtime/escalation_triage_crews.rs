@@ -129,6 +129,7 @@ pub(super) fn held_pilot_warning(fx: &Fixture, author: Option<&str>) -> String {
                 crew: author.to_string(),
                 source: TASK_PILOT_POOL.to_string(),
                 eligible_pool: Vec::new(),
+                auto_effort: None,
             },
         );
         fx.runtime.write_run_state(&run.run_id, &state).unwrap();

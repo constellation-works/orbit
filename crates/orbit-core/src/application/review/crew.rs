@@ -76,10 +76,27 @@ impl OrbitRuntime {
         let mut candidates = Vec::new();
         let mut refusal = None;
         for member in pool.iter().filter(|member| member.weight > 0) {
-            match self.resolve_crew_for_task(Some(&member.name), None) {
-                Ok(crew) => candidates.push(CrewCandidate {
+            // A `<crew>@auto` member resolves without a subject here, to its
+            // crew's configured effort; the review gate re-resolves it
+            // against the reviewable diff ([`Self::review_auto_effort_subject`]).
+            let resolved = match orbit_types::identity::auto_effort_base(&member.name) {
+                Some(base) => self
+                    .resolve_crew_for_task(Some(base), None)
+                    .map(|crew| {
+                        let choice = self.resolve_auto_effort(&crew, None);
+                        self.resolve_crew_for_task(Some(&choice.resolved), None)
+                            .map(|crew| (crew, Some(choice)))
+                    })
+                    .and_then(|resolved| resolved),
+                None => self
+                    .resolve_crew_for_task(Some(&member.name), None)
+                    .map(|crew| (crew, None)),
+            };
+            match resolved {
+                Ok((crew, auto_effort)) => candidates.push(CrewCandidate {
                     crew,
                     weight: member.weight,
+                    auto_effort,
                 }),
                 Err(error) => {
                     refusal.get_or_insert(error);

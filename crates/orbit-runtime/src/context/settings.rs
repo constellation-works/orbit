@@ -52,6 +52,9 @@ pub struct OrbitRuntimeSettings {
     purpose_crews: orbit_config::PurposeCrewPools,
     /// Admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
     type_complexity_crews: orbit_config::TypeComplexityCrewPools,
+    /// Admitted `workflow.auto_effort.*`: the bands `<crew>@auto` pool
+    /// members resolve through, and the exploration share.
+    auto_effort: orbit_config::AutoEffortPolicy,
     /// Initial `workflow.provider_limit_*` policy for the admission cache's
     /// last-known-good fallback before its first refresh.
     provider_limit: orbit_config::ProviderLimitPolicy,
@@ -160,6 +163,7 @@ impl OrbitRuntimeSettings {
         final_recovery_crews: Vec<String>,
         purpose_crews: orbit_config::PurposeCrewPools,
         type_complexity_crews: orbit_config::TypeComplexityCrewPools,
+        auto_effort: orbit_config::AutoEffortPolicy,
         provider_limit: orbit_config::ProviderLimitPolicy,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
@@ -221,6 +225,7 @@ impl OrbitRuntimeSettings {
             final_recovery_crews,
             purpose_crews,
             type_complexity_crews,
+            auto_effort,
             provider_limit,
             operation,
             worker_containment,
@@ -484,6 +489,11 @@ impl OrbitRuntimeSettings {
 
     pub fn type_complexity_crews(&self) -> &orbit_config::TypeComplexityCrewPools {
         &self.type_complexity_crews
+    }
+
+    /// The admitted `workflow.auto_effort.*` policy.
+    pub fn auto_effort(&self) -> &orbit_config::AutoEffortPolicy {
+        &self.auto_effort
     }
 
     pub(crate) fn provider_limit(&self) -> &orbit_config::ProviderLimitPolicy {

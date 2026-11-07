@@ -324,6 +324,7 @@ fn active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint() {
                         crew: "recoverer".into(),
                         source: "fixture".into(),
                         eligible_pool: vec![],
+                        auto_effort: None,
                     },
                 );
                 state.step_states.insert(0, JobRunState::Success);

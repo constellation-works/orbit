@@ -63,6 +63,7 @@ fn task_detail_attributes_the_producing_pilot_activity() {
                                 crew: crew.into(),
                                 source: key.into(),
                                 eligible_pool: vec![],
+                                auto_effort: None,
                             },
                         );
                     }

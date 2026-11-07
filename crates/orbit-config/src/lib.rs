@@ -113,7 +113,10 @@ mod visual_review;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
-use crew::{ladder as crew_ladder, performance as crew_performance, pools as crew_pools};
+use crew::{
+    auto_effort as crew_auto_effort, ladder as crew_ladder, performance as crew_performance,
+    pools as crew_pools,
+};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -124,6 +127,10 @@ use orbit_common::security::redaction::redact_home_dir;
 
 pub use aliases::{
     ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
+};
+pub use crew_auto_effort::{
+    AUTO_EFFORT_BANDS_KEY, AUTO_EFFORT_EXPLORE_SHARE_KEY, AUTO_EFFORT_POOLS, AutoEffortBand,
+    AutoEffortPolicy, DEFAULT_AUTO_EFFORT_EXPLORE_SHARE,
 };
 pub use crew_ladder::{
     CREW_LADDER_DELIVERY_QUALITY_KEY, CREW_LADDER_EXCLUDE_TYPES_KEY, CREW_LADDER_EXPLORE_RATE_KEY,

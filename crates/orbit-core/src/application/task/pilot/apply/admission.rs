@@ -88,6 +88,10 @@ pub(in super::super) struct ValidatedTask {
     pub(in super::super) pilot_run_id: Option<String>,
     /// The pilot run's crew, recorded in an explore brief's provenance.
     pub(in super::super) pilot_crew: Option<String>,
+    /// The `<crew>@<effort>` this task's partition ran as when the run drew a
+    /// task-pilot `<crew>@auto` member; reported as the result's
+    /// `pilot_crew`, which pilot attribution prefers over the run's draw.
+    pub(in super::super) pilot_auto_crew: Option<String>,
     /// The explore brief decision, `None` when none was owed or returned.
     pub(in super::super) explore_brief: Option<super::super::explore_brief::BriefDecision>,
 }

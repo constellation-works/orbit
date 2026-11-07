@@ -140,6 +140,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             crew: crew.into(),
                             source: key.into(),
                             eligible_pool: Vec::new(),
+                            auto_effort: None,
                         },
                     );
                 }
@@ -151,6 +152,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             crew: "wrong-legacy-crew".into(),
                             source: legacy.into(),
                             eligible_pool: Vec::new(),
+                            auto_effort: None,
                         },
                     );
                 }

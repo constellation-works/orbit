@@ -12,6 +12,7 @@ use crate::application::task::TaskAutomationPort;
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
 };
+use super::super::auto_effort::PILOT_CREW_FIELD;
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
@@ -138,6 +139,9 @@ pub(in super::super) fn record_applied_assessment(
         );
         fields.insert("outcome".to_string(), json!(outcome));
         fields.insert("operation_id".to_string(), json!(task.operation_id));
+        if let Some(crew) = &task.pilot_auto_crew {
+            fields.insert(PILOT_CREW_FIELD.to_string(), json!(crew));
+        }
         if let (Some(field), Some(decision)) = (field, decision.clone()) {
             fields.insert(field.to_string(), decision);
         }

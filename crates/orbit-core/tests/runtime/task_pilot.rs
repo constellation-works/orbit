@@ -25,6 +25,9 @@ use tempfile::TempDir;
 
 mod admission;
 mod artifact_attachment;
+// The provider fixture is an executable script.
+#[cfg(unix)]
+mod auto_effort;
 #[cfg(unix)]
 mod backlog_repilot;
 mod blockers;
