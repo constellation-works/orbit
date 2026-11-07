@@ -12,7 +12,7 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::Provider;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{ConfigSnapshot, CrewPerformancePolicy};
+use crate::CrewPerformancePolicy;
 
 use super::budget::ProviderLimitBudget;
 use super::target::{ProviderLimitTarget, SEPARATOR, validate_crew_target};
@@ -140,7 +140,7 @@ impl ProviderLimitExplicitCrews {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "wait" => Some(Self::Wait),
             "pool" => Some(Self::Pool),
@@ -219,7 +219,7 @@ impl CrewSelection {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "static" => Some(Self::Static),
             "usage_pressure" => Some(Self::UsagePressure),
@@ -311,47 +311,10 @@ impl ProviderLimitPolicy {
     }
 }
 
-impl ConfigSnapshot {
-    /// The admitted `workflow.provider_limit_*` settings.
-    #[must_use]
-    pub fn provider_limit_policy(&self) -> ProviderLimitPolicy {
-        let mut overrides = BTreeMap::new();
-        let mut crew_overrides = BTreeMap::new();
-        for (target, threshold) in self
-            .workflow_provider_limit_overrides
-            .iter()
-            .filter_map(|entry| stored_override(entry))
-        {
-            match target {
-                ProviderLimitTarget::Provider(provider) => {
-                    overrides.insert(provider, threshold);
-                }
-                ProviderLimitTarget::Crew(crew) => {
-                    crew_overrides.insert(crew, threshold);
-                }
-            }
-        }
-        ProviderLimitPolicy {
-            max_used_pct: self.workflow_provider_limit_max_used_pct,
-            overrides,
-            crew_overrides,
-            explicit_crews: ProviderLimitExplicitCrews::parse(
-                &self.workflow_provider_limit_explicit_crews,
-            )
-            .unwrap_or_default(),
-            budgets: self.provider_limit_budgets(),
-            usage_pressure: UsagePressurePolicy {
-                selection: CrewSelection::parse(&self.workflow_crew_selection).unwrap_or_default(),
-                cap: self.workflow_usage_pressure_cap,
-                strength: self.workflow_usage_pressure_strength,
-            },
-            crew_performance: self.crew_performance_policy(),
-        }
-    }
-}
-
 /// One admitted override string `target:percent` or `target:off`.
-fn stored_override(entry: &str) -> Option<(ProviderLimitTarget, ProviderLimitThreshold)> {
+pub(crate) fn stored_provider_limit_override(
+    entry: &str,
+) -> Option<(ProviderLimitTarget, ProviderLimitThreshold)> {
     let (target, value) = entry.split_once(SEPARATOR)?;
     let threshold = if value == OFF {
         ProviderLimitThreshold::Off
@@ -368,7 +331,7 @@ pub(crate) fn validate_override_crews(
     crews: &BTreeMap<String, Crew>,
 ) -> Result<(), OrbitError> {
     for entry in entries {
-        if let Some((target, _)) = stored_override(entry) {
+        if let Some((target, _)) = stored_provider_limit_override(entry) {
             validate_crew_target(OVERRIDES_KEY, entry, &target, crews)?;
         }
     }

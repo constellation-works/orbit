@@ -47,8 +47,13 @@
 //! - `roots` — the explicit two-root input ([`ConfigRoots`]).
 //! - `raw` — private serde schema for the parts of the document that are not
 //!   fixed registry keys (crew tables and retired-key migration guards).
-//! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
-//! - `config_document` — pure TOML path access shared below admission.
+//! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`],
+//!   with the snapshot's projections into the domain modules' typed settings.
+//!   It sits above the domain admission modules (`aliases`, `attention`,
+//!   `crew`, `operation`, `provider_limit`, `seeding`) whose admitters its key
+//!   table calls; none of them names it.
+//! - `config_document` — pure TOML path access and the typed dotted-path read
+//!   shared below admission.
 //! - `config_io` — no-follow `config.toml` reads and path admission, below
 //!   loading, diagnostics and the store.
 //! - `layering` — document reading, per-key merge, replace-only rules, and

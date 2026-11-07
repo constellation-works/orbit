@@ -18,7 +18,7 @@ use super::selective::{
     selective_unknown_risk_parse,
 };
 use super::timing::ReviewTimingSetting;
-use crate::registry::read_optional;
+use crate::config_document;
 
 /// Which layer supplied a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,45 +114,66 @@ impl OperationLayer {
 
         // The document is translated before it is read, so a deprecated
         // switch already reached `review.timing`; one key states both halves.
-        let timing = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)?
-            .map(|raw| ReviewTimingSetting::parse_in_file(&raw, config_path))
-            .transpose()?
-            .map(ReviewTimingSetting::switches);
+        let timing = config_document::read_typed_config_value::<String>(
+            document,
+            REVIEW_TIMING_KEY,
+            config_path,
+        )?
+        .map(|raw| ReviewTimingSetting::parse_in_file(&raw, config_path))
+        .transpose()?
+        .map(ReviewTimingSetting::switches);
         Ok(Self {
             review_before_pr: timing.map(|(before_pr, _)| before_pr),
             review_before_landing: timing.map(|(_, before_landing)| before_landing),
-            review_before_landing_hosts: before_landing_hosts(read_optional(
-                document,
-                REVIEW_BEFORE_LANDING_HOSTS_KEY,
-                config_path,
-            )?)?,
-            review_minutes: review_minutes(read_optional(
+            review_before_landing_hosts: before_landing_hosts(
+                config_document::read_typed_config_value(
+                    document,
+                    REVIEW_BEFORE_LANDING_HOSTS_KEY,
+                    config_path,
+                )?,
+            )?,
+            review_minutes: review_minutes(config_document::read_typed_config_value(
                 document,
                 REVIEW_MINUTES_KEY,
                 config_path,
             )?)?,
-            review_crew: review_crew(read_optional(document, REVIEW_CREW_KEY, config_path)?)?,
-            pre_landing_review_crew: pre_landing_review_crew(read_optional(
+            review_crew: review_crew(config_document::read_typed_config_value(
                 document,
-                PRE_LANDING_REVIEW_CREW_KEY,
+                REVIEW_CREW_KEY,
                 config_path,
             )?)?,
-            review_host_evidence: read_optional::<Vec<HostEvidenceRule>>(
-                document,
-                REVIEW_HOST_EVIDENCE_KEY,
-                config_path,
-            )?
-            .map(host_evidence_rules)
-            .transpose()?,
+            pre_landing_review_crew: pre_landing_review_crew(
+                config_document::read_typed_config_value(
+                    document,
+                    PRE_LANDING_REVIEW_CREW_KEY,
+                    config_path,
+                )?,
+            )?,
+            review_host_evidence:
+                config_document::read_typed_config_value::<Vec<HostEvidenceRule>>(
+                    document,
+                    REVIEW_HOST_EVIDENCE_KEY,
+                    config_path,
+                )?
+                .map(host_evidence_rules)
+                .transpose()?,
             legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
                 .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
             selective_before_landing: SelectiveLayer {
-                mode: read_optional::<String>(document, SELECTIVE_MODE_KEY, config_path)?
-                    .map(|raw| selective_mode_parse(&raw))
-                    .transpose()?,
+                mode: config_document::read_typed_config_value::<String>(
+                    document,
+                    SELECTIVE_MODE_KEY,
+                    config_path,
+                )?
+                .map(|raw| selective_mode_parse(&raw))
+                .transpose()?,
                 risk_threshold: selective_threshold(document, config_path)?,
-                paths: selective_paths(read_optional(document, SELECTIVE_PATHS_KEY, config_path)?)?,
-                unknown_risk: read_optional::<String>(
+                paths: selective_paths(config_document::read_typed_config_value(
+                    document,
+                    SELECTIVE_PATHS_KEY,
+                    config_path,
+                )?)?,
+                unknown_risk: config_document::read_typed_config_value::<String>(
                     document,
                     SELECTIVE_UNKNOWN_RISK_KEY,
                     config_path,

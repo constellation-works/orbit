@@ -342,7 +342,12 @@ impl ResolvedConfig {
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
         let mut operation =
             OperationPolicy::resolve(&[(options.operation_layer_source, &operation_layer)]);
-        operation.project_canonical_review_pools(&snapshot);
+        operation.project_canonical_review_pools(
+            snapshot.workflow_purpose_crews_review.as_deref(),
+            snapshot
+                .workflow_purpose_crews_pre_landing_review
+                .as_deref(),
+        );
 
         let compatibility_keys = CompatibilityKeys {
             deprecated_task_id_pattern: parsed

@@ -13,7 +13,6 @@ use super::keys::{
 };
 use super::layer::{OperationField, OperationLayer, OperationLayerSource};
 use super::timing::ReviewTimingSetting;
-use crate::registry::ConfigSnapshot;
 
 /// Version of the resolved-policy shape captured into run records. Bump when
 /// a captured field is added, removed, or changes meaning so an older
@@ -174,16 +173,18 @@ impl OperationPolicy {
         policy
     }
 
-    /// Copy the canonical admitted review pools into this policy, keeping
-    /// each field's existing source. An unset pool becomes empty.
-    pub(crate) fn project_canonical_review_pools(&mut self, snapshot: &ConfigSnapshot) {
-        self.review_crew.value = snapshot
-            .workflow_purpose_crews_review
-            .clone()
-            .unwrap_or_default();
-        self.pre_landing_review_crew.value = snapshot
-            .workflow_purpose_crews_pre_landing_review
-            .clone()
+    /// Copy the canonical admitted review pools — the snapshot's
+    /// `workflow.purpose_crews.review` and `workflow.purpose_crews.pre_landing_review`
+    /// — into this policy, keeping each field's existing source. An unset
+    /// pool becomes empty.
+    pub(crate) fn project_canonical_review_pools(
+        &mut self,
+        review: Option<&[String]>,
+        pre_landing_review: Option<&[String]>,
+    ) {
+        self.review_crew.value = review.map(<[String]>::to_vec).unwrap_or_default();
+        self.pre_landing_review_crew.value = pre_landing_review
+            .map(<[String]>::to_vec)
             .unwrap_or_default();
     }
 

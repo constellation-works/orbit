@@ -46,7 +46,6 @@ use crate::operation::{
     REVIEW_CREW_KEY, REVIEW_TIMING_KEY, ReviewTimingSetting, legacy_policy_before_pr,
     translate_legacy_review_minutes,
 };
-use crate::registry::read_optional;
 
 /// The consolidated final-recovery pool.
 pub(crate) const FINAL_RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.final_recovery";
@@ -209,18 +208,28 @@ fn review_halves(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<(Option<bool>, Option<bool>), OrbitError> {
-    if let Some(raw) = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)? {
+    if let Some(raw) = config_document::read_typed_config_value::<String>(
+        document,
+        REVIEW_TIMING_KEY,
+        config_path,
+    )? {
         let (before_pr, before_landing) =
             ReviewTimingSetting::parse_in_file(&raw, config_path)?.switches();
         return Ok((Some(before_pr), Some(before_landing)));
     }
-    let before_pr = match read_optional::<bool>(document, LEGACY_REVIEW_BEFORE_PR_KEY, config_path)?
-    {
+    let before_pr = match config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_REVIEW_BEFORE_PR_KEY,
+        config_path,
+    )? {
         Some(before_pr) => Some(before_pr),
         None => legacy_policy_before_pr(document, config_path)?,
     };
-    let before_landing =
-        read_optional::<bool>(document, LEGACY_REVIEW_BEFORE_LANDING_KEY, config_path)?;
+    let before_landing = config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_REVIEW_BEFORE_LANDING_KEY,
+        config_path,
+    )?;
     Ok((before_pr, before_landing))
 }
 
@@ -279,8 +288,11 @@ fn translate_worker_containment(
     document: &mut toml::Value,
     config_path: &Path,
 ) -> Result<(), OrbitError> {
-    let Some(strict) =
-        read_optional::<bool>(document, LEGACY_WORKER_CONTAINMENT_STRICT_KEY, config_path)?
+    let Some(strict) = config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_WORKER_CONTAINMENT_STRICT_KEY,
+        config_path,
+    )?
     else {
         return Ok(());
     };
@@ -322,7 +334,9 @@ fn probe_halves(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<(Option<bool>, Option<bool>), OrbitError> {
-    if let Some(raw) = read_optional::<String>(document, SHELL_PROBE_KEY, config_path)? {
+    if let Some(raw) =
+        config_document::read_typed_config_value::<String>(document, SHELL_PROBE_KEY, config_path)?
+    {
         return Ok(match ShellProbeMode::parse(&raw)? {
             ShellProbeMode::Off => (Some(false), None),
             ShellProbeMode::Login => (Some(true), Some(false)),
@@ -330,8 +344,16 @@ fn probe_halves(
         });
     }
     Ok((
-        read_optional::<bool>(document, LEGACY_LOGIN_SHELL_KEY, config_path)?,
-        read_optional::<bool>(document, LEGACY_INTERACTIVE_KEY, config_path)?,
+        config_document::read_typed_config_value::<bool>(
+            document,
+            LEGACY_LOGIN_SHELL_KEY,
+            config_path,
+        )?,
+        config_document::read_typed_config_value::<bool>(
+            document,
+            LEGACY_INTERACTIVE_KEY,
+            config_path,
+        )?,
     ))
 }
 

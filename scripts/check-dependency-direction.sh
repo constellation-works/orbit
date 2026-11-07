@@ -440,10 +440,31 @@ for module in aliases.rs operation; do
     fail=1
   fi
 done
-if [ -f "$config_src/config_document.rs" ] && rg -n '\b(crate|super|self)::|^[[:space:]]*(use|extern crate)[[:space:]]' "$config_src/config_document.rs"; then
-  echo "orbit-config config_document must remain a TOML/std leaf"
-  fail=1
+# [ORB-22707] The leaf also owns the typed path read, so it may use serde and
+# orbit-common's error and redaction, but never a sibling module.
+if [ -f "$config_src/config_document.rs" ]; then
+  if rg -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_document.rs"; then
+    echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+    fail=1
+  fi
+  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_document.rs" |
+    grep -vE '[[:space:]]use[[:space:]]+(std|toml|serde|orbit_common)::|:use[[:space:]]+(std|toml|serde|orbit_common)::'; then
+    echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+    fail=1
+  fi
 fi
+
+# [ORB-22707] The key registry sits above the domain admission modules whose
+# admitters and choices its key table calls. Those modules read TOML through
+# config_document and leave snapshot projections to registry/settings, so none
+# names the registry; its crate-root re-exports count as the same edge.
+config_registry_names='registry|AutoConcurrencySettings|CONFIG_KEY_REGISTRY|ConfigKeyDescriptor|ConfigKeyTier|ConfigSection|ConfigSnapshot|ExperimentSettings|ExploreBriefSettings|ExploreSettings|LeaseListenerSettings|LeaseListenerTlsSettings|MachineSettings|MidRunSteeringSettings|NoticeKindHours|NoticeSettings|RegressionRiskSettings|ResourceThrottleSettings|WorkerContainmentSettings|admit_config_key|admit_settable_config_key|config_key_options|describe_config_key|immutable_key_note|is_global_only_key'
+for module in aliases.rs attention.rs seeding.rs crew operation provider_limit; do
+  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" "$config_registry_names" crate-root; then
+    echo "orbit-config ${module} must not name the registry; read TOML through config_document"
+    fail=1
+  fi
+done
 
 # [ORB-22315] File reads and path admission live in the config_io leaf, below
 # loading and diagnostics and below the mutable ConfigStore those modules must

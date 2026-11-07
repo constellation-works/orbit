@@ -1,5 +1,4 @@
 //! Shared attention settings. Later source adapters consume this same owner.
-use crate::registry::ConfigSnapshot;
 use orbit_common::OrbitError;
 
 /// Validated settings for the derived attention feed and its source adapters.
@@ -21,21 +20,6 @@ pub struct AttentionSettings {
     pub fanout_budget_seconds: u32,
     /// Maximum candidates from one workspace.
     pub per_workspace_item_cap: u32,
-}
-impl AttentionSettings {
-    /// Read the canonical admitted registry values.
-    pub fn from_snapshot(snapshot: &ConfigSnapshot) -> Self {
-        Self {
-            cursor_ttl_hours: snapshot.attention_cursor_ttl_hours,
-            run_window_hours: snapshot.attention_run_window_hours,
-            run_stuck_after_minutes: snapshot.attention_run_stuck_after_minutes,
-            ci_cache_seconds: snapshot.attention_ci_cache_seconds,
-            source_timeout_seconds: snapshot.attention_source_timeout_seconds,
-            fanout_budget_seconds: snapshot.attention_fanout_budget_seconds,
-            per_workspace_item_cap: snapshot.attention_per_workspace_item_cap,
-            age_bump_hours: snapshot.attention_age_bump_hours.clone(),
-        }
-    }
 }
 pub(crate) fn resolve_attention_age_bumps(raw: Option<Vec<u32>>) -> Result<Vec<u32>, OrbitError> {
     let values = raw.unwrap_or_else(|| vec![24, 72]);
