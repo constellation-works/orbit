@@ -585,7 +585,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   }
   .rail {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
