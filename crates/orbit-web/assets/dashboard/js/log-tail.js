@@ -304,22 +304,6 @@ function wireDockModeToggle() {
   });
 }
 
-// The phone dock route's Back control drops only `dock=`, so the hash keeps the
-// list's filters and the router then shows the list.
-function wireDockBack() {
-  $("dock-back-tasks")?.addEventListener("click", () => {
-    const [route, query = ""] = window.location.hash.slice(1).split("?");
-    const params = new URLSearchParams(query);
-    params.delete("dock");
-    const rest = params.toString();
-    window.location.hash = rest ? `${route}?${rest}` : route;
-    // The hash change routes the list. Setting a fragment that is already the
-    // list's fires no hashchange, so mirror the list visibility here too; a
-    // router run stays idempotent.
-    setDockRouteShown(false);
-  });
-}
-
 // ORB-10972: the bottom status bar carries the newest line on every tab, not
 // just Tasks where the full tail is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
@@ -391,7 +375,6 @@ function wireLogPanelPreferences() {
   if (logPanelPrefsWired) return;
   logPanelPrefsWired = true;
   wireDockModeToggle();
-  wireDockBack();
   applyDockMode();
 }
 

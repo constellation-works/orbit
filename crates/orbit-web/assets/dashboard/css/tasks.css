@@ -833,22 +833,6 @@ main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns:
    area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
-/* The Back control shows only where a dock route stands in for the list. */
-.dock-back {
-  display: none;
-  align-items: center;
-  align-self: flex-start;
-  min-height: 36px;
-  padding: 0 4px;
-  border: 0;
-  background: transparent;
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.dock-back:hover { color: var(--fg); }
-.dock-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (max-width: 1000px) {
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
   .tasks-dock { display: contents; }
@@ -862,12 +846,10 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
      rather than running down the page. */
   main.tasks-layout.dock-route > .col-tasks { display: none !important; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
-  main.tasks-layout.dock-route .dock-back { display: inline-flex; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
      Start stay in reach while the pane scrolls, and a live window folds the Start
      form so state, Stop and warnings lead. */
-  main.tasks-layout.dock-route .dock-back,
   main.tasks-layout.dock-route .dock-seg { min-height: 44px; }
   main.tasks-layout.dock-route .dock-seg { padding-bottom: 0; }
   main.tasks-layout.dock-route :is(.drain-duration, .drain-step, .drain-stepper-value, .operation-button.drain-stop) { min-height: 44px; }
