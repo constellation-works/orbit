@@ -199,7 +199,7 @@ fn cached_sensitive_env_values() -> &'static [String] {
 }
 
 fn sensitive_env_values() -> Cow<'static, [String]> {
-    // Tests mutate process env after startup (`EnvVarGuard`). A process-wide
+    // Tests mutate process env after startup (`ScopedEnv`). A process-wide
     // snapshot would miss those values, so re-collect in this crate's tests
     // and while the shared scoped environment guard is active. Normal
     // production calls retain the cached snapshot.
