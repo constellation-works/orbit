@@ -385,7 +385,19 @@ overlays and the agent corpus; re-pointing them and retiring the shim is a
 follow-up. Executor `host_os` limits (`task::executor_host_os`) and
 `verify-mock-ui` admission (`task::mock_admission`) are task modules; the
 host-OS wait that resolves the draw's candidates is
-`job::crew_pools::host_os_wait`. Their back-edges with other unordered
+`job::crew_pools::host_os_wait`.
+
+`codebase` (the analytics behind `orbit codebase`) sits outside the order but
+above `task` [ORB-22625]. Task owns the pure block classification
+(`task::block_cause`: `BlockCause`, `Anchor`, `classify_block`, `actor_kind`,
+`entry_marks_run`), which its blocked-recovery readout calls, and records a
+done landing's diff stats through `task::TaskCodebasePort`, which `codebase`
+implements on `OrbitRuntime` in `codebase/diff_stats.rs`. `codebase` keeps the
+failed-claim settlement read that needs `distributed`, so `task -> codebase ->
+distributed` no longer climbs; it also keeps the persisted representation of
+`BlockCause`, and re-exports the moved names as a compatibility shim for
+`agents` and its own modules, whose retirement is a follow-up. The guard's
+`task` upper-module list names `codebase`. Their back-edges with other unordered
 modules (`precedent_decision`, `resident`, `experiment`, `codebase`) still keep
 the core strongly connected component and await a later audit, as do
 `experiment <-> visual_delivery` and `landing -> visual_delivery`: [ORB-22624]
@@ -417,6 +429,7 @@ cut only the edges into `visual_delivery` from `task`, `job`, `review` and
 - [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
 - [ORB-22416] — cut the distributed → experiment capture edge through `distributed::DistributedExperimentPort`, implemented by `experiment`, and guarded the direction.
 - [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
+- [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

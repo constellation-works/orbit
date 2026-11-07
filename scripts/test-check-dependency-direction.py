@@ -156,6 +156,39 @@ class RelativeImportTests(unittest.TestCase):
                 "        self.fresh_owner_method();\n    }\n}\n",
         }, rejected=True)
 
+    def test_task_reaches_codebase_only_through_its_port(self):
+        # [ORB-22625] Task imported codebase's block classifier and called its
+        # done-landing hook directly, climbing task -> codebase -> distributed.
+        # One detector per call: the guard's chains stop at the first hit.
+        for rows in (
+            [("task/blocked_recovery/readout.rs",
+              "use crate::application::codebase::{BlockCause, classify_block};\n")],
+            [("task/probe.rs", "use crate::application::{\n    codebase::Probe,\n};\n")],
+            [("task/mod.rs", "use super::codebase::Probe;\n"),
+             ("task/blocked_recovery/probe.rs",
+              "use super::super::super::{codebase::Probe};\n")],
+        ):
+            self.check_rows(rows, rejected=True)
+        self.check_rows([
+            ("task/resolves.rs",
+             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+             "        self.fresh_codebase_method();\n    }\n}\n"),
+        ], rejected=True, shared={
+            "codebase/diff_stats.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_codebase_method(&self) {}\n}\n"})
+        self.check_files({
+            "task/mod.rs": "pub(in crate::application) trait TaskCodebasePort {\n"
+                           "    fn record_landed_probe(&self);\n}\n",
+            "task/resolves.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.record_landed_probe();\n    }\n}\n",
+            "codebase/diff_stats.rs":
+                "impl TaskCodebasePort for OrbitRuntime {\n    fn record_landed_probe(&self) {}\n}\n",
+            "codebase/facts/block_cause.rs":
+                "use crate::application::distributed::LeafSettlement;\n"
+                "pub(in crate::application) use crate::application::task::classify_block;\n",
+        }, rejected=False)
+
     def test_lower_modules_cannot_reach_the_forecast(self):
         lowers = ("job", "automation", "review", "distributed", "pull_drain",
                   "admission", "workspace_auto")

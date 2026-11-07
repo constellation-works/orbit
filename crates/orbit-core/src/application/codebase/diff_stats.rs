@@ -38,6 +38,7 @@ use orbit_types::workflow::automation::DirectLandingRequest;
 use serde::Serialize;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskCodebasePort;
 
 /// Done tasks one backfill diffs and records at most.
 pub const DIFF_STATS_BACKFILL_DEFAULT_LIMIT: usize = 500;
@@ -216,50 +217,6 @@ impl OrbitRuntime {
             )?;
         }
         Ok(())
-    }
-
-    /// On a task's transition into done, record the landing its history's
-    /// receipt names. The merge commit of a pull request lives on the remote,
-    /// so it is fetched when the checkout lacks it.
-    pub(crate) fn record_done_landing_diff_stats(&self, previous_status: TaskStatus, task: &Task) {
-        if task.status != TaskStatus::Done || previous_status == TaskStatus::Done {
-            return;
-        }
-        let result = (|| -> Result<(), OrbitError> {
-            let history = self.get_task_history(&task.id)?;
-            let Some((commit, landed_at)) = super::landed::receipt(&history) else {
-                return Ok(());
-            };
-            let repo_root = &self.paths().repo_root;
-            if let Err(error) = orbit_engine::review_gate::fetch_landed_commit(repo_root, &commit) {
-                tracing::warn!(task_id = %task.id, %commit, %error, "landed commit could not be fetched");
-            }
-            let repo = git2::Repository::open(repo_root)
-                .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
-            let written = self.record_landing(
-                &repo,
-                task,
-                &Landing {
-                    task_id: &task.id,
-                    landed_commit: &commit,
-                    base_commit: None,
-                    landed_at,
-                    job_run_id: task.job_run_id.as_deref(),
-                    source: LandedDiffSource::Landing,
-                },
-            )?;
-            if !written {
-                tracing::warn!(
-                    task_id = %task.id,
-                    %commit,
-                    "landed commit is not in the local checkout; no diff stats recorded"
-                );
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            tracing::warn!(task_id = %task.id, %error, "recording a landing's diff stats failed");
-        }
     }
 
     /// Fill rows for up to `limit` done tasks that landed before diff stats
@@ -449,6 +406,53 @@ impl OrbitRuntime {
             tests: self.diff_test_paths(),
             non_code: self.diff_non_code_paths(),
             non_reviewable: self.diff_non_reviewable_paths(),
+        }
+    }
+}
+
+/// The done-landing hook a task write reaches through its port [ORB-22625].
+impl TaskCodebasePort for OrbitRuntime {
+    /// On a task's transition into done, record the landing its history's
+    /// receipt names. The merge commit of a pull request lives on the remote,
+    /// so it is fetched when the checkout lacks it.
+    fn record_landed_diff_stats_on_done(&self, previous_status: TaskStatus, task: &Task) {
+        if task.status != TaskStatus::Done || previous_status == TaskStatus::Done {
+            return;
+        }
+        let result = (|| -> Result<(), OrbitError> {
+            let history = self.get_task_history(&task.id)?;
+            let Some((commit, landed_at)) = super::landed::receipt(&history) else {
+                return Ok(());
+            };
+            let repo_root = &self.paths().repo_root;
+            if let Err(error) = orbit_engine::review_gate::fetch_landed_commit(repo_root, &commit) {
+                tracing::warn!(task_id = %task.id, %commit, %error, "landed commit could not be fetched");
+            }
+            let repo = git2::Repository::open(repo_root)
+                .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
+            let written = self.record_landing(
+                &repo,
+                task,
+                &Landing {
+                    task_id: &task.id,
+                    landed_commit: &commit,
+                    base_commit: None,
+                    landed_at,
+                    job_run_id: task.job_run_id.as_deref(),
+                    source: LandedDiffSource::Landing,
+                },
+            )?;
+            if !written {
+                tracing::warn!(
+                    task_id = %task.id,
+                    %commit,
+                    "landed commit is not in the local checkout; no diff stats recorded"
+                );
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            tracing::warn!(task_id = %task.id, %error, "recording a landing's diff stats failed");
         }
     }
 }
