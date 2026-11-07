@@ -33,7 +33,8 @@ semantics remain current.
 `AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
-`skip_unless_blocked_candidates` (§4c) preconditions, and
+`skip_unless_blocked_candidates` (§4c) preconditions, the optional `completion`
+contract a job step requires ([auto-task steps](../activity-job/specs/auto-task-step.md#phase-3-as-built)), and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — exactly one of `{ cron: "…" }`, `{ every_minutes: N }`,
 `{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` fires once per subject edge on the workspace owner; the other forms take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Delivery schedules use source evaluation and

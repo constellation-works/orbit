@@ -37,6 +37,9 @@ pub struct AutoTaskObservation {
     pub definition_hold: Option<String>,
     /// The terminal settlement of the bound task, when it has one.
     pub receipt: Option<AutoTaskReceipt>,
+    /// Why an accepted completion does not yet satisfy the definition's
+    /// declared contract. The step holds; expiry still decides.
+    pub result_hold: Option<String>,
     /// The bound task's raw status while it is still open.
     pub bound_status: Option<String>,
     /// The earliest deadline known now (outer bound or a step expiry whose

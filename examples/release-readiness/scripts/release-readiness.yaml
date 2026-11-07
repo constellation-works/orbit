@@ -1,0 +1,23 @@
+# Disabled example. A script runs only after an owner copies this manifest to
+# .orbit/resources/scripts/release-readiness.yaml and grants it; see the README.
+schemaVersion: 1
+kind: Script
+metadata:
+  name: release-readiness
+spec:
+  description: Judge release-readiness evidence for the release-readiness/v1 contract.
+  entry: scripts/release-readiness-adapter.py
+  interpreter: [python3]
+  files:
+    inputs:
+      - from: scripts/qa-full-sweep-inventory.json
+        as: qa-full-sweep-inventory.json
+  requests:
+    network: none
+    timeout_seconds: 60
+  output_schema_json:
+    type: object
+    required: [schema_version, contract, form, task_id, source_revision, status]
+    properties:
+      status:
+        enum: [passed, blocked, unavailable]

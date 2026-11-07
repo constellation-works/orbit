@@ -192,6 +192,10 @@ pub struct AutoTaskDefinition {
     /// host's rule; this only switches the check on.
     #[serde(default, skip_serializing_if = "is_false")]
     pub skip_unless_blocked_candidates: bool,
+    /// The opt-in completion contract a job step on this definition is held
+    /// to. Omitted, ordinary structured task completion applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<super::AutoTaskCompletionContract>,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -464,6 +468,9 @@ impl AutoTaskDefinition {
                  with '-' or '_' separators, and start alphanumeric",
                 self.name
             )));
+        }
+        if let Some(completion) = &self.completion {
+            completion.validate()?;
         }
         match &self.schedule {
             AutoTaskSchedule::Deliveries {

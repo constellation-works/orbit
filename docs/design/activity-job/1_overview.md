@@ -20,10 +20,10 @@ Activity / Job is Orbit's execution substrate. Activities describe runnable unit
 **Auto-task extension.** [Auto-task steps and durable waiting](./specs/auto-task-step.md)
 now have shipped schema/explain ([ORB-20157], with versioning in [ORB-20237]) and
 keyed bind/mint, parked CEL waits, admission rechecks and partial-branch checkpoints
-([ORB-20158]). Readiness evidence adapters ([ORB-20165]), their condition-history
-consumer ([ORB-20397]) and the disabled release-readiness composition ([ORB-20166])
-remain `someday`, outside the shipped scope. `require_result` holds without an
-adapter and historical `reuse_when` matching is not implemented. No separate
+([ORB-20158]), and opt-in completion contracts validate a step's result against owner
+records and a granted workspace adapter ([ORB-20165]). The condition-history consumer
+([ORB-20397]) and the disabled release-readiness composition ([ORB-20166]) remain
+`someday`, outside the shipped scope. Historical `reuse_when` matching is not implemented. No separate
 auto-sequence lifecycle is introduced; ordinary ordering and `when` skips remain.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.

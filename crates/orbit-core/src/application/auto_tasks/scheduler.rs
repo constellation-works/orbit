@@ -12,7 +12,9 @@ pub use orbit_automation::auto_tasks::scheduler::{
 use orbit_automation::condition::GuardVerdict;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
+use orbit_types::workflow::{
+    AutoTaskAcceptedHistory, AutoTaskDefinition, SkipIfUnchanged, auto_task_tag,
+};
 use std::path::PathBuf;
 
 use crate::application::automation::SourceCache;
@@ -207,6 +209,14 @@ impl AutoTaskDispatch for OrbitRuntime {
 }
 
 impl OrbitRuntime {
+    /// The latest result `name`'s declared completion contract accepted. A task
+    /// that merely finished never appears here, including a successful probe
+    /// whose evidence the contract does not accept. No accepted result and an
+    /// unreadable history are different answers.
+    pub fn auto_task_accepted_history(&self, name: &str) -> AutoTaskAcceptedHistory {
+        super::completion::accepted_history(self, name)
+    }
+
     /// The plugin that makes `definition` inactive in this workspace, if any:
     /// the one rule both the scheduler's skip and every listing's default
     /// hiding read.

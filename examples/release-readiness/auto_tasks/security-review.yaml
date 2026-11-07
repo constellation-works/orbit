@@ -1,0 +1,99 @@
+# Disabled example, not a seeded default. Its template is the current definition
+# unchanged, plus the `completion` declaration at the end. See ../README.md.
+schemaVersion: 1
+name: security-review
+description: Weekly evidence-backed review of application, dependency, secret-handling, and configuration risks
+enabled: false
+schedule:
+  cron: 0 8 * * 1
+template:
+  title: Review workspace security
+  description: |-
+    Perform a weekly security review of this workspace. The durable output is filed Orbit tasks for every actionable finding; the execution summary is only an audit trail. Narrative-only output does not count as delivery.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface. Search coverage with `orbit tool run orbit.search --input '{"query":"<distinctive symptom, component, or CVE terms>","kind":"task","all":true,"model":"<agent-family>"}'`. List open security-review work with `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"security-review","model":"<agent-family>"}'`. Inspect a candidate with `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`. File a finding with `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["security-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`. Derive canonical selectors from every evidenced source location, removing the line suffix: `symbol:<path>#<name>:<kind>` for the function, method or type that holds it (`<name>` qualified by its type for a member, e.g. `Store::claim:method`), or `file:<path>` when the defect is file-wide or the file has no symbols. Add the matching regression-test location as `file:`. Use existing paths where possible; for a test file that must be created, set `allow_missing_context: true` and identify that intended path. Never file a finding without context selectors. Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Before filing anything, check for duplicate open tasks covering the same underlying issue, including open tasks tagged `security-review`. Skip duplicates. If an open or done task already covers the finding, record the `<finding> -> <task-id>` mapping in the execution summary instead of filing another copy.
+    - Every actionable finding must be a durable, deduplicated Orbit task with reproducible evidence and severity/impact. Include the exact file paths, commands, dependency names and versions, configuration keys, or secret-handling locations that demonstrate the issue, plus a severity rating and an impact statement. Do not leave findings in narrative-only output.
+    - Fail open. A clean review with no findings is a successful no-op. Do not invent work to justify the run.
+
+    ## Review scope
+
+    Review only what applies to this workspace. Cite evidence from the current tree, lockfiles, configuration, and tests. Do not guess.
+
+    1. Application code. Inspect authentication, authorization, input validation, injection, unsafe deserialization, SSRF, path traversal, and other applicable code-level risks in the paths this workspace actually ships.
+    2. Dependencies. Inspect manifests and lockfiles for known-vulnerable, unpinned, abandoned, or unexpectedly added packages. Record the package, version, and advisory source.
+    3. Secret handling. Inspect how credentials, tokens, keys, and other secrets are stored, loaded, logged, and excluded from version control. Flag hardcoded secrets, secrets in logs, world-readable secret files, and missing ignore rules.
+    4. Configuration. Inspect service, sandbox, CI, and deployment configuration for overly permissive access, debug or insecure defaults on production paths, and missing hardening this workspace is expected to have.
+
+    ## Pass
+
+    1. Snapshot existing open `security-review` tasks and search for overlapping coverage of each candidate finding.
+    2. Review the four areas above and collect evidence-backed findings only.
+    3. For each actionable, non-duplicate finding, file exactly one Orbit task through `orbit tool run orbit.task.add` with reproduction evidence, severity, impact, and a `{"type":"spawned_from","target":"<this task ID>"}` relation targeting this review chore. Read it back with `orbit tool run orbit.task.show` and verify that exact edge before recording it as delivered; if missing or incorrect, report the linkage error and do not count it as delivered.
+    4. If there are no findings, persist an execution summary that the review was clean and succeed. Do not file filler tasks.
+
+    When the finding is a regression a landed task introduced (squash-merge
+    subjects carry its ID as `[<task-id>]`; confirm with `orbit.task.show`), add
+    `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","sites":["<defect site selector>"]}}`
+    to its `relations` alongside the required `spawned_from` edge and name the
+    culprit commit in its description. A
+    claimed run cannot record that relation: name the culprit, nature, escape and severity
+    in the description instead. Never blame a bystander task.
+    `sites` names where the defect lives, not everything the culprit touched:
+    the `symbol:<path>#<name>:<kind>` of the function, method or type that is
+    wrong, or `file:<path>` when the file has no symbols, usually the
+    finding's source selector. Never list tests, goldens, docs or wiring the
+    culprit only touched alongside.
+    `severity` is how much the defect matters, on the one scale findings and
+    regression links share; a new link without it is refused. Rate the worst
+    real impact the evidence shows, not the size of the fix, and take the lower
+    level when torn. Choose `unclassified` rather than guess. The scale and the
+    `nature` and `escape` values are the Severity rubric and `regression_from`
+    fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    those values.
+  acceptance_criteria:
+  - Applicable application code, dependencies, secret handling, and configuration were reviewed with evidence from the current workspace.
+  - Existing open tasks were searched and duplicate findings were not filed.
+  - Every actionable finding was filed as a durable Orbit task with reproducible evidence, severity, impact, and a read-back-verified `spawned_from` relation to this review chore alongside any justified `regression_from` relation; narrative-only output is not delivery.
+  - A review with no findings finishes with status `success` and files no task.
+  task_type: chore
+  tags:
+  - security-review
+  - no-diff-expected
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: hard
+  status: backlog
+dedupe: skip_if_open
+completion:
+  contract: release-readiness/v1
+  adapter: release-readiness
+  form: security-review
+  evidence_artifact: readiness-evidence.json
+  max_age_minutes: 1440
+  evidence_instructions: |
+    Attach `security-review-evidence.json` and every file it cites, list them in
+    the evidence manifest, and list each finding's task in `task_refs`:
+
+    ```json
+    {
+      "source_revision": "<the source revision above>",
+      "scope": [
+        {"area": "application-code", "summary": "<what was reviewed>", "evidence": ["<artifact>"]},
+        {"area": "dependencies", "summary": "<what was reviewed>", "evidence": ["<artifact>"]},
+        {"area": "secret-handling", "summary": "<what was reviewed>", "evidence": ["<artifact>"]},
+        {"area": "configuration", "summary": "<what was reviewed>", "evidence": ["<artifact>"]}
+      ],
+      "findings": [{"task_id": "<filed task>", "severity": "<severity>"}]
+    }
+    ```
+
+    A clean review has an empty `findings` list. Report every task spawned from
+    this review. An open high or critical finding holds the step until it is
+    resolved.

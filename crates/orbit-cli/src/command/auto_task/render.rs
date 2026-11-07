@@ -274,6 +274,17 @@ fn show(value: Value) -> CommandOut {
             "  skip_unless_blocked_candidates: mint only when a block episode awaits triage"
         );
     }
+    if let Some(completion) = doc.get("completion").filter(|value| !value.is_null()) {
+        let _ = writeln!(
+            out,
+            "  completion: {} judged by script {} (form {}, evidence {}, max age {} minutes)",
+            text(completion, "contract"),
+            text(completion, "adapter"),
+            text(completion, "form"),
+            text(completion, "evidence_artifact"),
+            completion["max_age_minutes"]
+        );
+    }
     if let Some(skip) = doc
         .get("cursor")
         .and_then(|cursor| cursor.get("last_skip"))

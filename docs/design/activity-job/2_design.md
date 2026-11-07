@@ -1803,13 +1803,13 @@ external effects. Layout migration 7 (`auto-task-job-checkpoints`) fences older 
 Auto-task targets inside loops/fan-out remain refused, and foreground `orbit job run`
 refuses auto-task jobs; detached submission is required.
 
-Readiness contracts and historical reuse are incomplete: `require_result` holds because
-there is no evidence adapter, and `reuse_when` never matches. [ORB-20165] (someday)
-owns the adapters and accepted-result history; [ORB-20397] (someday) consumes that
-history for condition facts; [ORB-20166] (someday) owns disabled release-readiness
-examples. Exact-source freshness and accepted QA/security/preparation evidence remain
-design commitments, not guarantees supplied by raw task `done`. No live readiness
-configuration, provider work or release is authorized by these shipped primitives.
+A step with `require_result` is accepted only on a receipt validated against owner
+records and a granted workspace adapter, revalidated for exact source and age before
+a later step mints ([auto-task steps](./specs/auto-task-step.md#phase-3-as-built)).
+Raw task `done` never supplies it. Historical reuse is incomplete: `reuse_when` never
+matches. [ORB-20397] (someday) consumes accepted-result history for condition facts;
+[ORB-20166] (someday) owns disabled release-readiness composition examples. No live
+readiness configuration, provider work or release is authorized by these primitives.
 
 ## 9. Filesystem Policy and `fsProfile`
 
