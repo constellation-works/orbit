@@ -24,7 +24,7 @@ use orbit_engine::RuntimeHost;
 use orbit_engine::activity_job::cli_runner::{
     CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
 };
-use orbit_types::identity::{Crew, resolve_crew};
+use orbit_types::identity::{Crew, resolve_crew, same_crew_family};
 use orbit_types::workflow::CrewEnvUnset;
 use orbit_types::workflow::activity_job::Provider;
 
@@ -155,8 +155,11 @@ impl OrbitRuntime {
             return Ok(requested);
         }
         let runnable = |name: &str| {
-            resolve_crew(name, crews)
-                .is_ok_and(|crew| !blocked.iter().any(|(blocked, _)| blocked.name == crew.name))
+            resolve_crew(name, crews).is_ok_and(|crew| {
+                !blocked
+                    .iter()
+                    .any(|(blocked, _)| same_crew_family(&blocked.name, &crew.name))
+            })
         };
         if !requested.is_empty() {
             let kept: Vec<String> = requested

@@ -2,6 +2,7 @@ use std::cell::LazyCell;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
     task_dependencies_ready_with_index,
@@ -492,7 +493,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 allowlist.is_none_or(|allowed| allowed.permits(&candidate.crew))
                     && !crew_unset
                         .iter()
-                        .any(|unset| unset.crew == candidate.crew.name)
+                        .any(|unset| same_crew_family(&unset.crew, &candidate.crew.name))
             });
             if runnable {
                 return true;
@@ -502,7 +503,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 .filter_map(|candidate| {
                     crew_unset
                         .iter()
-                        .find(|unset| unset.crew == candidate.crew.name)
+                        .find(|unset| same_crew_family(&unset.crew, &candidate.crew.name))
                 })
                 .collect::<Vec<_>>();
             if !missing.is_empty() {
