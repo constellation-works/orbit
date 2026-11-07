@@ -319,7 +319,7 @@ A supported raster artifact (`image/png`, `image/jpeg`, `image/gif`, `image/webp
 
 When the browser cannot decode the bytes, the preview says so and still offers the file, rather than leaving a broken-image icon.
 
-The preview holds the fetched bytes in a `blob:` object URL, which Open and Download reuse. The dashboard's CSP therefore lists `blob:` in `img-src`, and in no other directive, so the page and the new tab Open shows (which inherits that CSP) can display it [ORB-16623]. The task-artifacts browser fixture serves the real `DASHBOARD_CSP`, so a policy that blocks the preview fails it.
+The preview holds the fetched bytes in a `blob:` object URL, which Open and Download reuse. The dashboard's CSP therefore lists `blob:` in `img-src`, and in no other directive, so the page and the new tab Open shows (which inherits that CSP) can display it [ORB-16623]. The policy is pinned by `dashboard_routes_emit_csp` (`crates/orbit-web/tests/http_api/audit_contracts.rs`), which asserts that the index and every static route emit the same CSP; no automated check renders the preview under it, so a change that blocks the preview is caught only by manual QA.
 
 The set of types rendered inline mirrors the server's `nosniff` allowlist exactly. `image/svg+xml` and `text/html` are absent from both: they are viewable formats that are also script hosts, so they stay downloads. Everything else keeps its existing text render or download link.
 
