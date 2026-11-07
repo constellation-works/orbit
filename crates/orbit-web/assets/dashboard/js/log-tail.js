@@ -219,17 +219,32 @@ export function setDockRouteShown(shown) {
 /// and tasks.css gives it to the fixed message area; the tab bar sits inside
 /// that room, above the line. It is measured from the dock's own top and the
 /// card's place inside #side-dock, neither of which the lead moves, so a
-/// repeat run settles on the same value.
+/// repeat run settles on the same value. When the tab bar is taller than the
+/// list's controls (one row of status pills on a wide screen), the dock has
+/// no room to give, so `--tasks-list-lead` on #tasks-panel lowers the list
+/// instead; the list's own lead is taken back out of the measurement.
 export function alignTasksDock() {
   const dock = $("tasks-dock");
   const body = $("tasks-body");
   const side = $("side-dock");
-  if (!dock || !body || !side || !dock.contains(side) || !side.getClientRects().length) return;
+  const panel = $("tasks-panel");
+  if (!dock || !body || !side || !panel) return;
+  const setLead = (node, name, value) => {
+    const current = parseFloat(node.style.getPropertyValue(name)) || 0;
+    if (Math.abs(value - current) >= 0.01) node.style.setProperty(name, `${value}px`);
+  };
+  const listLead = parseFloat(panel.style.getPropertyValue("--tasks-list-lead")) || 0;
+  // Without the dock beside the list (a phone, or an open task), the list
+  // keeps its own place.
+  if (!dock.contains(side) || !side.getClientRects().length) {
+    setLead(panel, "--tasks-list-lead", 0);
+    return;
+  }
   // The first status card starts at the list's top (its first child has no
   // margin, and notices sit in the message area), scrolled or not.
-  const current = parseFloat(dock.style.getPropertyValue("--tasks-dock-lead")) || 0;
-  const lead = Math.max(0, Math.round((body.getBoundingClientRect().top - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100);
-  if (Math.abs(lead - current) >= 0.01) dock.style.setProperty("--tasks-dock-lead", `${lead}px`);
+  const room = Math.round((body.getBoundingClientRect().top - listLead - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100;
+  setLead(dock, "--tasks-dock-lead", Math.max(0, room));
+  setLead(panel, "--tasks-list-lead", Math.max(0, -room));
 }
 
 // How far below #side-dock's top the active tab's first shown card starts:
