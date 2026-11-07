@@ -35,6 +35,7 @@ pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
 mod landing;
+mod landing_dispatch_port;
 mod projection;
 pub(crate) mod reconciliation;
 mod switches;
@@ -64,6 +65,7 @@ pub use handoff::{
     DistributedClaimState, ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal,
 };
 pub(crate) use landing::record_review_landing;
+pub(in crate::application) use landing_dispatch_port::ReviewLandingDispatchPort;
 pub use projection::task_review_projection;
 pub use switches::{
     AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,

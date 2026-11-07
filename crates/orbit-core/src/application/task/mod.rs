@@ -39,6 +39,7 @@ mod final_recovery;
 mod finding_verification;
 pub(crate) mod finding_verification_steps;
 mod grants;
+mod handoff_claim;
 mod helpers;
 mod human_format;
 mod job_port;

@@ -329,6 +329,81 @@ class RelativeImportTests(unittest.TestCase):
                 "        self.fresh_visual_method();\n    }\n}\n",
         }, rejected=False)
 
+    def test_lower_modules_reach_landing_only_through_owned_port(self):
+        # [ORB-22708] Task and job resolved claims through landing, and review
+        # dispatched it directly; the missing guard admitted these cycles.
+        method = {
+            "landing/handoff.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_landing_method(&self) {}\n}\n",
+        }
+        for module in ("task", "job", "review", "distributed"):
+            self.check_files({
+                **method,
+                f"{module}/probe.rs":
+                    "impl OrbitRuntime {\n    fn probe(&self) {\n"
+                    "        self.fresh_landing_method();\n    }\n}\n",
+            }, rejected=True)
+            for relative, source in (
+                (f"{module}/probe.rs", "use crate::application::landing::Probe;\n"),
+                (f"{module}/deep/probe.rs",
+                 "fn probe() { crate::application::landing::step(); }\n"),
+                (f"{module}/probe.rs",
+                 "use crate::application::{\n    landing::Probe,\n};\n"),
+                (f"{module}/mod.rs", "use super::landing::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::landing::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::{landing::Probe};\n"),
+                (f"{module}/deep/probe.rs", "use super::super::super::{landing::Probe};\n"),
+            ):
+                with self.subTest(relative=relative, source=source):
+                    self.check_files({relative: source}, rejected=True)
+        self.check_files({
+            **method,
+            "task/handoff_claim.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn landing_claim(&self) {}\n}\n",
+            "job/pr_repair/admission.rs":
+                "impl OrbitRuntime {\n    fn admit(&self) { self.landing_claim(); }\n}\n",
+            "review/landing_dispatch_port.rs":
+                "pub(in crate::application) trait ReviewLandingDispatchPort {\n"
+                "    fn dispatch_recorded_landing_authority(&self);\n}\n",
+            "review/handoff.rs":
+                "impl OrbitRuntime {\n    fn accept(&self) {\n"
+                "        self.dispatch_recorded_landing_authority();\n    }\n}\n",
+            "landing/review_port.rs":
+                "impl ReviewLandingDispatchPort for OrbitRuntime {\n"
+                "    fn dispatch_recorded_landing_authority(&self) {\n"
+                "        self.fresh_landing_method();\n    }\n}\n",
+            "landing/context.rs":
+                "impl OrbitRuntime {\n    fn land(&self) { self.landing_claim(); }\n}\n",
+            "landing/dispatch.rs": "use crate::application::job::pipeline;\n",
+            "landing/identity.rs": "use crate::application::distributed::claim_receipt;\n",
+            "landing/visual.rs": "use crate::application::visual_delivery::capture;\n",
+        }, rejected=False)
+
+    def test_landing_store_reads_do_not_allow_runtime_calls(self):
+        method = {
+            "landing/attempts.rs":
+                "impl OrbitRuntime {\n    pub fn landing_attempts(&self) {}\n}\n",
+        }
+        self.check_files({
+            **method,
+            "task/external_merge/candidate.rs":
+                "fn probe() {\n    let attempt = tasks\n"
+                "        .landing_attempts()\n        .unwrap();\n}\n",
+            "task/external_merge/rescued.rs":
+                "fn probe() {\n    if tasks.landing_attempts()?.iter().any(|attempt| {\n"
+                "        true\n    }) {}\n}\n",
+            "review/handoff.rs":
+                "fn probe() {\n    self.stores().tasks().landing_attempts()?\n}\n",
+        }, rejected=False)
+        for relative in ("task/external_merge/candidate.rs",
+                         "task/external_merge/rescued.rs", "review/handoff.rs"):
+            with self.subTest(relative=relative):
+                self.check_files({
+                    **method,
+                    relative: "impl OrbitRuntime {\n    fn probe(&self) {\n"
+                              "        self.landing_attempts();\n    }\n}\n",
+                }, rejected=True)
+
     def test_automation_and_auto_tasks_cannot_reach_routines(self):
         # [ORB-22623] `routines` sits above both; automation's clock-settings
         # read and auto_tasks' display state were back-edges into it.
