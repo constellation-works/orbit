@@ -18,7 +18,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::{MemberAttempt, PreparationPolicy};
 use serde_json::Value;
 
-use crate::application::contracts::PilotFingerprints;
+use crate::application::contracts::{PilotFingerprints, PilotTaskReservation};
 
 /// One bounded Git reader pass whose commands share a single time and output
 /// budget, implemented by `automation`'s `Source`.
@@ -40,11 +40,12 @@ pub(in crate::application) trait TaskAutomationPort {
     /// Atomically reserve `task_ids` for pilot run `run_id` inside the
     /// workspace's commit boundary, returning those another live pilot run
     /// already holds, with their holding run IDs.
+    /// A busy acquisition before the reservation operation ran defers it.
     fn reserve_pilot_tasks(
         &self,
         run_id: Option<&str>,
         task_ids: &[String],
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError>;
+    ) -> Result<PilotTaskReservation, OrbitError>;
 
     /// The live state claim `value` carries under `state_automation`,
     /// rechecked at a deterministic prepare/apply boundary; `None` when it

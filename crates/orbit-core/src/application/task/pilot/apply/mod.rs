@@ -235,8 +235,23 @@ fn authority<'a>(
         carried_task_outcomes.extend(held_elsewhere(selection.excluded));
     }
     let promotion_authorized = input.promotion_authorized(action)?;
+    // Reservation acquisition refused before any assessment or reservation
+    // write. Its carried outcome releases this attempt for fresh admission;
+    // a CI-sweep child must not turn that wait into a missing-task failure.
+    let reservation_deferred = if let Some(filing) = ci_sweep_filing {
+        let task_id = filing.required_task_id(action)?;
+        selection.tasks.is_empty()
+            && carried_task_outcomes.iter().any(|outcome| {
+                outcome["task_id"] == task_id
+                    && outcome["outcome"] == "superseded"
+                    && outcome["reason"] == "pilot_reservation_lock_busy"
+            })
+    } else {
+        false
+    };
     if ci_sweep_filing.is_some()
-        && selection.tasks.len() + usize::from(piloted_elsewhere.is_some()) != 1
+        && selection.tasks.len() + usize::from(piloted_elsewhere.is_some() || reservation_deferred)
+            != 1
     {
         return Err(DispatchError::action_failed(
             action,
