@@ -932,16 +932,21 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
         || {
             let fixture = Fixture::new();
             busy_arrivals_fixture(&fixture, 2_150);
-            let server = fixture.server(false);
             // Over 300 one-hour filings a day keep some task running at every
-            // moment, so no run drains before the stream's limit.
-            let started = std::time::Instant::now();
-            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
-            let elapsed = started.elapsed();
-            assert!(
-                elapsed < std::time::Duration::from_secs(30),
-                "the dashboard abandons this read at 30 seconds: {elapsed:?}"
+            // moment, so no run drains before the stream's limit. Which bound
+            // ends the run must not depend on host speed: the production budget
+            // starts before history loads, so a loaded host can spend it first and
+            // report compute_budget. This read uses a budget no host reaches, as
+            // the drain test below does; the production budget is read afterwards.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "3600000".as_ref(),
+                )],
             );
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            drop(server);
             assert!(cut["arrivals"]["per_day"]["total"].as_f64().unwrap() >= 300.0);
             assert_eq!(cut["inputs"]["iterations"], 1000);
             let forecast = &cut["forecast"];
@@ -969,6 +974,37 @@ fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
             }
             for metric in ["work_hours", "tokens", "usd"] {
                 assert_eq!(forecast["arrival_work"][metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+
+            // The dashboard's read keeps its time limit under the production
+            // budget. Whichever bound this host reaches first, the run is cut
+            // and its totals are withheld.
+            let server = fixture.server(false);
+            let started = std::time::Instant::now();
+            let read = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(30),
+                "the dashboard abandons this read at 30 seconds: {elapsed:?}"
+            );
+            let forecast = &read["forecast"];
+            assert!(
+                matches!(
+                    forecast["simulation_cut"]["reason"].as_str(),
+                    Some("generated_limit" | "compute_budget")
+                ),
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
             }
             assert!(forecast["drain_probability"].is_null(), "{forecast}");
         },
