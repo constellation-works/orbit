@@ -118,6 +118,113 @@ spec:
       target: activity:deterministic_reference
 ```
 
+### Custom task-delivery jobs
+
+A workspace or plugin job opts into task delivery with `spec.task_delivery`.
+While a run is live, that declaration holds the delivery slot of every task
+in its `input.task_ids`; `orbit run ship` refuses to dispatch those tasks
+again. Ordinary jobs without the declaration do not hold delivery slots.
+
+Add these fields to your job envelope, alongside your delivery steps:
+
+```yaml
+schemaVersion: 2
+kind: Job
+metadata:
+  name: custom_delivery
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  task_delivery:
+    modes: [pr]
+  owns_task_worktree: true
+  default_input:
+    task_ids: []
+  # Supply your complete delivery steps here.
+```
+
+This is an illustrative declaration fragment, not a complete production
+delivery pipeline. You must supply the steps and their input wiring for
+implementation, validation, review, commit, publication or local delivery,
+and recovery as appropriate. These fields grant neither permission to
+dispatch work nor authority to skip review or merge a task.
+
+`task_delivery.modes` lists the ship modes (`pr`, `local`) for which a task
+may select the job. Declare only modes your pipeline implements. A job can
+hold slots without being selectable through a task tag:
+
+```yaml
+spec:
+  task_delivery:
+    modes: []
+```
+
+`task_delivery: {}` has the same empty-modes meaning. Coordinators and
+claim-bound delivery leaves use this distinction; an empty list does not
+mean every mode.
+
+To select `custom_delivery`, give the task one `delivery:custom_delivery`
+tag. The named job must be available in the active workspace/plugin catalog,
+declare `kind: workflow` (not `subroutine`), and include the requested ship
+mode in `task_delivery.modes`. An installed but disabled or otherwise inactive
+plugin does not provide an available route. Without a delivery tag, shipping
+uses `task_pr_pipeline` or `task_local_pipeline` for the selected mode.
+
+A malformed tag, multiple different delivery selections, an unavailable
+job or a mode mismatch refuses shipping; Orbit does not fall back to the
+default pipeline. All tasks delivered together must select the same route:
+mixing a tagged task with an untagged task also conflicts. Ship those tasks
+separately. The one cross-mode exception is
+`delivery:task_local_pipeline` during PR shipping: it delivers that task
+locally without a forge. See [Delivery workflows](../../getting-started/workflows/#ship-one-task).
+That exception does not make an arbitrary local-only custom job selectable
+in PR mode.
+
+Keep singleton commit constraints when designing the steps. A job containing
+`git_commit` with `scope: all` (also the default when `scope` is omitted)
+accepts only one distinct task per run; admission refuses a larger bundle
+before delivery effects. This applies to nested and inline actions too.
+`orbit run ship` dispatches selections as singletons. Bundled local delivery
+requires a custom pipeline with explicit `scope: per_task` and compatible
+per-task validation, no-diff handling and recovery; the shipped local pipeline
+is a singleton leaf.
+
+Set `owns_task_worktree: true` only when the job creates and owns a task-scoped
+worktree. It opts the job into guarded cleanup after successful delivery.
+Collection still checks task settlement, terminal runs, worktree registration
+and Git cleanliness, and protects paths shared with live runs. The flag does
+not unconditionally delete a worktree or replace those checks; it defaults to
+`false` and is independent of `task_delivery`.
+
+When [mid-run steering](../config/#settable-keys) is enabled with
+`workflow.mid_run_steering.enabled`, wire a promotion gate into your custom
+job before committing the still-uncommitted candidate:
+
+```yaml
+spec:
+  steering_gate:
+    before: commit
+    round: implement_bundle
+    candidate: resume_candidate  # Optional: only if this job carries candidates.
+```
+
+These values name your job's top-level step IDs. `round` must precede
+`before`; use the step that dispatches the implementer again with steering.
+If present, `candidate` must precede `round`. It names the step whose output
+describes a carried candidate: when that output has `implement: false`, it
+must provide a non-empty `source_run_id` so the gate uses the source run's
+steering watermark. Omit `candidate` when the job does not carry candidates
+past its implementer.
+
+With steering enabled, an operator comment newer than the delivered watermark
+prevents `before` from starting and reruns from `round`, even if that step's
+`when` is false. `workflow.mid_run_steering.max_rounds` bounds those rounds;
+exhausted rounds or a round that delivers none of the outstanding comments
+hold delivery as `steering_unconsumed`. An unreadable gate or a task that has
+become terminal also stops before promotion. Without `steering_gate`, or with
+steering disabled, this promotion check does not run.
+
 ## Step bodies
 
 Every step has an `id` and one body.
