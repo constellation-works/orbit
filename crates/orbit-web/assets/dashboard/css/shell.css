@@ -99,6 +99,21 @@
 }
 .rail .tab.active .rail-ico { color: var(--accent); }
 
+.rail .rail-drain { text-decoration: none; }
+/* The live reading: a dot and words, tinted by state. */
+.rail-drain-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--state-running); }
+.rail-drain-state[hidden] { display: none; }
+.rail-drain-state[data-drain-state="winding_down"], .rail-drain-state.held { color: var(--warn-fg); }
+.rail-drain-state[data-drain-state="pulling"] { color: var(--accent); }
+/* Without room beside the list, a dock route stands in for it, so the rail marks
+   Drain and not Tasks. Keep these in step with .rail .tab.active above. */
+@media (max-width: 1000px) {
+  .shell:has(.tab-pane.active > main.dock-route) .rail .tab.active[data-tab="tasks"] { background: transparent; color: var(--fg-soft); font-weight: 400; }
+  .shell:has(.tab-pane.active > main.dock-route) .rail .tab.active[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
+  .shell:has(.tab-pane.active > main.dock-route) .rail .rail-drain { background: var(--bg-selected); color: var(--fg-strong); font-weight: 500; }
+  .shell:has(.tab-pane.active > main.dock-route) .rail .rail-drain .rail-ico { color: var(--accent); }
+}
+
 .rail-ico { width: 17px; height: 17px; flex: 0 0 auto; color: var(--fg-dim); }
 .rail-label {
   flex: 1 1 auto;
@@ -610,7 +625,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     width: auto;
     flex: 0 0 auto;
     white-space: nowrap;
-    height: 36px;
+    height: 44px;
   }
   .rail-label { flex: 0 1 auto; }
   .rail .rail-subtabs {

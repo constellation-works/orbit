@@ -864,6 +864,27 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   main.tasks-layout.dock-route > .tasks-dock > .tasks-messages { display: none; }
   main.tasks-layout.dock-route .dock-back { display: inline-flex; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
+  /* The dock route is what a phone drives a drain with: 44px targets, Stop and
+     Start stay in reach while the pane scrolls, and a live window folds the Start
+     form so state, Stop and warnings lead. */
+  main.tasks-layout.dock-route .dock-back,
+  main.tasks-layout.dock-route .dock-seg { min-height: 44px; }
+  main.tasks-layout.dock-route .dock-seg { padding-bottom: 0; }
+  main.tasks-layout.dock-route :is(.drain-duration, .drain-step, .drain-stepper-value, .operation-button.drain-stop) { min-height: 44px; }
+  main.tasks-layout.dock-route .drain-step { min-width: 44px; }
+  main.tasks-layout.dock-route #auto-drain-panel { overflow: clip; }
+  main.tasks-layout.dock-route .drain-foot:has(.drain-stop) {
+    position: sticky; bottom: 0; z-index: 1;
+    margin: 0 -18px; padding: 10px 18px;
+    background: var(--bg-well);
+  }
+  main.tasks-layout.dock-route .drain-foot:has(.drain-stop):last-child { margin-bottom: -18px; }
+  main.tasks-layout.dock-route #auto-drain-quick-start .drain-start-foot { position: sticky; }
+  main.tasks-layout.dock-route .drain-start-live > header { padding: 0 18px; border-bottom: 0; }
+  main.tasks-layout.dock-route .drain-start-live > header > :not(.drain-start-toggle) { display: none; }
+  main.tasks-layout.dock-route .drain-start-live .drain-start-toggle { display: flex; }
+  main.tasks-layout.dock-route #auto-drain-quick-start.drain-start-live:not(.drain-start-open) > .body { display: none; }
+  main.tasks-layout.dock-route .drain-start-live.drain-start-open > header { border-bottom: 1px solid var(--hair); }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
 /* The active tab's first card starts level with the first task block, and

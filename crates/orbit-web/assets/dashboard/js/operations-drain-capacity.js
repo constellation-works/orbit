@@ -2,7 +2,7 @@ import { cpuReadingLabel, cpuReadingValue } from './host-resources.js';
 import { drainReason, drainReadinessView, DRAIN_LOCK_REASONS } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainNumber, $, operationsState, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
-import { el, infoHint, isAggregateView } from './common.js';
+import { el, infoHint, isAggregateView, pinnedInfoHint } from './common.js';
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
 // <duration> [--complete]" from the dashboard). One workspace-scoped action,
@@ -113,8 +113,7 @@ export function updateDrainIndicators(phase, label) {
   if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
 }
 
-// The card and dock tab describe the selected workspace. The top-bar pill
-// separately describes the fleet, including work outside that selection.
+// The card and dock tab describe the selected workspace.
 export function autoDrainPhase(payload) {
   const live = autoDrainLiveWindow(payload);
   const capacity = payload.capacity || {};
@@ -134,12 +133,11 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
-  const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
-  // Each message shares the card's line with the slot count, so it is short
-  // enough for three-digit counts at the 336px dock and the 375px phone dock.
-  // Detail the short wording drops is `detail`: it shows as focusable hover
-  // help beside the message, so it reads without a mouse.
-  let summary;
+  // Each message is short enough for one line at the 336px dock and the 375px
+  // phone dock. Detail the short wording drops is `detail`: it shows as focusable
+  // hover help beside the message, so it reads without a mouse. With eligible work
+  // and free slots there is nothing to explain, so no line shows.
+  let summary = "";
   let detail = "";
   if (capacity.host_shutdown && capacity.host_shutdown_holding !== false) {
     summary = "Host shutdown holds new tasks.";
@@ -170,8 +168,6 @@ export function autoDrainCapacity(capacity, counts, blocked) {
       ? `None eligible; ${autoDrainPlural(counts.waiting, "task")} waiting.`
       : "Backlog is empty.";
     }
-  } else {
-    summary = `Starting now: up to ${autoDrainPlural(admits, "task")}.`;
   }
   const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
   const full = Number.isFinite(free) && free <= 0;
@@ -206,20 +202,16 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   // A shortfall the operator should notice reads amber; a stopped window is
   // the operator's own choice and does not.
   const held = full && capacity.admissions_stopped !== true;
-  const count = el("span", {
-    class: `drain-capacity-count mono${full ? " full" : ""}`,
-    text: known ? `${busy}/${limit} slots` : "capacity unknown",
-    title: [label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"),
-  });
-  const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
-  const result = el("div", { class: "drain-capacity" }, [
-    bar,
-    el("div", { class: "drain-capacity-line" }, [
-      el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]),
-      count,
-    ]),
-  ]);
-  // One pipeline holding every slot is already in the count's tooltip; a mix
+  // The slot bar opens the free-slot and per-pipeline breakdown on hover, focus and tap.
+  const breakdown = pinnedInfoHint([label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"));
+  breakdown.classList.add("drain-capacity-hint");
+  breakdown.prepend(bar);
+  const result = el("div", { class: "drain-capacity" }, [breakdown]);
+  if (summary) {
+    const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
+    result.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
+  }
+  // One pipeline holding every slot is already in the bar's breakdown; a mix
   // is worth a visible line.
   if (pipelines.length > 1) {
     const list = el("ul", { class: "drain-pipeline-occupancy" }, byPipeline.map(text => el("li", { class: "drain-pipeline mono", text })));
