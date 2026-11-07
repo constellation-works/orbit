@@ -15,10 +15,14 @@ use super::manager::{
 };
 use super::settings::{ClockSettings, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings};
 
+/// Host clock settings and the scheduling state observed from its native manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClockStatus {
+    /// Sweep interval persisted in the host's clock settings, in seconds.
     pub configured_cadence_seconds: u64,
+    /// Configured interval in seconds, present only when the clock is schedulable.
     pub effective_cadence_seconds: Option<u64>,
+    /// Whether the native manager reports the clock as enabled or loaded.
     pub enabled: bool,
     /// Whether the native manager reports the unit as loaded.
     pub loaded: bool,
@@ -37,6 +41,7 @@ pub struct ClockStatus {
     pub last_tick_at: Option<String>,
     /// Next native timer trigger, in the manager's display format.
     pub next_tick_at: Option<String>,
+    /// Native manager name: `launchd` or `systemd`.
     pub platform: &'static str,
 }
 
@@ -122,6 +127,7 @@ fn systemd_next_trigger_command() -> ManagerCommand {
     }
 }
 
+/// Read host clock settings and query the native manager for scheduling health.
 pub fn clock_status(global_root: &Path) -> Result<ClockStatus, OrbitError> {
     let platform = ClockPlatform::current();
     // Resolved only on macOS: a systemd host has no launchd agent to inspect,

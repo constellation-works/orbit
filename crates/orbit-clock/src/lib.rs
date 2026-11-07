@@ -1,6 +1,4 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-// Moved from orbit-core with its existing documentation coverage [ORB-22688].
-#![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! OS clock integration [ORB-10021, ORB-12237]: the OS owns the wake-up,

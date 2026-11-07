@@ -13,12 +13,10 @@ mod snapshot;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports)]
+#[cfg(all(test, unix))]
 pub(super) use git::fetch_origin_branch;
 pub(crate) use git::{is_commit_id, tree_of};
-#[allow(unused_imports)]
 pub(crate) use snapshot::{
-    GitPathKind, INSPECTION_PROOF_KEY, InspectionProofError, SourceSnapshot,
-    inspection_proof_error, inspection_proof_required, requested_base_branch,
-    resolve_source_snapshot,
+    GitPathKind, INSPECTION_PROOF_KEY, SourceSnapshot, inspection_proof_error,
+    inspection_proof_required, requested_base_branch, resolve_source_snapshot,
 };
