@@ -1,7 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::Command;
 
 use orbit_core::JobRunState;
 use reqwest::blocking::Response;
