@@ -991,7 +991,7 @@ export function renderRunSteps() {
   const notices = activeRunLogsError ? [el("div", {
     class: "action-error",
     role: "alert",
-    text: `Unable to load agent logs: ${activeRunLogsError}. Use Refresh to retry.`,
+    text: `Unable to load agent logs: ${activeRunLogsError}. Reload the page to retry.`,
   })] : [];
   const steps = (activeRunDetail && activeRunDetail.steps) || [];
   if (steps.length === 0) {
@@ -1271,7 +1271,7 @@ export function renderRunGantt() {
   }
   panel.appendChild(legend);
   const retryNotice = activeRunRetriesError
-    ? `Retry markers unavailable: ${activeRunRetriesError}. Use Refresh to retry.`
+    ? `Retry markers unavailable: ${activeRunRetriesError}. Reload the page to retry.`
     : activeRunRetriesTruncated
       ? `Showing the first ${RUN_RETRIES_LIMIT} retries; later retry markers are omitted.`
       : !activeRunRetriesLoaded ? "Loading retry markers…" : null;
@@ -1401,7 +1401,7 @@ function buildStepDetail(step) {
     for (const block of blocks) section.appendChild(block);
     wrap.appendChild(section);
   } else {
-    wrap.appendChild(el("div", { class: "step-logs-empty", text: activeRunLogsError ? "Logs unavailable. Use Refresh to retry." : "No logs recorded for this step" }));
+    wrap.appendChild(el("div", { class: "step-logs-empty", text: activeRunLogsError ? "Logs unavailable. Reload the page to retry." : "No logs recorded for this step" }));
   }
   const km = knowledgeMetricsForStep(step);
   if (km) addBlock("knowledge_metrics (run)", km);
@@ -1473,7 +1473,7 @@ export function renderRunEvents() {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "!" }),
       el("div", { class: "text", text: activeRunEventsError }),
-      el("div", { class: "text", text: "Use Refresh to retry loading events." }),
+      el("div", { class: "text", text: "Reload the page to retry loading events." }),
     ])]);
     return;
   }

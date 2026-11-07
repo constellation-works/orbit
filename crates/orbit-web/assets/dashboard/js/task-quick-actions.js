@@ -256,7 +256,7 @@ async function runQuickAction(task, kind, context) {
     if (kind === "ship" && !dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
     quickActionState.set(task.id, { kind: "error", text: dispatched
-      ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+      ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
       : `${kind} failed: ${error.message || String(error)}`, at: Date.now() });
     rerender(context);
     scheduleFeedbackExpiry(quickActionState, task.id, context, QUICK_ACTION_ERROR_MS);

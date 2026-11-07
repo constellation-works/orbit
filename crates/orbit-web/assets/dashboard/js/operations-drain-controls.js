@@ -268,7 +268,7 @@ function autoDrainReviewControl(payload, reasons) {
 function autoDrainStartRefusal(payload) {
   const checkout = drainCheckout(payload, selectedWorkspace()?.id);
   return checkout.replica ? checkout.pullRefusal || (!checkout.ownerHost || !checkout.workspaceId && !checkout.pullSelector
-    ? "The owner's host and workspace are unavailable. Refresh before starting a pull window."
+    ? "The owner's host and workspace are unavailable. Reload the page before starting a pull window."
     : "") : "";
 }
 

@@ -95,34 +95,6 @@ export function fetchFleetDrains({ force = false, onPartial = null } = {}) {
   });
 }
 
-// Hosts whose read failed; their workspaces are missing from the counts.
-function unreachableHosts(rows) {
-  return [...new Set(rows.filter(row => row.error).map(row => row.host))];
-}
-
-export function fleetDrainLabel(payload) {
-  const rows = payload.items || [];
-  const known = rows.filter(row => row.workspace_id);
-  const draining = known.filter(row => ['draining', 'pulling'].includes(row.phase)).length;
-  const winding = known.filter(row => row.phase === 'winding_down').length;
-  const unreachable = unreachableHosts(rows);
-  const loading = rows.some(row => row.pending);
-  if (loading && !known.length && !unreachable.length) return 'Fleet loading…';
-  if (unreachable.length && known.every(row => row.error)) return 'Fleet unavailable';
-  const count = draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`;
-  const missing = unreachable.length ? ` · ${unreachable.length === 1 ? '1 host' : `${unreachable.length} hosts`} unreachable` : '';
-  return `${count}${missing}${loading ? ' · loading' : ''}`;
-}
-
-// The pill's tooltip, and the end of its accessible name: the destination,
-// preceded by the hosts a partial count leaves out.
-export function fleetDrainTooltip(payload) {
-  const names = unreachableHosts(payload.items || []);
-  const destination = 'Open fleet drains';
-  if (!names.length) return destination;
-  return `Count is incomplete: ${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} unreachable, so workspaces there are not counted. ${destination}`;
-}
-
 const LIVE_PHASES = ['draining', 'pulling', 'winding_down'];
 
 // A visible value preceded by its field name for assistive tech only.

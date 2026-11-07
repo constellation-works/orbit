@@ -2,7 +2,7 @@ import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, get
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
-import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, renderFleetIndicator } from './operations-fleet.js';
+import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
@@ -348,12 +348,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     }
     throw error;
   });
-  const fleet = loadFleetSnapshot({ refreshWhenStale: false, onPartial: payload => { if (visit.isCurrent()) { renderFleetIndicator(payload); } } }).then(payload => {
-    if (visit.isCurrent()) {
-      renderFleetIndicator(payload);
-    }
-    return payload;
-  });
+  const fleet = loadFleetSnapshot({ refreshWhenStale: false });
   // The optional summary paints itself and contains its failures. A slow
   // forecast must not delay dashboard refresh or release of action controls.
   // The Tasks page's 30 s tick leaves it to the page's slow reads.

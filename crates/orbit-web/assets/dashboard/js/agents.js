@@ -240,7 +240,7 @@ function syncTierControl() {
   if (unavailable) unavailable.hidden = Boolean(implementerMatrix);
   if (tierHint) {
     tierHint.firstChild.textContent = !implementerMatrix
-      ? "Tier scores are unavailable. Refresh to retry."
+      ? "Tier scores are unavailable. Reload the page to retry."
       : implementerTier ? "Ranks by tier crew score and support; the detail column's evidence covers all tiers."
         : "All tiers compares each row with the fleet on its own tier mix. A tier ranks by that tier's crew score.";
   }

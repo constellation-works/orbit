@@ -181,14 +181,14 @@ prove that a particular task or run succeeded.
 The rail foot shows live load, memory, and disk readings for the serving host
 (plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
 control. The top bar shows one chip per provider with its worst window's value, a
-meter and its weekly pressure (`claude 13% ×1.09`), the drain state when a
-delivery window is active, **Refresh**, and one warning chip only when a reading
+meter and its weekly pressure (`claude 13% ×1.09`), and one warning chip only when a reading
 is elevated or worse. Hover, focus or click a provider chip to open a dialog with
 each of its windows, when they reset, the gate that holds crews back and what the
 pressure means; click or **Pin open** keeps it open, and Esc or a click outside
 closes it. `+N more` (and, on narrower screens, the single summary chip) lists
-every provider. At 760px wide or less, the top bar leaves out the provider chips
-and the fleet drain pill. Counts in
+every provider. At 1024px wide or less, the top bar leaves out the provider chips
+and the warning chip; at 760px or less, the rail also leaves out its foot.
+Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
 under **Runs**, and doctor errors, warnings, and failing routines under
 **Health**. Click a rail count to open the view behind it. The rail has no
@@ -220,7 +220,8 @@ notices](../fleet-notices/).
 
 ## Tasks
 
-Search by ID or title, or filter by status. My work, Waiting on you,
+Search by ID or title from the top bar, or filter by status. **Settle merged PRs**
+and **New task** are in the top bar too, at every width. My work, Waiting on you,
 Done, Rejected, Archived, Someday, All, Not ready, and Pilot warnings are
 under **More**. Press Enter on a full task ID
 to open it even when the filter, page, or selected workspace hides it.
@@ -292,7 +293,7 @@ change that brings nothing new leaves the list as it is, and a changed task
 redraws only its own row, so the scroll position, open task and keyboard focus
 stay put.
 Slow Tasks reads (crew choices, Health counts and the drain forecast) run on
-entry or manual **Refresh**, then when five minutes have elapsed and a full
+entry, then when five minutes have elapsed and a full
 refresh reaches that check. With the connected Tasks safety poll, this may be
 the next three-minute poll after the five-minute threshold.
 
@@ -1834,9 +1835,9 @@ serialized JSON prefix.`
 |---|---|
 | `Select a workspace to view this panel`, count — | Choose one workspace. **All workspaces** does not merge plugin lists. Changing host or workspace drops the previous cards instead of leaving them on screen. |
 | No plugins installed | The body says no plugins are installed on this machine, then the command `orbit plugin add <source>` (shown in backticks) and `installs one.` Nothing is installed here, and nothing is pinned. |
-| `Unable to load: … Use Refresh to retry.` | The list never arrived. **Refresh** tries again. |
-| `Unable to load: This host's Orbit does not offer this view yet. Upgrade it to see this view.` | The host the dashboard reads runs an Orbit build that predates this view, so it answers with no route. **Refresh** cannot fix that. Upgrade that host's Orbit. |
-| `Refresh failed; showing stale data: … Use Refresh to retry.` | A later refresh failed. The cards from the last good read stay. The top status line reads `panel update failed: Plugins`. **Refresh** tries again. After a failed refresh the next automatic try waits longer, up to five minutes. A hidden browser tab does not refresh this list until you return to it. |
+| `Unable to load: … Reload the page to retry.` | The list never arrived. Reloading the page tries again. |
+| `Unable to load: This host's Orbit does not offer this view yet. Upgrade it to see this view.` | The host the dashboard reads runs an Orbit build that predates this view, so it answers with no route. Reloading cannot fix that. Upgrade that host's Orbit. |
+| `Refresh failed; showing stale data: … Reload the page to retry.` | A later refresh failed. The cards from the last good read stay. The top status line reads `panel update failed: Plugins`. Reloading the page tries again. After a failed refresh the next automatic try waits longer, up to five minutes. A hidden browser tab does not refresh this list until you return to it. |
 | An error in one panel body | That panel's read failed. The rest of the card stays. A later successful read replaces the error. |
 | The previous panel body while the list refreshes | A refresh keeps the last good body from this visit instead of blanking the panel. Leaving the workspace, including coming back to the same one, does not reuse that body. One workspace's output is not shown under another. |
 
@@ -2137,9 +2138,9 @@ session does not grant operator capability.
 | **Runs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
-| New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
+| New workspace missing after `orbit workspace init` | Reload the page. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
 | Plugins says to select a workspace, or its buttons are missing | **All workspaces** does not list plugins. Enable and disable need one workspace, an [operator session](#authorization), and a host that accepts writes. See [Plugins](#plugins). |
-| **connecting…** stays orange after startup | The first API request probably failed. **Refresh** or the `/healthz` probe tells a dead process from a slow workspace. |
+| **connecting…** stays orange after startup | The first API request probably failed. Reloading the page or the `/healthz` probe tells a dead process from a slow workspace. |
 
 For uptime monitoring, use the detailed probe. It also checks each workspace's
 store and log sink:
