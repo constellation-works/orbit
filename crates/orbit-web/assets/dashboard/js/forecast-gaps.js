@@ -9,19 +9,19 @@ import {
   forecastBaselineFigures, forecastCount, forecastUnavailableInfo, num, recordedPoolsContainGaps,
   regressionGapReasonPhrase, regressionHistoryIsAbsent,
 } from './forecast-summary.js';
+import * as forecastSummary from './forecast-summary.js';
 
 // Checks about delivery history; every other check counts tasks in this backlog.
 const HISTORY_CHECK_KEYS = new Set([
   "history_review_mode_unknown", "review_checkpoint_unreadable", "arrivals_missing_tokens", "arrivals_missing_usd",
 ]);
 
-// The if-approved scenario's own unavailable evidence. Proposed coverage is
-// a separate checklist, so the main backlog's coverage is not this reason.
+// The if-approved totals and their qualifications cover current plus proposed
+// tasks, even when all proposed additions have measured history.
 function proposedForecastUnavailable() {
   const approved = forecastView.payload.if_approved;
   if (!approved || !forecastCount(forecastView.payload.backlog?.proposed)) return null;
-  const proposedCoverage = forecastView.payload.proposed_coverage;
-  const coverage = proposedCoverage && typeof proposedCoverage === "object" ? proposedCoverage : {};
+  const coverage = forecastSummary.proposedForecastCoverage(forecastView.payload);
   return forecastUnavailableInfo(approved, { coverage });
 }
 
@@ -104,7 +104,7 @@ function unavailableNote() {
       parts.push("The pre-regression baseline shown instead excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.");
     }
     if (approvedInfo) {
-      const also = `If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}.`;
+      const also = [`If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}.`, approvedInfo.support].filter(Boolean).join(" ");
       const approvedBaseline = forecastBaselineFigures(forecastView.payload.if_approved?.pre_regression_baseline);
       parts.push(approvedBaseline ? `${also} Its baseline excludes unsupported regression follow-up work.` : also);
     }

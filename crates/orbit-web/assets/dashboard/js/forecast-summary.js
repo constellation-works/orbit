@@ -74,6 +74,20 @@ export function forecastCount(value) {
   return n == null || n < 0 ? 0 : Math.trunc(n);
 }
 
+// The if-approved forecast includes the disjoint current and proposed tasks.
+// Combine the task counters used by totals and unavailable qualifications;
+// history-level counters describe a shared pool and must not be added.
+// A missing counter in either population stays unknown, never a measured zero.
+export function proposedForecastCoverage(payload) {
+  const keys = ["tasks", "uncosted", "uncovered_model", "no_history", "regression_history_missing", "risk_unestimated", "regression_history_thin"];
+  return Object.fromEntries(keys.map((key) => {
+    const current = payload.coverage?.[key];
+    const proposed = payload.proposed_coverage?.[key];
+    const known = [current, proposed].every((count) => Number.isSafeInteger(count) && count >= 0);
+    return [key, known ? current + proposed : null];
+  }));
+}
+
 function backlogForecastFreshness(payload) {
   if (payload.served_from === "live") return "Live";
   if (payload.served_from === "stored") {

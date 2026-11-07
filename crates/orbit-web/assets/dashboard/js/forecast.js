@@ -35,6 +35,7 @@ import {
 } from './forecast-summary.js';
 import { dataGapsPanelNodes, openCoverageCount, otherChecksClearText } from './forecast-gaps.js';
 import { accuracyPanelNodes } from './forecast-accuracy.js';
+import * as forecastSummary from './forecast-summary.js';
 
 export {
   backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, forecastBaselineFigures,
@@ -378,8 +379,7 @@ function proposedScenarioReady(payload = view.payload) {
 function selectedScenario() {
   const payload = view.payload;
   if (view.scenario === "proposed" && proposedScenarioReady()) {
-    const proposedCoverage = payload.proposed_coverage;
-    const coverage = proposedCoverage && typeof proposedCoverage === "object" ? proposedCoverage : {};
+    const coverage = forecastSummary.proposedForecastCoverage(payload);
     return { key: "proposed", source: payload.if_approved, coverage, info: forecastUnavailableInfo(payload.if_approved, { coverage }) };
   }
   const source = payload.forecast || {};
@@ -462,8 +462,10 @@ function drainReason(scenario, quantiles) {
 }
 
 function costedLine(scenario) {
-  const tasks = forecastCount(scenario.coverage.tasks ?? scenario.source?.tasks);
-  const costed = Math.max(0, tasks - forecastCount(scenario.coverage.uncosted));
+  const { tasks, uncosted } = scenario.coverage;
+  if (![tasks, uncosted].every((count) => Number.isSafeInteger(count) && count >= 0)
+    || tasks !== scenario.source?.tasks || uncosted > tasks) return "Cost coverage unavailable.";
+  const costed = tasks - uncosted;
   return `${costed} of ${tasks} task${tasks === 1 ? "" : "s"} costed.`;
 }
 
@@ -496,7 +498,8 @@ function drainOdds(forecast) {
 function arrivalsApprovedLine(scenario) {
   const approved = view.payload.if_approved;
   if (scenario.key !== "arrivals" || !proposedScenarioReady()) return null;
-  const figures = forecastUnavailableInfo(approved, { coverage: view.payload.proposed_coverage || {} }) ? approved.pre_regression_baseline : approved;
+  const coverage = forecastSummary.proposedForecastCoverage(view.payload);
+  const figures = forecastUnavailableInfo(approved, { coverage }) ? approved.pre_regression_baseline : approved;
   if (!quantilePair(figures?.time_to_drain_hours) && !quantilePair(figures?.usd) && !quantilePair(figures?.tokens)) return null;
   const basis = figures === approved ? "" : " (pre-regression baseline)";
   return `If proposed work is also approved${basis}: drain ${formatForecastQuantileRange(figures.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(figures.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(figures.tokens, formatForecastTokens)}.`;
