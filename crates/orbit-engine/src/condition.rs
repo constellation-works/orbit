@@ -17,8 +17,9 @@ use orbit_common::OrbitError;
 use crate::template::{self, TemplateContext};
 
 /// Evaluate a boolean expression whose operands are templates. Shared between
-/// v1's `StepCondition::Expr` and v2's `when:` / loop `break_when:`
-/// constructs (§4.2); the grammar is documented on `evaluate_expr`.
+/// v1's `StepCondition::Expr` and v2's `when:` / loop `break_when:` constructs
+/// (`docs/design/activity-job/4_decisions.md`, "Condition guards stay
+/// equality-only"); the grammar is documented on `evaluate_with`.
 ///
 /// The expression is parsed *before* rendering and each operand is rendered
 /// on its own, so a rendered value (often agent output) is only ever compared,
@@ -28,14 +29,6 @@ pub fn evaluate_bool_expr(expr: &str, ctx: &TemplateContext) -> Result<bool, Orb
 }
 
 /// Parse and evaluate an already-resolved boolean expression.
-///
-/// Grammar (informal):
-///   expr     = or_expr
-///   or_expr  = and_expr ('||' and_expr)*
-///   and_expr = atom ('&&' atom)*
-///   atom     = boolean-literal | value ('==' | '!=') value
-///   boolean-literal = 'true' | 'false'
-///   value    = non-whitespace token (unquoted)
 #[cfg(test)]
 pub(crate) fn evaluate_expr(resolved: &str) -> Result<bool, OrbitError> {
     evaluate_with(resolved, &|operand| Ok(operand.to_string()))
@@ -43,6 +36,19 @@ pub(crate) fn evaluate_expr(resolved: &str) -> Result<bool, OrbitError> {
 
 type Render<'a> = dyn Fn(&str) -> Result<String, OrbitError> + 'a;
 
+/// Parse and evaluate an expression, rendering each operand through `render`.
+///
+/// Grammar (informal):
+///   expr     = or_expr
+///   or_expr  = and_expr ('||' and_expr)*
+///   and_expr = atom ('&&' atom)*
+///   atom     = boolean-literal | value ('==' | '!=') value | value
+///   boolean-literal = 'true' | 'false'
+///   value    = the text between operators (the whole atom for a lone value),
+///              trimmed; no quoting, may contain spaces or be empty
+///
+/// A lone `value` must render to `true` or `false`. Operators inside a
+/// `{{ ... }}` span are not split on.
 fn evaluate_with(expr: &str, render: &Render<'_>) -> Result<bool, OrbitError> {
     let mut result = false;
     for group in split_top_level(expr, "||") {
