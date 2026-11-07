@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_engine::DispatchError;
+use orbit_types::workflow::ActivityCrewDraw;
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -36,9 +37,15 @@ use report::Report;
 fn settled(outcome: &Value) -> bool {
     matches!(
         outcome["outcome"].as_str(),
-        Some("applied" | "already_applied" | "superseded")
+        Some("applied" | "already_applied" | "superseded" | ESCALATED)
     )
 }
+
+/// The outcome of a task whose valid assessment a lower-effort `@auto`
+/// pilot produced and that the repair round re-pilots at a higher effort
+/// ([`super::auto_effort`]). Nothing is written for it here; the repair
+/// apply settles it.
+pub(super) const ESCALATED: &str = "escalated";
 
 /// Error text of an unsettled task, falling back to its detail.
 fn detail(outcome: &Value) -> Option<&str> {
@@ -69,6 +76,22 @@ struct ApplyContext<'a> {
     run_id: Option<&'a str>,
     /// That run's crew, recorded in an explore brief's provenance.
     pilot_crew: Option<&'a str>,
+    /// The round this apply settles: the first pilots, or the repair round.
+    round: &'a str,
+    /// Each partition's resolved crew when the run drew a task-pilot
+    /// `<crew>@auto` member, by partition index.
+    partition_draws: &'a BTreeMap<u64, ActivityCrewDraw>,
+}
+
+impl ApplyContext<'_> {
+    /// The crew partition `index`'s pilot ran as: its own resolved draw, else
+    /// the run's.
+    fn partition_crew(&self, index: u64) -> Option<&str> {
+        self.partition_draws
+            .get(&index)
+            .map(|draw| draw.crew.as_str())
+            .or(self.pilot_crew)
+    }
 }
 
 /// What the applied tasks of every partition contribute to the report.
@@ -141,6 +164,28 @@ pub(crate) fn apply(
         .as_deref()
         .and_then(|run_id| runtime.stored_job_run(run_id).ok().flatten())
         .and_then(|run| run.resolved_crew);
+    let round = envelope
+        .prepared
+        .get(super::auto_effort::PILOT_ROUND)
+        .and_then(Value::as_str)
+        .filter(|round| *round == super::auto_effort::REPAIR_ROUND)
+        .unwrap_or(super::auto_effort::FIRST_ROUND);
+    let partition_draws = envelope
+        .authority
+        .run_id
+        .as_deref()
+        .and_then(|run_id| runtime.stored_run_state(run_id).ok().flatten())
+        .map(|state| {
+            partitions
+                .iter()
+                .filter_map(|partition| {
+                    let key = super::auto_effort::partition_draw_key(round, partition.index);
+                    let draw = state.activity_crew_draws.get(&key)?;
+                    Some((partition.index, draw.clone()))
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
     let context = ApplyContext {
         runtime,
         action,
@@ -153,6 +198,8 @@ pub(crate) fn apply(
         source_superseded: &source_superseded,
         run_id: envelope.authority.run_id.as_deref(),
         pilot_crew: pilot_crew.as_deref(),
+        round,
+        partition_draws: &partition_draws,
     };
     let mut applied = Applied::default();
     let mut partition_decisions = partitions

@@ -588,6 +588,7 @@ pub(in super::super) fn pilot_run(
             crew: crew.into(),
             source: key.into(),
             eligible_pool: Vec::new(),
+            auto_effort: None,
         },
     );
     fixture.runtime.write_run_state(run_id, &state).unwrap();

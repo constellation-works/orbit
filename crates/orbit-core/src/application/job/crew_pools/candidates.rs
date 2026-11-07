@@ -16,6 +16,7 @@ use crate::application::contracts::{
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
+use super::auto_effort::{candidate_holds_assignment, merge_same_crew, task_auto_effort_subject};
 use super::draw::{
     complexity_crews_key, permitted_candidates, pools_from_input, seeded_crew_ticket,
     sole_candidate, weighted_candidates, weighted_draw,
@@ -52,6 +53,19 @@ impl OrbitRuntime {
                     ),
                 };
                 let pool = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
+                // A run override is admitted like the configured pool: an
+                // `@auto` member needs bands for its crew.
+                let policy = self.context.settings().auto_effort();
+                if let Some(base) = pool.entries.iter().find_map(|entry| {
+                    orbit_types::identity::auto_effort_base(&entry.name)
+                        .filter(|base| policy.bands(base).is_none())
+                }) {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{source} names '{base}@auto', but crew '{base}' has no bands; configure \
+                         {}.{base} or name an effort",
+                        orbit_config::AUTO_EFFORT_BANDS_KEY
+                    )));
+                }
                 Ok((
                     complexity.to_string(),
                     CapturedCrewPool {
@@ -147,7 +161,24 @@ impl OrbitRuntime {
     ///
     /// [ORB-17770] Under usage pressure, a crew the system chose is drawn
     /// again from its whole pool ([`Self::usage_pressure_redraw_view`]).
+    ///
+    /// A `<crew>@auto` member resolves against the task here
+    /// ([`task_auto_effort_subject`]), whichever fallback produced it.
     pub(crate) fn auto_task_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        explicit: Option<&str>,
+        allowlist: Option<&CrewAllowlist>,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let (candidates, source) =
+            self.auto_task_crew_candidates_unresolved(task, pools, explicit, allowlist)?;
+        let candidates =
+            self.reresolve_auto_candidates(candidates, &task_auto_effort_subject(task))?;
+        Ok((candidates, source))
+    }
+
+    fn auto_task_crew_candidates_unresolved(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,
@@ -199,9 +230,11 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let Some((mut candidates, pool_source)) = pool else {
+        let Some((candidates, pool_source)) = pool else {
             return Ok(result);
         };
+        let mut candidates =
+            self.reresolve_auto_candidates(candidates, &task_auto_effort_subject(task))?;
         let hold = self.admission_provider_hold(task);
         let gate = self.provider_limit_gate(chrono::Utc::now());
         candidates.retain(|candidate| {
@@ -362,8 +395,8 @@ impl OrbitRuntime {
         let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
             return Ok(None);
         };
-        let (mut crews, draw_source) =
-            self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
+        let (crews, draw_source) = self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
+        let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
         // The claimed snapshot carries no tags or context files to type the
         // task by, and a follower keeps no performance snapshot of its own,
         // so this re-draw weighs this host's usage pressure only.
@@ -419,9 +452,20 @@ impl OrbitRuntime {
         pools: &CapturedCrewPools,
         include_experiment: bool,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        // Each pool's `@auto` members resolve against the task before the
+        // assigned member is looked for, so a task keeps its member while
+        // the effort it resolves to moves.
+        let subject = task_auto_effort_subject(task);
+        let resolved = |found: Option<(Vec<CrewCandidate>, String)>| {
+            found
+                .map(|(candidates, source)| {
+                    self.reresolve_auto_candidates(candidates, &subject)
+                        .map(|candidates| (candidates, source))
+                })
+                .transpose()
+        };
         if include_experiment && let Some(pool) = self.experiment_crew_pool(&task.id)? {
-            return self
-                .pool_member_candidates(&pool.entries, &pool.source, None)?
+            return resolved(self.pool_member_candidates(&pool.entries, &pool.source, None)?)?
                 .ok_or_else(|| {
                     OrbitError::PolicyDenied(format!(
                         "crew pool from {} has no enabled member that can run on this host",
@@ -455,12 +499,13 @@ impl OrbitRuntime {
         // crew is kept as it is.
         if (unassigned || automatic)
             && let Some(purpose) = task_crew_purpose(&task.tags)
-            && let Some((candidates, pool_source)) = self.purpose_pool_candidates(purpose, false)?
+            && let Some((candidates, pool_source)) =
+                resolved(self.purpose_pool_candidates(purpose, false)?)?
         {
             if purpose_source == Some(purpose.as_str())
                 && let Some(candidate) = candidates.iter().find(|candidate| {
                     candidate.weight > 0
-                        && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                        && candidate_holds_assignment(candidate, task.crew.as_deref())
                 })
             {
                 // Keep the assigned member while it can run. A hold or a usage
@@ -479,12 +524,13 @@ impl OrbitRuntime {
         if (unassigned || automatic)
             && let Some(route) =
                 self.task_type_pool_route(task.complexity, &task.tags, &task.context_files)
-            && let Some((candidates, pool_source)) = self.type_pool_candidates(&route, None)?
+            && let Some((candidates, pool_source)) =
+                resolved(self.type_pool_candidates(&route, None)?)?
         {
             if type_source == Some(route.crew_source().as_str())
                 && let Some(candidate) = candidates.iter().find(|candidate| {
                     candidate.weight > 0
-                        && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                        && candidate_holds_assignment(candidate, task.crew.as_deref())
                 })
             {
                 return Ok((
@@ -498,14 +544,14 @@ impl OrbitRuntime {
         // default one.
         if automatic {
             if let Some((candidates, pool_source)) =
-                self.complexity_pool_candidates(task.complexity, pools)?
+                resolved(self.complexity_pool_candidates(task.complexity, pools)?)?
             {
                 if task
                     .complexity
                     .is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
                     && let Some(candidate) = candidates.iter().find(|candidate| {
                         candidate.weight > 0
-                            && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                            && candidate_holds_assignment(candidate, task.crew.as_deref())
                     })
                 {
                     return Ok((
@@ -533,7 +579,7 @@ impl OrbitRuntime {
                 "task.crew".to_string(),
             ));
         }
-        if let Some(drawn) = self.complexity_pool_candidates(task.complexity, pools)? {
+        if let Some(drawn) = resolved(self.complexity_pool_candidates(task.complexity, pools)?)? {
             return Ok(drawn);
         }
         Ok((
@@ -602,20 +648,11 @@ impl OrbitRuntime {
         source: &str,
         task_os: Option<&TaskOsRequirement>,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
-        let registry = self.context.settings().crews();
-        let enabled = entries
-            .iter()
-            .filter(|entry| {
-                orbit_types::identity::find_crew(&entry.name, registry)
-                    .is_some_and(|crew| crew.enabled)
-            })
-            .map(|entry| {
-                Ok(CrewCandidate {
-                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
-                    weight: entry.weight,
-                })
-            })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
+        let mut enabled = Vec::with_capacity(entries.len());
+        for entry in entries {
+            enabled.extend(self.pool_entry_candidate(&entry.name, entry.weight, None)?);
+        }
+        let enabled = merge_same_crew(enabled);
         if enabled.is_empty() {
             tracing::info!(
                 source = %source,

@@ -269,6 +269,7 @@ fn a_purpose_pool_beats_the_complexity_pool() {
             crew: "low_lane".into(),
             source: LOW.into(),
             eligible_pool: Vec::new(),
+            auto_effort: None,
         },
     );
     fx.jobs.write_run_state(&run, &state).unwrap();

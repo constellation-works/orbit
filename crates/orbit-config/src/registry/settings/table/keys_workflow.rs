@@ -10,6 +10,20 @@ macro_rules! with_workflow_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "band", "workflow.admission_affinity", &orbit_types::task::AdmissionAffinityReach::CHOICES),
     },
+    workflow_auto_effort_bands: BTreeMap<String, Vec<AutoEffortBand>> => BTreeMap<String, Vec<AutoEffortBand>> {
+        key: "workflow.auto_effort.bands", value_type: "table<string,array<table>>",
+        description: "Per crew, the ordered effort bands a `<crew>@auto` pool entry resolves through: each band's effort applies when the draw's complexity, line or file signal meets every condition it sets.",
+        section: ConfigSection::Delivery, order: 119,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<BTreeMap<String, Vec<AutoEffortBand>>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_auto_effort_explore_share: f64 => f64 {
+        key: "workflow.auto_effort.explore_share", value_type: "number",
+        description: "Share of `<crew>@auto` draws (0-0.5) dispatched at an effort other than the bands' choice, so each side of a cutover keeps getting data.",
+        section: ConfigSection::Delivery, order: 119,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| crate::crew_auto_effort::admit_auto_effort_explore_share(raw),
+    },
     workflow_base_branch: String => String {
         key: "workflow.base_branch", value_type: "string",
         description: "Fallback base branch for ship, auto, and the task pilot.",

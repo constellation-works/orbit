@@ -5,7 +5,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{CREW_EFFORT_SEPARATOR, Crew, find_crew, resolve_crew};
+use orbit_types::identity::{
+    CREW_EFFORT_SEPARATOR, Crew, auto_effort_base, auto_effort_reference, crew_reference_base,
+    find_crew, resolve_crew,
+};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::CrewPurpose;
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,9 @@ const BARE_WEIGHT: u32 = 1;
 ///
 /// Each entry is written `crew[@effort]` or `crew[@effort]:weight`; a pool is
 /// either all bare or all weighted. `opus@medium` and `opus` are distinct
-/// members. [`canonical_crew_pool`] is the one place that grammar is
+/// members. `opus@auto` names a member whose effort each draw chooses from
+/// `workflow.auto_effort.bands`; only the pools [`crate::AUTO_EFFORT_POOLS`]
+/// names accept it. [`canonical_crew_pool`] is the one place that grammar is
 /// admitted, so configuration, `orbit config set` and CLI overrides reject the
 /// same malformed pools.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,13 +149,15 @@ pub fn type_complexity_crews_key(task_type: &str, tier: TaskComplexity) -> Strin
 ///
 /// Every pool must name only known, enabled crews, hold at least one entry,
 /// and give each entry a positive weight; tiers are `low`, `medium`, `hard`
-/// or `xhard`. With `known_types`, a type absent from that list is refused;
+/// or `xhard`. A `<crew>@auto` entry needs bands for its crew in
+/// `auto_bands`; `None` skips that check for a single-file view. With `known_types`, a type absent from that list is refused;
 /// `None` skips that check for a single-file view whose types may come from
 /// the other layer. Each pool is rewritten in its canonical form.
 pub(crate) fn admit_type_complexity_crews(
     table: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
     known_types: Option<&[crate::CrewPerformanceType]>,
     crews: &BTreeMap<String, Crew>,
+    auto_bands: Option<&BTreeMap<String, Vec<crate::AutoEffortBand>>>,
 ) -> Result<(), OrbitError> {
     for (task_type, tiers) in table.iter_mut() {
         if let Some(types) = known_types
@@ -200,16 +207,19 @@ pub(crate) fn admit_type_complexity_crews(
                         entry.name
                     )));
                 }
-                if find_crew(&entry.name, crews).is_some_and(|crew| !crew.enabled) {
+                if find_crew(crew_reference_base(&entry.name), crews)
+                    .is_some_and(|crew| !crew.enabled)
+                {
                     return Err(OrbitError::InvalidInput(format!(
                         "{setting} names crew '{}', which is disabled ([crews.{}] enabled = \
                          false)",
                         entry.name,
-                        orbit_types::identity::crew_reference_base(&entry.name)
+                        crew_reference_base(&entry.name)
                     )));
                 }
             }
             *pool = canonical.to_setting_value();
+            crate::crew_auto_effort::check_auto_effort_entries(pool, &setting, auto_bands)?;
         }
     }
     Ok(())
@@ -308,14 +318,12 @@ pub fn canonical_crew_pool(
                  mix of both"
             )));
         }
-        let crew = resolve_crew(name, crews)
-            .map_err(|error| OrbitError::InvalidInput(format!("{setting}: {error}")))?;
-        let previous = canonical.insert(crew.name.clone(), weight.unwrap_or(BARE_WEIGHT));
+        let member = pool_member_name(name, crews, setting)?;
+        let previous = canonical.insert(member.clone(), weight.unwrap_or(BARE_WEIGHT));
         if previous.is_some() && weight.is_some() {
             return Err(OrbitError::InvalidInput(format!(
-                "{setting} names crew '{}' more than once; a weighted pool gives each crew one \
-                 entry",
-                crew.name
+                "{setting} names crew '{member}' more than once; a weighted pool gives each crew \
+                 one entry"
             )));
         }
     }
@@ -345,11 +353,30 @@ pub fn canonical_crew_pool_entries(
         if name.is_empty() {
             return Err(OrbitError::InvalidInput(empty_name_message(setting)));
         }
-        let crew = resolve_crew(name, crews)
-            .map_err(|error| OrbitError::InvalidInput(format!("{setting}: {error}")))?;
-        canonical.entry(crew.name).or_insert(entry.weight);
+        canonical
+            .entry(pool_member_name(name, crews, setting)?)
+            .or_insert(entry.weight);
     }
     Ok(collect_entries(canonical))
+}
+
+/// The canonical name of one pool member: the resolved crew reference, or
+/// `<crew>@auto` for a member whose effort each draw chooses
+/// ([`crate::AutoEffortPolicy`]). Whether the pool may hold `@auto`, and
+/// whether its crew has bands, is checked where the pool's key is admitted.
+fn pool_member_name(
+    name: &str,
+    crews: &BTreeMap<String, Crew>,
+    setting: &str,
+) -> Result<String, OrbitError> {
+    let resolve = |name: &str| {
+        resolve_crew(name, crews)
+            .map_err(|error| OrbitError::InvalidInput(format!("{setting}: {error}")))
+    };
+    match auto_effort_base(name) {
+        Some(base) => Ok(auto_effort_reference(&resolve(base)?.name)),
+        None => Ok(resolve(name)?.name),
+    }
 }
 
 fn collect_entries(canonical: BTreeMap<String, u32>) -> Vec<CrewPoolEntry> {

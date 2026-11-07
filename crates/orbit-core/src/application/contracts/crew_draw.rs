@@ -2,7 +2,9 @@
 //! candidates a draw weighs, the assignment and provenance a task records,
 //! and the provenance prefixes and markers that classify it.
 
-use orbit_types::identity::Crew;
+use orbit_types::identity::{
+    AutoEffortBasis, AutoEffortChoice, AutoEffortSignal, Crew, ReasoningEffort,
+};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 
@@ -100,6 +102,22 @@ pub(crate) struct CreationCrewAssignment {
 pub(crate) struct CrewCandidate {
     pub(crate) crew: Crew,
     pub(crate) weight: u32,
+    /// How a `<crew>@auto` member resolved to `crew` for this draw; `None`
+    /// for a member that names its effort (or none) itself.
+    pub(crate) auto_effort: Option<AutoEffortChoice>,
+}
+
+/// What a `<crew>@auto` pool member resolves against in one draw: the
+/// subject's signal, the seed of its exploration roll, and an effort a
+/// task-pilot escalation forces. A draw without a subject resolves every
+/// `@auto` member to its crew's configured effort and never explores.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AutoEffortSubject {
+    pub(crate) signal: AutoEffortSignal,
+    /// Seeds the exploration roll so a retried draw resolves alike; `None`
+    /// never explores.
+    pub(crate) seed: Option<String>,
+    pub(crate) forced: Option<ReasoningEffort>,
 }
 
 /// A selected crew and the exact eligible weights used for this draw.
@@ -107,6 +125,8 @@ pub(crate) struct CrewPoolDraw {
     pub(crate) crew: Crew,
     pub(crate) source: String,
     pub(crate) eligible_pool: Vec<ActivityCrewPoolMember>,
+    /// The selected member's `@auto` resolution, when it was one.
+    pub(crate) auto_effort: Option<AutoEffortChoice>,
 }
 
 impl CrewPoolDraw {
@@ -115,6 +135,7 @@ impl CrewPoolDraw {
             crew: self.crew.name,
             source: self.source,
             eligible_pool: self.eligible_pool,
+            auto_effort: self.auto_effort,
         }
     }
 }
@@ -129,4 +150,28 @@ pub(crate) struct InspectionPool {
     /// Enabled members passed over, in this tier and the ones below it,
     /// because their provider has no native inspection surface.
     pub(crate) skipped: Vec<String>,
+}
+
+/// The provenance note a draw's source carries for an `@auto` member:
+/// `auto effort opus@auto -> opus@high (band 2)`, with `explored; policy
+/// <reference>` when the exploration share chose another effort.
+pub(crate) fn auto_effort_note(choice: &AutoEffortChoice) -> String {
+    let basis = match choice.basis {
+        AutoEffortBasis::Band => choice
+            .band
+            .map_or_else(|| "band".to_string(), |band| format!("band {}", band + 1)),
+        AutoEffortBasis::Fallback => "configured effort".to_string(),
+        AutoEffortBasis::Escalation => "pilot escalation".to_string(),
+    };
+    if choice.explored {
+        format!(
+            "auto effort {} -> {} (explored; policy {} by {basis})",
+            choice.requested, choice.resolved, choice.policy
+        )
+    } else {
+        format!(
+            "auto effort {} -> {} ({basis})",
+            choice.requested, choice.resolved
+        )
+    }
 }

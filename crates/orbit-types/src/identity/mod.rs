@@ -4,6 +4,7 @@ mod actor;
 mod agent_family;
 mod agent_pair;
 mod artifact_ids;
+mod auto_effort;
 mod crew_env;
 mod digest;
 mod error;
@@ -24,6 +25,10 @@ pub use agent_pair::{
     require_canonical_agent_family, resolve_crew, same_crew_family, validate_antigravity_model,
 };
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
+pub use auto_effort::{
+    AUTO_EFFORT, AutoEffortBasis, AutoEffortChoice, AutoEffortSignal, auto_effort_base,
+    auto_effort_reference,
+};
 pub use crew_env::{CrewEnvSource, CrewEnvVar};
 pub use digest::lower_hex;
 pub use human_crew::{

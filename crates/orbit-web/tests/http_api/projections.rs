@@ -148,6 +148,7 @@ projections_test!(
                         crew: "recoverer".into(),
                         source: "fixture".into(),
                         eligible_pool: vec![],
+                        auto_effort: None,
                     },
                 );
                 if index == 1 {

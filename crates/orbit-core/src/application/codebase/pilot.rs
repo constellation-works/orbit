@@ -260,6 +260,19 @@ impl PilotRuns {
                 return None;
             }
             let mut run = record.run.clone();
+            // A run that drew a `<crew>@auto` pilot ran each partition at its
+            // own effort; the applied result names that partition's crew.
+            if let Some(crew) = self.steps.iter().find_map(|(step, _)| {
+                state.as_ref()?.pipeline_step_output(step)?["tasks"]
+                    .as_array()?
+                    .iter()
+                    .find(|task| task["operation_id"].as_str() == Some(operation_id))?
+                    .get(crate::application::task::pilot::auto_effort::PILOT_CREW_FIELD)?
+                    .as_str()
+                    .map(ToOwned::to_owned)
+            }) {
+                run.crew = Some(crew);
+            }
             run.model = record.model_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
             run.tokens = record.pilot_run_tokens(runtime);
             Some(run)

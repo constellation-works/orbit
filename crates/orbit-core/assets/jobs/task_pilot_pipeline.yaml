@@ -99,6 +99,14 @@
 #   source natively, skipping disabled and provider-limited crews, and every
 #   pilot and repair pilot of the run reuses it; `orbit run show` records the
 #   draw and the pool it came from.
+# - When that pool has `<crew>@auto` members, prepare also splits partitions
+#   by the effort each task's filed complexity resolves to under
+#   `workflow.auto_effort.bands`, and each partition's first dispatch freezes
+#   its own `<crew>@<effort>` (`workflow.purpose_crews.task_pilot#pilots:<n>`).
+#   A valid assessment from a lower-effort `@auto` pilot that raised the
+#   task's tier to a higher-effort band, or reported confidence medium or
+#   low, settles `escalated`: the repair round re-pilots it once at the
+#   higher effort and applies that assessment. Repair rounds never escalate.
 # - While that purpose is unset, the pilot draws from
 #   `workflow.low_complexity_crews` instead: piloting reads tasks and writes a
 #   bounded proposal, so it is low work. An empty low pool falls back to

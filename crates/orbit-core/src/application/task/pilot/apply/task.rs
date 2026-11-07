@@ -82,6 +82,7 @@ struct Assessed {
 pub(super) fn settle_task(
     context: &ApplyContext<'_>,
     applied: &mut Applied,
+    partition_index: u64,
     task_id: &String,
     assessment: &Value,
     snapshot: &PreparedTaskSnapshot,
@@ -161,6 +162,11 @@ pub(super) fn settle_task(
         scope,
         pre_current.as_ref(),
     )?;
+    // A valid assessment from a lower-effort `@auto` pilot that warrants a
+    // higher effort is held back for the repair round's single re-pilot.
+    if let Some(outcome) = escalation(context, partition_index, task_id, snapshot, &assessed) {
+        return Err(outcome);
+    }
     // Decided only once the assessment itself is valid, so an invalid brief
     // never makes the task `invalid` or spends the repair pass.
     let explore_brief = decide_explore_brief(
@@ -195,10 +201,63 @@ pub(super) fn settle_task(
         user_facing_ui: assessed.user_facing_ui,
         applied_material: None,
         pilot_run_id: context.run_id.map(str::to_string),
-        pilot_crew: context.pilot_crew.map(str::to_string),
+        pilot_crew: context.partition_crew(partition_index).map(str::to_string),
+        pilot_auto_crew: context
+            .partition_draws
+            .get(&partition_index)
+            .map(|draw| draw.crew.clone()),
         explore_brief,
     };
     write(context, applied, validated, snapshot)
+}
+
+/// The escalation outcome of `task_id`'s valid assessment, or `None` when it
+/// applies as it is: only in the first round, only for a partition whose
+/// pilot ran at an `@auto` effort, and only when
+/// [`orbit_config::AutoEffortPolicy::pilot_escalation`] names a higher one.
+fn escalation(
+    context: &ApplyContext<'_>,
+    partition_index: u64,
+    task_id: &str,
+    snapshot: &PreparedTaskSnapshot,
+    assessed: &Assessed,
+) -> Option<Value> {
+    if context.round != super::super::auto_effort::FIRST_ROUND {
+        return None;
+    }
+    let choice = context
+        .partition_draws
+        .get(&partition_index)?
+        .auto_effort
+        .as_ref()?;
+    let settings = context.runtime.context.settings();
+    let crew = settings
+        .crews()
+        .get(orbit_types::identity::auto_effort_base(&choice.requested)?)?;
+    let confidence = assessed.assessment["confidence"].as_str();
+    let effort = settings.auto_effort().pilot_escalation(
+        crew,
+        choice,
+        snapshot.complexity,
+        Some(assessed.complexity),
+        confidence,
+    )?;
+    let mut outcome = task_outcome(
+        task_id,
+        super::ESCALATED,
+        Some(format!(
+            "pilot {} assessed {} with confidence {}; re-piloting once at {}@{effort}",
+            choice.resolved,
+            assessed.complexity,
+            confidence.unwrap_or("unknown"),
+            crew.name,
+        )),
+    );
+    outcome[super::super::auto_effort::AUTO_EFFORT_ESCALATION] = json!({
+        "effort": effort,
+        "from": choice.resolved,
+    });
+    Some(outcome)
 }
 
 fn scope_with(

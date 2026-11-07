@@ -7,6 +7,7 @@ use std::path::Path;
 use orbit_types::workflow::automation::members::{MemberAttempt, MemberEvidence};
 use serde_json::{Value, json};
 
+use super::super::auto_effort::{AUTO_EFFORT_ESCALATION, PILOT_ROUND, REPAIR_ROUND};
 use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
 use super::super::{
@@ -86,7 +87,7 @@ impl Report<'_> {
             .filter(|outcome| {
                 !matches!(
                     outcome["outcome"].as_str(),
-                    Some("invalid" | "applied" | "already_applied")
+                    Some("invalid" | "applied" | "already_applied" | super::ESCALATED)
                 )
             })
             .cloned()
@@ -160,21 +161,37 @@ impl Report<'_> {
             .unwrap_or_else(|| "partition envelope validation failed".to_string())
     }
 
-    /// One single-task partition per invalid assessment, and the prepared
-    /// input a repair apply settles them with.
+    /// One single-task partition per invalid assessment, and per assessment
+    /// held back for an `@auto` pilot escalation, and the prepared input a
+    /// repair apply settles them with.
     fn repair(&self, own_task_outcomes: &[Value]) -> Repair {
         let task_ids = own_task_outcomes
             .iter()
-            .filter(|outcome| outcome["outcome"] == "invalid")
+            .filter(|outcome| {
+                matches!(
+                    outcome["outcome"].as_str(),
+                    Some("invalid" | super::ESCALATED)
+                )
+            })
             .filter_map(|outcome| outcome["task_id"].as_str().map(ToOwned::to_owned))
             .collect::<Vec<_>>();
         let partitions = task_ids
             .iter()
             .enumerate()
             .map(|(partition_index, task_id)| {
+                let escalation = own_task_outcomes
+                    .iter()
+                    .find(|outcome| {
+                        outcome["task_id"].as_str() == Some(task_id)
+                            && outcome["outcome"] == super::ESCALATED
+                    })
+                    .and_then(|outcome| outcome.get(AUTO_EFFORT_ESCALATION));
+                // An escalation re-pilots a valid assessment: it has no
+                // validation errors to fix.
                 let errors = own_task_outcomes
                     .iter()
                     .filter(|outcome| outcome["task_id"].as_str() == Some(task_id))
+                    .filter(|outcome| outcome["outcome"] == "invalid")
                     .filter_map(|outcome| outcome["error"].as_str())
                     .collect::<Vec<_>>();
                 // The repair pilot returns a brief again for a task that
@@ -191,6 +208,9 @@ impl Report<'_> {
                 });
                 if brief_requested {
                     partition[EXPLORE_BRIEF_TASK_IDS] = json!([task_id]);
+                }
+                if let Some(escalation) = escalation {
+                    partition[AUTO_EFFORT_ESCALATION] = escalation.clone();
                 }
                 // A re-check is repaired as a re-check, against the same input.
                 if let Some(recheck) = self
@@ -229,6 +249,7 @@ impl Report<'_> {
         // certifies its own evidence under the consumer's predicate
         // [ORB-12746].
         let prepared = json!({
+            PILOT_ROUND: REPAIR_ROUND,
             "state_automation": self.echo.state_automation,
             "mode": self.mode,
             "workspace_path": self.workspace_root,

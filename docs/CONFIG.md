@@ -1539,6 +1539,37 @@ An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that c
 
 **Crew references.** Wherever a crew is named — the complexity, type, purpose, review and final-recovery pools, `workflow.default_crew`, `workflow.crew_ladder.rungs`, a task or auto-task `crew`, `--crew` and MCP `crew` inputs — it can carry an effort: `<crew>@<effort>`, followed in pools by the usual `:<weight>` (`hard_complexity_crews = ["opus@medium:100", "opus:100", "sol:100"]`). The reference runs that crew at that effort, ahead of the crew's own `effort` and the activity's inline baseline; without `@effort` the crew's own `effort` applies, as before. `opus@medium` and `opus` are distinct pool members with their own weights, and runs, scorecards, experiments and the crew ladder record them under those names. They share the crew's provider account, holds and limits: a [provider failure hold](#provider-failure-holds) or pull-drain exclusion on either one covers the whole family. Unlike a crew table's `effort`, a reference effort the provider or model does not accept (`grok@max`, `luna@hard`) is refused at load and by `orbit config set`, naming the reference and the accepted values. Crew names may therefore contain neither `:` nor `@`.
 
+**Effort chosen per draw (`<crew>@auto`).** A pool entry may leave the effort to the draw: `opus@auto`, or `opus@auto:100` in a weighted pool. Only the implementer pools (`workflow.<tier>_complexity_crews` and `workflow.type_complexity_crews`), `workflow.purpose_crews.task_pilot` and the two review pools (`workflow.purpose_crews.review`, `workflow.purpose_crews.pre_landing_review`) accept it, and only for a crew with bands in `workflow.auto_effort.bands`; any other pool, a crew without bands, `workflow.default_crew`, a task `crew` and `--crew` refuse it at load, by `orbit config set` and on run overrides. Each band sets an `effort` and at least one condition, and the first band whose every condition the draw's signal meets chooses the effort:
+
+```toml
+[workflow.auto_effort]
+explore_share = 0.1
+bands.opus = [
+  { complexity = ["hard", "xhard"], effort = "xhigh" },
+  { below_files = 4, effort = "medium" },
+  { below_lines = 400, effort = "medium" },
+]
+```
+
+| Condition | Meets it when |
+|---|---|
+| `complexity = [..]` | the signal's tier is listed (`low`, `medium`, `hard`, `xhard`) |
+| `below_files = N` | the signal counts fewer than `N` files |
+| `below_lines = N` | the signal counts fewer than `N` reviewable lines |
+
+Each role resolves at admission from the best signal it has. An implementer uses the task's assessed complexity and its declared footprint: the number of distinct files its `context_files` name, the size the task-risk forecast uses before dispatch. It never reads the final diff, so `below_lines` never matches an implementer. A task pilot uses the filed complexity only, because the pilot is what produces a size. A reviewer uses the candidate's reviewable lines (as `workflow.non_reviewable_paths` counts them), its changed files and the reviewed tasks' highest settled complexity. With no signal, or no band that matches, the crew's own `effort` applies (`opus`, or `opus@high` when its table sets `effort = "high"`). Bands are tuned from the Analytics › Agents › Implementers size curves; Orbit ships none.
+
+The run, its crew selection, the reviewer record, the Implementers, Pilots and Reviewers analytics tables and experiment readouts record the resolved `<crew>@<effort>`, never `@auto`. An implementer's `crew_selection` carries `auto_effort` (`requested`, `resolved`, `policy`, `basis` of `band`, `fallback` or `escalation`, the matching `band` index, `explored` and the `signal`); a frozen activity draw and an admitted reviewer carry the same record, and their `source` ends with `auto effort opus@auto -> opus@medium (band 2)`. A task keeps its `@auto` member while the effort it resolves to moves: the next admission re-resolves it against the task's current tier and footprint.
+
+`workflow.auto_effort.explore_share` (default `0.1`, at most `0.5`) dispatches that share of seeded draws at another effort the crew's bands or table name, so each side of a cutover keeps getting data. An explored draw records `explored: true` with the `policy` reference it replaced, and its source says `explored`. The roll is seeded by the task (implementers), the run and partition (pilots) or the run and candidate head (reviewers), so a retried selection resolves alike. A task's creation draw never explores.
+
+A task-pilot run draws one crew from its pool as before. When that pool has `@auto` members, preparation also splits partitions so each resolves to a single effort for whichever `@auto` crew the run draws, and each partition freezes its own `<crew>@<effort>` under `workflow.purpose_crews.task_pilot#pilots:<partition>` in the run's crew draws. **Pilot escalation:** when a pilot that ran at an `@auto` effort raises the task above its filed tier to one whose band maps to a higher effort, or reports confidence `medium` or `low` (target: the highest effort the crew's bands name), apply holds that valid assessment back as `escalated` and the run's repair round re-pilots the task once at the higher effort (`workflow.purpose_crews.task_pilot#repair_pilots:<partition>`, basis `escalation`). The higher-effort assessment is the one applied; the repair round never escalates again. An effort at or below the one the pilot ran at never escalates.
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.auto_effort.bands` | `{}` | **Advanced.** Per crew (its `[crews.<name>]` name, never `<crew>@<effort>`), the ordered bands a `<crew>@auto` pool entry resolves through. Each band needs an `effort` the crew's provider and model accept and at least one of `complexity`, `below_files`, `below_lines`; bounds are above `0`. |
+| `workflow.auto_effort.explore_share` | `0.1` | **Advanced.** Share of seeded `@auto` draws, `0`–`0.5`, dispatched at another effort the crew can resolve to. |
+
 **Recorded effort.** Each provider launch records its resolved crew, model and
 `reasoning_effort` before the process starts, after crew/inline precedence and
 configuration admission. `null` means no effort option was rendered (provider

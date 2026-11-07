@@ -50,6 +50,10 @@ pub struct ActivityCrewDraw {
     /// The permitted members and weights the draw ran on, so `run show`
     /// can explain the choice.
     pub eligible_pool: Vec<ActivityCrewPoolMember>,
+    /// The effort a `<crew>@auto` member resolved to, and why; absent when
+    /// the drawn member names its effort (or none) itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_effort: Option<crate::identity::AutoEffortChoice>,
 }
 
 /// The task revision final recovery observed when it was admitted.

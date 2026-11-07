@@ -769,6 +769,7 @@ fn certified_validated_task(
         applied_material: Some(written),
         pilot_run_id: Some(pilot_run_id),
         pilot_crew: None,
+        pilot_auto_crew: None,
         explore_brief: None,
     }
 }

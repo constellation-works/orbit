@@ -1120,6 +1120,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.auto_effort.bands": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.auto_effort.explore_share": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.base_branch": {
       "scope": "workspace",
       "state": "set",

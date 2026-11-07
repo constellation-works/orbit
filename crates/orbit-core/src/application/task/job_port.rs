@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::CapturedExploreBrief;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
@@ -29,7 +29,8 @@ use serde_json::Value;
 
 use super::TaskRow;
 use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
+    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    RetryKey,
 };
 
 /// The crew pools an admitting pipeline captured, as task code names them.
@@ -84,6 +85,12 @@ pub(in crate::application) trait TaskJobPort {
 
     /// A fresh ticket from the system RNG for a crew draw.
     fn random_crew_draw_ticket(&self) -> Result<u64, OrbitError>;
+
+    /// The `<crew>@<effort>` a `<crew>@auto` member (`crew`, its
+    /// `[crews.<name>]` entry) runs at for `subject`: its bands' choice, the
+    /// exploration share's, or the subject's forced effort.
+    fn auto_effort_crew_choice(&self, crew: &Crew, subject: &AutoEffortSubject)
+    -> AutoEffortChoice;
 
     /// Reproducible tickets for a crew draw that must come out the same
     /// when it is retried, seeded by `seed`.

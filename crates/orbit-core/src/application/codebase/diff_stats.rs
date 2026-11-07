@@ -424,6 +424,26 @@ impl OrbitRuntime {
         )
     }
 
+    /// The reviewable lines and changed files of `base..head` in the
+    /// repository at `repo_path`, as a landed row would count them: the
+    /// size a reviewer's `<crew>@auto` resolves from. `None` when the
+    /// repository or either commit cannot be read.
+    pub(crate) fn candidate_review_size(
+        &self,
+        repo_path: &std::path::Path,
+        base: &str,
+        head: &str,
+    ) -> Option<(u64, u64)> {
+        let repo = git2::Repository::open(repo_path).ok()?;
+        let (_, counts) = diff_counts(&repo, Some(base), head, &self.diff_classes())?;
+        let lines = counts.reviewable_lines();
+        let files = [counts.code, counts.tests, counts.other]
+            .iter()
+            .map(|class| class.files)
+            .sum();
+        Some((lines.added + lines.deleted, files))
+    }
+
     fn diff_classes(&self) -> DiffClasses<'_> {
         DiffClasses {
             tests: self.diff_test_paths(),

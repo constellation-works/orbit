@@ -467,7 +467,11 @@ pub(crate) fn prepare(
         retained.push((
             task_id,
             snapshot,
-            crate::runtime::engine::crew::normalized_task_crew(task.crew.as_deref()),
+            (
+                crate::runtime::engine::crew::normalized_task_crew(task.crew.as_deref()),
+                runtime.pilot_effort_key(task.complexity),
+                task.complexity,
+            ),
         ));
     }
 
@@ -528,15 +532,20 @@ pub(crate) fn prepare(
     // One crew per partition, then the size cap. A preparation pass may carry
     // siblings whose stored crews differ [ORB-16839]; each pilot worker still
     // sees a single crew. Same-crew selection order is unchanged, so a
-    // homogeneous batch partitions exactly as a size-only split did.
-    let mut crews_seen: Vec<Option<String>> = Vec::new();
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    for (task_id, crew) in task_ids.iter().zip(task_crews) {
-        if let Some(index) = crews_seen.iter().position(|existing| existing == &crew) {
-            groups[index].push(task_id.clone());
+    // homogeneous batch partitions exactly as a size-only split did. When the
+    // task-pilot pool has `<crew>@auto` members, tasks also split by the
+    // effort their filed complexity resolves to, so each partition runs at a
+    // single effort; the partition carries the signal it resolves from.
+    let mut crews_seen: Vec<(Option<String>, Option<String>)> = Vec::new();
+    let mut groups: Vec<(Vec<String>, Option<serde_json::Value>)> = Vec::new();
+    for (task_id, (crew, effort_key, complexity)) in task_ids.iter().zip(task_crews) {
+        let key = (crew, effort_key);
+        if let Some(index) = crews_seen.iter().position(|existing| existing == &key) {
+            groups[index].0.push(task_id.clone());
         } else {
-            crews_seen.push(crew);
-            groups.push(vec![task_id.clone()]);
+            let signal = super::auto_effort::partition_signal(key.1.as_deref(), complexity);
+            crews_seen.push(key);
+            groups.push((vec![task_id.clone()], signal));
         }
     }
     let brief_requested = task_snapshots
@@ -546,13 +555,19 @@ pub(crate) fn prepare(
         .collect::<BTreeSet<_>>();
     let partitions = groups
         .iter()
-        .flat_map(|ids| ids.chunks(max_partition_size))
+        .flat_map(|(ids, signal)| {
+            ids.chunks(max_partition_size)
+                .map(move |chunk| (chunk, signal.as_ref()))
+        })
         .enumerate()
-        .map(|(partition_index, ids)| {
+        .map(|(partition_index, (ids, signal))| {
             let mut partition = json!({
                 "partition_index": partition_index,
                 "task_ids": ids,
             });
+            if let Some(signal) = signal {
+                partition[super::auto_effort::AUTO_EFFORT_SIGNAL] = signal.clone();
+            }
             let requested = ids
                 .iter()
                 .filter(|id| brief_requested.contains(id.as_str()))

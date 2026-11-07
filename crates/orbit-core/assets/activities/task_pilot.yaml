@@ -53,8 +53,26 @@ spec:
           whose explore brief the workspace requests; absent means none.
           `rechecks` maps each task to re-check, rather than pilot in full,
           to its re-check input; absent means every task is piloted in full.
+          `auto_effort_escalation` marks a repair partition that re-pilots a
+          valid assessment at a higher effort.
         type: object
         properties:
+          auto_effort_signal:
+            description: >
+              The filed complexity this partition's effort resolved from, when
+              the task-pilot pool has a `<crew>@auto` member. Host data only.
+            type: object
+          auto_effort_escalation:
+            description: >
+              Set on a repair partition that re-pilots a task whose earlier,
+              valid assessment came from a lower-effort pilot: `effort` is the
+              effort this pilot runs at, `from` the crew that ran before.
+            type: object
+            properties:
+              effort:
+                type: string
+              from:
+                type: string
           explore_brief_task_ids:
             type: array
             items:
@@ -1049,7 +1067,11 @@ spec:
 
     When `repair_attempt` is true, apply rejected an earlier assessment.
     Reassess only the supplied task IDs at the original `source_revision` and
-    fix every message in `validation_errors`. Do not revisit successful siblings
+    fix every message in `validation_errors`. When
+    `partition.auto_effort_escalation` is set, the earlier assessment was valid
+    but came from a lower-effort pilot that raised the task's tier or was not
+    confident; `validation_errors` is empty. Pilot the task in full, from the
+    source, without relying on that earlier assessment. Do not revisit successful siblings
     or resolve a new source revision. Return `explore_brief` again for a task
     in `partition.explore_brief_task_ids`; apply validates it the same way. A
     task in `partition.rechecks` is repaired in Re-check mode.

@@ -57,6 +57,7 @@ use std::sync::mpsc;
 use tracing_subscriber::fmt::MakeWriter;
 
 include!("agent_stall.rs");
+include!("auto_effort.rs");
 include!("config_paths.rs");
 include!("config_store.rs");
 include!("crew_env.rs");

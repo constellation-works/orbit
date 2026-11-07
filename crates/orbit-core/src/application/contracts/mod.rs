@@ -37,11 +37,11 @@ pub use clock_settings::{
     save_clock_settings,
 };
 pub(crate) use crew_draw::{
-    BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
+    AutoEffortSubject, BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
     INSPECTION_CREW_UNAVAILABLE, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
     PURPOSE_SOURCE_PREFIX, REDRAW_SOURCE_PREFIX, TYPE_SOURCE_PREFIX, admission_crew_source,
-    auto_task_minted, automatic_crew_source, experiment_crew_source, parse_type_crew_source,
-    type_crew_source,
+    auto_effort_note, auto_task_minted, automatic_crew_source, experiment_crew_source,
+    parse_type_crew_source, type_crew_source,
 };
 pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;

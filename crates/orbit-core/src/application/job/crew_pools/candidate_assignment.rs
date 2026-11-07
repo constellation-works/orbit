@@ -178,10 +178,14 @@ impl OrbitRuntime {
                 source: "explicit".to_string(),
             }));
         }
+        // A `<crew>@auto` member resolves from the tier and footprint this
+        // write leaves the task with; admission resolves it again.
+        let subject = super::auto_effort::creation_auto_effort_subject(complexity, context_files);
         if let Some(purpose) = task_crew_purpose(tags)
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+            let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
                 return Ok(None);
             };
@@ -198,6 +202,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
         {
             let source = route.crew_source();
+            let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
                 return Ok(None);
             };
@@ -215,6 +220,7 @@ impl OrbitRuntime {
                 self.creation_complexity_pool_candidates(Some(complexity), &pools, &task_os)?
         {
             let source = format!("pool:{complexity}");
+            let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(tags, candidates)? else {
                 return Ok(None);
             };
