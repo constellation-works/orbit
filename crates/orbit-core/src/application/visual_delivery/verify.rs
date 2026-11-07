@@ -14,8 +14,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, create_private_dir_all};
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    VISUAL_VERIFY_BATCH_SIZE, VisualEvidence, VisualImageCatalog, VisualVerdictKind,
-    parse_visual_region_location, validate_visual_evidence, validate_visual_region_location,
+    self, SourceLocationEmptyComponents, SourceLocationParseError, VISUAL_VERIFY_BATCH_SIZE,
+    VisualEvidence, VisualImageCatalog, VisualVerdictKind, parse_visual_region_location,
+    validate_visual_evidence, validate_visual_region_location,
 };
 use serde_json::{Value, json};
 
@@ -483,18 +484,19 @@ fn non_empty(raw: &Value, field: &str) -> Result<String, String> {
 
 /// Whether a cited `path:line` exists in the candidate checkout (§11.1).
 pub(super) fn cited_line_exists(workspace: &Path, location: &str) -> Result<(), String> {
-    let (path, line) = location
-        .trim()
-        .rsplit_once(':')
-        .ok_or_else(|| format!("location {location:?} is not `path:line`"))?;
-    let line: usize = line
-        .parse()
-        .ok()
-        .filter(|line| *line > 0)
-        .ok_or_else(|| format!("location {location:?} has no positive line"))?;
-    if path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..") {
-        return Err(format!("location {location:?} is not repository-relative"));
-    }
+    let (path, line) =
+        task::parse_source_location::<usize>(location, SourceLocationEmptyComponents::Allow)
+            .map_err(|error| match error {
+                SourceLocationParseError::MissingSeparator => {
+                    format!("location {location:?} is not `path:line`")
+                }
+                SourceLocationParseError::InvalidLine => {
+                    format!("location {location:?} has no positive line")
+                }
+                SourceLocationParseError::InvalidPath => {
+                    format!("location {location:?} is not repository-relative")
+                }
+            })?;
     let content = std::fs::read_to_string(workspace.join(path))
         .map_err(|_| format!("location {location:?} names no file at the candidate"))?;
     if content.lines().count() < line {

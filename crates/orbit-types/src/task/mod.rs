@@ -21,6 +21,7 @@ mod regression;
 mod schedule;
 mod severity;
 mod show_fields;
+mod source_location;
 mod tags_changed;
 mod ui_requirement;
 mod visual;
@@ -152,6 +153,9 @@ pub use show_fields::{
     TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,
     task_artifact_manifest_json, task_base_json, task_dependency_labels, task_os_requirement_json,
     task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+};
+pub use source_location::{
+    SourceLocationEmptyComponents, SourceLocationParseError, parse_source_location,
 };
 pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_at};
 pub use ui_requirement::{

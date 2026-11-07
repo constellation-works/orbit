@@ -21,8 +21,9 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::identity::{Crew, agent_family_from_cli, infer_agent_family_from_model};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    DefectSeverity, SeveritySource, Task, TaskComment, TaskComplexity, TaskHistoryEntry,
-    TaskRelation, TaskRelationType, TaskStatus, TaskType,
+    self, DefectSeverity, SeveritySource, SourceLocationEmptyComponents, SourceLocationParseError,
+    Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskRelation, TaskRelationType,
+    TaskStatus, TaskType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -213,30 +214,20 @@ pub struct FindingEvidence {
 impl FindingEvidence {
     /// The repository-relative path and 1-based line `location` names.
     pub(crate) fn path_and_line(&self) -> Result<(&str, u32), String> {
-        let (path, line) =
-            self.location.trim().rsplit_once(':').ok_or_else(|| {
-                format!("evidence location {:?} is not `path:line`", self.location)
-            })?;
-        let line = line
-            .parse::<u32>()
-            .ok()
-            .filter(|line| *line > 0)
-            .ok_or_else(|| {
-                format!(
+        task::parse_source_location::<u32>(&self.location, SourceLocationEmptyComponents::Reject)
+            .map_err(|error| match error {
+                SourceLocationParseError::MissingSeparator => {
+                    format!("evidence location {:?} is not `path:line`", self.location)
+                }
+                SourceLocationParseError::InvalidLine => format!(
                     "evidence location {:?} has no positive line number",
                     self.location
-                )
-            })?;
-        if path.is_empty()
-            || path.starts_with('/')
-            || path.split('/').any(|part| part == ".." || part.is_empty())
-        {
-            return Err(format!(
-                "evidence location {:?} is not a repository-relative path",
-                self.location
-            ));
-        }
-        Ok((path, line))
+                ),
+                SourceLocationParseError::InvalidPath => format!(
+                    "evidence location {:?} is not a repository-relative path",
+                    self.location
+                ),
+            })
     }
 
     /// The image and `[x, y, w, h]` region `location` names when it is
