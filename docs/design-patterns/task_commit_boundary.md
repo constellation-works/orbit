@@ -245,6 +245,12 @@ operator's comment-only update: orbit-core flags it, and `update_task_history` a
 the claim only when its sole effect is appending one comment, recording no creation grant.
 Every other write inside that update still takes the ordinary fence. Frozen
 claim footprints also participate in ordinary reservation conflicts after TTL expiry.
+Backlog admission and readiness include those frozen footprints even when
+the owner's task envelopes or local leaf runs do not show the follower's
+work. Explicit task selection passes through the owner-wave admission
+section too: an overlapping live claim defers the task as a lock conflict
+before a leaf run is created, naming the claiming task and run. Releasing
+the claim makes the task eligible on the next pass, subject to other gates.
 A coordinated record update that starts work (`started`, `pulled_by` or
 `resume_readmitted` into `in-progress`) runs the ordinary footprint guard
 before its companion artifact, document and history writes, against the

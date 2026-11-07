@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
+use orbit_store::contracts::OwnerWaveCandidate;
 use orbit_types::task::{EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
+use super::super::claim_holders::claim_detail;
 use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
@@ -303,6 +305,71 @@ pub(crate) fn list_backlog_tasks(
                 continue;
             }
             tasks.push(task);
+        }
+        // Explicit selection still takes the same admission section as an
+        // automatic wave. A follower may claim an overlapping footprint while
+        // the per-task checks above run; defer it before creating a leaf run.
+        tasks.truncate(max_tasks);
+        let candidates = tasks
+            .iter()
+            .map(|task| OwnerWaveCandidate {
+                task_id: task.id.clone(),
+                footprint: if task
+                    .tags
+                    .iter()
+                    .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+                {
+                    Vec::new()
+                } else {
+                    lock_context_files_for_task(
+                        task,
+                        runtime.paths().repo_root.as_path(),
+                        runtime.unlocked_context_paths(),
+                    )
+                },
+            })
+            .collect::<Vec<_>>();
+        let admissions = runtime
+            .stores()
+            .tasks()
+            .admit_owner_wave(&candidates)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("admit explicit tasks through the admission section: {error}"),
+            })?;
+        for admission in admissions {
+            let Some(claim) = admission.blocked_by else {
+                continue;
+            };
+            let Some(candidate) = candidates
+                .iter()
+                .find(|candidate| candidate.task_id == admission.task_id)
+            else {
+                continue;
+            };
+            let conflicts = candidate
+                .footprint
+                .iter()
+                .filter(|requested| {
+                    claim.footprint.iter().any(|held| {
+                        runtime
+                            .footprint_lock_modes()
+                            .selectors_block(requested, held)
+                    })
+                })
+                .map(|requested| BacklogTaskConflict {
+                    requested_file: requested.clone(),
+                    locking_task_id: claim.task_id.clone(),
+                })
+                .collect();
+            tasks.retain(|task| task.id != admission.task_id);
+            excluded.push(BacklogTaskExclusion {
+                id: admission.task_id,
+                reason: BacklogTaskExclusionReason::ContextLockConflict,
+                conflicts,
+                crew: None,
+                detail: Some(claim_detail(&claim)),
+            });
         }
         (tasks, excluded)
     };

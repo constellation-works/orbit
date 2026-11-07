@@ -9,6 +9,7 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
+use super::super::claim_holders::ClaimHolders;
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
@@ -151,22 +152,16 @@ pub(super) fn backlog_snapshot_in_mode(
     };
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
-    // [ORB-12500] Claims need no separate holder entry here. A claimed task is
-    // `in-progress` or `review`, so its surface is already in this map, and
-    // the claim journal refuses every ordinary mutation of a claimed task —
-    // including narrowing its `context_files` — so the recomputed lock cannot
-    // drift from the footprint the claim froze. Consulting the claim ledger on
-    // this path would only add a way for the drain's hot loop to fail on a
-    // journal awaiting repair. The paths that can reach a claimed task
-    // directly, rather than through the backlog, consult it themselves.
-    // [ORB-14247] `no-diff-expected` is omitted from this map. The claim
-    // journal still fences that task's own writes; it just does not exclude
-    // overlapping backlog work. Entries `workflow.unlocked_context_paths`
-    // leaves unlocked are left out here as for any holder, though the claim
-    // froze them.
+    // Status-based holders omit `no-diff-expected` and apply the workspace's
+    // unlocked-path policy. Claims retain the surface their admission froze.
     let unlocked = runtime.unlocked_context_paths();
     let lock_modes = runtime.footprint_lock_modes();
-    let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
+    let mut lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
+    // A follower has no local leaf run, and the task population need not show
+    // its frozen surface. Reservation expiry does not release that surface.
+    let claims = ClaimHolders::read_for_admission(runtime)
+        .map_err(|error| PassError::store(action, "read execution claims", error))?;
+    claims.extend_lock_holders(&mut lock_holders);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.

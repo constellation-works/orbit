@@ -58,6 +58,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod crew_env;
+mod follower_claims;
 mod gap_fit;
 mod human_crew;
 mod lock_busy_pass;
