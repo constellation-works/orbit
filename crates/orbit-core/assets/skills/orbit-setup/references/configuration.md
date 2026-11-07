@@ -638,9 +638,10 @@ Choose `shadow` to record assignments without applying treatments. Choose
 allowlisted config values to work. Verify state from the command line with
 `orbit experiment list [--status <status>]`,
 `orbit experiment show <id-or-name>` (arms and event log) and
-`orbit experiment readout <id-or-name> [--metric <name>]` (per-arm outcomes,
-intervals and verdict, withheld while collection or delivery checks are
-unmet). Readouts calculate per-arm outcomes from the recorded assignments
+`orbit experiment readout <id-or-name> [--metric <name>]` (per-arm outcomes
+and intervals reported throughout; verdict reads `collecting` until the
+horizon and `withheld` when a sample-ratio or treatment-delivery check fails).
+Readouts calculate per-arm outcomes from the recorded assignments
 and work records. Or open the dashboard's **Analytics › Experiments** page
 for the list with per-arm enrollment and each experiment's readout: the
 detail renders from the experiment record immediately while the readout
