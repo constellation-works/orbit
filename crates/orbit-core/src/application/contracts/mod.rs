@@ -5,13 +5,16 @@
 //! none of them owns them: a module that defined one would pull every other
 //! user into a dependency on itself. This module sits below all nine and
 //! imports none of them [ORB-17924], nor `precedent_decision` or `assistance`
-//! [ORB-22313]. Only pure values belong here: no
-//! runtime access and no behaviour beyond formatting the value itself. The one
-//! exception is a port trait that a layer above application implements, such as
-//! `ToolInvocationPort` for the adapter [ORB-22004] and
-//! `TaskBundleMaintenancePort` for bootstrap [ORB-22005].
+//! [ORB-22313], nor `routines` or `auto_tasks` [ORB-22623]. Only pure values
+//! belong here: no runtime access and no behaviour beyond formatting the value
+//! itself. There are two exceptions: a port trait that a layer above
+//! application implements, such as `ToolInvocationPort` for the adapter
+//! [ORB-22004] and `TaskBundleMaintenancePort` for bootstrap [ORB-22005]; and
+//! `clock_settings`, which reads and writes the host's `clock.toml` under a root
+//! its caller names, because `automation` needs the cadence below `routines`.
 
 mod claimed_leaf;
+mod clock_settings;
 mod crew_draw;
 mod distributed_gate;
 mod drain_entry;
@@ -24,10 +27,15 @@ mod published_delivery;
 mod pull_settlement;
 mod retry_key;
 mod review_layer;
+mod schedule_display;
 mod task_bundle_maintenance;
 mod tool_invocation;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
+pub use clock_settings::{
+    ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
+    save_clock_settings,
+};
 pub(crate) use crew_draw::{
     BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
     INSPECTION_CREW_UNAVAILABLE, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
@@ -54,5 +62,6 @@ pub(in crate::application) use pull_settlement::SETTLEMENT_REFUSAL_REMEDY;
 pub use pull_settlement::{PullSettlementEntry, PullSettlementOutcome};
 pub(crate) use retry_key::RetryKey;
 pub(crate) use review_layer::review_layer_json;
+pub use schedule_display::ScheduleDisplayState;
 pub(crate) use task_bundle_maintenance::TaskBundleMaintenancePort;
 pub(crate) use tool_invocation::ToolInvocationPort;

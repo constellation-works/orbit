@@ -47,6 +47,7 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/task",
             "crates/orbit-core/src/application/job",
             "crates/orbit-core/src/application/automation",
+            "crates/orbit-core/src/application/auto_tasks",
             "crates/orbit-core/src/application/review",
             "crates/orbit-core/src/application/distributed",
             "crates/orbit-core/src/application/pull_drain",
@@ -239,6 +240,72 @@ class RelativeImportTests(unittest.TestCase):
                 "        self.capture_pull_experiments();\n    }\n}\n",
             "experiment/readout/admission.rs":
                 "use crate::application::distributed::claim_receipt;\n",
+        }, rejected=False)
+
+    def test_automation_and_auto_tasks_cannot_reach_routines(self):
+        # [ORB-22623] `routines` sits above both; automation's clock-settings
+        # read and auto_tasks' display state were back-edges into it.
+        method = {
+            "routines/status/report.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_routine_method(&self) {}\n}\n",
+        }
+        for module in ("automation", "auto_tasks"):
+            self.check_files({
+                **method,
+                f"{module}/probe.rs":
+                    "impl OrbitRuntime {\n    fn probe(&self) {\n"
+                    "        self.fresh_routine_method();\n    }\n}\n",
+            }, rejected=True)
+            for relative, source in (
+                (f"{module}/probe.rs", "use crate::application::routines::Probe;\n"),
+                (f"{module}/deep/probe.rs",
+                 "fn probe(root: &Path) { crate::application::routines::clock::load(root); }\n"),
+                (f"{module}/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n"),
+                (f"{module}/mod.rs", "use super::routines::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::routines::Probe;\n"),
+                (f"{module}/probe.rs", "use super::super::{routines::Probe};\n"),
+                (f"{module}/deep/probe.rs", "use super::super::super::{routines::Probe};\n"),
+            ):
+                with self.subTest(relative=relative, source=source):
+                    self.check_files({relative: source}, rejected=True)
+        self.check_files({
+            **method,
+            "automation/condition/evaluate.rs":
+                "fn cadence(root: &Path) { crate::application::contracts::load_clock_settings(root); }\n",
+            "automation/pilot_presence.rs":
+                "use orbit_automation::routines::loader::declared_routine_names;\n",
+            "auto_tasks/listing.rs":
+                "use crate::application::contracts::ScheduleDisplayState;\n",
+            "routines/sweep.rs":
+                "use crate::application::auto_tasks::scheduler::run;\n"
+                "use crate::application::automation::SourceCache;\n"
+                "use crate::application::backlog_forecast::record;\n",
+        }, rejected=False)
+
+    def test_contracts_cannot_reach_routines_or_auto_tasks(self):
+        # [ORB-22623] The moved leaves stay below the modules that read them.
+        for source in (
+            "use crate::application::routines::Probe;\n",
+            "use crate::application::{auto_tasks::Probe};\n",
+            "use super::routines::Probe;\n",
+        ):
+            with self.subTest(source=source):
+                self.check_files({"contracts/clock_settings.rs": source}, rejected=True)
+
+    def test_moved_clock_and_display_contracts_stay_in_contracts(self):
+        # [ORB-22623] A second definition would bring the back-edge's owner back.
+        for source in (
+            "pub struct ClockSettings;\n",
+            "pub fn load_clock_settings() {}\n",
+            "pub enum ScheduleDisplayState {}\n",
+        ):
+            with self.subTest(source=source):
+                self.check_files({"routines/clock/settings.rs": source}, rejected=True)
+        self.check_files({
+            "routines/clock/settings.rs":
+                "pub use crate::application::contracts::{ClockSettings, load_clock_settings};\n",
+            "routines/status/mod.rs":
+                "pub use crate::application::contracts::ScheduleDisplayState;\n",
         }, rejected=False)
 
     def test_forecast_cannot_reach_sweep_filing(self):

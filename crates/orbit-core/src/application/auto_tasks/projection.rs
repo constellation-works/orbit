@@ -3,7 +3,7 @@
 
 use super::scheduler::open_auto_task_instances_from_tasks;
 use super::{AutoTaskListingRow, AutoTaskSkip, ListedAutoTask};
-use crate::application::routines::ScheduleDisplayState;
+use crate::application::contracts::ScheduleDisplayState;
 use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{OrbitRuntime, Task};
 use chrono::{DateTime, Utc};

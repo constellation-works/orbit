@@ -16,7 +16,7 @@ use crate::OrbitRuntime;
 
 /// The clock cadence a hold's continuity limit is measured against.
 fn cadence_seconds(runtime: &OrbitRuntime) -> u64 {
-    crate::application::routines::clock::load_clock_settings(&runtime.global_root())
+    crate::application::contracts::load_clock_settings(&runtime.global_root())
         .map(|settings| settings.cadence_seconds)
         .unwrap_or(60)
 }
