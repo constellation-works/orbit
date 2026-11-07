@@ -68,7 +68,11 @@ disclosure choices survive status refreshes and reset on workspace or host
 changes. Filtering and paging are refused only while a trigger editor is on
 screen: close it first. An open editor whose routine moved to another page or
 group keeps the controls usable, so the operator can page back to it; paging
-or filtering back onto the editor disables them again. A save still in flight
+or filtering back onto the editor disables them again. If a filter keystroke
+reveals the editor, the query stops there and focus moves to the editor panel;
+remaining query characters do not change the draft. Tab or click into a form
+control to resume editing. Paging and Clear focus an enabled editor control
+when available, or the panel while a save is pending. A save still in flight
 reports its refusal in the editor now on screen, with the draft kept.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
