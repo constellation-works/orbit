@@ -158,7 +158,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | — | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
-| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Operator may enable a precedent category after shadow evidence; channel shipped | claude |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review the plugin-raised decision design (ORB-22824), then file its slices | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |

@@ -7,11 +7,11 @@ status: Draft
 feature: human-decision-channel
 doc_role: design
 type: design
-summary: "Design: decision-request record, delegated-human authority, email reply authentication, stale guard, triggers and digest for deciding held Orbit work by email"
+summary: "Design: decision-request record, delegated-human authority, email reply authentication, stale guard, triggers and digest for deciding held Orbit work by email; plugin-raised requests with an apply callback"
 tags: [human-decision-channel, plugins, routines, blocked-recovery, task-pilot]
 paths: ["crates/orbit-core/**", "crates/orbit-types/**", "crates/orbit-common/**", "crates/orbit-tools/**"]
 related_features: [plugins, automation-triggers, routines, state-compatibility, decision-assistance]
-related_artifacts: [ORB-17979, ORB-21089]
+related_artifacts: [ORB-17979, ORB-21089, ORB-22824]
 ---
 
 # Human decision channel — Design
@@ -22,7 +22,9 @@ human's answer without becoming the human, reply authentication, the stale guard
 the reply grammar, triggers, the digest, noise control, and compatibility. §10
 lists the ordered implementation slices, all done. §11 records the request
 fields, model-answer provenance and veto path for precedent-answered decisions,
-with their own slices (the first two implemented). Code anchors were re-checked at `b32997c50`
+with their own slices (the first two implemented). §12 ([ORB-22824], designed, not
+implemented) adds plugin-raised requests whose effect is the plugin's own apply tool,
+with its own concerns, slices and compatibility notes. Code anchors were re-checked at `b32997c50`
 (2026-11-01); symbols are the anchor, and line numbers that no longer sit on the
 symbol were dropped. §9 (Concerns &
 Honest Limitations) precedes §10 only because the slice list must close the doc;
@@ -764,8 +766,438 @@ The channel-side ones are:
 3. **Enablement and self-answer, including the notification wait**
    ([ORB-21097]) — §11.4. Implemented, default-off.
 
+## 12. Plugin-raised decision requests with an apply callback
+
+[ORB-22824] designs this section; nothing in it is implemented. It lets a plugin put a
+closed question on a task through this channel and own what happens when a human
+answers. The first consumer is orbit-office: a Library proposal (`knowledge_add`,
+`knowledge_update`, `runbook_from_friction`, `retire`, `auto_task`) that a human accepts
+from the dashboard, the CLI or an email reply. The daily "dreaming" auto-task that
+proposes consolidated learnings is the first producer. Its prompt, schedule and inputs
+are designed elsewhere. Code anchors were read at `a16a8e0d9` (2026-11-07).
+
+### 12.1 What is missing today
+
+Every gate's effect is a hard-coded arm of the one apply step
+(`OrbitRuntime::apply_decision_answer`, `application/task/decision/answering.rs`): an
+option rewrite, a pilot verdict, `approve_task_guarded_deferring_effects`, a resident
+grant, a script grant. `DecisionGate` (`orbit-types/src/task/decision/request/gates.rs`)
+is a closed, persisted enum, so each new effect has so far meant a new core gate
+(`resident_authority`, `script_grant`). That does not scale to effects core must not
+understand. An office acceptance writes a Library page or creates an auto-task from a
+payload the human reviewed (`office.proposal-accept {id, sha256}`, in orbit-office's
+proposals spec). Core cannot apply it, and should not learn Library semantics.
+
+There is a second, sharper gap. An office proposal is an Orbit task in `proposed`. With
+the channel enabled, `orbit.decision.digest` raises a `proposed_approval` request for
+every `proposed` task that has no open one
+(`raise_approval_decision_request`, `application/task/decision_channel/digest.rs`).
+Answering `approve` runs the generic approval toward `backlog`, which is the wrong
+effect for a proposal: office acceptance goes `proposed → in-progress` through its own
+tool and never through dispatch. So today the channel can offer a proposal for approval
+and apply something other than what the human meant.
+
+### 12.2 Shape
+
+One new generic gate, `plugin_request`, and one new binding kind. The plugin raises; core
+records, routes and guards; a human answers; core runs the plugin's own apply tool with
+the answer; the plugin applies or refuses. Core never reads the payload and knows
+nothing about what the answer does.
+
+| Step | Owner | What happens |
+|---|---|---|
+| Raise | Plugin, through a callback | `orbit.decision.plugin_raise` puts a request on one task with plugin-declared answers, an apply tool and an opaque revision (§12.3) |
+| Route | Core | Listing, `open_decisions`, dashboard, digest, `DecisionRequested` trigger and email, unchanged (§2.4, §7) |
+| Answer | Human | Dashboard, `orbit decision answer`, or a channel submission (§3.3). Never precedent or model (§12.6) |
+| Apply | Core calls the plugin | The registered apply tool runs once with the pinned input and the answer; the plugin re-checks its revision (§12.4) |
+| Record | Core | The human's answer and the apply outcome, both on the task history (§12.4) |
+
+### 12.3 The raise contract
+
+`orbit.decision.plugin_raise` is a new governed write with the same row shape as
+`orbit.decision.submit` and `orbit.decision.digest` (`catalog/operations.rs`): operator
+only for every capability-resolved caller, plus an *identified* plugin callback session
+admitted past the row and bound by the handler. An agent session is refused
+`caller_not_allowed`. An agent never raises one directly. It calls the plugin's own
+agent-callable tool (office: `office.proposal-create`), whose backend calls back. The
+plugin is the raiser of record; the agent is only a requester.
+
+Input:
+
+```json
+{
+  "task_id": "OFF-123",
+  "summary": "Accept the proposed update to runbook rb-release-checklist?",
+  "answers": [
+    {"id": "accept",  "label": "Accept",  "consequence": "Writes the reviewed diff to the Library."},
+    {"id": "dismiss", "label": "Dismiss", "consequence": "Closes the proposal; it is suppressed for 30 days."}
+  ],
+  "recommended": "accept",
+  "apply": {
+    "tool": "office.proposal-accept",
+    "input": {"id": "OFF-123", "sha256": "9f2c…"},
+    "revision": "sha256:9f2c…"
+  }
+}
+```
+
+The handler checks, in order, and writes nothing on any refusal:
+
+1. **Caller.** The callback session's plugin (`PluginCallbackIdentity::provenance.name`,
+   `crates/orbit-tools/src/plugin/callback/session.rs`) owns the namespace of `apply.tool`. A plugin can name
+   only its own tools.
+2. **Apply tool.** `apply.tool` is in the plugin's installed, enabled manifest. It is
+   `execution_kind: mutating` with `mcp_scope: none`, so no agent can call the effect
+   directly and bypass the decision. It is also on the host's apply-tool allowlist
+   (§12.5). The manifest digest is recorded on the request.
+3. **Answers.** Two to four, ids matching `[a-z][a-z0-9_]{0,31}`, one-line label and
+   consequence, the same bounds as `orbit.decision.raise`. `recommended` names one of
+   them or is absent. A `risk_tier` the plugin supplies is ignored (§12.6).
+4. **Input and revision.** `apply.input` is a JSON object of at most 8 KiB with no
+   top-level `decision` key, which core reserves (§12.4). `apply.revision` is 1-128
+   printable characters, opaque to core.
+5. **Task.** The task is in the session's workspace, open (not `done`, `rejected` or
+   `archived`), and owned by this host: the raise is a coordination write and
+   `ensure_coordination_task_write_permitted` refuses a replica checkout or a claimed
+   worker. The plugin must also be enabled for that workspace on this host (§12.7).
+6. **Bounds.** A task holds one open `plugin_request`. A re-raise with the same
+   `(plugin, tool, revision)` returns the open request (`deduplicated: true`). A re-raise
+   with a new revision supersedes the old request, as a new script-grant request
+   supersedes the old one on its holder task. Open plugin requests are capped per
+   workspace (50) and per plugin (20). Past either cap the raise is refused and nothing
+   is written.
+
+The record is a `DecisionRequest` with `gate: plugin_request`, `raised_by: plugin:<ns>`,
+the `summary`, `recommended` and `answers`, and one new optional field:
+
+```rust
+pub struct PluginApply {
+    pub plugin: String,            // namespace
+    pub tool: String,              // <ns>.<verb>
+    pub manifest_digest: String,   // at raise
+    pub input: serde_json::Value,  // pinned, ≤ 8 KiB
+    pub revision: String,          // opaque; the plugin's stale guard
+    pub requested_by: Option<String>, // writer label of the caller that spawned the backend
+}
+```
+
+The binding is a new `DecisionBinding::PluginObject { plugin, revision, manifest_digest,
+status }`. The status is the task's status at raise. The request reads `superseded`
+when the task's status moves, when a newer `plugin_request` on the task carries another
+revision, or when the installed manifest digest differs from the recorded one, because an
+upgraded plugin may give the same tool a different meaning. `requested_by` needs the
+host to stamp the spawning caller's writer label into the callback session record when
+it mints the session (slice 1). It is provenance only and grants nothing.
+
+While a task holds an open `plugin_request`, `orbit.decision.digest` does not raise a
+`proposed_approval` or `review_approval` request on it, and an `--approve-proposed`
+drain holds it as `decision_pending` instead of approving it. That closes the §12.1
+mis-apply: one task, one question, and the plugin's answers are the only ones offered.
+
+### 12.4 The apply step
+
+Answering a `plugin_request` uses the existing entry points and their checks unchanged.
+On the dashboard and `orbit decision answer`, `answer_decision_request_as_human` refuses
+automation and `precedent` writers. On a channel submission, the §3.3 checks and §4
+token run first. The gate's own step then runs in two phases. An out-of-process plugin
+call whose callbacks write the same task cannot run under that task's write lock.
+
+**Phase 1, under the task write lock.** Core takes a fresh read and checks state,
+binding, expiry and the allowed answer (§5). It checks that the plugin is installed and
+enabled on this host and in the workspace, and that the apply tool is still on the
+allowlist with the digest the request recorded (§12.5). Then it appends
+`decision_answered` with the human as writer and the channel provenance, as every gate
+does, plus a new `apply` block `{tool, input_sha256, revision, state: "pending"}`. The
+human's decision is now final and the token is consumed. A second answer is refused
+`request_superseded` ("already answered by …"), which is the existing answered-state
+refusal (`ensure_request_answerable`).
+
+**Phase 2, lock released.** Core calls `apply.tool` once through the ordinary audited
+tool dispatch, the same path a deterministic `plugin.tool_call` step takes
+(`plugin_tool_call`, `adapter/engine_host/actions/dispatch.rs`). The input is the pinned
+`apply.input` with one reserved key added:
+
+```json
+{"id": "OFF-123", "sha256": "9f2c…",
+ "decision": {"request_id": "dr-…", "answer": "accept", "revision": "sha256:9f2c…",
+              "answered_by": "daniel", "via": "email", "note": "…"}}
+```
+
+The plugin re-checks `decision.revision` against its live object and refuses with its
+own code when they differ (office already refuses a changed payload digest, and
+`base_sha256` for a changed page). Core then appends `decision_applied {request_id,
+outcome, code, summary, finished_at}`, where `outcome` is `applied` when the tool
+returned success and `failed` otherwise, with the plugin's error code kept verbatim.
+Core does not interpret plugin codes. It stays generic, and the plugin's code says
+whether anything changed (the office contract: a refusal before its reservation writes
+nothing).
+
+**Authority.** The human's authority is recorded once, on `decision_answered`, by core.
+The apply call runs with the authority the operator has when running the same tool from
+the CLI. The callback session the host mints for it carries the operator's ceiling
+∩ `permissions.orbit_tools` ∩ the plugin's grant ([plugins](../plugins/1_scope.md)
+§4), exactly as for `ORBIT_OPERATOR=1 orbit tool run
+office.proposal-accept`, which is office's documented operator path today. The plugin's
+callback writes keep their plugin provenance and are never written under the human's
+label ([4_decisions.md](./4_decisions.md#a-plugins-effect-is-never-written-under-the-humans-label)).
+The session record and every audit row of the call and its callbacks carry a new
+`decision` provenance field `{request_id, answered_by, via}`, so the audit trail reads:
+human answered through the channel, then plugin applied under that answer.
+
+**Derived apply state** (on read, like §2.2): `pending` (no `decision_applied` yet),
+`applied`, `failed`, and `unknown` when the `pending` entry is older than the backend's
+`timeout_ms` plus one minute, or the process that wrote it is gone. Nothing retries a
+`failed` or `unknown` apply automatically, matching office's "no callback is retried on
+an unknown outcome". The operator inspects it, and the plugin may raise a fresh request.
+`orbit.decision.show`, `open_decisions` and the dashboard show the apply state beside
+the answer. The submit response returns it, so the transport's confirmation or refusal
+mail states what actually happened, not only that the answer was recorded.
+
+### 12.5 Operator consent: the apply-tool allowlist
+
+A human answer is consent to one effect. It is not consent for a plugin to run tools at
+operator ceiling whenever its own request is answered. That consent is the operator's,
+given once per tool from the interactive CLI and refused from agent envelopes and plugin
+callbacks, like channel registration and `assist enable`:
+
+```
+orbit decision apply-tool allow office.proposal-accept
+orbit decision apply-tool revoke office.proposal-accept
+orbit decision apply-tool list
+```
+
+Each entry records the tool, the manifest digest at allow time and the operator, in
+`<global_root>/state/decision-channels/apply-tools.json`. The file sits beside the
+channel store and is masked the same way. A plugin upgrade that changes the digest
+suspends the entry until it is allowed again, mirroring how a grant change suspends a
+precedent enablement. Revoking an entry is immediate: open requests naming that tool
+stay open, and answering them is refused `plugin_unavailable` until it is re-allowed or
+the requests expire. This is a host-local store, not a manifest field, so the plugin
+protocol (`host_api`) does not change.
+
+### 12.6 Auto-answer policy: never by precedent or model
+
+A `plugin_request` is answered only by a human. This is structural, not a default the
+operator can switch on in v1:
+
+- `DecisionRequest::new` fixes every answer of a `plugin_request` at `authority` tier,
+  whatever the plugin declared, as it does for `resident_authority` and `script_grant`.
+  The model applies only `routine` and `reversible` requests
+  (`apply_model_decision_answer`, `decision/model.rs`), and its self-answer step routes
+  any other tier `excluded_tier`.
+- Curated-rule auto-answer runs only for `agent_request` (`decision/precedent.rs`).
+  `plugin_request` joins the gates the corpus never appends
+  (`decision_corpus_append`, `application/agent_corpus.rs`), so no answered plugin
+  request becomes precedent that automation could answer from. The plugin keeps its own
+  memory (office's 30-day dismissal suppression).
+- `answer_decision_request_as_human` already refuses `model`, `precedent` and every
+  automation label. A channel submission writes as the registered human only after
+  §3.3 and §4.
+
+**Why.** For the first consumer the request *is* agent memory. The dreaming run, the
+office orchestrator or a knowledge-maintenance auto-task files a proposal, and the
+answer decides what every later agent reads as knowledge or runs as automation. An
+agent that approved such a request would curate its own memory, which [ORB-10736]
+retired native learnings to prevent. It would also break office's invariant that "the
+orchestrator cannot approve its own proposals". That invariant rests on
+`office.proposal-accept` being `mcp_scope: none` and not agent-callable
+(orbit-office's office design, §3 Authority boundaries). This design keeps it: the apply
+tool must be `mcp_scope: none` (§12.3 step 2), only core calls it, and core calls it
+only after a human answer. Measured precedent accuracy does not help here, because
+the model predicting what Daniel would accept is the same self-approval loop with one
+more step. A future plugin whose requests are not memory and want a lower tier needs
+its own design and its own operator enablement. A plugin's declared tier is a claim
+by the raiser, the weakness the precedent spec already names for agent-declared tiers.
+
+### 12.7 Cross-host apply: the request lives where the effect lives
+
+Decision requests are task history, so they live on the host that owns the task's
+workspace. Answering is a coordination write. In a replica checkout,
+`coordination_task_write_refusal` (`orbit-runtime/src/orbit_runtime/identity.rs`)
+refuses it, and a claimed worker is refused the same way. The apply tool must run where
+the plugin and its data are. The office Library is Mac-only (`office-constellation`).
+dk-server-2, the channel host and owner of `ws_orbit`, does not install `office`: its
+`ws_orbit` config names an `[plugin_enablement] office` toggle and dk-server-2 warns that
+the plugin "is not installed on this host" (observed 2026-11-07).
+
+**Rule: a plugin request is raised only on a task its plugin can apply on the same
+host, and core never forwards an apply to another host**
+([4_decisions.md](./4_decisions.md#a-decision-effect-runs-on-the-host-that-owns-its-request)).
+Enforcement:
+
+- *Raise* (§12.3 step 5): the task is owned by this host, and the plugin is installed
+  and enabled here for that workspace. Otherwise the raise is refused `host_not_owner`
+  or `plugin_unavailable` and nothing is written.
+- *Answer* (§12.4 phase 1): an answer arriving through a runtime that does not own the
+  task is refused `host_not_owner`. That is today's `CapabilityRefused`, given the
+  named decision code so clients can match it. A plugin that has since become
+  unavailable on the owner host refuses `plugin_unavailable`. Neither writes anything,
+  and the request stays open.
+
+For office this is not a restriction in practice. A proposal is a task in the office
+workspace, owned by the Mac, the same host as the Library. So the request, the answer
+and `office.proposal-accept` are all local to the Mac. Two consequences are bounded
+rather than solved:
+
+- **Email for Mac-owned requests.** The registered email channel and `decision-mail`
+  live on dk-server-2 (§1 decision 4), and a channel registration is host config. A
+  request on the Mac is answerable from the Mac's dashboard and `orbit decision answer`.
+  It reaches email only if the Mac registers its own channel with its own
+  `decision-mail` install. Relaying submissions between hosts is out of scope, because
+  it would move the delegated-human authority across a host boundary that §3.2 keeps
+  local.
+- **The dreaming run on another host.** A dream run in `ws_orbit` on dk-server-2 cannot
+  file a Library proposal there, because `office` is absent. The dreaming design must
+  run its Library-facing half in the office workspace on the Mac, where
+  `office.proposal-create` raises the request locally. Its skill and runbook half stays
+  in `ws_orbit` (§12.8). A cross-host hand-off of dream candidates, such as a Mac job
+  that imports a dk-server-2 artifact, is possible later. It changes nothing here,
+  because the request would still be raised on the Mac.
+
+### 12.8 Dream PRs need only `review_approval`
+
+Dream changes to skills (`crates/orbit-core/assets/skills/`) and runbooks
+(`docs/runbooks/`) are code-reviewed repository changes. A dream-minted task opens a
+PR and reaches `review`. It then needs a human approval through the existing
+`review_approval` gate (digest raise, dashboard or CLI approve). No new kind is needed,
+and a `plugin_request` would be wrong, because no plugin owns a repository change:
+
+- `review_approval` is fixed `irreversible` tier (`DecisionRequest::new`), so the model
+  never answers it. Curated rules answer only `agent_request`. The human is therefore
+  the approver of agent-proposed skill text by construction, which is the same
+  self-approval guarantee §12.6 gives the Library.
+- Landing is not authorized by a task approval or a PR request (the Orbit agent guide's
+  rule). Completion authority is granted per invocation by an operator, never by
+  workspace configuration (`COMPLETION_IS_NEVER_WORKSPACE_RESOLVED`,
+  `adapter/engine_host/actions/dispatch.rs`).
+
+The one gap belongs to the dreaming design, not to the channel. A drain started with
+`--approve-proposed` approves qualifying proposed tasks into `backlog`, which admits
+execution, not landing. If Daniel wants to see a dream's proposed skill edits before
+any run, the dream auto-task's template must tag minted tasks `no-auto-approve`, which
+drain promotion already honours (`task/pilot/promotion.rs`).
+
+### 12.9 Refusals
+
+All are `DecisionRefusalCode`s (`orbit-common/src/error/kinds.rs`) exposed as `code` on
+the CLI and MCP (§5). The new codes are `plugin_unavailable` and `host_not_owner`;
+`apply_failed` is an outcome, not a refusal.
+
+| Case | When | Code / outcome | Written | Request after |
+|---|---|---|---|---|
+| Stale revision | The plugin's object changed after raise | Plugin's own code, outcome `failed` | `decision_answered` + `decision_applied` | Answered, apply `failed`; the plugin re-raises on the new revision |
+| Stale task | Task status moved, a newer revision was raised, or the manifest digest changed | `request_superseded` | Nothing (token rules as §5) | Superseded |
+| Plugin disabled | Plugin removed, disabled on the host or in the workspace, or apply tool revoked or suspended (§12.5) | `plugin_unavailable` | Nothing; token not consumed | Open until expiry |
+| Apply failure | The tool errors, times out, or its outcome is unknown | outcome `failed` / `unknown` | `decision_answered` + `decision_applied` (or none for `unknown`) | Answered; never retried; operator inspects |
+| Host mismatch | Raise or answer on a runtime that does not own the task, or a claimed worker | `host_not_owner` | Nothing | Unchanged |
+| Not a plugin's tool | `apply.tool` outside the caller's namespace, agent-callable, read-only, or not allowlisted | `caller_not_allowed` / `answer_not_applicable` at raise | Nothing | Not raised |
+| Agent or automation answer | Any non-human answerer, including `model` and `precedent` | `caller_not_allowed` | Nothing | Open |
+
+### 12.10 Contract office would adopt
+
+This section names the contract only. orbit-office designs its own changes.
+
+- Mark `office.proposal-accept` (and a dismiss tool, if office wants dismissal by
+  decision) as the apply tool. It already is `mutating` and `mcp_scope: none`.
+- Accept the reserved `decision` input key. Treat `decision.answer` as the choice
+  (`accept`, `dismiss`; `theirs`/`mine` for `shared_conflict` map onto answers), and
+  check `decision.revision`, which office sets to its `payload_sha256`, against the
+  stored `proposal.json` before reservation.
+- From `office.proposal-create`, after creating the task and artifact, call
+  `orbit.decision.plugin_raise` with the proposal's answers, `apply.input = {id,
+  sha256}` and `revision = sha256:<payload_sha256>`. Add `orbit.decision.plugin_raise`
+  to the manifest's `permissions.orbit_tools`.
+- Keep the app's Today accept on its own application-consent path. Both paths call the
+  same tool, and whichever lands first wins, because the other's revision or status check
+  refuses. The application-approvals rule "a relayed click is no stronger than its
+  relayer" ([application-approvals 4_decisions.md](../application-approvals/4_decisions.md#a-relayed-click-is-no-stronger-than-its-relayer))
+  stays intact. A decision request adds a surface the app cannot reach (email,
+  the operator dashboard). It adds no ceremony to the app's own click.
+- Proposal kinds, diffs, evidence pages, dismissal memory and reconcile stay office's.
+  Core sees an opaque input, a revision and two answer ids.
+
+### 12.11 Implementation slices
+
+Ordered. Each is shippable alone and inert until a plugin raises a request.
+
+1. **Record, binding and raise.** `orbit-types`: `DecisionGate::PluginRequest`,
+   `DecisionBinding::PluginObject`, `PluginApply`, the `authority` tier arm.
+   `orbit-common`: the governed row and the `plugin_request` spec. `orbit-tools`: the
+   spawning caller's label in the callback session record. `orbit-core`: the
+   `orbit.decision.plugin_raise` handler (§12.3 checks, bounds, supersession), the
+   digest and drain exclusion, and listing and show of the new fields. Acceptance: a
+   fixture plugin raises one request; an agent session, another plugin's namespace and
+   an agent-callable tool are refused; a re-raise dedupes or supersedes by revision.
+2. **Apply-tool allowlist.** `orbit-core` and the CLI: the host-only store and
+   `orbit decision apply-tool allow|revoke|list`, with the sandbox mask beside the
+   channel store and digest suspension. Depends on: 1.
+3. **Two-phase apply.** `orbit-core`: the `plugin_request` arm of
+   `apply_decision_answer`, `decision_applied`, the derived apply state, the operator
+   ceiling session with `decision` provenance, the corpus exclusion, and the new
+   refusal codes. Depends on: 1, 2. Acceptance: dashboard and CLI answers run the tool
+   once with the reserved key; a plugin refusal and a timeout record `failed` and
+   `unknown`; a revoked tool refuses `plugin_unavailable` and writes nothing; the model
+   apply step refuses the gate.
+4. **Channel and mail.** `orbit.decision.submit` returns the apply outcome, and
+   `decision-mail` renders plugin requests (summary, answers, no payload) and reports
+   the outcome in confirmation and refusal mail. Depends on: 3.
+5. **Office adoption** (orbit-office, §12.10), then the dreaming auto-task's Library half
+   in the office workspace. These are filed in their own repositories and designs.
+
+### 12.12 Compatibility
+
+- **Persisted enums.** `DecisionGate::PluginRequest` and
+  `DecisionBinding::PluginObject` are new variants of closed, persisted serde enums, so
+  they follow retain-don't-remove from their first release, like `ExecutionFailed` in
+  `StateTriggerKind`. A binary older than slice 1 that reads a `plugin_request` entry
+  fails to parse it, and `DecisionRequest::from_entry` returns `None`. The request is
+  then invisible to that binary and cannot be answered there. That fails closed, but
+  it is silent, so the release notes for slice 1 must say that mixed-version hosts do
+  not list plugin requests.
+- **History events.** `decision_applied` and the `apply` block on `decision_answered`
+  are additive. Old readers ignore an unknown event, and `DecisionResolution` gains an
+  optional field (`#[serde(default)]`).
+- **`DecisionRequestState`** gains no variant. The apply state is a separate derived
+  field, so existing consumers of `state` keep their four values.
+- **Refusal codes.** `plugin_unavailable` and `host_not_owner` are new codes on an
+  existing contract. A client that matches codes treats an unknown one as a refusal.
+- **Surfaces.** New tool, new CLI verbs and new optional output fields only; existing
+  shapes stay byte-stable, within the 30-day window
+  ([state-compatibility](../state-compatibility/4_decisions.md#compatibility-paths-expire-on-a-30-day-release-gated-window)).
+  Plugin protocol (`host_api`): unchanged. The apply input's reserved key is a
+  per-tool contract the plugin opts into by raising.
+- **Stores.** `apply-tools.json` is new, host-local and created on first allow. Its
+  absence means no tool is allowed, so every plugin request refuses
+  `plugin_unavailable` until an operator allows one.
+
+### 12.13 Concerns & honest limitations
+
+- **Core trusts the plugin's report of what it did.** `applied` means the tool returned
+  success. A buggy or lying plugin could claim success without effect, or act beyond
+  its answer within its grant. The containment is the same as §9's: an
+  operator-installed, grant-bound plugin, an operator-allowed tool, pinned input, and
+  a full audit trail.
+- **Operator ceiling is broad.** The apply runs at the authority an operator CLI run
+  has, bounded only by the plugin's grant. A narrower per-tool constraint profile,
+  reusing application-approvals' constrained scopes, would bound callbacks to the
+  request's own task. It is deferred because office's accept also creates auto-tasks
+  and moves its task through `review`, which needs most of that profile. Revisit if a
+  second plugin adopts this gate.
+- **The answer is final before the effect.** Recording the human's answer first is what
+  makes a crashed apply visible (`unknown`) and not silently re-runnable. It also means
+  an answered request can carry a failed effect. Surfaces must show the apply state,
+  and an email confirmation must not say "done" for `failed`.
+- **Email reach is per host.** Plugin requests on the Mac are not emailed until the Mac
+  has its own channel (§12.7). That is a real gap for Library proposals, accepted to
+  keep delegated-human authority host-local.
+- **The plugin writes the question.** The summary and consequences the human reads are
+  the plugin's text. A plugin can mislead. The operator's allowlist is the consent that
+  bounds which plugins may ask at all.
+
 ## Task References
 
+- [ORB-22824] — designs plugin-raised decision requests with an apply callback (§12).
+- [ORB-10736] — retired native learnings, so agents do not curate their own memory.
 - [ORB-21835] — bounds decision-list scanning for the Tasks waiting count.
 - [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
