@@ -1,0 +1,34 @@
+# Nonseeded, disabled Orbit workspace example. Install only after the owner
+# prerequisites in docs/design/activity-job/specs/auto-task-step.md section 6.
+# Targets are existing workspace definitions, never the generic QA coordinator.
+schemaVersion: 3
+kind: Job
+metadata:
+  name: release-readiness
+spec:
+  state: disabled
+  kind: workflow
+  max_active_runs: 1
+  # Includes queue time, parking, restart and downtime. Never reset on resume.
+  expire_when: "now >= job.started_at + duration('24h')"
+  steps:
+    - id: qa
+      target: auto-task:qa-full-sweep
+      wait_until: "board.empty"
+      require_result: release-readiness/v1
+    - id: security
+      target: auto-task:security-review
+      wait_until: "self.prev.status == 'done' && board.empty"
+      expire_when: "now >= self.wait_started_at + duration('8h')"
+      require_result: release-readiness/v1
+    - id: prepare
+      target: auto-task:release-prep
+      wait_until: >-
+        steps['qa'].status == 'done' && steps['security'].status == 'done'
+        && board.empty
+      require_result: release-readiness/v1
+# board.empty excludes only this step's bound child; siblings still count.
+# Typed acceptance pins the integration SHA and rechecks prior receipts at prep
+# admission (identity, source, age and unresolved findings). No merge is needed
+# for accepted no-diff evidence. Busy/no-release prep probes are not accepted.
+# No reuse_when: historical result reuse is not implemented; checks are fresh.
