@@ -383,6 +383,46 @@ fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
         .expect("data page offset");
     file.write_all(&[0]).expect("invalid B-tree page type");
 }
+
+#[test]
+fn doctor_unknown_check_suggests_listing_valid_checks() {
+    if in_child("doctor::doctor_unknown_check_suggests_listing_valid_checks") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(
+        &f,
+        &["workspace", "init", "--name", "doctor-check-recovery"],
+    );
+
+    let listed = run_ok(&f, &["doctor", "--json"]);
+    let listed_rows = rows(&listed);
+    let database = row(&listed_rows, "database");
+
+    let selected = run_ok(&f, &["doctor", "--check", "database", "--json"]);
+    let selected: Value = serde_json::from_slice(&selected.stdout).expect("selected check JSON");
+    assert_eq!(selected["check"], database["check"]);
+    assert_eq!(selected["status"], database["status"]);
+    assert_eq!(selected["message"], database["message"]);
+    assert_eq!(selected["remediation"], database["remediation"]);
+
+    let text = run(&f, &["doctor", "--check", "missing-check"]);
+    assert_eq!(text.status.code(), Some(1), "{text:?}");
+    let text_error = String::from_utf8_lossy(&text.stderr);
+    has(&text_error, "invalid input");
+    has(&text_error, "missing-check");
+    has(&text_error, "orbit doctor --json");
+
+    let json = run(&f, &["doctor", "--check", "missing-check", "--json"]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert!(json.stdout.is_empty(), "{json:?}");
+    let error: Value = serde_json::from_slice(&json.stderr).expect("JSON error");
+    assert_eq!(error["code"], "invalid_input", "{error}");
+    let message = error["error"].as_str().expect("error message");
+    assert!(message.contains("missing-check"), "{message}");
+    assert!(message.contains("orbit doctor --json"), "{message}");
+}
+
 #[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {
