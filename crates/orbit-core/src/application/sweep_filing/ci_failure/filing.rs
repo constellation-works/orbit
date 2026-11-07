@@ -72,6 +72,7 @@ use super::evidence::{
 use super::fields::value_string;
 use super::grouping::cluster_failures;
 use super::identity::CiTaskIdentities;
+use super::infrastructure::{infrastructure_audit, split_declared_infrastructure};
 use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
 use super::runner_os;
@@ -286,6 +287,15 @@ where
     let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
     let (complete, already_repaired) = exclude_already_repaired(complete, evidence);
     let audit = repaired_audit(audit, &already_repaired);
+    let (complete, infrastructure) = split_declared_infrastructure(
+        complete,
+        &runtime
+            .context
+            .settings()
+            .pr_settings()
+            .ci_infrastructure_signatures,
+    );
+    let audit = infrastructure_audit(audit, &infrastructure);
     // Recheck old/replayed snapshots too: ref_kind and the PR/event head alone
     // do not prove the failing checkout belongs to a landing branch.
     let (complete, branch_failures): (Vec<_>, Vec<_>) = complete
@@ -406,12 +416,16 @@ where
             && excluded_branch_failures.is_empty()
             && evidence_incomplete.is_empty()
             && retention.observation_errors.is_empty()
+            && infrastructure.is_empty()
         {
             OUTCOME_NO_CURRENT_FAILURE
         } else {
             OUTCOME_CURRENT_FAILURES
         };
-        let detail = if deferred.is_empty() {
+        let detail = if !infrastructure.is_empty() && deferred.is_empty() {
+            "the current failures carry a declared infrastructure signature, so no task is \
+             filed for them; nothing here is a CI pass"
+        } else if deferred.is_empty() {
             empty_snapshot_detail(
                 inconclusive.is_empty(),
                 retention.deferred_attribution.is_empty(),
@@ -436,6 +450,7 @@ where
             "deferred": deferred,
             "evidence_incomplete": evidence_incomplete,
             "inconclusive": inconclusive,
+            "infrastructure": infrastructure,
             "already_repaired": already_repaired,
             "pending_supersession": pending_supersession,
             "attributed": retention.attributed,
@@ -783,6 +798,7 @@ where
         "deferred": deferred,
         "evidence_incomplete": evidence_incomplete,
         "inconclusive": inconclusive,
+        "infrastructure": infrastructure,
         "already_repaired": already_repaired,
         "pending_supersession": pending_supersession,
         "max_tasks": max_tasks,

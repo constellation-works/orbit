@@ -456,14 +456,47 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.assertEqual(self.calls(), [])
                 self.assertFalse(self.destination.exists())
 
-    def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
-        self.configure([response(6, "000")])
+    def test_transient_responses_retry_until_the_budget_is_spent(self):
+        # Five transport failures on the virtual clock: 0.25s plus 1+2+3+4s of
+        # backoff, which leaves 1.75s of the budget, less than the next 5s.
+        for row in (response(22, "504"), response(6, "000")):
+            with self.subTest(row=row):
+                self.configure([row])
+                result = self.invoke(budget=12, deadline=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(self.calls()), 5)
+                self.assertEqual(self.backoffs(active_limit=12), [1, 2, 3, 4])
+                self.assertIn("ci-download: outcome=failed class=transient attempts=5",
+                              result.stderr)
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
+
+    def test_recovery_after_more_than_three_transient_responses(self):
+        self.configure([response(22, "504")] * 4 + [response()])
         result = self.invoke(deadline=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.calls()), 3)
-        self.assertEqual(self.backoffs(active_limit=4), [1, 2])
-        self.assertFalse(self.destination.exists())
-        self.assert_clean()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.destination.read_bytes(), BODY)
+        self.assertEqual(self.backoffs(active_limit=12), [1, 2, 3, 4])
+        self.assertIn("ci-download: outcome=verified attempts=5", result.stderr)
+
+    def test_only_an_exhausted_transient_budget_is_declared_transient(self):
+        # A permanent answer ends at once and stays the change's failure, even
+        # after transient responses.
+        cases = (([response(22, "404")], 1),
+                 ([response(22, "504"), response(22, "404")], 2),
+                 ([response(22, "504"), response(body=b"corrupt")], 2))
+        for rows, attempts in cases:
+            with self.subTest(rows=rows):
+                self.configure(rows)
+                result = self.invoke(deadline=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(self.calls()), attempts)
+                self.assertIn(f"ci-download: outcome=failed class=permanent attempts={attempts}",
+                              result.stderr)
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
+
+    def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
         for row in (response(6, "000"), response(stall=True)):
             with self.subTest(row=row):
                 self.configure([row])

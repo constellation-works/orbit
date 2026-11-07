@@ -97,7 +97,11 @@ spec:
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
     Every successful output carries `deferred_count`, the number of entries
-    in `deferred`.
+    in `deferred`. A failure whose log has a line starting with an entry of
+    `workflow.ci_infrastructure_signatures` is listed in `infrastructure` and
+    never filed or retained on a task: it is not a code failure to repair, and
+    it is not a CI pass, so a snapshot holding only such failures reports
+    `current_failures`. A workspace that declares none files as before.
     Schema version 2 requires one job per failure row, matching diagnostic
     and checkout job identities, one known failed step, and complete
     diagnostic evidence. A complete bounded diagnostic_unit with matching job
@@ -238,6 +242,12 @@ spec:
         items:
           type: object
           required: [task_id, failure_key, workflow, job, step, tested_commit, run_ids, run_urls, ref_kinds, head_branches]
+      infrastructure:
+        type: array
+        description: Failures not filed because their log carries a declared infrastructure signature.
+        items:
+          type: object
+          required: [run_id, job_id, signature]
       withheld:
         type: array
         description: Exact-key operator holds with outcome, reason, owner, and cover or expiry.

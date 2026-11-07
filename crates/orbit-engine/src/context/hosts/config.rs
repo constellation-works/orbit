@@ -39,6 +39,9 @@ pub struct PrConfig {
     /// `pr.delivery_authors`: forge logins whose pull requests count as
     /// Orbit's. Empty means the login that opened this run's pull request.
     pub delivery_authors: Vec<String>,
+    /// `workflow.ci_infrastructure_signatures`: log-line prefixes that mark a
+    /// failed CI job as an infrastructure failure. Empty declares none.
+    pub ci_infrastructure_signatures: Vec<String>,
     /// `pr.*`, `commit.*` and `branch.*` templates and switches; the default
     /// is Orbit's built-in titles, bodies, messages and branch names.
     pub conventions: orbit_types::workflow::DeliveryConventions,

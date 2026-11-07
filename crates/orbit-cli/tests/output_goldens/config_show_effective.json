@@ -1148,6 +1148,13 @@
         }
       ]
     },
+    "workflow.ci_infrastructure_signatures": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.crew_ladder.delivery_quality": {
       "scope": "built-in",
       "state": "default",

@@ -18,7 +18,7 @@ use super::super::super::operations::{
 use super::base_update::contains;
 use super::head::{CheckReadGap, prerequisite_log};
 use super::jobs::{
-    answers, commit_jobs, excerpt, failed_step, same_job, transient_evidence, unsuccessful,
+    answers, commit_jobs, excerpt, failed_step, infrastructure_evidence, same_job, unsuccessful,
 };
 
 /// Base commits, the starting one included, read for a job that ran to a
@@ -135,7 +135,9 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             base_id,
             deadline_ms,
         )?;
-        if transient_evidence(&log).is_some() || transient_evidence(&base_log).is_some() {
+        if infrastructure_evidence(host, &log).is_some()
+            || infrastructure_evidence(host, &base_log).is_some()
+        {
             return Ok(None);
         }
         let signature = error_signature(&log, failed_step(job));

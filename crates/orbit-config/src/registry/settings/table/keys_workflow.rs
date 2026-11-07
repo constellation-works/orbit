@@ -89,6 +89,13 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 167,
         resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.explore_brief.tags"),
     },
+    workflow_ci_infrastructure_signatures: Vec<String> => Vec<String> {
+        key: "workflow.ci_infrastructure_signatures", value_type: "array<string>",
+        description: "Line prefixes a failed CI job's log prints when infrastructure, not the change, failed. A match gets a CI rerun, not a repair agent or a CI sweep task.",
+        section: ConfigSection::Delivery, order: 168,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.ci_infrastructure_signatures"),
+    },
     workflow_explore_brief_deliver: bool => bool {
         key: "workflow.explore_brief.deliver", value_type: "bool",
         description: "Give a stored explore brief to the implementer; false keeps briefs in shadow.",

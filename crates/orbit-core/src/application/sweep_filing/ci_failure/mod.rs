@@ -11,6 +11,7 @@ mod fields;
 pub(crate) mod filing;
 mod grouping;
 mod identity;
+mod infrastructure;
 mod landed_repair;
 mod log_signature;
 mod operator_cover;

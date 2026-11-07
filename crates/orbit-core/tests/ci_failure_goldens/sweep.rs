@@ -112,6 +112,10 @@ pub(crate) struct Workspace {
 
 impl Workspace {
     pub(crate) fn new() -> Self {
+        Self::with_config("")
+    }
+
+    pub(crate) fn with_config(config: &str) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
@@ -119,7 +123,7 @@ impl Workspace {
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::create_dir_all(&origin).unwrap();
-        std::fs::write(repo.join(".orbit/config.toml"), "").unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
         let head = super::commit_chain(&repo, 1).remove(0);
         git(&origin, &["init", "-q", "--bare"]);
         git(
@@ -512,6 +516,51 @@ fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
 /// B4: newer red runs on task branches origin has since deleted outnumber the
 /// agent-main failure and carry more failed jobs than the job-log budget, so a
 /// slot or log read spent on them would starve agent-main.
+#[test]
+fn declared_infrastructure_signature_files_no_sweep_task() {
+    if !isolated_with_fake_gh("sweep::declared_infrastructure_signature_files_no_sweep_task") {
+        return;
+    }
+    let attributed = |payload: &str| {
+        format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {payload}\n")
+    };
+    let log = [
+        "HEAD is now at {checkout} Merge into agent-main",
+        "##[group]Run scripts/ci-download-verified.sh",
+        "##[endgroup]",
+        "curl: (22) The requested URL returned error: 504",
+        "ci-download: outcome=failed class=transient attempts=9 total_seconds=57.1 budget_seconds=60.0",
+        "##[error]Process completed with exit code 1.",
+    ]
+    .map(attributed)
+    .concat();
+
+    let mut undeclared = Workspace::new();
+    undeclared.push_red_run(8_200, 9_300, &log);
+    let (_, filed) = undeclared.sweep();
+    assert_eq!(filed.unwrap()["filed_count"], json!(1));
+
+    let mut declared = Workspace::with_config(
+        "[workflow]\nci_infrastructure_signatures = \
+         [\"ci-download: outcome=failed class=transient\"]\n",
+    );
+    declared.push_red_run(8_200, 9_300, &log);
+    let (_, filed) = declared.sweep();
+    let filed = filed.unwrap();
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["outcome"], json!("current_failures"), "{filed:#}");
+    assert_eq!(filed["audit"]["infrastructure"], json!(1), "{filed:#}");
+    let held = &filed["infrastructure"][0];
+    assert_eq!(held["run_id"], json!(8_200), "{filed:#}");
+    assert_eq!(held["job_id"], json!(9_300), "{filed:#}");
+    assert_eq!(
+        held["signature"],
+        json!("ci-download: outcome=failed class=transient"),
+        "{filed:#}"
+    );
+}
+
 #[test]
 fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     if !isolated_with_fake_gh(
