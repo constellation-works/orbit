@@ -116,10 +116,12 @@ never fire on a quiet tree.
 
 A definition may declare `completion`, a definition-file field, so a job step can
 require more than a `done` task. Without it a definition behaves as before.
+The job checker accepts only contracts in its result-contract registry;
+currently, `release-readiness/v1` is the only registered contract.
 
 ```yaml
 completion:
-  contract: my-readiness/v1      # the step's require_result
+  contract: release-readiness/v1 # the job step's require_result
   adapter: my-adapter            # a granted script, .orbit/resources/scripts/my-adapter.yaml
   form: my-form                  # passed to the adapter
   evidence_artifact: readiness-evidence.json
