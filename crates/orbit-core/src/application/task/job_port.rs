@@ -18,7 +18,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
@@ -292,10 +291,6 @@ pub(in crate::application) trait TaskJobPort {
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<String, OrbitError>;
-
-    /// The explore brief the claimed leaf this process executes captured at
-    /// admission; an error when no claimed leaf binds this process.
-    fn claimed_leaf_explore_brief(&self) -> Result<Option<CapturedExploreBrief>, OrbitError>;
 
     /// The task-pilot run still pending or running for `task_id`, if any.
     fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError>;

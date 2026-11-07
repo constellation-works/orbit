@@ -65,11 +65,7 @@
 # by an operator `allow_missing_context` write) may be missing there, and apply
 # keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
 # audit rationale/evidence, and a replay receipt.
-# Under `workflow.explore_brief.*`, prepare lists the tasks requesting an
-# explore brief in each partition's `explore_brief_task_ids`; apply validates
-# each returned brief and writes it as the system-written `explore-brief.json`
-# task artifact before the receipt. An invalid brief is dropped with its
-# reason in the receipt and never fails or repairs the assessment. A CI sweep may pass its
+# A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
 # promote a warning-free, selector-backed proposed repair to backlog. A filed
 # task another writer already promoted settles superseded `promoted_elsewhere`. An
@@ -192,8 +188,8 @@ spec:
           default_input:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
-            # The whole item, so a partition without
-            # `explore_brief_task_ids` (none requested) still dispatches.
+            # The whole item, so a partition without its optional fields
+            # (`rechecks`, `auto_effort_escalation`) still dispatches.
             partition: "{{ item }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"

@@ -1,9 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    EXPLORE_BRIEF_ARTIFACT, MOCK_DEVIATIONS_ARTIFACT, MUTATION_PROPOSAL_ARTIFACT_DIR,
-    MUTATION_RECEIPT_ARTIFACT_DIR, MockDeviations, Task, TaskArtifact, VISUAL_ARTIFACT_PREFIX,
-    canonical_artifact_path, is_explore_brief_artifact, is_mock_artifact,
-    is_mutation_proposal_artifact, is_mutation_receipt_artifact, is_visual_artifact,
+    MOCK_DEVIATIONS_ARTIFACT, MUTATION_PROPOSAL_ARTIFACT_DIR, MUTATION_RECEIPT_ARTIFACT_DIR,
+    MockDeviations, Task, TaskArtifact, VISUAL_ARTIFACT_PREFIX, canonical_artifact_path,
+    is_mock_artifact, is_mutation_proposal_artifact, is_mutation_receipt_artifact,
+    is_visual_artifact,
 };
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
 
@@ -53,10 +53,9 @@ pub(crate) fn admit_task_artifact_as(
 }
 
 /// Canonicalize an artifact a caller other than Orbit's system writer
-/// supplies, and refuse it in a reserved name: the review namespace, the
-/// task-pilot's explore brief and mutation application receipts. Gate records
-/// are certificates and authority, the brief is the pilot's validated
-/// product and a receipt suppresses re-application through its key, not
+/// supplies, and refuse it in a reserved name: the review namespace and
+/// mutation application receipts. Gate records are certificates and
+/// authority, and a receipt suppresses re-application through its key, not
 /// agent claims, so every agent- or operator-originated write applies this
 /// one rule: task updates, task starts and a claimed worker's claim evidence,
 /// which a remote owner's broker also reaches. The only exception is the live
@@ -91,12 +90,6 @@ fn admit_agent_artifact_as(
                 "{MOCK_DEVIATIONS_ARTIFACT} does not match the mock deviations contract: {error}"
             ))
         })?;
-    }
-    if is_explore_brief_artifact(&artifact.path) {
-        return Err(OrbitError::InvalidInput(format!(
-            "{} is reserved for the task-pilot's system writer: only an applied pilot assessment writes {EXPLORE_BRIEF_ARTIFACT}; rename ordinary supporting evidence to a nonreserved name",
-            artifact.path
-        )));
     }
     if is_mutation_receipt_artifact(&artifact.path) {
         return Err(OrbitError::InvalidInput(format!(

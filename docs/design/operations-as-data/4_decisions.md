@@ -563,7 +563,8 @@ Managed implement and review-repair runs perform their own investigation.
 Legacy `workflow.explore.*` and `workflow.purpose_crews.explorer` config
 loads with a deprecation warning and is ignored. Stored invocation answers,
 run accounting and concluded experiment explorer-uptake fields remain
-readable. The task pilot's `explore_brief.*` feature is independent and stays.
+readable. The task pilot's separate `explore_brief.*` feature was removed later
+[ORB-22805].
 
 **Operator attention.** `orbit.attention` is advertised in the default `tasks-read` toolset, annotated read-only, and governed for Agent and Operator. It derives task-level waits without widening source rights. A bound MCP session refuses `all`, `host` and another workspace with `scope_not_permitted`; local CLI callers may select the local registry. Reading the feed changes no state or configuration.
 

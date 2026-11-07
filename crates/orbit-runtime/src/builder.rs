@@ -407,7 +407,6 @@ pub(crate) fn build_context_from_roots(
                 )?,
             ),
             runtime_config.snapshot.regression_risk(),
-            runtime_config.snapshot.explore_brief(),
             runtime_config.snapshot.task_types().to_vec(),
             runtime_config.snapshot.decision_channel_enabled,
             crate::task::locks::LeasePolicy::admit(&runtime_config.snapshot)?,

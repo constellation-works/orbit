@@ -20,7 +20,6 @@ use tempfile::TempDir;
 const FAILED_AUDIT_TITLE: &str = "audit insert fails after the task commits";
 const NORMAL_TITLE: &str = "audit insert commits with the task";
 
-#[test]
 fn committed_task_add_stays_success_when_its_audit_insert_fails() {
     let (_root, runtime, repo_root, database) = test_runtime();
     install_audit_failure(&database);
@@ -82,7 +81,6 @@ fn committed_task_add_stays_success_when_its_audit_insert_fails() {
 /// another connection's writer lock retries the insert once, so the row
 /// still lands. The lock is held for one busy timeout plus a margin: the
 /// first insert gives up while it is held, and the retry outlasts it.
-#[test]
 fn audit_insert_held_out_by_a_sqlite_writer_lock_is_retried() {
     let (_root, runtime, repo_root, database) = test_runtime();
     let busy_timeout = Duration::from_millis(u64::from(
@@ -214,3 +212,9 @@ fn clear_audit_failure(database: &Path) {
         .execute_batch("DROP TRIGGER IF EXISTS injected_tool_audit_failure;")
         .expect("drop audit failure trigger");
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    committed_task_add_stays_success_when_its_audit_insert_fails,
+    audit_insert_held_out_by_a_sqlite_writer_lock_is_retried,
+);

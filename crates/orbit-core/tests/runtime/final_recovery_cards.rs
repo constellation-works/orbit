@@ -65,7 +65,6 @@ fn answer(fx: &Fixture, request: &str, option: &str, note: &str) {
         .unwrap();
 }
 
-#[test]
 fn a_decide_decision_opens_one_request_with_summary_options_and_recommendation() {
     let fx = fixture();
     let (task, request_id) = blocked_on_decision(&fx, data_semantics_decision());
@@ -120,7 +119,6 @@ fn a_decide_decision_opens_one_request_with_summary_options_and_recommendation()
     assert_eq!(open["options"][1]["recommended"], false);
 }
 
-#[test]
 fn a_terminal_recovery_option_makes_the_request_irreversible() {
     let fx = fixture();
     let mut decision = data_semantics_decision();
@@ -180,7 +178,6 @@ fn a_malformed_option_set_is_refused_when_the_decision_is_parsed() {
     assert!(FinalRecoveryDecision::parse(&out_of_range).is_err());
 }
 
-#[test]
 fn a_requeue_option_rewrites_comments_the_choice_and_closes_the_request() {
     let fx = fixture();
     let (task, request_id) = blocked_on_decision(&fx, data_semantics_decision());
@@ -222,7 +219,6 @@ fn a_requeue_option_rewrites_comments_the_choice_and_closes_the_request() {
     );
 }
 
-#[test]
 fn a_rewrite_only_option_edits_the_task_and_unblocks_it() {
     let fx = fixture();
     let (task, request_id) = blocked_on_decision(&fx, data_semantics_decision());
@@ -240,7 +236,6 @@ fn a_rewrite_only_option_edits_the_task_and_unblocks_it() {
     );
 }
 
-#[test]
 fn a_split_option_files_a_linked_follow_up_and_narrows_the_task() {
     let fx = fixture();
     let (task, request_id) = blocked_on_decision(
@@ -292,7 +287,6 @@ fn a_split_option_files_a_linked_follow_up_and_narrows_the_task() {
     );
 }
 
-#[test]
 fn an_agent_attributed_answer_is_refused_and_changes_nothing() {
     let fx = fixture();
     let (task, request_id) = blocked_on_decision(&fx, data_semantics_decision());
@@ -314,3 +308,13 @@ fn an_agent_attributed_answer_is_refused_and_changes_nothing() {
         DecisionRequestState::Open
     );
 }
+
+crate::scenario_table!(
+    final_recovery_cards,
+    a_decide_decision_opens_one_request_with_summary_options_and_recommendation,
+    a_terminal_recovery_option_makes_the_request_irreversible,
+    a_requeue_option_rewrites_comments_the_choice_and_closes_the_request,
+    a_rewrite_only_option_edits_the_task_and_unblocks_it,
+    a_split_option_files_a_linked_follow_up_and_narrows_the_task,
+    an_agent_attributed_answer_is_refused_and_changes_nothing,
+);

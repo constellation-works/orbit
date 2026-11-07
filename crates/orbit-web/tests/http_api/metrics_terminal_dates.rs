@@ -6,7 +6,7 @@ use orbit_core::application::task::TaskUpdateParams;
 use orbit_store::contracts::{InvocationInsertParams, TaskArtifactUpdateParams};
 use orbit_types::task::{ArtifactWriter, TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::backlog_forecast::comment_on_task;
 use super::metrics_trends::{
@@ -220,17 +220,15 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
             let turns = format!("/api/diagnostics/turns_to_edit?since=24h&{WS}");
             let friction =
                 format!("/api/diagnostics/delivery_friction?since=24h&families=tokens&{WS}");
-            let brief = format!("/api/diagnostics/brief_accuracy?since=24h&{WS}");
             let read = || {
                 (
                     json_ok(server.get(&tokens)),
                     json_ok(server.get(&turns)),
                     json_ok(server.get(&friction)),
-                    json_ok(server.get(&brief)),
                 )
             };
 
-            let check = |(tokens, turns, friction, brief): &(Value, Value, Value, Value)| {
+            let check = |(tokens, turns, friction): &(Value, Value, Value)| {
                 assert_eq!(tokens["total"]["n"], 1, "tokens population: {tokens}");
                 assert_eq!(tokens["total"]["excluded_no_invocations"], 0);
                 assert_eq!(tokens["undated_tasks"], 1);
@@ -250,8 +248,6 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
                     Some(count),
                     "the rate divides by one done task"
                 );
-                assert_eq!(brief["done_tasks"], 1, "brief selection");
-                assert_eq!(brief["undated_tasks"], 1);
             };
             let before = read();
             check(&before);
@@ -272,7 +268,6 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
                 after.2["families"][0]["total"], before.2["families"][0]["total"],
                 "friction rate"
             );
-            assert_eq!(after.3["done_tasks"], json!(1));
         },
     );
 }

@@ -147,7 +147,6 @@ fn excluded_reason(prepared: &Value, task: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-#[test]
 fn an_agent_cannot_close_a_human_crew_task_and_an_operator_can() {
     let fx = HumanCrewFixture::new();
     let task = fx.task("Renew the domain", Some("dk"));
@@ -185,7 +184,6 @@ fn an_agent_cannot_close_a_human_crew_task_and_an_operator_can() {
 /// `--force`; an agent or MCP caller keeps the lifecycle on the same task, so
 /// assigning a human crew never skips review. Each bypass is a forced-style
 /// history entry naming the actor, the move and the human crew.
-#[test]
 fn an_operator_moves_a_human_crew_task_to_any_status_and_an_agent_cannot() {
     let fx = HumanCrewFixture::new();
 
@@ -252,7 +250,6 @@ fn an_operator_moves_a_human_crew_task_to_any_status_and_an_agent_cannot() {
     assert!(reopen.to_string().contains("cannot move from"), "{reopen}");
 }
 
-#[test]
 fn the_task_pilot_never_assesses_a_human_crew_task() {
     let fx = HumanCrewFixture::new();
     let human = fx.task("Renew the domain", Some("dk"));
@@ -290,7 +287,6 @@ fn the_task_pilot_never_assesses_a_human_crew_task() {
     assert!(fx.runtime.get_task_comments(&human).unwrap().is_empty());
 }
 
-#[test]
 fn an_experiment_arm_cannot_draw_a_human_crew() {
     let fx = HumanCrewFixture::new();
     let actor = ExperimentActor {
@@ -322,7 +318,6 @@ fn an_experiment_arm_cannot_draw_a_human_crew() {
     assert!(message.contains("arm `treatment`"), "{message}");
 }
 
-#[test]
 fn crew_analytics_leave_human_crew_tasks_out() {
     let fx = HumanCrewFixture::new();
     let human = fx.task("Renew the domain", Some("dk"));
@@ -359,7 +354,6 @@ fn crew_analytics_leave_human_crew_tasks_out() {
     );
 }
 
-#[test]
 fn filing_a_human_crew_task_warns_unless_the_body_is_short_with_steps_commands_and_verify() {
     let fx = HumanCrewFixture::new();
     let file = |crew: &str, description: &str| -> Vec<String> {
@@ -417,3 +411,13 @@ fn filing_a_human_crew_task_warns_unless_the_body_is_short_with_steps_commands_a
         "an agent crew's task is not held to the human format"
     );
 }
+
+crate::scenario_table!(
+    human_crew_work,
+    an_agent_cannot_close_a_human_crew_task_and_an_operator_can,
+    an_operator_moves_a_human_crew_task_to_any_status_and_an_agent_cannot,
+    the_task_pilot_never_assesses_a_human_crew_task,
+    an_experiment_arm_cannot_draw_a_human_crew,
+    crew_analytics_leave_human_crew_tasks_out,
+    filing_a_human_crew_task_warns_unless_the_body_is_short_with_steps_commands_and_verify,
+);

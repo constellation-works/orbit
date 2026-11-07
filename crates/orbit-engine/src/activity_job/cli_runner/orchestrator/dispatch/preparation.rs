@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
-use orbit_types::workflow::{
-    ExperimentActivityOverlay, ExperimentOverlayRecord, ExploreBriefAdmission,
-};
+use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord};
 use serde_json::Value;
 
 use crate::activity_job::cli_runner::image_input::{ImageInputPlan, admit_image_input};
@@ -43,7 +41,6 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) activity_tools: ResolvedActivityTools,
     pub(super) task_ctx: Option<Value>,
     pub(super) regression_risk_instruction: Option<&'a str>,
-    pub(super) explore_brief_instruction: Option<&'a str>,
     pub(super) notice_instruction: Option<&'a str>,
     pub(super) notice_posting_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
@@ -74,47 +71,6 @@ fn attach_regression_risk<'a>(
     let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
     context.insert("regression_risk".to_string(), marks);
     Some(instruction)
-}
-
-/// Ask the host for the task's explore brief when `spec` declares an
-/// `explore_brief_instruction`, record the outcome whatever it is, and put a
-/// delivered brief into the task context. Returns the instruction to append
-/// only when the prompt carries the brief.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "brief admission needs the step identity, the mutable task context and the audit writer together"
-)]
-fn attach_explore_brief<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    step_id: &str,
-    activity_name: &str,
-    input: &Value,
-    task_ctx: Option<&mut Value>,
-    audit: &V2AuditWriter,
-) -> Option<&'a str> {
-    let instruction = spec
-        .explore_brief_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let ExploreBriefAdmission { mut record, brief } =
-        host.explore_brief_for_activity(run_id, activity_name, input)?;
-    let delivered = match (brief, task_ctx.and_then(Value::as_object_mut)) {
-        (Some(brief), Some(context)) if record.deliverable() => {
-            context.insert("explore_brief".to_string(), brief);
-            true
-        }
-        _ => false,
-    };
-    record.delivered = delivered;
-    audit.emit_lossy(V2AuditEventKind::ExploreBriefApplied {
-        step_id: step_id.to_string(),
-        activity_name: activity_name.to_string(),
-        task_id: task_id_from_input(input).unwrap_or_default().to_string(),
-        brief: record,
-    });
-    delivered.then_some(instruction)
 }
 
 /// The notice instructions one dispatch carries: the untrusted-data
@@ -282,16 +238,6 @@ pub(crate) fn dispatch_cli_invocation(
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
     let regression_risk_instruction =
         attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
-    let explore_brief_instruction = attach_explore_brief(
-        host,
-        spec,
-        run_id,
-        step_id,
-        activity_name,
-        input,
-        task_ctx.as_mut(),
-        &audit,
-    );
     let FleetNoticeInstructions {
         notice_instruction,
         notice_posting_instruction,
@@ -348,7 +294,6 @@ pub(crate) fn dispatch_cli_invocation(
             activity_tools,
             task_ctx,
             regression_risk_instruction,
-            explore_brief_instruction,
             notice_instruction,
             notice_posting_instruction,
             tool_ctx,

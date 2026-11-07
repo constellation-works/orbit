@@ -1,8 +1,9 @@
 # Default task-pilot routine [ORB-10739, ORB-12745]. Seeded into
 # `.orbit/routines/` on `orbit init` with the routine name, this host's
 # registered machine id (`owner_machine`) and the workspace's registered base
-# branch resolved at seed time. It is intentionally disabled: enabling
-# scheduled task preflight is an explicit, versioned workspace decision.
+# branch resolved at seed time. A newly initialized workspace seeds it
+# enabled; set `enabled: false` to opt out of scheduled task preflight. A
+# workspace seeded earlier keeps its setting.
 #
 # State-triggered rather than cron [ORB-11331]: each clock tick fingerprints
 # the eligible tasks against the pinned branch head and admits the tasks whose
@@ -56,9 +57,9 @@ name: __ORBIT_ROUTINE_NAME__
 description: >
   Preflight proposed/backlog tasks whose material fingerprint has no fresh
   task-pilot assessment. State-triggered: fires on creation or requirements edit
-  and stays quiet otherwise. Disabled by default; set enabled to true in this
-  versioned definition to opt this workspace into scheduled task preflight.
-enabled: false
+  and stays quiet otherwise. Set enabled to false in this versioned
+  definition to opt this workspace out of scheduled task preflight.
+enabled: true
 trigger:
   state:
     kind: preparation_eligible

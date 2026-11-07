@@ -873,7 +873,9 @@ Only the global file, and only when it is absent (or under `--force`):
   | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
 
   On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["terra", "sonnet", "grok", "muse-wonder"]`, `hard = ["sol", "opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
-- every [purpose pool](#purpose-crew-pools), so no route is an invisible default: `task_pilot` and `auto_fix` copy `low`, `failure_recovery` and `review` copy `medium`, and `final_recovery` names whichever of `sol`, `grok` and `muse-wonder` are enabled (else `opus`). `pre_landing_review`, `baseline_red_repair`, `sweep_tasks`, `visual_review` and `pilot_warning_triage` are written as `[]`, each with a comment naming the route it keeps: `pre_landing_review` uses the review pool, `baseline_red_repair` and `sweep_tasks` use the task's complexity pool, `visual_review` uses the task's complexity pool for image-capable crews, and `pilot_warning_triage` uses `workflow.hard_complexity_crews`.
+- these [purpose pools](#purpose-crew-pools), each keeping only the members whose crew is enabled: `review = ["sol", "sonnet", "muse-wonder", "grok", "opus@medium"]`, `task_pilot = ["luna@high", "haiku@high", "muse-spark@high"]`, `failure_recovery = ["luna", "haiku", "muse-spark", "grok"]`, `auto_fix = ["luna", "haiku", "muse-spark"]`, `final_recovery = ["sol", "muse-wonder", "opus@medium"]`, `baseline_red_repair = ["terra", "sonnet", "muse-wonder", "grok"]` and `pre_landing_review = ["luna", "haiku", "muse-spark"]`. A pool left empty is omitted and keeps its earlier route, except `final_recovery`, written as `[]` (final recovery off) so it never falls back to a crew this host does not run. `sweep_tasks` and `pilot_warning_triage` are not written;
+- `experiments.enabled = true`, `workflow.crew_selection = "static"`, `workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`, `workflow.mid_run_steering.enabled = true` and `workflow.task_pilot_freshness.material_fields = ["description", "criteria"]`;
+- when init creates this machine's identity, `machine.auto_concurrency.mode = "enforce"` beside it, unless already set. An existing machine keeps its mode.
 
 These choices apply to newly seeded global configurations. Existing crew tables and complexity or purpose pools keep their explicit values; workspace overrides keep their normal precedence. To use the new defaults in an existing configuration, edit those choices explicitly.
 
@@ -1058,35 +1060,7 @@ are deprecated and ignored. Existing files still load with a warning; remove
 these keys with `orbit doctor --fix-retired-config-keys`, which backs up each
 affected file first, or delete the lines by hand from the `config.toml` that
 sets them. Explorer delegation and its MCP tool have been removed. Stored runs
-and experiment readouts remain readable. The task pilot's explore briefs below
-are a separate feature.
-
-### `[workflow.explore_brief]` — explore briefs from the task pilot
-
-```toml
-[workflow.explore_brief]
-enabled = true
-tags = ["explore-brief"]
-deliver = false
-```
-
-| Key | Default | What it does |
-|---|---|---|
-| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for an explore brief for each requested task. |
-| `workflow.explore_brief.tags` | `[]` | Task tags that request a brief. Empty requests one for every piloted task. |
-| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer. `false` keeps briefs in shadow: produced and stored, never delivered. |
-
-The task pilot already reads the code a task will change to propose its lock footprint. An **explore brief** keeps a bounded map of that reading: the targets the change creates, modifies or deletes, the call path to them, the existing pattern to copy, the covering tests, gotchas, adjacent work the task does not own, and the checked-in maps it builds on. Every location is a `file:`, `dir:` or `symbol:` selector, never a line number.
-
-- **Which tasks.** With the switch on, preparation marks each task whose tags include one of `tags` (or every task, when `tags` is empty) and the pilot returns a brief for it. Tags are read when the task is piloted, so tag a task at filing; one tagged later gets a brief only when it is piloted again. A non-Git workspace gets no brief, and neither does a `verified_no_diff`, `host_operational` or `unassessed` assessment.
-- **Validation.** Apply checks the brief's shape and per-field caps, a serialized size of at most 8 KiB, that no target or free text cites a line number or pastes code, that every target exists at the pilot's pinned revision (a `symbol:` name must also occur in its file), and that every `change` target lies inside the applied `context_files`. A brief that fails is dropped: the assessment applies as usual, the task is never marked invalid for it, and no repair pass is spent. When a task is repaired for another reason, the repair pilot returns a brief again.
-- **Storage.** A valid brief is written as the task artifact `explore-brief.json` by the system writer, before the pilot's receipt, with its provenance: the task, the inspection revision and tree, the material fingerprint and operation id of the receipt, and the pilot run and crew. Re-piloting replaces it. The name is reserved: an agent or operator write to it is refused. The receipt records `explore_brief` as `{written, sha256, bytes}` or `{dropped: <reason>}`, and `orbit task show` prints that outcome in the pilot comment.
-
-- **Delivery.** Each `agent_implement` dispatch checks the task's brief before the agent starts, and records the outcome as `activity.explore_brief_applied`, whatever it is. First, the brief must belong to the task's newest pilot receipt (otherwise `absent`), and the task's material, recomputed at the brief's inspection revision under the pilot's freshness policy, must still be what that receipt sealed. The comparison ignores the task's own status and its dependencies' statuses, which admission changes, so a material edit with no new pilot (title, description, criteria, plan or selectors by default) drops the brief as `dropped: material_changed`, and so does a fingerprint that cannot be recomputed. Second, the files the brief's targets cover (a `dir:` target by prefix) are compared between the inspection revision and the run's base (`steps.worktree.output.base_sha`): none changed is `fresh`; 1 to 3 files and at most 200 changed lines, with no `change` target deleted or renamed, is `drifted`; more is `dropped: stale`; an inspection revision that is not an ancestor of the base is `dropped: revision_unrelated`. The limits are fixed. A resumed implementation on a new base is checked again against it.
-- **Claimed runs.** Admission captures the selected task's current brief (including its inspection revision), the receipt's status-neutral material fingerprint, the pilot's resolved eligibility and freshness policy, and the owner's delivery setting alongside tag instructions. The follower recomputes material from the current task at the inspection revision and classifies code drift against the claim's worktree base using the same checks as an owner run. Dispatch reads the capture, never the owner's artifact or pilot run, and never the replica's brief policy. An older receipt without a captured brief runs cold.
-- **What the implementer sees.** Only a `fresh` or `drifted` brief, and only while both `enabled` and `deliver` are on, reaches the prompt: the task context carries `explore_brief` (`status`, `inspection_revision`, `base_sha`, the brief and, when drifted, `drift` with each changed covered file's added and deleted line counts and the `git diff` command to read them; the patch itself is never inlined), and the activity's `explore_brief_instruction` is appended. It says the brief is a starting map, not authority, and asks the execution summary to list wrong or missing entries. Tag instructions are unchanged; explorer delegation has been removed. Review, review repair and recovery activities never receive a brief. `orbit run show` prints an `Explore brief:` line per dispatch and carries the records under `tag_instructions.explore_briefs` in its JSON.
-
-Settings are read when the runtime opens.
+and experiment readouts remain readable.
 
 ### `[workflow.agent_corpus]` — activity-scoped workspace knowledge
 
@@ -3106,3 +3080,4 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap`, `crew_performance_window_days` | Ignored: crew-performance weighting and its snapshots were removed. Delete the keys. Recognised until 2026-12-07. |
 | `scoring.enabled` | Ignored: the agent-family scoreboard was retired and nothing records scoreboard metrics. Delete the `[scoring]` table. Recognised until 2026-11-12; after that it is an unknown key. |
 | `workflow.crew_ladder.mode`, `rungs`, `tiers`, `explore_rate`, `margin`, `look_every`, `max_sample`, `exclude_types`, `watch_window`, `retry_after_days`, `delivery_quality`, `quality_grade_margin`, `min_grade_coverage` | Ignored: the crew ladder, its standing shadow trials and `orbit agents ladder` were removed. Route each tier with `workflow.<tier>_complexity_crews` and compare crews with [experiments](#experiments--experiments-over-agent-treatments). Delete the `[workflow.crew_ladder]` table. Recognised until 2026-12-07; after that they are unknown keys. |
+| `workflow.explore_brief.enabled`, `tags`, `deliver` | Ignored: the task pilot's explore brief was removed. The pilot no longer returns a brief, no implement dispatch receives one, and the brief-accuracy diagnostics endpoint is gone. Existing `explore-brief.json` task artifacts and `activity.explore_brief_applied` audit rows stay readable. Delete the `[workflow.explore_brief]` table. Recognised until 2026-12-07; after that they are unknown keys. |

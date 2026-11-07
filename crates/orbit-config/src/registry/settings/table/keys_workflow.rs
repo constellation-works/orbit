@@ -43,30 +43,12 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<String>| resolve_distributed_completion(raw),
     },
-    workflow_explore_brief_enabled: bool => bool {
-        key: "workflow.explore_brief.enabled", value_type: "bool",
-        description: "Ask the task pilot for an explore brief, a bounded map of the change stored as a task artifact.",
-        section: ConfigSection::Delivery, order: 166,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
-    workflow_explore_brief_tags: Vec<String> => Vec<String> {
-        key: "workflow.explore_brief.tags", value_type: "array<string>",
-        description: "Task tags that request an explore brief; empty requests one for every piloted task.",
-        section: ConfigSection::Delivery, order: 167,
-        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.explore_brief.tags"),
-    },
     workflow_ci_infrastructure_signatures: Vec<String> => Vec<String> {
         key: "workflow.ci_infrastructure_signatures", value_type: "array<string>",
         description: "Line prefixes a failed CI job's log prints when infrastructure, not the change, failed. A match gets a CI rerun, not a repair agent or a CI sweep task.",
         section: ConfigSection::Delivery, order: 168,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.ci_infrastructure_signatures"),
-    },
-    workflow_explore_brief_deliver: bool => bool {
-        key: "workflow.explore_brief.deliver", value_type: "bool",
-        description: "Give a stored explore brief to the implementer; false keeps briefs in shadow.",
-        section: ConfigSection::Delivery, order: 168,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
         key: "workflow.generated_paths", value_type: "table<string,string>",

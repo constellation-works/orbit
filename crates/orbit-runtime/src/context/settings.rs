@@ -106,9 +106,6 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
-    /// `[workflow.explore_brief]`: whether the task pilot is asked for
-    /// explore briefs, for which tasks, and whether they are delivered.
-    explore_brief: orbit_config::ExploreBriefSettings,
     /// `workflow.task_types`: the ordered task types type pools route by
     /// and the implementer scorecard's by-type lens.
     task_types: Vec<orbit_config::TaskTypeDefinition>,
@@ -180,7 +177,6 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
-        explore_brief: orbit_config::ExploreBriefSettings,
         task_types: Vec<orbit_config::TaskTypeDefinition>,
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
@@ -236,7 +232,6 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
             regression_risk,
-            explore_brief,
             task_types,
             decision_channel_enabled,
             lease_policy,
@@ -287,10 +282,6 @@ impl OrbitRuntimeSettings {
     /// Whether the operator explicitly accepts unscanned routine attachments.
     pub fn publication_routine_allow_unscanned_attachments(&self) -> bool {
         self.publication_routine_allow_unscanned_attachments
-    }
-
-    pub(crate) fn explore_brief(&self) -> &orbit_config::ExploreBriefSettings {
-        &self.explore_brief
     }
 
     pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {

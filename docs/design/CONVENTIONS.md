@@ -267,7 +267,6 @@ Retired features are removed from this table along with their folder.
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Experiments | [docs/design/experiments/](./experiments/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
-| Explore Brief | [docs/design/explore-brief/](./explore-brief/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
 | Fleet Notices | [docs/design/fleet-notices/](./fleet-notices/) | claude |

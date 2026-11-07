@@ -565,52 +565,6 @@ wait such as:
 
 The task stays in the backlog while it waits.
 
-## Explore briefs
-
-An explore brief is the task pilot's bounded map of code a task may change,
-including targets, call paths, patterns, covering tests and gotchas. Configure
-whether the pilot makes one and whether an implementer receives it in
-`<workspace>/.orbit/config.toml`:
-
-```toml
-[workflow.explore_brief]
-enabled = true
-tags = ["explore-brief"]
-deliver = true
-```
-
-| Key | Default | Effect |
-|---|---|---|
-| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for a brief for requested tasks. |
-| `workflow.explore_brief.tags` | `[]` | Select tasks by tag; an empty list selects every piloted task. |
-| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer; `false` keeps it in shadow, where it is produced and stored but never delivered. |
-
-Use `orbit config show --all` to inspect the effective values and their
-provenance. With `enabled = true`, tags are read when a task is piloted, so add
-the selected tag before piloting it. A valid brief is stored as the reserved
-task artifact `explore-brief.json`; agents and operators cannot write that
-artifact themselves.
-
-To verify storage, run `orbit task show <task-id>` and inspect the task-pilot
-comment: its `explore_brief` receipt says `written` with a digest and byte count,
-or records a drop reason. To verify an implementation dispatch, run
-`orbit run show <run-id>` and inspect its `Explore brief:` line; JSON carries
-the same records under `tag_instructions.explore_briefs`.
-
-At dispatch, `fresh` means none of the brief's covered files changed since its
-inspection revision. `drifted` means one to three covered files changed by at
-most 200 lines and no `change` target was deleted or renamed; a drifted brief
-can still be delivered, with the changed-file details available to the
-implementer. Changes beyond those limits, or deletion or rename of a `change`
-target, produce `dropped: stale`; an inspection revision that is not an
-ancestor of the run base produces `dropped: revision_unrelated`; and changed
-task material without a new pilot, or material whose fingerprint cannot be
-recomputed, produces `dropped: material_changed`.
-The run's `Explore brief:` line reports these dispatch outcomes. Only a `fresh`
-or `drifted` brief reaches the implementer, and only when both `enabled` and
-`deliver` are on. In shadow mode, the pilot still stores the brief, while the
-dispatch does not pass it to the implementer.
-
 ## Experiments
 
 Experiments compare a control arm with one or more treatments for agent work.
@@ -1473,11 +1427,20 @@ table, nor a system-crew key. The four
 grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored
-legacy `qa` crew remains loadable, but init never creates it. Init also writes every
-`workflow.purpose_crews` pool explicitly: `task_pilot` and `auto_fix` copy `low`, and
-`failure_recovery` and `review` copy `medium`. Because a fresh init writes them as explicit lists,
-editing `workflow.*_complexity_crews` later does not move those purpose pools; to move system
-work, edit its `workflow.purpose_crews.<purpose>` pool directly. With no supported
+legacy `qa` crew remains loadable, but init never creates it. Init also writes the
+`workflow.purpose_crews` pools as fixed lists filtered to the enabled crews: `review` from
+`sol, sonnet, muse-wonder, grok, opus@medium`; `task_pilot` from `luna@high, haiku@high,
+muse-spark@high`; `failure_recovery` from `luna, haiku, muse-spark, grok`; `auto_fix` and
+`pre_landing_review` from `luna, haiku, muse-spark`; `final_recovery` from `sol, muse-wonder,
+opus@medium`; `baseline_red_repair` from `terra, sonnet, muse-wonder, grok`. A pool left empty
+is omitted, except `final_recovery`, written as `[]` (off). Editing
+`workflow.*_complexity_crews` later does not move those purpose pools; to move system
+work, edit its `workflow.purpose_crews.<purpose>` pool directly. Creating this machine's
+identity also sets `machine.auto_concurrency.mode = "enforce"` (an existing machine keeps
+its mode), and the seed sets `experiments.enabled = true`,
+`workflow.crew_selection = "static"`, `workflow.mid_run_steering.enabled = true`,
+`workflow.task_pilot_freshness.material_fields = ["description", "criteria"]` and
+`workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`. With no supported
 agent CLI, every crew is written disabled and no default crew is set, so nothing
 dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:

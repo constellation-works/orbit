@@ -12,8 +12,8 @@ use orbit_types::task::{
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
-    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -668,14 +668,6 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
-    }
-    fn explore_brief_for_activity(
-        &self,
-        run_id: &str,
-        activity_name: &str,
-        input: &Value,
-    ) -> Option<ExploreBriefAdmission> {
-        NullRuntimeHost::explore_brief_for_activity(self, run_id, activity_name, input)
     }
     fn notices_for_agent_input(
         &self,

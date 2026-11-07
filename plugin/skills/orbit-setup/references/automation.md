@@ -113,9 +113,11 @@ deleted.
 `orbit workspace init` seeds the routines selected by `seeding.routines`
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
-to change that selection and reconcile an existing workspace. Every routine default starts
-disabled. The `host-health` auto-task is the one shipped auto-task seeded enabled
-([Auto-tasks](auto-tasks.md)), and only when the seeding policy selects it. The cron routines
+to change that selection and reconcile an existing workspace. Every routine default starts disabled
+except `worktree-gc` and `task-pilot`. A workspace seeded while `worktree-gc` or `task-pilot`
+shipped disabled keeps its `enabled` value. The `host-health` auto-task is the one shipped
+auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of the two starts enabled only when
+the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot`, `finding-verification`, `pilot-warning-triage` and `resident-cycle`
 are state-triggered and additionally resolve this host's
@@ -306,7 +308,8 @@ worker, or on another platform. See
 
 ## Recommended enablement order
 
-Enable in this order and stop wherever the value runs out. Each step is safe
+A newly initialized workspace starts with steps 1 and 2 enabled. Otherwise,
+enable in this order and stop wherever the value runs out. Each step is safe
 without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every

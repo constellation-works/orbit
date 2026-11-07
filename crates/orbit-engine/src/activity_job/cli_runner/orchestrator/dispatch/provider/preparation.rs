@@ -38,7 +38,6 @@ pub(super) fn prepare_provider_envelope<'a>(
         image_input,
         task_id,
         regression_risk_instruction,
-        explore_brief_instruction,
         notice_instruction,
         notice_posting_instruction,
         source_checkout,
@@ -52,7 +51,6 @@ pub(super) fn prepare_provider_envelope<'a>(
     } = source_checkout;
     let task_id = *task_id;
     let regression_risk_instruction = *regression_risk_instruction;
-    let explore_brief_instruction = *explore_brief_instruction;
     let notice_instruction = *notice_instruction;
     let notice_posting_instruction = *notice_posting_instruction;
     let mut envelope_spec = spec.clone();
@@ -90,10 +88,6 @@ pub(super) fn prepare_provider_envelope<'a>(
         envelope_spec.instruction.push_str(&staged.instruction);
     }
     if let Some(instruction) = regression_risk_instruction {
-        envelope_spec.instruction.push_str("\n\n");
-        envelope_spec.instruction.push_str(instruction);
-    }
-    if let Some(instruction) = explore_brief_instruction {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }

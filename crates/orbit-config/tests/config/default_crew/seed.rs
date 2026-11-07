@@ -58,7 +58,9 @@ fn seeded_and_builtin_configs_load_valid_crew_registries() {
                 .contains_key("explorer"),
             "fresh config must not seed a retired key whose warning corrupts structured callback errors"
         );
-        default_crew_write_config(workspace.path(), &seeded_body);
+        // `orbit init` seeds the global file, which alone may carry `[machine]`.
+        default_crew_write_config(global.path(), &seeded_body);
+        default_crew_write_config(workspace.path(), "[workflow]\n");
         let loaded =
             orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
                 .expect("seeded config loads with its pools");

@@ -194,7 +194,6 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         instruction: String::new(),
         steering_instruction: None,
         regression_risk_instruction: None,
-        explore_brief_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: Vec::new(),

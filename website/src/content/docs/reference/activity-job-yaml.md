@@ -1127,9 +1127,9 @@ Artifacts follow the task artifact rules:
 - The artifact path, including any `path_prefix`, must be a relative path with
   no `..` segments.
 - Orbit's own writers keep some paths: `mocks/`, `visual/`,
-  `mutation-proposals/`, `mutation-receipts/`, `explore-brief.json`, and any
-  name that starts with `review-` in any case. The one exception is
-  `review-report.json`, which must parse as a review report.
+  `mutation-proposals/`, `mutation-receipts/`, and any name that starts with
+  `review-` in any case. The one exception is `review-report.json`, which must
+  parse as a review report.
 
 The activity is atomic. Orbit reads and checks every selected file before it
 writes anything, then writes all the artifacts in one task update. If any file

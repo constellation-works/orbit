@@ -241,8 +241,8 @@ usage limit or failure hold redraws inside the pool instead of stalling it.
 
 Orbit's own work: `task_pilot`, `failure_recovery`, `final_recovery`,
 `auto_fix`, `review`, `pre_landing_review`, `baseline_red_repair`,
-`sweep_tasks`. `orbit init` writes them as explicit copies of the
-complexity pools, so editing a complexity pool later does **not** move them:
+`sweep_tasks`. `orbit init` writes most of them as fixed lists of the
+enabled crews, so editing a complexity pool later does **not** move them:
 revisit each one whenever you retune the tiers. Guidance:
 
 - `task_pilot`, `auto_fix`: cheap, fast crews; the pilot also
@@ -389,7 +389,6 @@ Changes apply to deliveries recorded afterwards.
 | Feature | Turn on when | Reference |
 |---|---|---|
 | `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [Mid-run steering configuration](configuration.md#mid-run-steering) |
-| `[workflow.explore_brief]` | The task pilot should store context briefs for chosen tags | [Explore briefs](configuration.md#explore-briefs) |
 | `[lease]` | Interactive editors and agents share a checkout | [Path-lease policy](configuration.md#path-lease-policy) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |
 | `notice.*`, `attention.*`, `resident.evolution.*`, `jobs.failure_streak_warn`, `commit.regression_trailers` | Fleet-notice limits or brief quoting, the attention feed, the evolution pass, the failing-job badge or commit regression trailers need tuning | [Fleet notices, attention, evolution pass and failing jobs](configuration.md#fleet-notices-attention-evolution-pass-and-failing-jobs) |

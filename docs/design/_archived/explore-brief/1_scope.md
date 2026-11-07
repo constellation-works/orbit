@@ -1,11 +1,9 @@
 ---
 title: "Scope: explore briefs from task-pilot"
 owner: claude
-last_updated: 2026-11-06
-last_validated: 2026-11-06
-status: Draft
-stage: building
-next: "Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs"
+last_updated: 2026-11-07
+last_validated: 2026-11-07
+status: Deprecated
 feature: explore-brief
 doc_role: scope
 type: design
@@ -14,6 +12,12 @@ tags: [explore-brief, task-pilot, task-artifacts, explore, implement-prompt]
 ---
 
 # Scope: explore briefs from task-pilot
+
+Retired in [ORB-22805] (2026-11-07): Daniel removed the explore brief while simplifying Orbit's
+configuration. The pilot no longer returns a brief, no implement dispatch receives one, and the
+brief-accuracy endpoint is gone. `workflow.explore_brief.*` loads with a deprecation warning and is
+ignored until 2026-12-07. Stored `explore-brief.json` artifacts and `activity.explore_brief_applied`
+audit rows stay readable. The text below is the record of the design as it stood.
 
 Status: building. Designed in [ORB-18363]. Direction approved by Daniel on 2026-10-25. S1 is
 implemented: the dashboard map landed ([ORB-18463]). S2 is implemented: the pilot
@@ -29,11 +33,11 @@ before it runs. The `task_pilot_pipeline` job runs `prepare_task_pilot`, fans `t
 out over partitions of one to five tasks, then validates the results in the deterministic
 `apply_task_pilot_results` step, with one repair pass for invalid assessments. The pilot is
 triggered by the `preparation_eligible` state trigger (`assets/routines/task_pilot.yaml`),
-with freshness governed by [`[workflow.task_pilot_freshness]`](../../CONFIG.md). An applied
+with freshness governed by [`[workflow.task_pilot_freshness]`](../../../CONFIG.md). An applied
 assessment is not automatically repeated through the routine after a material change; an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted, and scheduled discovery does so only when its description/criteria drifted (each when no live execution claim holds the task); otherwise use `orbit task repilot` to request another pilot. It runs on the cheap
 `workflow.purpose_crews.task_pilot` pool, is a `require_response_envelope: true` activity,
 and already returns `context_files_after`, the task's lock footprint.
-[Task artifacts](../task-artifacts/2_design.md#5-artifact-manifest) store bounded files per
+[Task artifacts](../../task-artifacts/2_design.md#5-artifact-manifest) store bounded files per
 task. Explorer delegation (`[workflow.explore]`, `orbit.agent.invoke`, [ORB-16814]) and tag
 instructions (`[workflow.tag_instructions.<tag>]`) are the two existing ways to change what
 an implementer starts with.
@@ -54,7 +58,7 @@ Two earlier answers failed:
   and used zero times. The call is synchronous, and the prompt tells the agent to re-read
   whatever it relies on, so delegating never pays off. [ORB-18032] added the `explore-first`
   tag instruction (retired by the invocation removal recorded in
-  [operations decisions](../operations-as-data/4_decisions.md)) to force it on a trial share;
+  [operations decisions](../../operations-as-data/4_decisions.md)) to force it on a trial share;
   [ORB-18033] reads that trial out.
 
 One fact about the current code shapes the fix. The pilot already does most of this
@@ -172,7 +176,7 @@ forge one.
   fingerprint is recomputed at dispatch under the pilot policy (the task's resolved
   `material_fields`), at the brief's `inspection_revision` — not at `base_sha` — by the
   status-neutral comparison in
-  `crates/orbit-core/src/application/task/pilot/brief_delivery.rs::brief_material_current`:
+  `pilot/brief_delivery.rs::brief_material_current`:
   the receipt-certified fingerprint against the consumer's current fingerprint, failing
   closed when either cannot be read or recomputed. Pilot-routine admission does not make
   this comparison: `pilot/freshness.rs::pilot_requirements_stale` re-pilots only on
@@ -488,10 +492,10 @@ and orchestrator tasks. Anchors are `path::symbol`, not line numbers.
 |---|---|---|---|---|
 | S1 ([ORB-18463], done) | Checked-in dashboard map for implementers | — | A new `dashboard-map.md` under `docs/agents/` names, by path and symbol, where dashboard views, API routes and assets live, how a view is registered and served, the pattern a new panel or series copies, and the screenshot and goldens obligations. It contains no line numbers. The workspace guide links it. The generated docs index is updated if a row changes | new `dashboard-map.md` under `docs/agents/`; `crates/orbit-web/assets/dashboard/`; `crates/orbit-web/src/api/`; root `CLAUDE.md` link |
 | S2 ([ORB-18539], done) | Pilot produces and stores briefs (shadow) | — | Under the three `workflow.explore_brief.*` keys, prepare marks the requested tasks. `task_pilot` returns `tasks[].explore_brief` for them. Apply validates the brief (schema, 8 KiB cap, no line numbers, anchors at the revision, `change` inside the footprint) and writes `explore-brief.json` through the system writer before the receipt. An invalid brief is dropped with its reason in the audit note and does not make the task `invalid`. The repair pass returns a brief. Agent and operator writes to the name are refused. CONFIG.md documents the keys. A regression test at the pilot apply boundary covers one valid brief and one dropped brief | `crates/orbit-core/assets/activities/task_pilot.yaml` (output schema, new "Explore brief" instruction section, Repair attempt); `crates/orbit-core/assets/activities/prepare_task_pilot.yaml`; `crates/orbit-core/src/application/task/pilot/prepare.rs::prepare`; `pilot/apply/task.rs::settle_task`; `pilot/assessment/mod.rs`; `pilot/persist/apply_task.rs::apply_task`; `crates/orbit-core/src/application/task/update/artifacts.rs::admit_agent_artifact`; `crates/orbit-config/src/registry/settings/table/keys_workflow.rs`; `crates/orbit-config/src/registry/settings/snapshot.rs`; `crates/orbit-cli/src/command/task/pilot_comment.rs::assessment_summary`; `docs/CONFIG.md` |
-| S3 ([ORB-18540], done) | Owner runs receive a fresh or drifted brief | S2 | An `agent_implement` dispatch reads the current brief, first recomputes the task's current material fingerprint at the brief's `inspection_revision` under the pilot policy and drops the brief as `dropped: material_changed` (recorded in `activity.explore_brief_applied`, no delivery) when it differs from the stored `material_fingerprint` or cannot be recomputed, then classifies a passing brief against `base_sha` with the thresholds in this doc, and injects `explore_brief` and `explore_brief_instruction` only for `fresh`/`drifted`. It records `activity.explore_brief_applied`, including `absent`. `orbit run show` prints the `Explore brief:` line. Review and recovery activities never receive the brief. `deliver = false` suppresses delivery but not the audit record. A regression test at the admission/task-context boundary covers delivery refusal after a material task edit with no intervening pilot receipt, and delivery of an unchanged task's brief | `crates/orbit-core/src/adapter/engine_host/actions/task_context.rs::task_context_for_agent_input`; `crates/orbit-core/assets/activities/agent_implement.yaml`; `crates/orbit-types/src/workflow/activity_job/activity_v2.rs::AgentLoopSpec`; `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs::attach_explore_brief`; `crates/orbit-cli/src/command/run/show.rs`; `crates/orbit-runtime/src/audit/tag_instructions.rs::RunTagInstructions::header_lines` (the `Explore brief:` line); `crates/orbit-core/src/application/task/pilot/brief_delivery.rs::brief_material_current` and `classify_explore_brief` |
+| S3 ([ORB-18540], done) | Owner runs receive a fresh or drifted brief | S2 | An `agent_implement` dispatch reads the current brief, first recomputes the task's current material fingerprint at the brief's `inspection_revision` under the pilot policy and drops the brief as `dropped: material_changed` (recorded in `activity.explore_brief_applied`, no delivery) when it differs from the stored `material_fingerprint` or cannot be recomputed, then classifies a passing brief against `base_sha` with the thresholds in this doc, and injects `explore_brief` and `explore_brief_instruction` only for `fresh`/`drifted`. It records `activity.explore_brief_applied`, including `absent`. `orbit run show` prints the `Explore brief:` line. Review and recovery activities never receive the brief. `deliver = false` suppresses delivery but not the audit record. A regression test at the admission/task-context boundary covers delivery refusal after a material task edit with no intervening pilot receipt, and delivery of an unchanged task's brief | `crates/orbit-core/src/adapter/engine_host/actions/task_context.rs::task_context_for_agent_input`; `crates/orbit-core/assets/activities/agent_implement.yaml`; `crates/orbit-types/src/workflow/activity_job/activity_v2.rs::AgentLoopSpec`; `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs::attach_explore_brief`; `crates/orbit-cli/src/command/run/show.rs`; `crates/orbit-runtime/src/audit/tag_instructions.rs::RunTagInstructions::header_lines` (the `Explore brief:` line); `pilot/brief_delivery.rs::brief_material_current` and `classify_explore_brief` |
 | S4 ([ORB-18541], done) | Claimed runs receive the same brief | S3 | The owner captures the current brief and its revision into the admission claim, alongside the captured tag instructions. The follower recomputes the current material fingerprint and applies the same `dropped: material_changed` check, then classifies it against the claim base and injects it as S3 does, with no owner artifact read at dispatch. The same regression coverage applies to the claimed path (material edit with no new receipt drops, unchanged task delivers) | `crates/orbit-core/src/application/tag_instructions.rs::captured_tag_instructions` (pattern to copy); `crates/orbit-store/src/contracts/task/coordination/admission.rs`; `crates/orbit-store/src/repository/task/coordination/admission/admit.rs` |
 | S5 ([ORB-18542], done) | Turns-to-first-edit series | — | A diagnostics endpoint and an Analytics › Metrics series report, per trend bucket, complexity and tag cohort, the count of tool calls and summed `result_bytes` before the first file-mutating call of each task's first implement invocation. Invocations without a detectable edit are excluded and counted. Low-count buckets are marked. Screenshots are attached | `crates/orbit-types/src/telemetry/invocation.rs::ToolCallTrace`; `crates/orbit-store/src/contracts/invocation.rs::InvocationRecord`; `crates/orbit-web/src/api/diagnostics/trend.rs`; `crates/orbit-web/assets/dashboard/js/metrics.js` |
-| S6 ([ORB-18543], done) | Brief accuracy report | S2 | For done tasks with a brief, a diagnostics endpoint reports recall and precision of `change` file targets against the delivered diff's files, and the brief outcome mix (`fresh`/`drifted`/`dropped`/`absent`) | `crates/orbit-web/src/api/diagnostics/`; `crates/orbit-web/src/api/diagnostics/brief_accuracy.rs::diagnostics_brief_accuracy` (shipped report) |
+| S6 ([ORB-18543], done) | Brief accuracy report | S2 | For done tasks with a brief, a diagnostics endpoint reports recall and precision of `change` file targets against the delivered diff's files, and the brief outcome mix (`fresh`/`drifted`/`dropped`/`absent`) | `crates/orbit-web/src/api/diagnostics/`; `api/diagnostics/brief_accuracy.rs::diagnostics_brief_accuracy` (shipped report) |
 | S7 (not filed) | Trial started (operator, `ws_constellation`) | S1, S3, S4, S5, [ORB-18364] | Box `ws_orbit` config maps `[workflow.tag_instructions.explore-first]` and sets `workflow.explore_brief = {enabled = true, tags = ["explore-brief"]}`. The orchestration skill records the assignment rule. The start date is commented on the assignment task | box `ws_orbit` `.orbit/config.toml`; `.claude/skills/orchestration-session/SKILL.md` (constellation) |
 | S8 ([ORB-18544], archived) | Three-arm readout (`ws_constellation`, with or after [ORB-18033]) | S6, S7, minimum sample | The readout reports each metric per arm and complexity cell, marks cells below 15, applies the adoption bar, and recommends `tags = []`, keeping the trial, or retiring the feature | — |
 

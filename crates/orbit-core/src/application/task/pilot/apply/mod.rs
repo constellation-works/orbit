@@ -75,7 +75,8 @@ struct ApplyContext<'a> {
     /// The pilot job run applying these results, recorded on each receipt so
     /// the assessment can be attributed to the run's crew and model.
     run_id: Option<&'a str>,
-    /// That run's crew, recorded in an explore brief's provenance.
+    /// That run's crew, the attribution fallback when no partition draw
+    /// names one.
     pilot_crew: Option<&'a str>,
     /// The round this apply settles: the first pilots, or the repair round.
     round: &'a str,

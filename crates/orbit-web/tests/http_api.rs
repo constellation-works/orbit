@@ -32,8 +32,6 @@ mod backlog_forecast;
 mod backlog_outcomes;
 #[path = "http_api/backlog_rework.rs"]
 mod backlog_rework;
-#[path = "http_api/brief_accuracy.rs"]
-mod brief_accuracy;
 #[path = "http_api/codebase.rs"]
 mod codebase;
 #[path = "http_api/compression.rs"]

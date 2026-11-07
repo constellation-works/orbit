@@ -175,7 +175,7 @@ pub use provider_limit::{
 };
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
-    ConfigSection, ConfigSnapshot, ExperimentSettings, ExploreBriefSettings, LeaseListenerSettings,
+    ConfigSection, ConfigSnapshot, ExperimentSettings, LeaseListenerSettings,
     LeaseListenerTlsSettings, MachineSettings, MidRunSteeringSettings, NoticeKindHours,
     NoticeSettings, RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
     admit_config_key, admit_settable_config_key, config_key_options,
@@ -189,7 +189,7 @@ pub use resolved::{
 };
 pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
 pub use roots::ConfigRoots;
-pub use seed::{ConfigSeed, seed_default_config, seed_workspace_review};
+pub use seed::{ConfigSeed, seed_default_config, seed_new_machine_defaults, seed_workspace_review};
 pub use seeding::{
     DEMOTED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_ROUTINES,
     SEEDING_AUTO_TASKS_KEY, SEEDING_ROUTINES_KEY, SHIPPED_DEFAULT_AUTO_TASKS,

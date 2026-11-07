@@ -151,7 +151,6 @@ pub(super) fn held_pilot_warning(fx: &Fixture, author: Option<&str>) -> String {
     task
 }
 
-#[test]
 fn a_pilot_warning_draws_from_its_purpose_pool_and_records_it_as_the_source() {
     let fx = triage_fixture("pilot_warning_triage = [\"pilot_codex:1\", \"pilot_gemini:500\"]");
     let task = held_pilot_warning(&fx, None);
@@ -163,7 +162,6 @@ fn a_pilot_warning_draws_from_its_purpose_pool_and_records_it_as_the_source() {
     assert_eq!(members, ["pilot_codex"]);
 }
 
-#[test]
 fn an_unset_pilot_warning_pool_draws_from_the_hard_tier_as_before() {
     let fx = triage_fixture("");
     let task = held_pilot_warning(&fx, None);
@@ -174,7 +172,6 @@ fn an_unset_pilot_warning_pool_draws_from_the_hard_tier_as_before() {
     assert_eq!(prepared["tasks"][0]["tier"], "hard", "{prepared}");
 }
 
-#[test]
 fn a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier() {
     let fx = triage_fixture("pilot_warning_triage = [\"pilot_gemini\"]");
     let task = held_pilot_warning(&fx, None);
@@ -182,7 +179,6 @@ fn a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier() {
     assert_eq!((crew.as_str(), source.as_str()), ("hard_lane", "pool:hard"));
 }
 
-#[test]
 fn the_retired_block_subject_is_refused_and_points_at_final_recovery() {
     let fx = triage_fixture("");
     let task = fx.task(&[]);
@@ -207,7 +203,6 @@ fn the_retired_block_subject_is_refused_and_points_at_final_recovery() {
     assert_eq!(fx.status(&task), "blocked", "nothing changed");
 }
 
-#[test]
 fn partitions_stay_crew_homogeneous_with_at_most_five_tasks_each() {
     let fx = triage_fixture("pilot_warning_triage = [\"pilot_codex\"]");
     let tasks = (0..7)
@@ -244,7 +239,6 @@ fn partitions_stay_crew_homogeneous_with_at_most_five_tasks_each() {
     assert!(sizes.iter().all(|size| *size <= 5), "{sizes:?}");
 }
 
-#[test]
 fn a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another() {
     // The author holds almost every ticket, so a draw that did not pass it
     // over would all but always pick it.
@@ -261,7 +255,6 @@ fn a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another
     );
 }
 
-#[test]
 fn a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member() {
     let fx = triage_fixture("pilot_warning_triage = [\"pilot_claude\", \"pilot_gemini\"]");
     let task = held_pilot_warning(&fx, Some("pilot_claude"));
@@ -269,3 +262,14 @@ fn a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member() {
     assert_eq!(crew, "pilot_claude");
     assert_eq!(source, "purpose:pilot_warning_triage");
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    a_pilot_warning_draws_from_its_purpose_pool_and_records_it_as_the_source,
+    an_unset_pilot_warning_pool_draws_from_the_hard_tier_as_before,
+    a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier,
+    the_retired_block_subject_is_refused_and_points_at_final_recovery,
+    partitions_stay_crew_homogeneous_with_at_most_five_tasks_each,
+    a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another,
+    a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member,
+);

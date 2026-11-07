@@ -153,7 +153,6 @@ pub(super) fn scope_with(
         retained,
         evidence,
         reauthorization,
-        authorized_creation: authorized_creation.to_vec(),
     })
 }
 

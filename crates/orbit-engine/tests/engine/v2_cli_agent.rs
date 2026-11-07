@@ -53,7 +53,6 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 mod build_budget;
 #[cfg(unix)]
 #[cfg(unix)]
-mod explore_brief;
 #[cfg(unix)]
 mod fleet_notices;
 #[cfg(unix)]
@@ -1606,7 +1605,6 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         instruction: "cli smoke".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
-        explore_brief_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
@@ -1725,7 +1723,6 @@ fn synthetic_loop_session_job() -> JobV2 {
                 instruction: String::new(),
                 steering_instruction: None,
                 regression_risk_instruction: None,
-                explore_brief_instruction: None,
                 notice_instruction: None,
                 notice_posting_instruction: None,
                 tools: vec![],

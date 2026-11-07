@@ -45,8 +45,10 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 `resident_cycle`, `evolution_pass`, `worktree_gc`, `store_gc`,
 `task_publication` and `ux-rules`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
-suffix (for example, `task-pilot-<workspace-name>`). All defaults are `enabled: false`.
-`crew_performance_refresh` ([ORB-17816]), the one default once seeded enabled, was retired
+suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
+seeded enabled in a newly initialized workspace [ORB-22802]; a workspace seeded earlier keeps
+its `enabled` value, because a template refresh never changes it. Other defaults are
+`enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
 with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited
 copy. [ORB-18378] added disabled weekly
 `task_publication` (Sunday 04:47 host-local time), which publishes only its own
@@ -178,5 +180,6 @@ fragmentation this feature exists to end.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
 - [ORB-21244] added the `resident_due` state trigger and the seeded `resident_cycle` routine.
 - [ORB-21249] added the seeded disabled weekly `evolution_pass` routine and manager digest.
+- [ORB-22802] seeded `worktree_gc` and `task_pilot` enabled in newly initialized workspaces.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
