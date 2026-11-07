@@ -126,9 +126,10 @@ provider process. A notice posted mid-step reaches the agent at its next safe po
 ### Delivery record
 
 Each built prompt that carries the block emits an audit event `NoticesDelivered {step_id,
-activity_name, task_id, notices: ["ntc_…@2", …], omitted}` through the same audit writer that
-records `ExploreBriefApplied`. It is a fact about what the host wrote, not a claim the agent read
-it. Nothing gates on it in v1.
+activity_name, task_id, notices: ["ntc_…@2", …], omitted}`. The audit envelope retains
+`ExploreBriefApplied` only so earlier rows still parse; current prompt builds no longer emit it.
+`NoticesDelivered` is a fact about what the host wrote, not a claim the agent read it. Nothing
+gates on it in v1.
 
 ### Failure
 
