@@ -698,6 +698,20 @@ spec:
       not report a criterion that expects a refusal, or a tool named inside a
       quoted example. When `implementation_lane` is null, do not invent a tool
       set.
+    - **Evidence reachability.** An implementing agent leaf runs on one host
+      with only its granted authority. When a criterion requires owner-only or
+      operator-only evidence the leaf cannot produce on its own host through
+      its granted tools or the claimed-workspace bridge, return a
+      `utility_warnings` object with `holds_promotion: true` before admission.
+      Name the criterion number, quote the required evidence, cite the
+      inaccessible records or authority boundary, and request a criterion
+      rewrite or separate owner/operator validation. For example, an
+      authoritative owner-side audit rescan is not feasible merely because
+      the leaf can run on the owner host; it also needs authorized access to
+      the audit records. Do not substitute operational logs or follower data.
+      Candidate checks repeatable locally and task records readable through
+      the bridge need no such hold. Preserve the explicit Friction criteria
+      and Post-deploy routes below for their landing and deployed evidence.
     - **Operator-only tool mentions.** For every `{criterion, tool}` that
       `partition.operator_tool_candidates` lists for a task, return one
       `operator_tool_classifications` entry with the same `criterion` and
@@ -811,9 +825,11 @@ spec:
       `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`.
       Otherwise, or when it is null, use `utility_warnings`. Never guess a cursor,
       substitute follower data, widen broker scope or remove tools. Machine
-      routing grants no authority: preserve independent re-home, re-authoring or
-      operator holds. Portable scans whose reads fit the bridge need no machine
-      requirement.
+      routing grants no authority and cannot clear an Evidence reachability
+      hold: use `required_machine` for evidence an agent can obtain on that
+      host with its granted access, and preserve independent re-home,
+      re-authoring or operator holds. Portable scans whose reads fit the bridge
+      need no machine requirement.
     - **Post-deploy.** When only the deployed build on a named host can
       evidence a criterion after merge (its live service's latency, the
       installed binary against its live store), add
