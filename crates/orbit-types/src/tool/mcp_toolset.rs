@@ -67,6 +67,23 @@ pub enum McpToolset {
 }
 
 impl McpToolset {
+    /// The toolset ORB-20383 removed with `orbit.agent.invoke`. Selections
+    /// ignore it with a warning so stored `machine.mcp.toolsets` entries
+    /// keep resolving; no toolset replaces it.
+    pub const RETIRED_AGENT_INVOKE: &str = "agent-invoke";
+
+    /// Every retired toolset name a selection ignores.
+    pub const RETIRED_TOOLSETS: [&'static str; 1] = [Self::RETIRED_AGENT_INVOKE];
+
+    /// Migration note for the retired toolset, shared by every surface that
+    /// still accepts it.
+    pub const RETIRED_AGENT_INVOKE_NOTE: &str = "agent invocation (orbit.agent.invoke) was removed; remove 'agent-invoke' from the selection";
+
+    /// Whether `name` is a retired toolset selections ignore (trimmed, exact).
+    pub fn is_retired_toolset_name(name: &str) -> bool {
+        Self::RETIRED_TOOLSETS.contains(&name.trim())
+    }
+
     /// Every toolset, in declaration order.
     pub const ALL: [Self; 20] = [
         Self::Core,
@@ -168,6 +185,12 @@ impl FromStr for McpToolset {
     type Err = McpToolsetError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if Self::is_retired_toolset_name(value) {
+            return Err(McpToolsetError::Retired {
+                name: value.trim().to_string(),
+                note: Self::RETIRED_AGENT_INVOKE_NOTE,
+            });
+        }
         Self::ALL
             .into_iter()
             .find(|toolset| toolset.as_str() == value)
@@ -345,7 +368,9 @@ impl McpToolsetSelection {
     }
 
     /// This selection with the named toolsets added; `all` adds every
-    /// toolset and `default` the default tier. The role is kept.
+    /// toolset and `default` the default tier. The role is kept. A retired
+    /// toolset name is ignored so stored selections keep loading; callers
+    /// warn naming the removal.
     pub fn with_names<'a>(
         mut self,
         names: impl IntoIterator<Item = &'a str>,
@@ -355,6 +380,7 @@ impl McpToolsetSelection {
                 "" => return Err(McpToolsetError::EmptyEntry),
                 "all" => self.enabled.extend(McpToolset::ALL),
                 "default" => self.enabled.extend(McpToolset::DEFAULT_TIER),
+                name if McpToolset::is_retired_toolset_name(name) => {}
                 name => {
                     self.enabled.insert(name.parse()?);
                 }

@@ -740,12 +740,28 @@ pub(super) fn resolve_pr_body_template(
 }
 
 /// Trimmed, non-empty entries in first-seen order without duplicates.
-/// `machine.mcp.toolsets`: every entry names a toolset (or `all`).
+/// `machine.mcp.toolsets`: every entry names a toolset (or `all`). The
+/// retired `agent-invoke` entry is ignored with a warning so hosts that
+/// opted in before its removal keep resolving.
 pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     let names = raw.unwrap_or_default();
     orbit_types::tool::McpToolsetSelection::from_names(names.iter().map(String::as_str))
         .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.toolsets: {error}")))?;
-    Ok(names.iter().map(|name| name.trim().to_string()).collect())
+    let mut kept = Vec::new();
+    for name in &names {
+        let trimmed = name.trim();
+        if orbit_types::tool::McpToolset::is_retired_toolset_name(trimmed) {
+            tracing::warn!(
+                key = "machine.mcp.toolsets",
+                value = trimmed,
+                note = orbit_types::tool::McpToolset::RETIRED_AGENT_INVOKE_NOTE,
+                "machine.mcp.toolsets entry 'agent-invoke' was removed and is ignored; remove it from config.toml",
+            );
+            continue;
+        }
+        kept.push(trimmed.to_string());
+    }
+    Ok(kept)
 }
 
 /// `machine.mcp.role`: unset, or one role name.
