@@ -134,6 +134,13 @@
 .config-crew-cell { min-width: 0; }
 .config-crew-cell > .config-value { overflow-wrap: anywhere; }
 .config-crew-label { display: none; }
+.config-crew-tools { padding: 8px 14px; border-bottom: 1px solid var(--hair); }
+.config-crew-filter { width: 100%; max-width: 360px; box-sizing: border-box; }
+.config-crew-more { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 14px; }
+.config-crew-status { color: var(--fg-mute); font-size: 11px; margin-right: auto; }
+.config-crew-toggle { display: none; }
+.config-crew-row:focus { outline: none; }
+.config-crew-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
 .config-crew-row.disabled .config-crew-cells { color: var(--fg-disabled); }
 .config-crew-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -166,6 +173,19 @@
   .config-crew-cell { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .config-crew-label { display: block; color: var(--fg-dim); font-size: 11px; }
   .config-crew-cell > .config-source { justify-self: start; }
+  /* Bounded rows: identity, provider, model and the edit action stay; the
+     rest opens from each row's Details control. */
+  .config-crew-detail { display: none; }
+  .config-crew-row.expanded .config-crew-detail { display: grid; }
+  .config-crew-toggle {
+    display: inline-block; margin: 0 14px 8px; padding: 6px 10px; min-height: 32px;
+    background: none; border: 1px solid var(--border); border-radius: 2px;
+    color: var(--fg-dim); font-size: 12px; cursor: pointer;
+  }
+  .config-crew-toggle:hover { color: var(--accent); }
+  .config-crew-filter { max-width: none; min-height: 32px; }
+  .config-crew-more .config-action { min-height: 32px; }
+  .config-crew-cell > .config-pencil { min-width: 32px; min-height: 32px; justify-self: start; }
 }
 
 /* The System view: the resource throttle as one panel. A row per resource
