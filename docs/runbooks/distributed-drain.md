@@ -1489,20 +1489,23 @@ settlement, captured from the run record before its first settlement is
 recorded, never from a later executable, and the owner keeps them in an
 immutable row beside the claim. `provenance` is `settlement` for that, `hydrated`
 for evidence an operator read afterwards (below), or null when the claim holds
-none. `build_state` and `root_cause_state` are `recorded` or `unrecorded`; an
-`unrecorded` field means the run record held none (or the claim predates the
-evidence), and the owner never fills it from its own or any current build or by
-reading the settlement's text. An older follower sends none. The owner records a
-report only when its `run_id` is the run the claim bound, the bound run's machine
-is the machine the claim executed on, and its `job_id` is nonblank; any other
-report is dropped without refusing the settlement. The owner does not compare the
-job with an expected job, because a claim binds a machine and a run, not a job.
+none. `build_state` and `root_cause_state` are `recorded` or `unrecorded`. With
+`provenance` null both are `unrecorded` because the owner holds no record, so
+they say nothing about the run, and the owner never fills them from its own or
+any current build or by reading the settlement's text. In a held record, an
+`unrecorded` field means the run record held none. An older follower sends none.
+The owner records a report only when its `run_id` is the run the claim bound, the
+bound run's machine is the machine the claim executed on, and its `job_id` is
+nonblank; any other report is dropped without refusing the settlement. The owner
+does not compare the job with an expected job, because a claim binds a machine
+and a run, not a job.
 Hydration checks more: it accepts only a terminal claimed-leaf job (below). The
 managed scan reads all of this from the owner's store with
 `--no-reconcile` and needs no operator capability.
 
-A claim settled before a follower sent its run record stays `unrecorded` until
-an operator on the owner hydrates it from the follower:
+A claim with `provenance` null (settled before a follower sent its run record, or
+from a follower that sent none) holds no evidence until an operator on the owner
+hydrates it from the follower:
 
 ```bash
 orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--machine <id|name>] [--since 7d] [--limit 25] [--after <claim-id>] [--recheck] [--json]
@@ -1522,7 +1525,7 @@ run, and starts, cancels and retries nothing. Each claim reports one outcome:
 `conflict` (different evidence is held and stands, nothing is overwritten);
 `mismatch` (the record is not this claim's leaf); `absent` (the follower answered
 that it holds no such run, so the evidence is genuinely not available, which for a
-claim that predates the evidence stays `unrecorded`); `unreachable` (the follower
+claim that predates the evidence keeps `provenance` null); `unreachable` (the follower
 could not be asked, so the question stays open and a later run can answer it); or
 `no_leaf_run` (the claim never bound one). A claim that already holds evidence is
 skipped without `--recheck`. When the selection is larger than the limit,
