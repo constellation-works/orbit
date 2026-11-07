@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
-    task_dependencies_ready_with_index,
+    is_no_diff_expected, task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
-use super::super::claim_holders::ClaimHolders;
+use super::super::claim_holders::{self, ClaimHolders};
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
@@ -153,7 +153,8 @@ pub(super) fn backlog_snapshot_in_mode(
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     // Status-based holders omit `no-diff-expected` and apply the workspace's
-    // unlocked-path policy. Claims retain the surface their admission froze.
+    // unlocked-path policy. Ordinary claims retain the surface their admission
+    // froze; known no-diff holders remain exempt from context locks.
     let unlocked = runtime.unlocked_context_paths();
     let lock_modes = runtime.footprint_lock_modes();
     let mut lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
@@ -167,7 +168,7 @@ pub(super) fn backlog_snapshot_in_mode(
         BacklogReadMode::Admission => ClaimHolders::read_for_admission(runtime)
             .map_err(|error| PassError::store(action, "read execution claims", error))?,
     };
-    claims.extend_lock_holders(&mut lock_holders);
+    claims.extend_lock_holders(&mut lock_holders, &task_lookup);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.
@@ -571,6 +572,31 @@ pub(super) fn backlog_snapshot_in_mode(
             }
         })
         .collect();
+    // A no-diff claim holds no surface, but it still prevents a second
+    // dispatch of its own task, independently of context-lock conflicts.
+    backlog.retain(|task| {
+        if !is_no_diff_expected(&task.tags) {
+            return true;
+        }
+        let Some(claim) = claims.protecting_task_claim(&task.id) else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::ContextLockConflict,
+            conflicts: task
+                .context_files
+                .iter()
+                .map(|selector| BacklogTaskConflict {
+                    requested_file: selector.clone(),
+                    locking_task_id: task.id.clone(),
+                })
+                .collect(),
+            crew: None,
+            detail: Some(claim_holders::claim_detail(claim)),
+        });
+        false
+    });
     if !lock_holders.is_empty() {
         let holder_index = lock_holder_index(&lock_holders);
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
