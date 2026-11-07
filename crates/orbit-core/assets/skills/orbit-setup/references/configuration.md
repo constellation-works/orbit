@@ -35,10 +35,13 @@ orbit config keys                  # every registered key; machine.id and machin
 orbit config path
 ```
 
-`orbit config show` annotates every setting as `workspace`, `global`,
-`built-in`, or `environment`, with the file it came from. `machine.id` and
-`machine.task_prefix` render as identity, not as settable rows. Reach for it before
-assuming a value. Use `orbit config show --all` to include unset advanced keys;
+`orbit config show` labels configured rows with their `workspace`, `global`, or
+`environment` source, and rows with no configured value show `default` or
+`unset`. `machine.id` and `machine.task_prefix` render as identity, not as
+settable rows. The text rows do not include file paths: see the `Layers (later
+wins)` banner for layer paths, or use `orbit config show --json` for per-key
+path provenance. Reach for it before assuming a value. Use `orbit config show
+--all` to include unset advanced keys;
 the defaults below are built-ins, not necessarily this host's effective policy.
 
 ## MCP roles and toolsets
