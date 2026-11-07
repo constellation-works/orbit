@@ -3,8 +3,8 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Implemented
 feature: mcp-session-context
 doc_role: design
@@ -67,7 +67,7 @@ Steps 2 and 3 are one session field, resolved once at initialize: an announced w
 
 Process cwd is not an MCP fallback. The server resolves the selector against its registry, opens the selected local runtime, writes the resolved workspace_id into context, and normalizes an explicit workspace argument to the selected checkout path before Core dispatch.
 
-For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, `ORBIT_ACTIVITY_FS_PROFILE`, `ORBIT_PROC_ALLOWED_PROGRAMS`, `ORBIT_PROC_PROGRAM_POLICY`, and `ORBIT_PROC_DISALLOWED_PROGRAMS`, the activity toolset name `ORBIT_ACTIVITY_MCP_TOOLSETS`, the timeout and build-budget names `ORBIT_ACTIVITY_TIMEOUT_MS` and `ORBIT_ACTIVITY_BUILD_BUDGET_DIR`, and the plugin broker locator `ORBIT_PLUGIN_BROKER`, from Codex's environment [ORB-13268] [ORB-13269] [ORB-13315] [ORB-13316] [ORB-13317]. The broker locator names a socket and grants nothing: the broker authenticates each connection by the kernel's peer identity against the run it serves, so forwarding it lets a nested server reach brokered tools (the claimed before-PR review bridge among them) without widening authority. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, process program policy, and `proc.spawn` timeout budget (the activity's deadline) as the managed run. The selector remains subject to registry resolution and per-call override.
+For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, `ORBIT_ACTIVITY_FS_PROFILE`, `ORBIT_PROC_ALLOWED_PROGRAMS`, `ORBIT_PROC_PROGRAM_POLICY`, and `ORBIT_PROC_DISALLOWED_PROGRAMS`, the activity toolset name `ORBIT_ACTIVITY_MCP_TOOLSETS` [ORB-20450], the timeout and build-budget names `ORBIT_ACTIVITY_TIMEOUT_MS` and `ORBIT_ACTIVITY_BUILD_BUDGET_DIR`, and the plugin broker locator `ORBIT_PLUGIN_BROKER`, from Codex's environment [ORB-13268] [ORB-13269] [ORB-13315] [ORB-13316] [ORB-13317]. The broker locator names a socket and grants nothing: the broker authenticates each connection by the kernel's peer identity against the run it serves, so forwarding it lets a nested server reach brokered tools (the claimed before-PR review bridge among them) without widening authority. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, process program policy, and `proc.spawn` timeout budget (the activity's deadline) as the managed run. The selector remains subject to registry resolution and per-call override.
 
 Global tools do not require a workspace selector.
 
@@ -85,7 +85,7 @@ Because tools/list is answered per session, the injected selector documents the 
 
 For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
-The host selects toolsets at startup with `--toolset` or `machine.mcp.toolsets`; the default exposes tasks, workflows, runs, automation and decision tools, while optional sets include leases, experiments, analytics, decision-channel, agent-invoke and notice. A call outside the selected set is refused as disabled. The default omits `agent-invoke`; managed explorer runs can opt in when configured [ORB-20234] [ORB-20382] [ORB-20414].
+The host selects the advertised surface at startup. A role (`--role` or `machine.mcp.role`: `operator`, `manager`, `resident`, `agent` or `reader`) bundles toolsets for one kind of session, and `--toolset` or `machine.mcp.toolsets` adds named toolsets beside it [ORB-21263]. With no role, the default tier advertises the task, decision, run, dispatch, automation, codebase, search, ui, exec and plugin toolsets plus the always-on core. The optional sets are leases, experiments, analytics, decision-channel, agent-invoke, notice and resident. A managed run's dispatch can stamp further names in `ORBIT_ACTIVITY_MCP_TOOLSETS`. A call outside the selected set is refused as disabled, and a role or toolset trims advertisement only: it grants no authority. The default omits `agent-invoke`; managed explorer runs can opt in when configured [ORB-20234] [ORB-20382] [ORB-20414].
 
 ## 5. Core dispatch and audit
 
@@ -123,5 +123,7 @@ Capability authorization is no longer deferred: Core's tool chokepoint authorize
 - [ORB-20234] — added opt-in MCP toolsets.
 - [ORB-20382] — hid agent invocation from operator sessions.
 - [ORB-20414] — moved agent invocation into the opt-in `agent-invoke` toolset.
+- [ORB-21263] — grouped MCP toolsets into the `--role` surfaces (operator, manager, resident, agent, reader).
+- [ORB-20450] — added `ORBIT_ACTIVITY_MCP_TOOLSETS` to the documented Codex `env_vars` list.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
