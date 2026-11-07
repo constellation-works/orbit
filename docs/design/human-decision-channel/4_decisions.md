@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 The three entries below were proposed with plugin-raised decision requests
 ([2_design.md](./2_design.md) §12) in [ORB-22824]. They bind once Daniel accepts that
 design. All three are standing rules (Door 2): each governs the next gate, plugin or
-host this channel gains, not only the office case that prompted it.
+host this channel gains, not only the scribe case that prompted it.
 
 ## A decision effect runs on the host that owns its request
 
@@ -32,9 +32,10 @@ host this channel gains, not only the office case that prompted it.
 A decision request is task history, so it lives on the host that owns the task's
 workspace. Answering it is a coordination write that a replica checkout or claimed
 worker is refused (`coordination_task_write_refusal`). A plugin's effect must run where
-the plugin and its data are. These can be different hosts: the office Library is
-Mac-only, while the channel and `ws_orbit` live on dk-server-2. The real alternative was
-a forwarded apply. The owner host records the human's answer, then asks the plugin's
+the plugin and its data are. These can be different hosts: scribe's store is per
+host and the one that matters holds Daniel's Mac sessions, while scribe's own
+workspace (ws_scribe), the channel and `ws_orbit` are owned by dk-server-2. The real
+alternative was a forwarded apply. The owner host records the human's answer, then asks the plugin's
 host to run the effect over a host-to-host route. That would keep one channel for
 every host. It would also move delegated-human authority across hosts and add a
 cross-host write path with its own failure modes (partition, a lost outcome, double
@@ -52,11 +53,12 @@ the effect. This applies to every future gate, plugin and channel.
 
 - Every decision's authority record, apply and audit sit in one host's history. A
   partition delays a decision and never splits it.
-- Producers that span hosts, such as the dreaming auto-task, must run the half that
-  needs a host's data on that host.
-- Cost: a host without a registered channel has no email reach. The Mac's Library
-  proposals are answerable only on the Mac's dashboard and CLI until the Mac registers
-  its own channel and `decision-mail` install. Today one mailbox cannot serve
+- A producer runs where its data is: scribe's consistency routine must be enabled in a
+  workspace the Mac owns to raise requests about the Mac's store.
+- Cost: a host without a registered channel has no email reach. scribe proposals
+  raised on the Mac are answerable only on the Mac's dashboard, CLI and in-session
+  `#scribe approve` until the Mac registers its own channel and `decision-mail`
+  install. Today one mailbox cannot serve
   requests on every host.
 
 ## A plugin's effect is never written under the human's label
@@ -85,7 +87,7 @@ future mechanism that runs non-core code on a human's answer.
 
 ### Consequences
 
-- Audit reads in two steps, "daniel answered through email, then plugin office applied
+- Audit reads in two steps, "daniel answered on the dashboard, then plugin scribe applied
   under dr-…", and a human-writer guard can never be satisfied by plugin code.
 - The apply ceiling is a separate, explicit operator consent (the apply-tool allowlist),
   not something inherited from the answer.
@@ -101,10 +103,12 @@ future mechanism that runs non-core code on a human's answer.
 
 Precedent rules and the decision model answer requests without the human, gated by
 risk tier and per-category enablement. Some requests decide what agents will later read
-as knowledge or run as automation: Library pages, runbooks, auto-tasks, and skills via
+as knowledge or run as automation: scribe's records of Daniel's decisions,
+directions and preferences, runbooks, auto-tasks, and skills via
 their PRs. An agent or a model trained on the human's past answers that approved such a
 request would curate its own memory. [ORB-10736] retired native learnings to prevent
-that, and office's "orchestrator cannot approve its own proposals" invariant forbids it.
+that. scribe's own rules forbid it too: records change only on Daniel's explicit
+instruction, with no auto-backfill, and agents cannot settle its proposals.
 The real alternative was to treat these like any request: tier them `reversible`,
 because a page edit can be reverted, and let a category earn self-answer through
 shadow measurement. Measurement would show the model predicts the human well. That is
@@ -124,13 +128,14 @@ applies to `plugin_request` now and to any future gate with the same effect.
   and its answers never become precedent.
 - Dream skill and runbook PRs need nothing new: `review_approval` is already
   `irreversible` and human-only.
-- Cost: every Library or automation proposal waits for Daniel, however routine. No
+- Cost: every memory or automation proposal waits for Daniel, however routine. No
   measured accuracy will reduce that queue, so volume is controlled at the producer
   (caps, dismissal memory, batching), not by delegation.
 
 ## Task References
 
 - [ORB-22824] — designs plugin-raised decision requests with an apply callback and proposes these rules.
+- [ORB-21795] — scribe S6: built the consistency routine whose proposals are the first plugin requests.
 - [ORB-10736] — retired native learnings, so agents do not curate their own memory.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

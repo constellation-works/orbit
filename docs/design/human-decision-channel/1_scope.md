@@ -223,8 +223,8 @@ requests in operator-enabled categories can be answered without the human.
 [consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
 rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are done.
 
-Designed, not implemented: plugin-raised decision requests ([ORB-22824]). A plugin
-raises a closed question on a task and names an apply tool from its own manifest; a
+Designed, not implemented: plugin-raised decision requests ([ORB-22824]), with scribe's
+consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a
 human answers and core runs that tool once with the answer, never through precedent or
 the model, and only on the host that owns the task. [2_design.md](./2_design.md) §12
 holds the contract, slices and compatibility notes;
