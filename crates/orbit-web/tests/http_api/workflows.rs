@@ -1202,6 +1202,15 @@ fn warning_lines(receipt: &Value) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
+// Notes are independent informational lines: the required-validation note a drain without configured commands gets, and on macOS the worker-containment note [ORB-19251]. Assert each by its category, never by platform copy.
+fn note_lines(receipt: &Value) -> Vec<String> {
+    receipt["note"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
 // A drain started from the dashboard reports what `orbit run auto` and `orbit.workflow.auto` report: the host throttle, backlog for another OS, unset `execution.env.pass` names and the required-validation note. An explicit ship reports the throttle and the unset names.
 wf_test!(auto_start_and_ship_report_the_submission_notices, {
     let _credential = held_worker_credential();
@@ -1236,7 +1245,8 @@ wf_test!(auto_start_and_ship_report_the_submission_notices, {
     chk!(warnings[1].contains(&elsewhere.id) && warnings[1].contains("another OS") => "{started}");
     assert!(warnings[2].contains(UNSET_PASS), "{started}");
     chk!(started["resource_throttle"]["resources"] .as_array() .is_some_and(|resources| !resources.is_empty()) => "{started}");
-    chk!(started["note"] .as_str() .is_some_and(|note| note.contains("workflow.required_validation_commands")) => "{started}");
+    let notes = note_lines(&started);
+    chk!(notes.iter().any(|note| note.contains("workflow.required_validation_commands")) && notes.len() == 1 + usize::from(cfg!(target_os = "macos")) => "the drain notes the empty required-validation key, and a macOS host adds its worker-containment note: {started}");
     assert!(started.get("validation_env_warning").is_none(), "{started}");
     let shipped = ok_post(
         &server,
@@ -1247,7 +1257,8 @@ wf_test!(auto_start_and_ship_report_the_submission_notices, {
     assert_eq!(warnings.len(), 2, "{shipped}");
     chk!(warnings[0].starts_with("Admissions throttled: ") => "an explicit ship proceeds under the throttle and says so: {shipped}");
     assert!(warnings[1].contains(UNSET_PASS), "{shipped}");
-    chk!(shipped.get("resource_throttle").is_none() && shipped.get("note").is_none() => "{shipped}");
+    let ship_notes = note_lines(&shipped);
+    chk!(shipped.get("resource_throttle").is_none() && ship_notes.iter().all(|note| !note.contains("workflow.required_validation_commands")) && ship_notes.len() == usize::from(cfg!(target_os = "macos")) => "a ship receipt carries the throttle only as a warning and no required-validation note; a macOS host adds only its worker-containment note: {shipped}");
 });
 // Required validation that cannot use the login shell is reported by a dashboard drain start and ship, as by the CLI and MCP.
 wf_test!(auto_start_and_ship_report_the_validation_environment, {
@@ -1272,7 +1283,8 @@ wf_test!(auto_start_and_ship_report_the_validation_environment, {
             .unwrap_or_else(|| panic!("{path}: {receipt}"));
         chk!(warning.contains("`workflow.validation_env.shell_probe = off`") => "{path}: {receipt}");
         chk!(warning_lines(&receipt).iter().any(|line| line == warning) => "{path}: {receipt}");
-        chk!(receipt.get("note").is_none() => "{path}: configured required validation needs no note: {receipt}");
+        let notes = note_lines(&receipt);
+        chk!(notes.iter().all(|note| !note.contains("workflow.required_validation_commands")) && notes.len() == usize::from(cfg!(target_os = "macos")) => "{path}: configured required validation needs no note, and a macOS host adds only its worker-containment note: {receipt}");
     }
 });
 fn run_input(fixture: &Fixture, started: &Value) -> Value {
