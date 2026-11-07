@@ -2057,9 +2057,13 @@ one. From then on:
   never dispatches a source-repair agent.
 - Claims admitted before the change keep their `review` contract and still
   need **Approve handoff**.
-- Setting the key back to `review` (or removing it) stops every handoff that
-  has not landed. The landing job refuses with `owner completion policy
-  withdrawn`. Restore the key, or revoke the handoff and recover the claim.
+- Setting the key back to `review` (or removing it) stops unlanded handoffs
+  authorized by the owner policy, once the relevant owner runtime has read
+  the new setting (restart long-lived owner processes as above). The landing
+  job refuses those handoffs with `owner completion policy withdrawn`. It
+  does not stop a handoff an operator already approved, which keeps its
+  separate operator authorization. Restore the key, or revoke the handoff
+  and recover the claim.
 
 Do not merge follower pull requests on the provider by hand. That skips the
 owner's validation gate, and the owner still has to settle the claim.
