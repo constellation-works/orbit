@@ -371,6 +371,94 @@ fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer_scena
     }
 }
 
+#[test]
+fn selective_selection_sticks_to_its_lineage_only() {
+    if !super::dispatch_admission::isolated(
+        "review_admission_shape::selective_selection_sticks_to_its_lineage_only",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::selective_landing("enforce", &["candidate.txt"]);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+    assert_eq!(
+        fixture.input["admission"]["selective_receipt"]["result"],
+        "required"
+    );
+    let git = |args: &[&str]| {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    std::fs::write(fixture.repo.join("candidate.txt"), "before\n").unwrap();
+    std::fs::write(fixture.repo.join("other.txt"), "new\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "revise candidate"]);
+    fixture.admit();
+    assert_eq!(
+        fixture.input["admission"]["selective_receipt"]["result"], "required",
+        "a revised candidate in the same run remains selected"
+    );
+
+    let old = fixture
+        .runtime
+        .show_job_run(fixture.input["job_run_id"].as_str().unwrap())
+        .unwrap();
+    let retry = fixture
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            Utc::now(),
+            old.input.clone(),
+            Some(old.run_id.clone()),
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(retry.run_id.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fixture.input["job_run_id"] = json!(retry.run_id);
+    fixture.admit();
+    assert_eq!(
+        fixture.input["admission"]["selective_receipt"]["result"], "required",
+        "a retry retains the original selection"
+    );
+    let fresh = fixture
+        .runtime
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), old.input, None)
+        .unwrap();
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(fresh.run_id.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fixture.input["job_run_id"] = json!(fresh.run_id);
+    fixture.admit();
+    assert_eq!(
+        fixture.input["admission"]["selective_receipt"]["result"], "not_required",
+        "a fresh delivery evaluates its own candidate"
+    );
+}
+
 crate::scenario_table!(
     admitted_output_keeps_its_recorded_shape_and_an_older_one_settles,
     admitted_output_keeps_its_recorded_shape_and_an_older_one_settles_scenario

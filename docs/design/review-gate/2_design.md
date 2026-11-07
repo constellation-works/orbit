@@ -686,6 +686,9 @@ by shrinking the patch or moving a protected path; the existing candidate
 and re-review rules determine fresh evidence requirements. Reviewer fixes
 remain under the existing settlement contract, not a recursive extra review
 of the reviewer's own repairs. Preserve prior receipts and consumed budget.
+An independent delivery starts a new selection lineage; an earlier task
+receipt does not impose its selection on that new delivery. Retry and
+owner-publication adoption follow the original lineage.
 
 #### Owner/follower compatibility
 
@@ -1190,6 +1193,12 @@ ends the run `held`; no failure handoff runs. Run finalization preserves this
 decision. Admission refuses to continue while the matching hold has missing
 evidence; that refusal reaches the failure handoff, which keeps the task in
 progress and its candidate recoverable, and holds publication.
+Requirement result paths and their automatically derived log paths must all
+be distinct after normalization. For example, `evidence/x.json` reserves
+`evidence/x.log.json` for its log, and `evidence/x` reserves that same log
+path. Conflicting requirements are refused before checks run, including
+when an older persisted hold is replayed; use distinct paths when requesting
+the checks again.
 For each requirement, an accepted writer (below) attaches its result at its
 named artifact path, plus the separately referenced nonempty log artifact. An
 operator attaches both with `orbit task artifact put`:

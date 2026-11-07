@@ -25,6 +25,48 @@ use orbit_types::workflow::{
 const ARTIFACT: &str = "evidence/host-sandbox-probe.json";
 const LOG_ARTIFACT: &str = "evidence/host-sandbox-probe.log.json";
 
+#[test]
+fn claimed_host_refuses_colliding_evidence_before_running() {
+    if !isolated(
+        module_path!(),
+        "claimed_host_refuses_colliding_evidence_before_running",
+    ) {
+        return;
+    }
+    for (first, second) in [
+        ("evidence/x.json", "evidence/x.log.json"),
+        ("evidence/x", "evidence/x.json"),
+    ] {
+        let (leaf, attempt_id) = leaf_with_probe(PROBE);
+        let command = "cargo test -p orbit-exec --test probe";
+        reviewer_needs_host(&leaf, &attempt_id, command, host_os());
+        let mut report: ReviewReport = serde_json::from_slice(
+            &leaf
+                .owner_artifact(orbit_types::workflow::REVIEW_REPORT_ARTIFACT)
+                .unwrap(),
+        )
+        .unwrap();
+        report.external_evidence[0].artifact = first.into();
+        let mut other = report.external_evidence[0].clone();
+        other.artifact = second.into();
+        other.command = "cargo test -p orbit-exec --test probe second".into();
+        report.external_evidence.push(other.clone());
+        let mut validation = report.validation[1].clone();
+        validation.id = Some("V3".into());
+        validation.command = other.command;
+        report.validation.push(validation);
+        leaf.put_report(&report);
+        assert!(leaf.settle().is_err());
+        for path in [first, second, "evidence/x.log.json"] {
+            assert!(
+                leaf.owner_artifact(path).is_none(),
+                "no evidence written at {path}"
+            );
+        }
+        assert!(leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none());
+    }
+}
+
 mod deferred;
 mod sandbox;
 

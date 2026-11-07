@@ -212,12 +212,14 @@ pub(super) fn canonical_requirements(
     requirements
         .iter()
         .map(|required| {
-            let artifact = evidence_artifact_path(&required.artifact)?;
+            let (artifact, log) =
+                super::fulfilment::fulfilment_artifact_paths(&required.artifact).ok()?;
             // [ORB-14478] A host-run check must name the OS it runs on.
             if required.name.trim().is_empty()
                 || required.command.trim().is_empty()
                 || (required.kind == ReviewEvidenceKind::HostSandboxTest && required.os.is_none())
                 || !seen.insert(artifact.clone())
+                || !seen.insert(log)
             {
                 return None;
             }
