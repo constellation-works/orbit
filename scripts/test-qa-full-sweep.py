@@ -262,13 +262,34 @@ def owned(root):
     return found
 
 def signal_confirmed(info, sig):
+    # Signal only through a pidfd bound to the observed incarnation. A
+    # starttime check followed by kill(pid) races with PID reuse: the
+    # process can exit and be replaced between the two operations.
     if not alive(info["pid"], info["starttime"]):
         return False
+    if not sys.platform.startswith("linux"):
+        return False
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is None or pidfd_send is None:
+        return False
     try:
-        os.kill(info["pid"], sig)
-        return True
+        pidfd = pidfd_open(info["pid"], 0)
     except OSError:
         return False
+    try:
+        if not alive(info["pid"], info["starttime"]):
+            return False
+        try:
+            pidfd_send(pidfd, sig)
+        except OSError:
+            return False
+        return True
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
 
 def reap(root, deadline_s=10, kill_grace_s=5):
     records = {}
@@ -564,25 +585,52 @@ def _cwd_under(cwd, root: Path) -> bool:
     return False
 
 
+def _pidfd_supported():
+    return (sys.platform.startswith("linux")
+            and getattr(os, "pidfd_open", None) is not None
+            and getattr(signal, "pidfd_send_signal", None) is not None)
+
+
 def _signal_confirmed(info, sig):
+    # Signal only through a pidfd bound to the observed incarnation. A
+    # starttime check followed by kill(pid) races with PID reuse: the
+    # process can exit and be replaced between the two operations. With
+    # no identity-bound handle (non-Linux or no pidfd) fail closed: send
+    # nothing, so the worker stays recorded as not exited.
     if not _proc_alive(info["pid"], info["starttime"]):
         return False
+    if not _pidfd_supported():
+        return False
     try:
-        os.kill(info["pid"], sig)
+        pidfd = os.pidfd_open(info["pid"], 0)
     except OSError:
         return False
-    return True
+    try:
+        if not _proc_alive(info["pid"], info["starttime"]):
+            return False
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except OSError:
+            return False
+        return True
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
 
 
 def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
     """Stop processes whose cwd is still under root and wait until they exit.
 
-    Signals only a pid whose starttime still matches. After the SIGTERM
-    deadline, SIGKILL is sent and the same identity is polled for up to
-    ``kill_grace_s``; return happens only when the identity is gone or the
-    bounded grace expires. A refused signal, or an identity that survives
-    the grace (for example in uninterruptible sleep), stays recorded as
-    not exited so cleanup cannot be reported as verified.
+    Signals only through a pidfd bound to the incarnation whose starttime
+    was observed (Linux). After the SIGTERM deadline, SIGKILL is sent the
+    same way and the same identity is polled for up to ``kill_grace_s``;
+    return happens only when the identity is gone or the bounded grace
+    expires. A refused signal, a platform with no identity-bound handle,
+    or an identity that survives the grace (for example in uninterruptible
+    sleep), stays recorded as not exited so cleanup cannot be reported as
+    verified.
     """
     root = Path(root)
     records = {}
@@ -633,7 +681,11 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
     # cwd_visible is False on a host whose process table has no working
     # directories (the ps fallback): a worker under root could not have been
     # found, so an empty list there is not evidence of a clean root.
-    return {"workers": workers, "cwd_visible": _proc_table_native()}
+    # identity_signal_available is False where no pidfd can bind the
+    # observed incarnation (non-Linux): such a worker is never signalled
+    # by number, so it stays not exited above.
+    return {"workers": workers, "cwd_visible": _proc_table_native(),
+            "identity_signal_available": _pidfd_supported()}
 
 
 def _fixture_ownership_roots(cwd, env):
@@ -2807,6 +2859,104 @@ def process_self_test():
             raise AssertionError(failure)
 
         try:
+            # Deterministic PID-reuse regression: the incarnation changes
+            # between identity observation and signaling. No numeric signal
+            # may reach the replacement; the unchanged control signals only
+            # through the pidfd bound to the observed incarnation.
+            fake_pid = 424242
+            original_info = {"pid": fake_pid, "ppid": 1, "pgrp": fake_pid, "sid": fake_pid,
+                             "starttime": 11, "state": "S", "cwd": str(temp), "cmdline": "worker"}
+            replacement_info = {**original_info, "starttime": 22, "cwd": "/unrelated"}
+
+            def sequenced_identity(infos):
+                calls = {"count": 0}
+
+                def fake_identity(_pid):
+                    index = min(calls["count"], len(infos) - 1)
+                    calls["count"] += 1
+                    return infos[index]
+
+                return fake_identity
+
+            for label, infos, expected, expected_sends in (
+                    ("replacement", [original_info, replacement_info], False, 0),
+                    ("unchanged", [original_info, original_info], True, 1)):
+                sent = []
+                killed = []
+                with (mock.patch.dict(globals(), {"_proc_identity": sequenced_identity(infos)}),
+                      mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                      mock.patch.object(signal, "pidfd_send_signal",
+                                        side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
+                      mock.patch.object(os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig)))):
+                    confirmed = _signal_confirmed(original_info, signal.SIGTERM)
+                if confirmed is not expected or killed or len(sent) != expected_sends:
+                    raise AssertionError(
+                        f"{label} identity signal: confirmed={confirmed} killed={killed} sent={sent}")
+                ownership_cases.append({"name": f"signal-identity-{label}", "pid": fake_pid,
+                                        "starttime": 11, "signaled": expected})
+
+            # Run the embedded supervisor head in a child so its subreaper
+            # prctl and signal handlers stay out of this process.
+            supervisor_driver = (
+                "import json, os, signal, sys\n"
+                "mode = sys.argv[1]\n"
+                "head = sys.argv[2]\n"
+                "sys.argv = ['supervisor', '-1', '-1', '[]']\n"
+                "ns = {'__name__': 'qa-supervisor-fixture'}\n"
+                "exec(head, ns)\n"
+                "original = {'pid': 424242, 'ppid': 1, 'pgrp': 424242, 'sid': 424242,"
+                " 'starttime': 11, 'state': 'S', 'cwd': '/root', 'cmdline': 'worker'}\n"
+                "replacement = {**original, 'starttime': 22, 'cwd': '/unrelated'}\n"
+                "infos = [original, replacement] if mode == 'replacement' else [original, original]\n"
+                "calls = {'count': 0}\n"
+                "def fake_identity(_pid):\n"
+                "    index = min(calls['count'], len(infos) - 1)\n"
+                "    calls['count'] += 1\n"
+                "    return infos[index]\n"
+                "ns['identity'] = fake_identity\n"
+                "sent = []\n"
+                "killed = []\n"
+                "os.pidfd_open = lambda pid, flags: 9999\n"
+                "signal.pidfd_send_signal = lambda fd, sig: sent.append((fd, sig))\n"
+                "os.kill = lambda pid, sig: killed.append((pid, sig))\n"
+                "confirmed = ns['signal_confirmed'](original, signal.SIGTERM)\n"
+                "print(json.dumps({'confirmed': confirmed, 'killed': killed, 'sent': sent}))\n")
+            supervisor_head = _PROCESS_SUPERVISOR.split("def reap(", 1)[0]
+            for label, expected, expected_sends in (
+                    ("replacement", False, 0), ("unchanged", True, 1)):
+                completed = subprocess.run(
+                    [sys.executable, "-c", supervisor_driver, label, supervisor_head],
+                    capture_output=True, text=True, timeout=10)
+                if completed.returncode != 0:
+                    raise AssertionError(f"supervisor {label} driver failed: {completed.stderr}")
+                observed = json.loads(completed.stdout.strip().splitlines()[-1])
+                if (observed.get("confirmed") is not expected or observed.get("killed")
+                        or len(observed.get("sent") or []) != expected_sends):
+                    raise AssertionError(f"supervisor {label} identity signal: {observed}")
+                ownership_cases.append({"name": f"supervisor-signal-identity-{label}", "pid": fake_pid,
+                                        "starttime": 11, "signaled": expected})
+
+            settle_killed = []
+            settle_sent = []
+            with (mock.patch.dict(globals(), {
+                    "_proc_identity": sequenced_identity([original_info, replacement_info]),
+                    "_proc_snapshot": lambda: {fake_pid: original_info}}),
+                  mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                  mock.patch.object(signal, "pidfd_send_signal",
+                                    side_effect=lambda fd, sig: settle_sent.append((fd, sig)), create=True),
+                  mock.patch.object(os, "kill", side_effect=lambda pid, sig: settle_killed.append((pid, sig)))):
+                identity_settlement = settle_detached_workers_under(temp, deadline_s=0.2, kill_grace_s=0.2)
+            identity_workers = identity_settlement.get("workers") or []
+            if (settle_killed or settle_sent or len(identity_workers) != 1
+                    or identity_workers[0].get("starttime") != 11
+                    or identity_workers[0].get("exited") is not True):
+                raise AssertionError(
+                    f"replacement incarnation was signalled or misrecorded: "
+                    f"killed={settle_killed} sent={settle_sent} settlement={identity_settlement}")
+            ownership_cases.append({"name": "settle-signal-identity-replacement", "pid": fake_pid,
+                                    "starttime": 11, "signaled": False,
+                                    "record": identity_workers[0]})
+
             complete_root = Path(env["TMPDIR"]) / "complete-root"
             complete_root.mkdir()
             complete_ready = Path(env["TMPDIR"]) / "complete-ready"

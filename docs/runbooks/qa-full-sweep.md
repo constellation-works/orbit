@@ -532,8 +532,15 @@ private temp root, read through `/proc` or libproc. After the command leaves,
 the supervisor records that worker's process id, process group, working
 directory and command line, and waits until the process has exited before
 publishing the command result. Timeout, normal completion, owner loss and
-unwind all wait for that exit. A host with neither a subreaper nor a
-working-directory source cannot find a detached worker, so the run reports
+unwind all wait for that exit. Individual worker signals are identity-bound:
+on Linux both the supervisor and the harness open a pidfd for the observed
+incarnation, re-verify its start time, and signal only through that pidfd,
+never by numeric pid, so a process that exits and is replaced cannot be
+signalled in its place. There is no identity-bound handle in this harness
+on macOS or without pidfd support, so no numeric fallback is used there: a
+found worker stays recorded as not exited and cleanup stays unverified. A
+host with neither a subreaper nor a working-directory source cannot find a
+detached worker, so the run reports
 `cleanup_verified` false with `detached worker cleanup NOT_RUN` in its output,
 and the report's `scratch_cleanup.warning` says the same. On macOS a worker
 whose working directory is outside that root is not found. The report records
