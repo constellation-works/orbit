@@ -91,6 +91,17 @@ ignored; `backend: http` and `backend: auto` fail catalog load, and
 `max_iterations` is accepted and has no effect: only
 `wall_clock_timeout_seconds` bounds an invocation.
 
+Other removed keys fail the same way at load — for example
+`trustedHostExecution: true`, whose error directs you to use a task
+workflow instead. Where the stale file is a workspace-local copy under
+`.orbit/resources/activities/` (including a copy of a bundled activity a
+release retired), that one file is excluded from the catalog with a
+warning naming its path and the remedy, so jobs that do not reference it
+still run; a job that does reference it fails with the same named error.
+`orbit doctor` reports the file with its path and the fix-or-remove
+remedy. Fix the definition or remove the stale file; a removed activity
+or key will not return.
+
 ## Job envelope
 
 ```yaml

@@ -233,6 +233,91 @@ fn activity_catalog_health_matches_runtime_duplicate_admission() {
     }
 }
 
+#[test]
+fn stale_workspace_activity_is_isolated_and_reported() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "stale_workspace_activity_is_isolated_and_reported",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{ResolveError, load_job_asset, resolve_job_target_refs};
+
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let (runtime, _, activities) = workspace_runtime(root.path());
+    let stale = activities.join("agent_invoke.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("agent_invoke", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace activity");
+    std::fs::write(
+        activities.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+
+    // The stale file must not fail catalog construction for unrelated jobs.
+    let catalog = runtime
+        .v2_activity_catalog()
+        .expect("catalog builds despite the stale workspace-local activity");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("agent_invoke").is_none());
+    let reason = catalog
+        .unavailable_reason("agent_invoke")
+        .expect("stale activity is recorded unavailable");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains("use a task workflow"), "{reason}");
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let mut unrelated =
+        load_job_asset(&job_yaml("unrelated_job", "good_activity")).expect("unrelated job");
+    resolve_job_target_refs(&mut unrelated.spec, &catalog)
+        .expect("a job not referencing the stale activity still resolves");
+
+    let mut referencing =
+        load_job_asset(&job_yaml("referencing_job", "agent_invoke")).expect("referencing job");
+    let error = resolve_job_target_refs(&mut referencing.spec, &catalog)
+        .expect_err("a job referencing the stale activity is refused");
+    assert!(
+        matches!(
+            &error,
+            ResolveError::ActivityUnavailable { name, .. } if name == "agent_invoke"
+        ),
+        "expected ActivityUnavailable for agent_invoke, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&stale.display().to_string()),
+        "{error}"
+    );
+
+    // Doctor names the same file, error and remedy.
+    let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    let fault = findings
+        .iter()
+        .find(|finding| finding.path == stale)
+        .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", stale.display()));
+    assert_eq!(fault.condition, ArtifactCondition::Faulty);
+    assert!(
+        fault.detail.contains(&stale.display().to_string()),
+        "{fault:?}"
+    );
+    assert!(fault.detail.contains("trustedHostExecution"), "{fault:?}");
+    assert!(fault.detail.contains("use a task workflow"), "{fault:?}");
+    assert!(fault.remediation.contains("agent_invoke.yaml"), "{fault:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_retirement_confines_linked_and_regular_skill_assets() {
