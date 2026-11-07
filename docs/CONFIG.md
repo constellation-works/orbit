@@ -1117,9 +1117,11 @@ This release runs only the report and shadow trials. `margin`, `look_every`, `ma
 `workflow.explore.max_concurrent_per_run`, `workflow.explore.timeout_seconds`,
 `workflow.explore.max_answer_bytes`, and `workflow.purpose_crews.explorer`
 are deprecated and ignored. Existing files still load with a warning; remove
-these keys with `orbit config unset <key>`. Explorer delegation and its MCP
-tool have been removed. Stored runs and experiment readouts remain readable.
-The task pilot's explore briefs below are a separate feature.
+these keys with `orbit doctor --fix-retired-config-keys`, which backs up each
+affected file first, or delete the lines by hand from the `config.toml` that
+sets them. Explorer delegation and its MCP tool have been removed. Stored runs
+and experiment readouts remain readable. The task pilot's explore briefs below
+are a separate feature.
 
 ### `[workflow.explore_brief]` — explore briefs from the task pilot
 
