@@ -196,20 +196,32 @@ class Block:
     head: tuple
 
 
+@dataclass(frozen=True)
+class ModuleContext:
+    """A source file and the directory rule of this particular loading context."""
+    path: Path
+    parent_owned: bool
+
+
+def module_context(path, parent_owned=False):
+    """Normalize mod.rs to the same directory rule in every loading context."""
+    return ModuleContext(path, parent_owned or path.name == "mod.rs")
+
+
 @dataclass
 class Module:
-    """A `mod` declaration at token `index`; `child` is its file for `mod name;`."""
+    """A `mod` declaration at token `index`; `child` is its loading context for `mod name;`."""
     name: str
     index: int
     block: int
-    child: object
+    child: ModuleContext | None
     active: bool
     attrs: tuple
 
 
 class Source:
-    def __init__(self, path, crate_root=False, platform="windows"):
-        self.path = path
+    def __init__(self, context, platform="windows"):
+        path = self.path = context.path
         self.platform = platform
         self.text = path.read_text(encoding="utf-8")
         self.items = list(tokens(self.text))
@@ -220,7 +232,7 @@ class Source:
         self.heads = []
         self.blocks = []
         self.modules = []
-        directory = path.parent if crate_root or path.name == "mod.rs" else path.with_suffix("")
+        directory = path.parent if context.parent_owned else path.with_suffix("")
         self.walk(0, len(self.items), True, directory, path.parent)
 
     def walk(self, start, end, enabled, directory, path_directory, comma_items=False, block=-1):
@@ -273,8 +285,9 @@ class Source:
                         directory / f"{module}.rs", directory / module / "mod.rs"]
                     for candidate in candidates:
                         if candidate.is_file():
-                            self.edges.append((candidate.resolve(), active))
-                            child = child or candidate.resolve()
+                            context = module_context(candidate.resolve(), parent_owned=path_override is not None)
+                            self.edges.append((context, active))
+                            child = child or context
                 if module:
                     self.modules.append(Module(module, header + module_at, block, child, active,
                                                tuple(attrs)))
@@ -357,35 +370,62 @@ def cargo_roots(root, directories=("crates",)):
 
 
 def scan(root, platform, directories=("crates",)):
-    """Parse every Rust file below `directories`; return the sources and the set reachable
-    on `platform` through ungated module edges from crate roots and unreferenced files."""
-    paths = sorted(path.resolve() for name in directories for path in (root / name).rglob("*.rs")
-                   if "target" not in path.relative_to(root).parts)
-    targets = cargo_roots(root, directories)
+    """Return sources and platform-reachable ModuleContext keys.
+
+    Index declarations even when gated off, so excluded descendants do not
+    become orphan roots. Parse each actual directory-ownership context on its
+    own; edges from an excluded context must not leak into a reachable one.
+    """
+    paths = {path.resolve() for name in directories for path in (root / name).rglob("*.rs")
+             if "target" not in path.relative_to(root).parts}
+    targets = cargo_roots(root, directories) & paths
     targets.update(path for path in paths if path.name in ("lib.rs", "main.rs", "build.rs"))
-    sources = {path: Source(path, crate_root=path in targets, platform=platform) for path in paths}
-    incoming = {child for source in sources.values() for child, _ in source.edges if child in sources}
-    # Unreferenced files are checked too. Never trust a Unix-looking filename.
-    roots = set(sources) - incoming
-    roots.update(targets & set(sources))
+    sources = {}
+
+    def index_contexts(contexts):
+        pending = list(contexts)
+        while pending:
+            context = pending.pop()
+            if context in sources or context.path not in paths:
+                continue
+            source = sources[context] = Source(context, platform=platform)
+            pending.extend(child for child, _ in source.edges)
+
+    roots = {module_context(path, parent_owned=True) for path in targets}
+    index_contexts(roots)
+    # Check unreferenced files too, without inventing ordinary contexts for
+    # files already owned by a #[path] tree. Infer the remaining ordinary
+    # roots, then follow their real contexts before considering more orphans.
+    orphan_roots = set()
+    while remaining := paths - {context.path for context in sources}:
+        defaults = {module_context(path): Source(module_context(path), platform=platform)
+                    for path in remaining}
+        incoming = {child.path for source in defaults.values() for child, _ in source.edges}
+        inferred = {context for context in defaults if context.path not in incoming}
+        if not inferred:
+            break
+        orphan_roots.update(inferred)
+        index_contexts(inferred)
+    incoming = {child.path for source in sources.values() for child, _ in source.edges}
+    roots.update(context for context in orphan_roots if context.path not in incoming)
     reachable = set()
     pending = list(roots)
     while pending:
-        path = pending.pop()
-        if path in reachable:
+        context = pending.pop()
+        if context in reachable or context not in sources:
             continue
-        reachable.add(path)
-        pending.extend(child for child, enabled in sources[path].edges if enabled and child in sources)
+        reachable.add(context)
+        pending.extend(child for child, enabled in sources[context].edges if enabled)
     return sources, reachable
 
 
 def check(root):
     sources, reachable = scan(root, "windows")
-    failures = []
-    for path in sorted(reachable):
-        for line, label in sources[path].findings():
-            failures.append(f"{path.relative_to(root)}:{line}: {label} needs an enclosing cfg that excludes Windows")
-    return failures
+    failures = set()
+    for context in reachable:
+        for line, label in sources[context].findings():
+            failures.add(f"{context.path.relative_to(root)}:{line}: {label} needs an enclosing cfg that excludes Windows")
+    return sorted(failures)
 
 
 def main():

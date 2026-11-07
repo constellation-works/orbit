@@ -91,6 +91,38 @@ class OpenptyPortabilityTests(unittest.TestCase):
                     source = "fn fixture() {\n libc::openpty(\n " + ",\n ".join(args) + ",\n );\n}"
                     self.check_tree({"lib.rs": source}, 0)
 
+    def test_redirected_descendants_keep_gates_and_loading_contexts(self):
+        call = "fn f() { libc::openpty(a,b,c,d,&dimensions); }"
+        gate = '#[cfg(target_os = "linux")] '
+        for declaration, child in (("mod child;", "helpers/child.rs"),
+                                   ("mod nested { mod child; }", "helpers/nested/child.rs")):
+            with self.subTest(declaration=declaration):
+                files = {"lib.rs": gate + '#[path = "helpers/provider.rs"] mod helper;',
+                         "helpers/provider.rs": declaration, child: call}
+                self.check_tree(files, 0)
+                files["lib.rs"] = files["lib.rs"].replace(gate, "")
+                self.check_tree(files, 1)
+
+        files = {"lib.rs": gate + 'mod provider;\n#[path = "provider.rs"] mod redirected;',
+                 "provider.rs": "mod child;", "provider/child.rs": call,
+                 "child.rs": "pub fn portable() {}"}
+        self.check_tree(files, 0)
+        files["lib.rs"] = 'mod provider;\n' + gate + '#[path = "provider.rs"] mod redirected;'
+        self.check_tree(files, 1)
+        files["provider/child.rs"], files["child.rs"] = files["child.rs"], call
+        self.check_tree(files, 0)
+        files["lib.rs"] = files["lib.rs"].replace(gate, "")
+        self.check_tree(files, 1)
+
+    def test_redirected_child_is_still_an_automatic_cargo_target(self):
+        files = {"../Cargo.toml": '[package]\nname = "fixture"\nversion = "0.1.0"\n',
+                 "lib.rs": '#[cfg(target_os = "linux")] #[path = "bin/provider.rs"] mod helper;',
+                 "bin/provider.rs": "mod child;",
+                 "bin/child.rs": "fn main() { libc::openpty(a,b,c,d,&dimensions); }"}
+        self.check_tree(files, 1)
+        files["../Cargo.toml"] += "autobins = false\n"
+        self.check_tree(files, 0)
+
     def test_macos_reachability(self):
         call = "fn f() { libc::openpty(a,b,c,d,&dimensions); }"
         self.check_tree({"lib.rs": '#[cfg(target_os = "linux")]\n' + call}, 0)
