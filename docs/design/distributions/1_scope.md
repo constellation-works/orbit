@@ -23,8 +23,10 @@ Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, 
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
 11 default routines and 19 default auto-tasks: 30 defaults in total. By default it seeds all
-30 into each workspace; the auto-task `host-health` ([ORB-21596]) is seeded enabled, and the
-others are disabled. The routine `crew_performance_refresh` ([ORB-17816]), once seeded enabled,
+30 into each workspace; the routines `worktree-gc` and `task-pilot` are seeded enabled, and
+other shipped routines are seeded disabled. Among auto-tasks, `host-health` ([ORB-21596]) alone is
+seeded enabled; other shipped auto-tasks are seeded disabled. The routine
+`crew_performance_refresh` ([ORB-17816]), once seeded enabled,
 was retired in [ORB-22804]. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
 which of its already-seeded plugin definitions to enable with a preset.

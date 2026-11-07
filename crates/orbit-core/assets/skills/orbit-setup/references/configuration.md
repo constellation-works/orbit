@@ -177,7 +177,8 @@ orbit doctor
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
   from enabling it: shipped auto-tasks start disabled, except `host-health`,
-  which ships enabled. Every routine starts disabled. Preserve existing
+  which ships enabled. The shipped `worktree-gc` and `task-pilot` routines
+  seed enabled; other shipped routines seed disabled. Preserve existing
   enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves

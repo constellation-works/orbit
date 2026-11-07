@@ -163,10 +163,11 @@ at 04:47 host-local time, disabled until you opt into publishing task prose;
 attachments default to `omit`), and the `ux-rules` routine (daily at 06:40,
 which does no work until you grant its runner script and choose the surfaces
 it measures).
-All start disabled. `orbit workspace sync`
+The shipped `worktree-gc` and `task-pilot` routines start enabled; the other
+shipped routines start disabled. `orbit workspace sync`
 refreshes the routines after an upgrade and keeps your edits.
 
-Turn one on with its switch in **Automation → Routines**, or set
+Change a routine's enablement with its switch in **Automation → Routines**, or set
 `enabled: true` in its YAML. Git ignores `.orbit/`, so the change applies to
 this checkout on this machine. Start with worktree GC, and turn on the ship
 sweep last (see [Ship unattended](#ship-unattended)).
