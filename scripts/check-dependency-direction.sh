@@ -288,8 +288,10 @@ app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
 # [ORB-22313] The precedent-assistance records keep contracts below their
 # consumer and the assistance grants that consumer reads.
-contracts_higher="${app_modules}|precedent_decision|assistance"
-if rg -n "crate::application::(${contracts_higher})\\b|\\bsuper::super\\b|\\bsuper::(precedent_decision|assistance)\\b" \
+# [ORB-22623] So do the clock settings and schedule display state, below
+# `routines` and `auto_tasks`.
+contracts_higher="${app_modules}|precedent_decision|assistance|routines|auto_tasks"
+if rg -n "crate::application::(${contracts_higher})\\b|\\bsuper::super\\b|\\bsuper::(precedent_decision|assistance|routines|auto_tasks)\\b" \
   "$app_src/contracts" -g '*.rs' ||
   rg -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
     "$app_src/contracts" -g '*.rs'; then
@@ -841,6 +843,24 @@ if rg -n 'crate::application::experiment\b' \
   fail=1
 fi
 
+# [ORB-22623] `routines` (the sweep clock) sits outside the order, above
+# `automation` and `auto_tasks`: it calls automation's evaluation and the
+# auto-task scheduler, and reaches `review`, `pull_drain` and `backlog_forecast`.
+# The clock settings and schedule display state those two read live in
+# `contracts`. A path, a grouped tree, a `super::` chain into `routines`, or a
+# call to an inherent method it defines (names derived) is a reintroduced edge.
+for lower_module in automation auto_tasks; do
+  if rg -n 'crate::application::routines\b' \
+    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
+    rg -n -U 'crate::application::\{[^}]*\broutines\b' \
+      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
+    ! inherent_calls_into "$app_src" "$lower_module" routines '' '' ||
+    ! super_chains_into "$app_src" "$lower_module" routines; then
+    echo "orbit-core ${lower_module} must not name routines or call its inherent methods; read clock settings and schedule display state from application::contracts"
+    fail=1
+  fi
+done
+
 # [ORB-22287] The forecast has no ports, so nothing below it may call its
 # inherent methods (names derived); `task` and `job` are covered above, through
 # their upper-module lists.
@@ -855,9 +875,7 @@ done
 # edge into it is `runtime.task_riskiness_model()` in `assembly.rs`, whose
 # returned model answers `forecast_regression_prior`. Any other path or inherent
 # call into `codebase`, or any `codebase` path or call back into the forecast,
-# is a new edge. `automation -> routines -> backlog_forecast` is the documented
-# indirect path through unordered `routines` (the sweep clock), which these
-# direct-reference checks cannot see.
+# is a new edge.
 forecast_codebase_allowed='^backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = runtime\.task_riskiness_model\(\)\?;$'
 if rg -n 'crate::application::codebase\b' \
   "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
@@ -878,7 +896,7 @@ if rg -n 'crate::application::backlog_forecast\b' \
   fail=1
 fi
 
-shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery|PrecedentAssistState|PrecedentAssistOutcomeSource|PrecedentAssistOutcome|PrecedentAssistDemotion|PrecedentAssistEnd|PrecedentAssistEnablement'
+shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery|PrecedentAssistState|PrecedentAssistOutcomeSource|PrecedentAssistOutcome|PrecedentAssistDemotion|PrecedentAssistEnd|PrecedentAssistEnablement|ClockSettings|DEFAULT_CLOCK_CADENCE_SECONDS|LAUNCHD_LABEL|SYSTEMD_UNIT|load_clock_settings|save_clock_settings|ScheduleDisplayState'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \

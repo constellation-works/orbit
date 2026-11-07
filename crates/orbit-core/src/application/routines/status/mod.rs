@@ -31,13 +31,11 @@ mod fires;
 mod report;
 mod toggle;
 
+pub use crate::application::contracts::ScheduleDisplayState;
 pub(crate) use checkout::{
     checkout_edit_report, checkout_refusal, checkout_routine_statuses, toggle_checkout_routine,
 };
-pub use display::{
-    FireField, RoutineFailureStreak, RoutineField, RoutineStatus, ScheduleDisplayState,
-    project_fire,
-};
+pub use display::{FireField, RoutineFailureStreak, RoutineField, RoutineStatus, project_fire};
 pub use fires::recent_fires;
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
 pub use toggle::{
