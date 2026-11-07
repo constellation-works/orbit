@@ -8,7 +8,6 @@ use orbit_types::task::{
     VisualMockDigestRecord, VisualReviewContract, has_verify_mock_ui_tag, mock_sha256_hex,
     record_mock_digests,
 };
-use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::tag_instructions::read_blob_at;
@@ -113,7 +112,7 @@ impl OrbitRuntime {
     }
 
     /// The contract a claim admission returns in its receipt for `task`.
-    pub(crate) fn captured_visual_review(
+    pub(super) fn captured_visual_review(
         &self,
         task: &Task,
     ) -> Result<Option<VisualReviewContract>, OrbitError> {
@@ -137,68 +136,6 @@ impl OrbitRuntime {
                     task.id
                 ))
             })
-    }
-
-    /// Freeze the mocks of each `verify-mock-ui` task a fresh
-    /// `task_pr_pipeline` submission names (§2.4), so a mock replaced
-    /// during the delivery is refused as `mock_changed`. Admission's own
-    /// mock refusal stays where it is; a task whose mocks do not pass is
-    /// not frozen here, and its capture records why.
-    pub(crate) fn freeze_visual_admission(
-        &self,
-        job_name: &str,
-        input: &mut Value,
-        resuming: bool,
-    ) -> Result<(), OrbitError> {
-        if job_name != "task_pr_pipeline" || resuming || self.worker_invocation().is_some() {
-            return Ok(());
-        }
-        if self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Off {
-            return Ok(());
-        }
-        let task_ids = input
-            .get("task_ids")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut mock_admissions = input
-            .get("__mock_admissions")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for task_id in task_ids.iter().filter_map(Value::as_str) {
-            let Ok(task) = self.get_task(task_id) else {
-                continue;
-            };
-            if mock_admissions.contains_key(task_id)
-                || !matches!(self.mock_admission_check(&task), Ok(Some(_)))
-            {
-                continue;
-            }
-            let admission_id = format!(
-                "visual:{}",
-                mock_sha256_hex(
-                    format!(
-                        "{task_id}|{}|{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |duration| duration.as_nanos()),
-                        std::process::id()
-                    )
-                    .as_bytes()
-                )
-            );
-            self.record_admitted_mock_digests(
-                &task,
-                Some(admission_id.clone()),
-                Self::mock_freeze_mode_for_ship(&task),
-            )?;
-            mock_admissions.insert(task_id.to_string(), json!(admission_id));
-        }
-        if !mock_admissions.is_empty() {
-            input["__mock_admissions"] = Value::Object(mock_admissions);
-        }
-        Ok(())
     }
 
     /// The contract of the claimed leaf this process executes: what its

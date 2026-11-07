@@ -48,7 +48,7 @@ impl OrbitRuntime {
     /// Refuse `handoff` when the capture it returns is not the one its
     /// claim's visual review contract asks for. A claim admitted without a
     /// contract (the phase did not apply) returns none and is not checked.
-    pub(crate) fn check_handoff_visual_capture(
+    pub(super) fn check_handoff_visual_capture(
         &self,
         handoff: &TaskHandoff,
     ) -> Result<(), OrbitError> {

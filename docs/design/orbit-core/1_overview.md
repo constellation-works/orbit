@@ -133,6 +133,7 @@ source scan, enforces the runtime direction.
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
+| Visual delivery's pure reads and the ports into it | `crates/orbit-core/src/application/task/visual_review_json.rs`, `task/mock_admission.rs` (`freeze_visual_admission`), `review/visual_port.rs` (`ReviewVisualPort`) and `distributed/visual_port.rs` (`DistributedVisualPort`), implemented in `visual_delivery/review_port.rs` and `visual_delivery/distributed_port.rs` | [ORB-22624] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
 | Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition/services.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
@@ -267,7 +268,17 @@ moved the backlog forecast out of `task` to its own place in the order:
   owns, so admission captures a claimed task's experiments through
   `distributed::DistributedExperimentPort::capture_pull_experiments`, which
   `experiment` implements on `OrbitRuntime`; the receipt read stays a legal
-  `experiment -> distributed` edge [ORB-22416].
+  `experiment -> distributed` edge [ORB-22416]. `visual_delivery` sits beside
+  it, outside the order and above `distributed`: it calls `review`'s run
+  admission, `distributed`'s claim receipt and `job`'s claimed leaf and reviewer
+  pools. `task` owns the two pure reads (`task_visual_review_json` with
+  `read_visual_record`, and `freeze_visual_admission`), `review` reaches the
+  reviewer's findings and the handoff capture check through
+  `review::ReviewVisualPort`, and `distributed` reaches the receipt's contract
+  and the live evidence recheck through `distributed::DistributedVisualPort`,
+  both implemented by `visual_delivery`. `visual_delivery/mod.rs` aliases
+  `read_visual_record` as `read_record`, a shim for its children whose
+  retirement is a follow-up [ORB-22624].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`
@@ -294,6 +305,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   `distributed` names `experiment` or calls its inherent methods [ORB-22416],
   when `automation` or `auto_tasks` names `routines` or calls its inherent
   methods [ORB-22623],
+  when `task`, `job`, `review` or `distributed` names `visual_delivery` or
+  calls its inherent methods [ORB-22624],
   or when a shared contract is defined or imported anywhere but
   `application::contracts`. [ORB-22004] The same derivation covers the adapter:
   `application` may not import `crate::adapter`, and no application file may call
@@ -373,9 +386,11 @@ follow-up. Executor `host_os` limits (`task::executor_host_os`) and
 `verify-mock-ui` admission (`task::mock_admission`) are task modules; the
 host-OS wait that resolves the draw's candidates is
 `job::crew_pools::host_os_wait`. Their back-edges with other unordered
-modules (`precedent_decision`, `resident`, `experiment`, `visual_delivery`,
-`codebase`) still keep the core strongly connected component and await a
-later audit.
+modules (`precedent_decision`, `resident`, `experiment`, `codebase`) still keep
+the core strongly connected component and await a later audit, as do
+`experiment <-> visual_delivery` and `landing -> visual_delivery`: [ORB-22624]
+cut only the edges into `visual_delivery` from `task`, `job`, `review` and
+`distributed`.
 
 ## Task References
 
@@ -401,6 +416,7 @@ later audit.
 - [ORB-22287] — moved the backlog forecast from `task/backlog_forecast/` to `backlog_forecast/` above `workspace_auto`, removed its guard exemption, and guarded the forecast → `codebase` edge to the one authorized call.
 - [ORB-22313] — cut the task → precedent_decision edge through `task::TaskPrecedentDecisionPort`, moved the pure enablement records to `contracts`, and guarded the direction.
 - [ORB-22416] — cut the distributed → experiment capture edge through `distributed::DistributedExperimentPort`, implemented by `experiment`, and guarded the direction.
+- [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

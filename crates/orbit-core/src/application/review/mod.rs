@@ -41,6 +41,7 @@ mod switches;
 mod task_port;
 #[cfg(test)]
 mod tests;
+mod visual_port;
 
 pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
@@ -68,6 +69,7 @@ pub use switches::{
     AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,
     review_switches_view,
 };
+pub(in crate::application) use visual_port::ReviewVisualPort;
 
 /// Audit command name shared by every gate decision.
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
