@@ -286,13 +286,6 @@
 .drain-field-row:has(> .drain-switch) { align-items: flex-start; }
 @media (prefers-reduced-motion: reduce) { .drain-switch, .drain-switch::after { transition: none; } }
 
-/* A labelled rule before what happens after a task ships. */
-.drain-divider {
-  display: flex; align-items: center; gap: 10px; color: var(--fg-mute);
-  font: 500 11px var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
-}
-.drain-divider::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hair); }
-
 /* The sunk footer: what the window will do, a throttle warning, Start. */
 /* `.panel` hides overflow, which would make the card the footer's scroll
    container; clip keeps the rounded corners and lets the footer stick to the
