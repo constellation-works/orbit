@@ -54,6 +54,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`) | [Plugins — Managing legacy external tools](references/plugins.md#managing-legacy-external-tools) |
 | Owner/replica roles, multiple machines, or coordinating a breaking workspace-layout upgrade across hosts | [Multi-host](references/multi-host.md#upgrading-a-workspace-together) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
+| Owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [Configuration — Distributed-drain completion policy](references/configuration.md#distributed-drain-completion-policy) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
 | Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding; inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades) |
 | Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
