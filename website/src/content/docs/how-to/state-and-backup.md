@@ -196,7 +196,7 @@ machine's prefix is replaced by the incoming copy and reported `updated`. A task
 this machine's prefix is left alone and reported `skipped-local-owned`, so an archive
 can't overwrite your own work. Nothing is renumbered, no `.idmap.json` is written, and
 running the same archive again reports `already-present`, so it is safe to repeat on a
-schedule. Import tasks that others depend on first: a cross-machine `depends_on`
+schedule. Import tasks that others depend on first: a cross-machine dependency
 resolves only once its target's mirror has landed.
 
 Only the prefix decides, so `owner-wins` never moves ownership: a mirror stays

@@ -86,6 +86,7 @@ orbit workspace sync --check --all   # preview; writes nothing
 | Status | Meaning |
 |---|---|
 | `synced` | Changes were applied; the line lists what changed. |
+| `pending` | Shown only with `--check`: a sync would apply changes here. |
 | `already current` | Nothing to apply. |
 | `skipped` | Left untouched, with a reason: the checkout path or its `.orbit/` directory is missing, the path is not a Git checkout, it shares a data root with an earlier workspace, or a live drain or run holds it. |
 | `failed` | Convergence raised an error; the line carries it. |
@@ -112,10 +113,10 @@ orbit migrate
 
 ```text
 COMPONENT         CURRENT  SUPPORTED
-workspace layout  1        1
-store schema      1        1
+workspace layout  9        9
+store schema      86       86
 
-workspace: /path/to/repo/.orbit (orbit 0.32.0)
+workspace: /path/to/repo/.orbit (orbit 0.45.1)
 
 Workspace is up to date.
 ```

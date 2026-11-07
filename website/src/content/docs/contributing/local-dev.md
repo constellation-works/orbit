@@ -15,6 +15,7 @@ Clippy on the crates you touched, and goldens when you change a golden surface.
 These targets are available for broader checks when needed:
 
 ```bash
+make ci-guards
 make ci-fast
 make ci-test-affected
 make ci-lint

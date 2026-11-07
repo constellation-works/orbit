@@ -39,7 +39,9 @@ CLI command only.
 
 - Leave room under `experiments.max_running` (default `3`, range `1`–`20`).
   Starting or resuming past it is refused. A paused experiment does not
-  count. Conclude, pause, or abandon one first.
+  count. Conclude, pause, or abandon one first. Shadow trials that the
+  [crew ladder](../../concepts/agents/#crew-ladder) keeps (off by default) are
+  experiments too and use these slots.
 - If a treatment sets a `config` overlay, list every key it sets under
   `experiments.config_keys` (default `[]`). Starting refuses an arm that
   sets any other key. The overlay itself only admits keys Orbit has opted
@@ -216,7 +218,8 @@ enabled agent-facing added tools, removal only of tools the handoff
 contract does not require, and resolvable overlay crews — and refuses
 with the arm and the reason.
 
-`--mode` decides what an assignment does:
+The experiment's `--mode`, set on `create` or `update`, decides what an
+assignment does:
 
 - `shadow` (the default) assigns and records arms but applies no overlay.
   Use it to validate the population, weights, and readout on real tasks

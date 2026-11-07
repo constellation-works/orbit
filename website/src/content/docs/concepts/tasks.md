@@ -397,7 +397,8 @@ orbit task locks reserve \
 ```
 
 - `--task` reserves the task's declared context surface, expanded the way
-  conflict admission expands it.
+  conflict admission expands it. Repeat the flag or comma-separate IDs to
+  reserve several tasks' combined surface.
 - `--file` takes `file:` or `dir:` selectors. Repeat the flag or comma-separate
   selectors to claim several.
 - `--ttl` takes a duration such as `45m` or `2h`. It defaults to `30m`, and its
