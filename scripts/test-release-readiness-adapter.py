@@ -226,5 +226,89 @@ class NativeReadinessRegression(unittest.TestCase):
                 self.assertEqual(verdict["status"], "unavailable", verdict)
 
 
+class PrepReadinessRegression(unittest.TestCase):
+    """A handoff passes only against the owner's pinned survey, never merely
+    by agreeing with the (also agent-authored) canonical task."""
+
+    HEAD = "d" * 40
+    COMMITS = ["b" * 40, "c" * 40]
+
+    def request(self, *, candidate=None, trusted_survey="real", canonical_version=None,
+                scenario="handoff"):
+        survey = {"latest_tag": "v0.1.0", "head": self.HEAD,
+                  "commits": list(self.COMMITS), "breaking": False}
+        if candidate:
+            survey.update(candidate)
+        version = canonical_version or {
+            ("v0.1.0", False): "0.1.1", ("v0.1.0", True): "0.2.0",
+        }.get((survey["latest_tag"], survey["breaking"] is True), "0.0.1")
+        trusted = {"source_revision": self.HEAD, "task_id": "probe"}
+        if trusted_survey == "real":
+            trusted["release_survey"] = {"latest_tag": "v0.1.0", "head": self.HEAD,
+                                         "commits": list(self.COMMITS), "breaking": False}
+        elif trusted_survey is not None:
+            trusted["release_survey"] = trusted_survey
+        body = {"source_revision": self.HEAD, "scenario": scenario, "blockers": [],
+                "survey": survey, "version": version, "canonical_task_id": "ORB-1"}
+        if scenario == "blocked":
+            body["blockers"] = ["ORB-9"]
+        return {
+            "contract": "release-readiness/v1", "form": "release-prep",
+            "trusted": trusted,
+            "tasks": {"tagged": [{
+                "id": "ORB-1", "title": f"Prepare v{version} release", "status": "backlog",
+                "tags": ["release", "no-diff-expected"],
+                "context_files": ["file:CHANGELOG.md", "file:Cargo.toml",
+                                  "file:Cargo.lock", "file:npm/package.json"],
+                "description": f"pinned {self.HEAD} version {version}",
+            }]},
+            "evidence": {"artifacts": {"release-prep-evidence.json": {"json": body}}},
+        }
+
+    def verdict(self, request):
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+            input=json.dumps(request), text=True, capture_output=True, timeout=30,
+            cwd=ROOT / ".orbit/tmp")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_valid_handoff_passes(self):
+        self.assertEqual(self.verdict(self.request())["status"], "passed")
+        breaking = self.request(candidate={"breaking": True})
+        breaking["trusted"]["release_survey"]["breaking"] = True
+        self.assertEqual(self.verdict(breaking)["status"], "passed")
+
+    def test_invented_and_mismatched_surveys_are_unavailable(self):
+        cases = {
+            # The ORB-22658 fixture: an invented commit, tag and version that
+            # agree only with the canonical task.
+            "invented-survey": self.request(
+                candidate={"latest_tag": "v0.0.0", "commits": ["not-a-commit"]}),
+            "no-trusted-survey": self.request(trusted_survey=None),
+            "mismatched-tag": self.request(candidate={"latest_tag": "v0.0.9"}),
+            "mismatched-range": self.request(candidate={"commits": ["e" * 40]}),
+            "mismatched-breaking": self.request(candidate={"breaking": True}),
+            "mismatched-version": self.request(canonical_version="9.9.9"),
+            "empty-trusted-range": self.request(trusted_survey={
+                "latest_tag": "v0.1.0", "head": self.HEAD, "commits": [], "breaking": False}),
+            "malformed-trusted-range": self.request(trusted_survey={
+                "latest_tag": "v0.1.0", "head": self.HEAD,
+                "commits": ["not-a-commit"], "breaking": False}),
+        }
+        for name, request in cases.items():
+            with self.subTest(name=name):
+                verdict = self.verdict(request)
+                self.assertEqual(verdict["status"], "unavailable", verdict)
+
+    def test_busy_board_and_empty_range_probes_stay_blocked(self):
+        for scenario, code in (("blocked", "prep-board-busy"),
+                               ("no_release", "prep-nothing-to-release")):
+            with self.subTest(scenario=scenario):
+                verdict = self.verdict(self.request(scenario=scenario, trusted_survey=None))
+                self.assertEqual(verdict["status"], "blocked", verdict)
+                self.assertEqual(verdict["reasons"][0]["code"], code, verdict)
+
+
 if __name__ == "__main__":
     unittest.main()

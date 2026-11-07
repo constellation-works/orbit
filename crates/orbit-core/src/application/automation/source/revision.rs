@@ -11,6 +11,18 @@ use std::{path::Path, time::Duration};
 
 use super::{SOURCE_DEADLINE, Source};
 
+/// One commit in a pinned release survey, with the subject that names its tasks.
+pub(crate) struct SurveyedCommit {
+    pub(crate) sha: String,
+    pub(crate) subject: String,
+}
+
+/// The pinned release survey: latest reachable tag and its no-merge range.
+pub(crate) struct PinnedReleaseSurvey {
+    pub(crate) latest_tag: Option<String>,
+    pub(crate) commits: Vec<SurveyedCommit>,
+}
+
 impl<'a> Source<'a> {
     pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
         let commit = self.git(&[
@@ -291,6 +303,56 @@ impl<'a> Source<'a> {
             unfetched: false,
             oldest_unobserved_epoch,
         }))
+    }
+
+    /// Independently verified release survey at `pinned`: the latest reachable
+    /// `v*` tag and the no-merge commits in `<latest-tag>..<pinned>`, oldest
+    /// first, each with its subject. This reads only local Git objects; it
+    /// never fetches and never consults candidate evidence. `None` tag means
+    /// no release baseline reaches the pin, so the range is empty.
+    pub(crate) fn release_survey(
+        &self,
+        pinned: &str,
+    ) -> Result<PinnedReleaseSurvey, AutomationError> {
+        self.revision(pinned)?;
+        let tags = self.git(&[
+            "tag",
+            "--merged",
+            pinned,
+            "--list",
+            "v*",
+            "--sort=-version:refname",
+        ])?;
+        let Some(latest_tag) = tags.lines().map(str::trim).find(|line| !line.is_empty()) else {
+            return Ok(PinnedReleaseSurvey {
+                latest_tag: None,
+                commits: Vec::new(),
+            });
+        };
+        let latest_tag = latest_tag.to_string();
+        let range = format!("{latest_tag}..{pinned}");
+        let log = self.git(&[
+            "log",
+            "--no-merges",
+            "--reverse",
+            "--pretty=%H%x09%s",
+            &range,
+        ])?;
+        let commits = log
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (sha, subject) = line.split_once('\t').unwrap_or((line, ""));
+                SurveyedCommit {
+                    sha: sha.trim().to_string(),
+                    subject: subject.to_string(),
+                }
+            })
+            .collect();
+        Ok(PinnedReleaseSurvey {
+            latest_tag: Some(latest_tag),
+            commits,
+        })
     }
 
     /// `true` when `older` is an ancestor of `newer`. A missing object is

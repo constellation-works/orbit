@@ -142,6 +142,11 @@ completion:
     ```
 
     `survey`, `version` and `canonical_task_id` apply to a handoff. Record the
-    source revision and version in the canonical task's description. A blocked
+    source revision and version in the canonical task's description. The owner
+    independently surveys the pinned revision (latest reachable `v*` tag, the
+    no-merge `<tag>..<revision>` range, and the breaking classification from
+    owner task records) and the adapter accepts only a handoff whose survey
+    and derived version match those facts exactly, so survey the same pinned
+    range with the same prescriptions above. A blocked
     or nothing-to-release pass still finishes successfully, but it is reported
     as not accepted: only the actual handoff of this revision satisfies the step.

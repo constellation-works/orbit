@@ -75,7 +75,7 @@ policy:
 | --- | --- | --- | --- |
 | `qa-full-sweep` | Every required scenario, forecast scenario and capability gap has passing evidence for this clean candidate. | | Anything missing, stale, dirty, failed or run against another inventory. |
 | `security-review` | All four areas have cited evidence, each spawned finding is reported with its review link, and duplicates are read back from existing tasks. | An open high or critical finding, including a duplicate. | A missing scope, an omitted finding, a new finding without its review link, or a missing task reference. |
-| `release-prep` | The actual open canonical `Prepare v<X.Y.Z> release` task, selected deterministically and read back with the commit survey. | A busy-board or nothing-to-release probe. | No canonical task, or one that does not match the survey. |
+| `release-prep` | The actual open canonical `Prepare v<X.Y.Z> release` task, selected deterministically and read back with the commit survey, where the tag, commit range and breaking classification equal the owner's independently verified pinned survey (Git at the pinned revision plus owner task records, supplied in the trusted input) and the version is derived from that survey. | A busy-board or nothing-to-release probe. | No canonical task, no trusted pinned survey, or a handoff whose tag, range, breaking classification or derived version does not match the pinned survey. |
 
 Security findings default to `disposition: "new"` and require a `spawned_from`
 relation to this review. When an existing task already covers a finding, use
