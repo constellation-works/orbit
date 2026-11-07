@@ -388,30 +388,6 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-lock-total { flex: none; font-weight: 600; color: var(--fg); }
 .codebase-lock-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 
-/* Regression-risk marks. */
-.codebase-risk-table { border-collapse: collapse; font-size: 12.5px; }
-.codebase-risk-table th { padding: 6px 10px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; }
-.codebase-risk-table thead th { white-space: nowrap; }
-.codebase-risk-table td { padding: 6px 10px; border-top: 1px solid #1f252d; white-space: nowrap; color: var(--fg-dim); }
-.codebase-risk-table tbody th { border-top: 1px solid #1f252d; max-width: 420px; overflow-wrap: anywhere; }
-.codebase-risk-table .codebase-risk-total th { color: var(--fg); }
-.codebase-risk-none { font-style: italic; }
-
-/* Regression-risk marks: phone layout. Each path gets a full-width line and
-   the two rates sit side by side under their column headings, so a path reads
-   as whole segments instead of one fragment per line on a 375px screen. */
-@media (max-width: 520px) {
-  .codebase-risk-table, .codebase-risk-table thead, .codebase-risk-table tbody { display: block; }
-  .codebase-risk-table thead tr, .codebase-risk-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 12px; padding: 0 12px; }
-  .codebase-risk-table thead th:first-child { display: none; }
-  .codebase-risk-table thead th { padding: 8px 0 4px; }
-  .codebase-risk-table tbody tr { padding-top: 6px; padding-bottom: 6px; border-top: 1px solid #1f252d; }
-  .codebase-risk-table tbody th { grid-column: 1 / -1; max-width: none; padding: 0 0 2px; border-top: 0; overflow-wrap: break-word; }
-  .codebase-risk-table .codebase-path { overflow-wrap: break-word; }
-  .codebase-risk-table .codebase-path-base { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
-  .codebase-risk-table td { padding: 0; border-top: 0; }
-}
-
 @media (max-width: 520px) {
   .codebase-head { padding: 12px 12px 0; }
   .panel > .body.codebase-body { padding: 12px; gap: 12px; }

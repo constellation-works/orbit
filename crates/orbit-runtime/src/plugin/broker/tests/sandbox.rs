@@ -261,7 +261,6 @@ impl BrokerHost {
             tool_disallow_list: None,
             instruction: String::new(),
             steering_instruction: None,
-            regression_risk_instruction: None,
             notice_instruction: None,
             notice_posting_instruction: None,
             tools: Vec::new(),

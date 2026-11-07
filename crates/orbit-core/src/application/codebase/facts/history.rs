@@ -3,10 +3,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, RegressionRiskMarks, TaskDecision,
-    TaskStatus,
-};
+use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskStatus};
 use serde::{Deserialize, Serialize};
 
 use super::block_cause::{SettledFailure, classify_block, entry_marks_run};
@@ -33,7 +30,6 @@ pub(in crate::application::codebase) struct HistoryFacts {
     pub(in crate::application::codebase) left_backlog: Vec<DateTime<Utc>>,
     /// The verified landing receipt: its commit and when it landed.
     pub(in crate::application::codebase) receipt: Option<(String, DateTime<Utc>)>,
-    pub(in crate::application::codebase) marks: Vec<(DateTime<Utc>, RegressionRiskMarks)>,
     /// The task-pilot receipts, read for a task with a landing receipt.
     pub(in crate::application::codebase) pilot: Option<super::super::pilot::PilotInputs>,
     /// The receipt commit's changed paths, once a diff produced them. Never
@@ -90,15 +86,6 @@ impl HistoryFacts {
             .map(|entry| entry.at)
             .collect();
         left_backlog.sort();
-        let marks = history
-            .iter()
-            .filter_map(|entry| match &entry.decision {
-                Some(TaskDecision::RegressionRiskMarked(marked)) => {
-                    Some((entry.at, marked.clone()))
-                }
-                _ => None,
-            })
-            .collect();
         let receipt = super::super::landed::receipt(&history);
         let pilot = receipt
             .is_some()
@@ -118,7 +105,6 @@ impl HistoryFacts {
             blocks,
             left_backlog,
             receipt,
-            marks,
             pilot,
             landed_paths: None,
         };

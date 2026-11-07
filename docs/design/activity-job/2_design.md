@@ -67,11 +67,6 @@ The common `agent_loop` fields are:
   says `success` and carries `error`, or a clean prose ending with no envelope,
   inside its own wall-clock budget — see §7.6a; `task_pilot`
   declare it)
-- optional `regression_risk_instruction` (declaring it asks the host, through
-  `RuntimeHost::regression_risk_for_agent_input`, for the task's
-  regression-risk marks; the engine adds them to the envelope's task snapshot
-  as `regression_risk` and appends this text only when a path is marked — see
-  [`[workflow.regression_risk]`](../../CONFIG.md#workflowregression_risk--prompt-marks-and-task-riskiness-scores))
 
 A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T20260420-0510-2]) was removed as unused in [ORB-10332]; activity specs are now only `agent_loop` and `deterministic`.
 

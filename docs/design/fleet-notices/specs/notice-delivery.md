@@ -33,8 +33,8 @@ instruction exist so that seeing a notice informs the agent and cannot redirect 
 
 ### Which activities
 
-An activity opts in by declaring a `notice_instruction` in its catalog YAML, the way an activity
-declares `regression_risk_instruction` today
+An activity opts in by declaring a `notice_instruction` in its catalog YAML, like the activity's
+other optional instruction fields
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`). Slice 2
 adds it to the task-bound agent activities `agent_implement`, `agent_review_repair`,
 `review_reconciliation_review`, `final_recovery` and `task_pilot`; the slice confirms each is a

@@ -22,31 +22,9 @@ impl OwnerCoordinator for MetadataWire {
         session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         self.requests.lock().unwrap().push(input.clone());
-        if input["_worker_read"] == "regression_risk" {
-            match *self.fault.lock().unwrap() {
-                Some("failed") => {
-                    return Err(OrbitError::UnreachableDestination(
-                        "owner unavailable".into(),
-                    ));
-                }
-                Some("unknown") => {
-                    return Err(OrbitError::OutcomeUnknown {
-                        mcp_call_id: "fixture/marks".into(),
-                        message: "unknown read outcome".into(),
-                    });
-                }
-                Some("tool-error") => {
-                    return Ok(
-                        json!({"error": {"code": "store_error", "message": "owner read failed"}}),
-                    );
-                }
-                _ => {}
-            }
-        }
         if *self.fault.lock().unwrap() == Some("scan-change")
-            && (input["_worker_read"] == "regression_risk"
-                || (input["_worker_read"] == "task_metadata"
-                    && !input["metadata_page"]["cursor"].is_null()))
+            && input["_worker_read"] == "task_metadata"
+            && !input["metadata_page"]["cursor"].is_null()
         {
             self.owner.add_task(TaskAddParams {
                 title: "Deterministic scan mutation".into(),
@@ -282,7 +260,7 @@ crate::scenario_table!(
     worker_metadata_scenarios,
     worker_metadata_is_complete_bodyless_and_bounded,
     worker_metadata_failures_never_return_a_partial_scan,
-    worker_metadata_regression_marks_match_the_owner
+    worker_metadata_carries_regression_classifications
 );
 
 fn worker_metadata_failures_never_return_a_partial_scan() {
@@ -315,16 +293,6 @@ fn worker_metadata_failures_never_return_a_partial_scan() {
         assert!(
             bound.list_task_metadata_for_ids(&ids).is_err(),
             "{fault}: targeted metadata fails too"
-        );
-        assert_eq!(
-            RuntimeHost::regression_risk_for_agent_input(
-                &bound,
-                "metadata-failure",
-                "agent_implement",
-                &json!({"task_id": ids.first().unwrap()})
-            ),
-            None,
-            "{fault}: marks remain advisory"
         );
     }
     *wire.fault.lock().unwrap() = Some("scan-change");
@@ -378,12 +346,12 @@ fn worker_metadata_failures_never_return_a_partial_scan() {
     ));
 }
 
-fn worker_metadata_regression_marks_match_the_owner() {
+fn worker_metadata_carries_regression_classifications() {
     use orbit_types::task::{
         DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature,
         SeveritySource, TaskRelation, TaskRelationType,
     };
-    let (leaf, wire, bound, ids) = metadata_fixture();
+    let (leaf, _wire, bound, ids) = metadata_fixture();
     let owner = &leaf.pair.wire.owner;
     for (index, target) in ids.iter().take(3).enumerate() {
         owner
@@ -409,118 +377,9 @@ fn worker_metadata_regression_marks_match_the_owner() {
             })
             .unwrap();
     }
-    // These tasks have recent update stamps but entered done outside the window.
-    // Owner-local history reads must exclude them from the denominator.
-    for n in 0..5 {
-        let old = owner
-            .add_task(TaskAddParams {
-                title: format!("old hot {n}"),
-                description: "small old body".into(),
-                context_files: vec!["file:src/hot.rs".into()],
-                status: Some(TaskStatus::Done),
-                ..Default::default()
-            })
-            .unwrap();
-        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-            &orbit_store::maintenance::task_registry::task_registry_path(&owner.global_root()),
-        )
-        .unwrap();
-        let events = registry
-            .find_task_binding(&old.id)
-            .unwrap()
-            .unwrap()
-            .canonical_path
-            .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
-        let at = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
-        let rows: String = std::fs::read_to_string(&events)
-            .unwrap()
-            .lines()
-            .map(|line| {
-                let mut row: Value = serde_json::from_str(line).unwrap();
-                row["at"] = json!(at);
-                format!("{row}\n")
-            })
-            .collect();
-        std::fs::write(events, rows).unwrap();
-    }
-    let marks = |runtime: &OrbitRuntime| {
-        RuntimeHost::regression_risk_for_agent_input(
-            runtime,
-            "bounded-metadata",
-            "agent_implement",
-            &json!({"task_id": ids.first().unwrap()}),
-        )
-    };
-    let expected = marks(owner).expect("the owner has one qualifying hotspot");
-    wire.requests.lock().unwrap().clear();
     assert_eq!(
         serde_json::to_value(bound.list_task_metadata().unwrap()).unwrap(),
         serde_json::to_value(owner.list_task_metadata().unwrap()).unwrap(),
         "all envelope fields, including regression sites and attribution, survive the wire"
-    );
-    wire.requests.lock().unwrap().clear();
-    wire.responses.lock().unwrap().clear();
-    let history_before = owner.get_task_history(ids.first().unwrap()).unwrap();
-    let task_count = owner.list_task_metadata().unwrap().len();
-    *wire.fault.lock().unwrap() = Some("scan-change");
-    assert_eq!(
-        marks(&bound),
-        Some(expected.clone()),
-        "an owner task write must not discard prompt marks"
-    );
-    assert_eq!(owner.list_task_metadata().unwrap().len(), task_count + 1);
-    assert_eq!(
-        serde_json::to_value(owner.get_task_history(ids.first().unwrap()).unwrap()).unwrap(),
-        serde_json::to_value(history_before).unwrap(),
-        "the owner projection must not record mark history on behalf of a leaf"
-    );
-    {
-        let requests = wire.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2, "one task read and one mark read");
-        assert_eq!(requests[0]["_worker_read"], "task");
-        assert_eq!(requests[1]["_worker_read"], "regression_risk");
-        assert_eq!(requests[1]["paths"], json!(["src/hot.rs"]));
-        let responses = wire.responses.lock().unwrap();
-        assert_eq!(responses[1], expected);
-        assert!(serde_json::to_vec(&responses[1]).unwrap().len() <= CEILING);
-    }
-    *wire.fault.lock().unwrap() = Some("identity");
-    assert_eq!(
-        marks(&bound),
-        Some(expected.clone()),
-        "prompt marks no longer depend on paged metadata identity"
-    );
-    let log = leaf.pair._root.path().join("mark-failure.log");
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::WARN)
-        .with_writer(Mutex::new(std::fs::File::create(&log).unwrap()))
-        .finish();
-    {
-        let _logging = tracing::subscriber::set_default(subscriber);
-        for fault in ["failed", "unknown", "tool-error"] {
-            *wire.fault.lock().unwrap() = Some(fault);
-            wire.requests.lock().unwrap().clear();
-            assert_eq!(marks(&bound), None, "{fault}: marks remain advisory");
-            assert_eq!(wire.requests.lock().unwrap().len(), 2, "no fallback scan");
-        }
-    }
-    let warnings = std::fs::read_to_string(log).unwrap();
-    assert_eq!(warnings.matches("WARN").count(), 3, "{warnings}");
-    assert_eq!(
-        warnings
-            .matches("regression risk: marks unavailable")
-            .count(),
-        3,
-        "{warnings}"
-    );
-    *wire.fault.lock().unwrap() = None;
-    assert_eq!(expected["marks"][0]["regressed"], "3 of 7 touching tasks");
-    assert_eq!(expected["marks"][0]["nature"], json!(["broke_existing"]));
-    assert_eq!(expected["marks"][0]["escape"], json!(["no_test"]));
-    assert_eq!(
-        expected["marks"][0]["lesson"],
-        "Restore the bounded retry lesson"
     );
 }

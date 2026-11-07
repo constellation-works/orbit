@@ -11,8 +11,5 @@ pub use machine::{
     AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };
 pub(crate) use resolve::{admit_lease_intake_peer_user, resolve_percent};
-pub use snapshot::{
-    ExperimentSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings,
-    RegressionRiskSettings,
-};
+pub use snapshot::{ExperimentSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings};
 pub use table::{CONFIG_KEY_REGISTRY, ConfigSnapshot};

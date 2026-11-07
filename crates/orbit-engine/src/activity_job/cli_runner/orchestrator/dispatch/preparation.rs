@@ -40,7 +40,6 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) tool_disallow_list: Option<Vec<String>>,
     pub(super) activity_tools: ResolvedActivityTools,
     pub(super) task_ctx: Option<Value>,
-    pub(super) regression_risk_instruction: Option<&'a str>,
     pub(super) notice_instruction: Option<&'a str>,
     pub(super) notice_posting_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
@@ -48,29 +47,6 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) source_checkout: SourceCheckout,
     pub(super) experiment_overlays: Vec<ExperimentActivityOverlay>,
     pub(super) experiment_records: Vec<ExperimentOverlayRecord>,
-}
-
-/// Add the host's `regression_risk` marks to the task snapshot of an
-/// activity that declares how to act on them, and return that instruction
-/// when it did. An activity without one, a prompt with no task snapshot, or
-/// a task with nothing marked leaves the snapshot and instruction as they
-/// are.
-fn attach_regression_risk<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    activity_name: &str,
-    input: &Value,
-    task_ctx: Option<&mut Value>,
-) -> Option<&'a str> {
-    let instruction = spec
-        .regression_risk_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let context = task_ctx?.as_object_mut()?;
-    let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
-    context.insert("regression_risk".to_string(), marks);
-    Some(instruction)
 }
 
 /// The notice instructions one dispatch carries: the untrusted-data
@@ -236,8 +212,6 @@ pub(crate) fn dispatch_cli_invocation(
     });
 
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
-    let regression_risk_instruction =
-        attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
     let FleetNoticeInstructions {
         notice_instruction,
         notice_posting_instruction,
@@ -293,7 +267,6 @@ pub(crate) fn dispatch_cli_invocation(
             tool_disallow_list,
             activity_tools,
             task_ctx,
-            regression_risk_instruction,
             notice_instruction,
             notice_posting_instruction,
             tool_ctx,

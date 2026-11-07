@@ -149,28 +149,6 @@ pub(crate) fn task_context_for_agent_input(
     Ok(Some(context))
 }
 
-/// The `regression_risk` section for the task `input` names, as the prompt
-/// `run_id` builds for `activity_name` shows it, or `None` when marks are
-/// off, no `file:` selector qualifies, or the input names no single task.
-/// Marks are advisory, so a scan that fails is logged and yields none rather
-/// than refusing the dispatch.
-pub(crate) fn regression_risk_for_agent_input(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    activity_name: &str,
-    input: &Value,
-) -> Option<Value> {
-    let task_id = singular_task_id_from_input(input)?;
-    let section = runtime.get_task(task_id).and_then(|task| {
-        let selectors = envelope_context_files(&task, input, &runtime.paths().repo_root);
-        runtime.regression_risk_section(task_id, &selectors, run_id, activity_name)
-    });
-    section.unwrap_or_else(|error| {
-        tracing::warn!(%task_id, %run_id, %error, "regression risk: marks unavailable");
-        None
-    })
-}
-
 /// The `fleet_notices` brief for one prompt build, or `None` when
 /// `notice.brief_delivery` is off or no notice is open in scope. Notices
 /// are advisory, so the read runs under `notice.brief_read_timeout_ms` on

@@ -32,7 +32,6 @@ mod lock_waits;
 mod pilot;
 mod regression;
 mod related;
-mod risk;
 mod riskiness;
 mod sections;
 mod stored;

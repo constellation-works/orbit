@@ -68,7 +68,6 @@ pub(in super::super) fn dispatch_prepared_provider(
         tool_disallow_list,
         activity_tools,
         task_ctx,
-        regression_risk_instruction: _,
         notice_instruction: _,
         notice_posting_instruction: _,
         tool_ctx,

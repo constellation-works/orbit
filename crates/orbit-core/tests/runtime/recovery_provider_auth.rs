@@ -161,7 +161,6 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
         crew_account: Some("credits".into()),
         instruction: "Return a recovery decision.".into(),
         steering_instruction: None,
-        regression_risk_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
         tools: vec![],

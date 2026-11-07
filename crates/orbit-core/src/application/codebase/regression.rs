@@ -22,7 +22,6 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{
     RegressionClassification, RegressionEscape, RegressionNature, Task, TaskOrigin,
@@ -242,27 +241,12 @@ pub(super) struct RegressionLink {
     /// The link's severity and who set it; `absent` for both without a
     /// payload.
     severity: (&'static str, &'static str),
-    /// When the regression task was filed.
-    pub(super) filed_at: DateTime<Utc>,
-    /// The regression task's title: its one-line account of the defect.
-    pub(super) summary: String,
     /// Where the defect lives, as the payload's `sites` record it; empty
     /// for a link filed without sites.
     pub(super) sites: Vec<String>,
 }
 
 impl RegressionLink {
-    /// The link's nature; a link stored without a payload reads as
-    /// `unclassified`, as its filer never said.
-    fn nature_or_unclassified(&self) -> &'static str {
-        classified(self.dims[NATURE])
-    }
-
-    /// The link's escape, with an absent payload read as `unclassified`.
-    fn escape_or_unclassified(&self) -> &'static str {
-        classified(self.dims[ESCAPE])
-    }
-
     pub(super) fn json(&self) -> Value {
         json!({
             "task_id": self.task_id,
@@ -287,8 +271,6 @@ pub(super) struct PendingLink {
     escape: &'static str,
     severity: (&'static str, &'static str),
     detected_by: &'static str,
-    filed_at: DateTime<Utc>,
-    summary: String,
     sites: Vec<String>,
 }
 
@@ -320,8 +302,6 @@ impl PendingLink {
             escape,
             severity,
             detected_by: detected_by(fix.created_by.as_deref(), fix.origin, &fix.tags),
-            filed_at: fix.created_at,
-            summary: fix.title.clone(),
             sites,
         }
     }
@@ -334,55 +314,9 @@ impl PendingLink {
             dims: [self.nature, self.escape, layer, self.detected_by],
             layer_source,
             severity: self.severity,
-            filed_at: self.filed_at,
-            summary: self.summary,
             sites: self.sites,
         }
     }
-}
-
-/// A nature or escape as a regression-risk mark shows it: an absent payload
-/// is as unclassified as an explicit `unclassified`.
-fn classified(value: &'static str) -> &'static str {
-    if value == ABSENT {
-        "unclassified"
-    } else {
-        value
-    }
-}
-
-/// The `limit` natures and escapes most of `links` carry, each by link
-/// count, ties in breakdown order. An unclassified link shows as
-/// `unclassified`; nothing is guessed.
-pub(super) fn top_categories(
-    links: &[&RegressionLink],
-    limit: usize,
-) -> (Vec<&'static str>, Vec<&'static str>) {
-    let top = |order: &[&'static str], value: fn(&RegressionLink) -> &'static str| {
-        let mut counted: Vec<(&'static str, usize)> = order
-            .iter()
-            .filter(|candidate| **candidate != ABSENT)
-            .map(|candidate| {
-                let count = links
-                    .iter()
-                    .filter(|link| value(link) == *candidate)
-                    .count();
-                (*candidate, count)
-            })
-            .filter(|(_, count)| *count > 0)
-            .collect();
-        // A stable sort keeps breakdown order among equal counts.
-        counted.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-        counted
-            .into_iter()
-            .take(limit)
-            .map(|(candidate, _)| candidate)
-            .collect()
-    };
-    (
-        top(NATURES, RegressionLink::nature_or_unclassified),
-        top(ESCAPES, RegressionLink::escape_or_unclassified),
-    )
 }
 
 fn nature_name(nature: RegressionNature) -> &'static str {

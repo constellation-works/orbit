@@ -630,48 +630,6 @@ spec:
       comments `input.steering_round.outstanding` names (in `task.steering`,
       or in `task.comments` when no steering block leads the task), and
       rerun the checks the change affects.
-  regression_risk_instruction: |
-    Regression-risk marks
-
-    `task.regression_risk.marks` names context files whose recent
-    deliveries often regressed: `regressed` counts tasks that touched the
-    file in the last `window_days` and were later named by a regression;
-    `nature` and `escape` say how those regressions happened and why gates
-    missed them; `lesson` is the newest one's summary. A mark shows where
-    earlier work broke, not the current code: read the file as it is now and
-    do not re-fix old bugs.
-
-    For each marked file you change, act on every category its mark lists:
-    - escape `no_test`: add a focused regression check at the public CLI/API
-      boundary for the behavior you change.
-    - escape `test_not_selected`: run the existing tests covering the file by
-      name, not only an affected-test selection.
-    - escape `platform_only`: name each platform or host the change behaves
-      differently on, and exercise it or record it as owed.
-    - escape `review_missed`: before handoff, re-read your diff of the file
-      against every acceptance criterion and its callers.
-    - escape `spec_ambiguous`: say in the execution summary which reading of
-      the requirement you implemented and why.
-    - escape `nondeterministic`: keep timing, ordering and environment out
-      of the change and its tests.
-    - nature `broke_existing`: run the tests of the file's existing callers.
-    - nature `defect_in_new`: cover the new paths you add, failure paths
-      included.
-    - nature `incomplete`: check each acceptance criterion against the diff.
-    - nature `merge_reintroduced`: after a rebase or base sync, re-verify the
-      touched area and that nothing removed earlier came back.
-    - nature `contract_drift`: update the affected docs, schemas or contract
-      in the same diff.
-    - `unclassified`: apply whichever checks above fit.
-
-    `orbit.codebase.show` with a path lists regression tasks whose recorded
-    sites resolve under that path. For a path the task declared, a task whose
-    incoming regression links have no recorded sites appears only in that
-    path's `unsited` count; tasks whose sites resolve only to other paths are
-    omitted from that path's regression standing. Risk marks count regressions
-    against every file declared in the task footprint, regardless of sites, so
-    a mark can include contributors this lookup does not list. In the execution
-    summary, say what you did for each marked file you changed.
   notice_instruction: |
     Fleet notices
 

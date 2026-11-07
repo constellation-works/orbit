@@ -804,15 +804,6 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(None)
     }
 
-    fn regression_risk_for_agent_input(
-        &self,
-        _run_id: &str,
-        _activity_name: &str,
-        _input: &Value,
-    ) -> Option<Value> {
-        None
-    }
-
     fn agent_corpus_for_activity(
         &self,
         _run_id: &str,

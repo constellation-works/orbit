@@ -61,7 +61,8 @@ pub enum TaskDecision {
     /// recorded on the `flaky_validation` event.
     FlakyValidation(FlakyValidation),
     /// Context files a prompt marked as regression-prone, recorded on the
-    /// `regression_risk_marked` event.
+    /// `regression_risk_marked` event until prompt marks were removed
+    /// [ORB-22806]; kept so earlier history entries still load.
     RegressionRiskMarked(RegressionRiskMarks),
     /// A verified source-repair publication read and its durable wait reservation.
     SourceRepairPublication(PublicationSettlingObservation),

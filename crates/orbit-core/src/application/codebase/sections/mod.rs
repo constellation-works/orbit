@@ -41,7 +41,7 @@ pub(in crate::application::codebase) use coupling::coupling_pairs;
 pub(in crate::application::codebase) use footprint::footprint_rows;
 pub(in crate::application::codebase) use locks::{lock_rows, lock_tally};
 pub(in crate::application::codebase) use regressions::{
-    footprint_regression_rows, regressed_fields, regression_rows, site_entries,
+    regressed_fields, regression_rows, site_entries,
 };
 pub(in crate::application::codebase) use rejected::rejected_rows;
 pub(in crate::application::codebase) use rollup::{

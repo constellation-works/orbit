@@ -233,6 +233,29 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.crew_ladder.min_grade_coverage",
         CREW_LADDER_REMOVED_NOTE,
     ),
+    // [ORB-22806] Regression-risk prompt marks were removed on 2026-11-07.
+    // Each key loads, warns and is ignored; code-health-sweep deletes these
+    // entries after 2026-12-07, when they become ordinary unknown settings.
+    (
+        "workflow.regression_risk.enabled",
+        REGRESSION_RISK_REMOVED_NOTE,
+    ),
+    (
+        "workflow.regression_risk.window_days",
+        REGRESSION_RISK_REMOVED_NOTE,
+    ),
+    (
+        "workflow.regression_risk.min_support",
+        REGRESSION_RISK_REMOVED_NOTE,
+    ),
+    (
+        "workflow.regression_risk.threshold_percent",
+        REGRESSION_RISK_REMOVED_NOTE,
+    ),
+    (
+        "workflow.regression_risk.max_files",
+        REGRESSION_RISK_REMOVED_NOTE,
+    ),
     // [ORB-22804] The task-type list keeps routing type pools under its new
     // name; the performance weighting and its scorecard snapshots are gone.
     (
@@ -261,6 +284,10 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("workflow.explore_brief.tags", EXPLORE_BRIEF_REMOVED_NOTE),
     ("workflow.explore_brief.deliver", EXPLORE_BRIEF_REMOVED_NOTE),
 ];
+
+const REGRESSION_RISK_REMOVED_NOTE: &str = "ignored: regression-risk prompt marks were removed; \
+     task riskiness scores use a fixed 30-day window and a minimum support of 5. Delete the \
+     [workflow.regression_risk] table. This key stops being recognised after 2026-12-07";
 
 const EXPLORE_BRIEF_REMOVED_NOTE: &str = "ignored: the task pilot's explore brief was removed; \
      delete the [workflow.explore_brief] table. This key stops being recognised after 2026-12-07";

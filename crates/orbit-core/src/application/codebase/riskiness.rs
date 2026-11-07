@@ -1,11 +1,9 @@
 //! Per-task riskiness: the observed chance that a task, once done, is named
 //! by at least one `regression_from` link, estimated from its size alone.
 //!
-//! The estimate reads the same windowed regression facts as the
-//! regression-risk marks ([`super::risk`]) and the Regressions ranking: every
-//! task done in the trailing `workflow.regression_risk.window_days` is one
-//! observation, regressed when any link names it. The marks' threshold and
-//! file cap do not apply.
+//! The estimate reads the same windowed regression facts as the Regressions
+//! ranking: every task done in the trailing [`RISKINESS_WINDOW_DAYS`] is one
+//! observation, regressed when any link names it.
 //!
 //! 1. A task's size has one of two bases. Before a diff exists it is the
 //!    declared path count: the distinct `file:`/`symbol:` paths and `dir:`
@@ -24,7 +22,7 @@
 //!    window's done tasks that have that size. When every observation has
 //!    the same size the slope is not identified and the fit is the
 //!    intercept alone (`b = 0`).
-//! 3. A fit needs at least `min_support` observations, some regressed and
+//! 3. A fit needs at least [`RISKINESS_MIN_SUPPORT`] observations, some regressed and
 //!    some not, and a finite optimum. Otherwise the state names why
 //!    (`no_footprint`, `unsupported_footprint` or `insufficient_history`),
 //!    never a low probability.
@@ -48,7 +46,7 @@ use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::facts::{Anchor, CodebaseFacts, HistoryCompleteness};
+use super::facts::{Anchor, CodebaseFacts};
 use super::regression::RegressionFilter;
 use super::sections::{Params, Rollup};
 use crate::OrbitRuntime;
@@ -60,6 +58,13 @@ use crate::application::job::CodebaseDeliveryScan;
 /// finite fit: scoring centers the log-size covariate and separation is a
 /// size threshold, not a parameter magnitude [ORB-19376].
 pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 3;
+/// Trailing days of done tasks the riskiness model observes: the former
+/// `workflow.regression_risk.window_days` default, fixed when the key was
+/// removed [ORB-22806].
+pub const RISKINESS_WINDOW_DAYS: u32 = 30;
+/// Observations a size basis needs before it is fitted: the former
+/// `workflow.regression_risk.min_support` default [ORB-22806].
+pub const RISKINESS_MIN_SUPPORT: usize = 5;
 /// Fisher-scoring iterations one fit may take before it is abandoned.
 const FIT_MAX_ITERATIONS: usize = 100;
 /// A fit has converged once a full step moves no parameter further.
@@ -259,13 +264,10 @@ pub struct TaskRiskinessModel {
 impl OrbitRuntime {
     /// Read the windowed regression facts and the recorded diff sizes once
     /// and build the model that estimates every task's riskiness from them,
-    /// under the configured `workflow.regression_risk` window and minimum
-    /// support.
+    /// over a fixed 30-day window with a minimum support of 5.
     pub fn task_riskiness_model(&self) -> Result<TaskRiskinessModel, OrbitError> {
-        let settings = self.regression_risk_settings();
-        let since = Utc::now() - Duration::days(i64::from(settings.window_days));
-        let facts =
-            super::facts::scan_regressions(self, since, HistoryCompleteness::ExcludeUnreadable)?;
+        let since = Utc::now() - Duration::days(i64::from(RISKINESS_WINDOW_DAYS));
+        let facts = super::facts::scan_regressions(self, since)?;
         let mut diff_lines: HashMap<String, u64> = self
             .landed_diff_stats(None)
             .unwrap_or_else(|error| {
@@ -280,8 +282,8 @@ impl OrbitRuntime {
         Ok(TaskRiskinessModel::build(
             &facts,
             since,
-            settings.window_days,
-            settings.min_support as usize,
+            RISKINESS_WINDOW_DAYS,
+            RISKINESS_MIN_SUPPORT,
             diff_lines,
         ))
     }

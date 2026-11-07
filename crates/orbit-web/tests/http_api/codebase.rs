@@ -2376,26 +2376,6 @@ analytics_test!(
             detail["riskiness"], risky,
             "list and detail share one estimate"
         );
-        drop(server);
-
-        // min_support is the history a fit needs: above both populations,
-        // neither basis fits and no number is shown.
-        let config = fixture.work.join("config.toml");
-        let mut text = fs::read_to_string(&config).unwrap_or_default();
-        text.push_str("\n[workflow.regression_risk]\nmin_support = 13\n");
-        fs::write(&config, text).unwrap();
-        let server = fixture.server(false);
-        for id in [&backlog_wide, &large[0]] {
-            let thin = task_riskiness(&server, id);
-            assert_eq!(thin["state"], "insufficient_history", "{thin}");
-            assert_eq!(thin["probability"], Value::Null);
-            assert_eq!(thin["basis"], "declared_files");
-            assert_eq!(thin["size_band"], Value::Null);
-        }
-        assert_eq!(
-            task_riskiness(&server, &large[0])["basis_fallback"],
-            "diff_history_insufficient"
-        );
     }
 );
 

@@ -359,7 +359,7 @@ comparison above even when predictive gates pass.
 ### Configuration
 
 These are proposed study/serving controls, not new configuration keys or defaults
-installed by this document. Keep current `workflow.regression_risk` semantics.
+installed by this document. Keep the riskiness model's window and support semantics (fixed at 30 days and 5 since [ORB-22806]).
 
 | Control | Initial proposal | Meaning |
 | --- | --- | --- |

@@ -103,9 +103,6 @@ pub struct OrbitRuntimeSettings {
     diff_test_paths: orbit_common::fs::path_filter::PathFilter,
     diff_non_code_paths: orbit_common::fs::path_filter::PathFilter,
     diff_non_reviewable_paths: orbit_common::fs::path_filter::PathFilter,
-    /// `[workflow.regression_risk]`: whether implement and review prompts
-    /// mark regression-prone context files, and the gates for a mark.
-    regression_risk: orbit_config::RegressionRiskSettings,
     /// `workflow.task_types`: the ordered task types type pools route by
     /// and the implementer scorecard's by-type lens.
     task_types: Vec<orbit_config::TaskTypeDefinition>,
@@ -176,7 +173,6 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
             orbit_common::fs::path_filter::PathFilter,
         ),
-        regression_risk: orbit_config::RegressionRiskSettings,
         task_types: Vec<orbit_config::TaskTypeDefinition>,
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
@@ -231,7 +227,6 @@ impl OrbitRuntimeSettings {
             diff_test_paths: diff_path_filters.0,
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
-            regression_risk,
             task_types,
             decision_channel_enabled,
             lease_policy,
@@ -282,10 +277,6 @@ impl OrbitRuntimeSettings {
     /// Whether the operator explicitly accepts unscanned routine attachments.
     pub fn publication_routine_allow_unscanned_attachments(&self) -> bool {
         self.publication_routine_allow_unscanned_attachments
-    }
-
-    pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {
-        self.regression_risk
     }
 
     pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
