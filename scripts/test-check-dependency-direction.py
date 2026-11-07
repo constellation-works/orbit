@@ -338,13 +338,27 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_contracts_cannot_reach_routines_or_auto_tasks(self):
         # [ORB-22623] The moved leaves stay below the modules that read them.
-        for source in (
-            "use crate::application::routines::Probe;\n",
-            "use crate::application::{auto_tasks::Probe};\n",
-            "use super::routines::Probe;\n",
-        ):
-            with self.subTest(source=source):
-                self.check_files({"contracts/clock_settings.rs": source}, rejected=True)
+        # Grouped relative imports escaped the guard; each super chain must
+        # reach application from the fixture's actual module depth.
+        for target in ("routines::clock::set_clock_cadence", "auto_tasks::AutoTaskListingRow"):
+            for relative, source in (
+                ("contracts/clock_settings.rs", f"use crate::application::{target};\n"),
+                ("contracts/clock_settings.rs", f"use crate::application::{{{target}}};\n"),
+                ("contracts/mod.rs", f"use super::{target};\n"),
+                ("contracts/mod.rs", f"use super::{{{target}}};\n"),
+                ("contracts/mod.rs", f"use super::{{\n    {target},\n}};\n"),
+                ("contracts/clock_settings.rs", f"use super::super::{{{target}}};\n"),
+                ("contracts/clock_settings/nested.rs",
+                 f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
+            ):
+                with self.subTest(relative=relative, source=source):
+                    self.check_files({relative: source}, rejected=True)
+        self.check_files({
+            "contracts/mod.rs": "pub use self::clock_settings::ClockSettings;\n",
+            "contracts/clock_settings.rs": "use super::{ScheduleDisplayState};\n",
+            "contracts/clock_settings/nested.rs":
+                "use super::super::{ScheduleDisplayState};\n",
+        }, rejected=False)
 
     def test_moved_clock_and_display_contracts_stay_in_contracts(self):
         # [ORB-22623] A second definition would bring the back-edge's owner back.
