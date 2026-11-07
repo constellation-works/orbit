@@ -328,9 +328,18 @@ orbit config set workflow.distributed_completion done
 ```
 
 Stay on the default until the drain and its landing path are routinely clean,
-then opt in one workspace at a time. Reverting is the same write with
-`review`; because landing rechecks the key, withdrawing `done` stops every
-handoff that has not landed yet.
+then opt in one workspace at a time. The key is read when each owner runtime
+opens, so opting in or withdrawing reaches long-lived owner processes only
+after they restart: restart `orbit web serve`, any active drain, and any
+running landing worker's owner process after changing the key (a landing
+worker already running keeps the value it opened with until it finishes),
+then verify with `orbit config get workflow.distributed_completion`.
+Reverting is the same write with `review`; because landing rechecks the key,
+withdrawing `done` stops handoffs authorized by the owner policy that have
+not landed yet. It does not stop a handoff an operator already approved,
+which lands through the operator authorization path. Claims admitted before
+opting in keep their `review` contract and still need **Approve handoff** on
+the owner's dashboard.
 
 `done` changes only who authorizes completion. It skips none of the gates
 captured at admission: the owner's required validation commands, any review
