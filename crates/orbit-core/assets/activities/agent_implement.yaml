@@ -419,9 +419,14 @@ spec:
 
     For a criterion the pilot typed `post_deploy`, read “Criteria owed after
     deploy” in the Orbit skill's task-execution reference before returning
-    `owed_criteria`. Gather candidate evidence and copy the pilot's host and
-    command; mark it `not_run` (owed after deploy). Every other unmet criterion
-    still fails.
+    `owed_criteria`. Each entry is an object with `criterion` (the pilot's
+    criterion number), `host` and `command` (copied from the pilot's
+    `post_deploy` finding), `target` (the threshold the acceptance criterion
+    states, such as `p95 <= 150 ms`; the pilot's finding carries no target),
+    and optional `candidate_evidence` (what the candidate showed). The entry
+    has no status field. Record `not_run` (owed after deploy) for each owed
+    criterion in the execution summary, never in `owed_criteria` and never as
+    passed. Every other unmet criterion still fails.
 
     Scratch and cleanup
 
