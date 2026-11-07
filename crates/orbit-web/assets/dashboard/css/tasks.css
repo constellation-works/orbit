@@ -87,7 +87,9 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 /* The status pills, then the pager at their right once the list has pages
    (on its own line when the pills fill theirs); the first status card follows
    12px below. */
-#tasks-panel > .controls { border-bottom: 0; padding: 0 0 12px; align-items: flex-start; }
+/* --tasks-list-lead (log-tail.js) lowers the list when the dock's tab bar is
+   taller than these controls, so both start level. */
+#tasks-panel > .controls { border-bottom: 0; padding: 0 0 calc(12px + var(--tasks-list-lead, 0px)); align-items: flex-start; }
 
 #tasks-panel > .body {
   max-height: none;
@@ -887,8 +889,9 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
 /* The active tab's first card starts level with the first task block, and
    the list and dock end together: log-tail.js sets `--tasks-dock-lead` to the
-   room above the dock, which the message area fills (with a 12px gap above the
-   tabs, which sit above that line). Its height is that room, never its
+   room above the dock, which the message area fills (with up to a 12px gap
+   above the tabs, which sit above that line), or `--tasks-list-lead` on
+   #tasks-panel when the dock has no room and the list must drop instead. Its height is that room, never its
    content, so a notice moves neither the dock nor the list; more notices than
    fit scroll inside it. */
 .tasks-dock { --tasks-dock-lead: 0px; }
@@ -904,7 +907,9 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 .tasks-dock > .tasks-messages {
   flex: 0 0 auto;
   height: var(--tasks-dock-lead);
-  padding-bottom: 12px;
+  /* Never more than the lead: a 12px floor pushed the dock below the list
+     whenever the room above it was smaller. */
+  padding-bottom: min(12px, var(--tasks-dock-lead));
 }
 .tasks-messages > :empty { display: none; }
 #tasks-notices { display: flex; flex-direction: column; gap: 6px; }

@@ -374,8 +374,11 @@ keeping its bottom edge level with the dock and clear of the shell's bottom bar.
 `alignTasksDock` in
 `log-tail.js` measures the list's top and the card's depth inside the dock,
 sets `--tasks-dock-lead` on `#tasks-dock`, and re-levels on a tab switch or
-when the tab bar or anything above the list resizes. The status
-chips sit 12px above the first block. The room above the dock is the **Tasks
+when the tab bar or anything above the list resizes. When the tab bar is
+taller than the list's controls (one row of status chips on a wide screen),
+the dock has no room to give, so it sets `--tasks-list-lead` on
+`#tasks-panel` and the list drops by the difference instead. The status
+chips sit at least 12px above the first block. The room above the dock is the **Tasks
 message area** (`#tasks-messages`), as tall as that room whatever it holds, so
 passing notices move neither the list nor the dock: task-ID lookup feedback,
 page failure, the list's failure notes (`Refresh failed`, `Unable to load`), and
