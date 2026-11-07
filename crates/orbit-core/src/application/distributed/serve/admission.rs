@@ -12,7 +12,8 @@ use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    DistributedAdmissionPort, DistributedExperimentPort, owner_binary_version,
+    DistributedAdmissionPort, DistributedExperimentPort, DistributedVisualPort,
+    owner_binary_version,
 };
 use crate::application::host_labels;
 use crate::application::task::PilotAdmissionHold;
@@ -307,7 +308,7 @@ impl OrbitRuntime {
                         .mock_digest_artifact_for_pull_admission(task, &request.request_id)?
                         .into_iter()
                         .collect(),
-                    visual_review: self.captured_visual_review(task)?,
+                    visual_review: self.claim_visual_review_contract(task)?,
                 })
             },
         )

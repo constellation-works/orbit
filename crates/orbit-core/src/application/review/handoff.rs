@@ -19,6 +19,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::JobDrainPort;
 use crate::application::landing::dispatch_recorded_authority;
+use crate::application::review::ReviewVisualPort;
 use crate::application::task;
 
 impl OrbitRuntime {
@@ -66,7 +67,7 @@ impl OrbitRuntime {
         // A worker cannot owe a criterion its pilot finding did not type.
         self.check_owed_criteria(&self.get_task(&handoff.task_id)?, &handoff.owed_criteria)?;
         // A `verify-mock-ui` claim's capture must be the contract's (§6.2).
-        self.check_handoff_visual_capture(&handoff)?;
+        self.refuse_mismatched_handoff_capture(&handoff)?;
         let context = context.clone().with_handoff_observation(observation);
         let outcome = self.mutate_execution_claim_outcome(
             Some(&context),

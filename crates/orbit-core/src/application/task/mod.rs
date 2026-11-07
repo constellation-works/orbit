@@ -82,6 +82,8 @@ mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
+mod visual_review_json;
+pub(in crate::application) use visual_review_json::read_visual_record;
 mod workspace_auto_port;
 mod write_response;
 

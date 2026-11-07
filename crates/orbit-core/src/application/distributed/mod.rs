@@ -61,6 +61,7 @@ mod review_port;
 mod serve;
 mod settlement;
 mod task_port;
+mod visual_port;
 mod work_fit;
 
 pub(in crate::application) use admission_port::DistributedAdmissionPort;
@@ -95,4 +96,5 @@ pub(crate) use settlement::{
 pub use settlement::{
     OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow, PullLeafClaim, RefusedPullSettlement,
 };
+pub(in crate::application) use visual_port::DistributedVisualPort;
 pub(crate) use work_fit::PullWorkFit;

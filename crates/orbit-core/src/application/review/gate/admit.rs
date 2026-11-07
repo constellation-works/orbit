@@ -27,6 +27,7 @@ use super::super::evidence::{
 use crate::OrbitRuntime;
 use crate::application::contracts::AutoEffortSubject;
 use crate::application::job::crew_pools::seeded_crew_ticket;
+use crate::application::review::ReviewVisualPort;
 use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::application::task::light_delivery::{
     carries, light_delivery_decision, record_light_delivery, review_skip_decisions,
@@ -691,7 +692,7 @@ fn admit(
     // front of this reviewer, which resolves each in its report.
     let mut visual_findings = Vec::new();
     for task_id in &context.task_ids {
-        visual_findings.extend(runtime.visual_findings_for_review(task_id)?);
+        visual_findings.extend(runtime.review_manifest_visual_findings(task_id)?);
     }
     let manifest = ReviewManifest {
         mutation_proposals,

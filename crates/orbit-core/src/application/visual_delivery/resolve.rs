@@ -126,7 +126,7 @@ impl OrbitRuntime {
     /// The confirmed findings of `task_id`'s live visual review the code
     /// reviewer resolves; none in shadow, for any other task, or when the
     /// record cannot be read (review admission never fails on it).
-    pub(crate) fn visual_findings_for_review(
+    pub(super) fn visual_findings_for_review(
         &self,
         task_id: &str,
     ) -> Result<Vec<ReviewVisualFinding>, OrbitError> {

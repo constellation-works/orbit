@@ -5,6 +5,7 @@ use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, TaskHand
 
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::distributed::DistributedVisualPort;
 
 use super::refusal;
 
@@ -51,7 +52,7 @@ impl OrbitRuntime {
         accepted: Option<&orbit_types::workflow::handoff::AcceptedHandoff>,
     ) -> Result<HandoffObservation, OrbitError> {
         let receipt = self.claim_receipt(&handoff.claim_id)?;
-        self.check_handoff_live_visual_resolution(handoff)?;
+        self.recheck_observed_live_visual_resolution(handoff)?;
         let candidate = match handoff.candidate.delivery {
             HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
                 self,
