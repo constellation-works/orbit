@@ -890,6 +890,19 @@ function initTabsImpl(ctx) {
         setActiveTabImpl(ctx, "jobs/catalogue", { refresh: false });
         return;
       }
+      // ORB-22755: leaving a dock route through the Tasks item drops only the
+      // dock param, so the list keeps its filters like the removed Back control did.
+      if (tab.dataset.tab === "tasks") {
+        const { query: currentQuery } = parseHashRoute(window.location.hash);
+        if (currentQuery.has("dock") || currentQuery.has("dockMode") || currentQuery.has("panel")) {
+          currentQuery.delete("dock");
+          currentQuery.delete("dockMode");
+          currentQuery.delete("panel");
+          const rest = currentQuery.toString();
+          setActiveTabImpl(ctx, rest ? `tasks?${rest}` : "tasks", { refresh: false });
+          return;
+        }
+      }
       setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });
     });
   }

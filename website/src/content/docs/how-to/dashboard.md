@@ -557,7 +557,7 @@ start a window. On a replica checkout, Start pulls work from its owner without
 leaving Tasks. At 1000px and narrower the rail's **Drain** item opens this tab, or
 the fleet overview in **All workspaces** mode. On a narrow window the dock takes
 the place of the task
-list, and **Back to tasks** returns to it.
+list; the rail's **Tasks** item returns to it, keeping the list's filters.
 
 Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the
 auto-drain card, Start card or Log selected. The dock keeps the throttle as an

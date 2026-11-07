@@ -350,9 +350,9 @@ It stays beside the task list and gives way to an open task. Below 1000px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
 (`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Locks held or Log
 link, or the bottom log bar) shows the dock in place of the list at that width:
-its tabs sit under a **Back to tasks** control, which drops only `dock=` from the
-hash, keeping the list's filters. Any Tasks route without `dock=` shows the list
-again. The rail marks Drain rather than Tasks while the dock stands in for the
+its tabs sit directly under the top nav. The rail's **Tasks** item returns to
+the list, dropping only `dock=` from the hash and keeping the list's filters.
+Any Tasks route without `dock=` shows the list again. The rail marks Drain rather than Tasks while the dock stands in for the
 list. The dock route is how a phone drives a drain: its tabs and drain controls
 are 44px targets, Stop and Start stick to the foot of the scrolling pane, and a
 live window folds the Start form behind **Start another window**, so state, Stop
