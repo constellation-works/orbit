@@ -175,7 +175,9 @@ ask for a reason.
 
 A follower leaf runs on its own host, so the owner's run history never holds
 it. What the owner knows of its job, build, and failing step is the claim's
-`run_evidence` in `orbit run settlements --no-reconcile`. Read it in two parts.
+`run_evidence` in `orbit run settlements --no-reconcile --json`. The JSON
+document has a `settlements` array; each settlement carries its `claim_id` and
+its `run_evidence` object. Read `run_evidence` in two parts.
 
 - `provenance` says whether the owner holds the follower's run record at all.
   `null` means it holds none: the claim settled before the owner recorded
@@ -198,13 +200,33 @@ present, a `null` build with `build_state` `unrecorded` does mean the run
 record held no build.
 
 Run this recovery on the owner, as operator. Agents and claimed workers are
-refused; they read `orbit run settlements --no-reconcile` instead:
+refused; they read `orbit run settlements --no-reconcile --json` instead:
 
 ```bash
-orbit run settlements-hydrate --follower-workspace orbit --limit 10
-orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>
-orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck
+orbit run settlements-hydrate \
+  --follower-workspace orbit \
+  --limit 10 --json
+orbit run settlements-hydrate \
+  --follower-workspace orbit \
+  --limit 10 \
+  --after <next_after_claim_id> \
+  --json
+orbit run settlements-hydrate \
+  --follower-workspace orbit \
+  --task <task-id> \
+  --recheck --json
 ```
+
+The hydration JSON document has a `rows` array plus `remaining` and
+`next_after_claim_id`. Each row includes its `claim_id` and `outcome`. When
+`remaining` is greater than zero, pass the returned `next_after_claim_id` as
+the next command's `--after` value. It is the last claim visited on that page,
+regardless of its outcome. The CLI resolves it against the filtered settlement
+list before excluding claims that already hold evidence, so it remains usable
+when the last row was hydrated; there is no need to search the rows for a
+particular outcome. `unreachable`, `mismatch`, and `absent` claims remain
+eligible in a later default run because they gained no evidence. Claims that
+already hold evidence are selected again with `--recheck`.
 
 `--follower-workspace` names the workspace on each follower where its leaves
 ran, by name or `ws_*` ID as that host lists it. Narrow the selection with
@@ -213,9 +235,10 @@ duration such as `7d` or `24h`). Without `--recheck` only claims that still
 hold no evidence are visited; `--recheck` also revisits claims that already
 hold evidence, to confirm an identical replay or report a conflict.
 Selection is newest first. `--limit` bounds one run (default 25, at most
-100); the report gives `remaining` and `next_after_claim_id`, which you pass
-back as `--after` to visit the next page. Paging covers unsuccessful outcomes
-too, and an `--after` ID outside the selection is refused.
+100); `remaining` counts selected claims after this page. `next_after_claim_id`
+is set only when another page remains; pass it back as `--after` to visit that
+page. Paging covers unsuccessful outcomes too, and an `--after` ID outside the
+selection is refused.
 
 Each visited claim reports one outcome:
 
