@@ -583,14 +583,26 @@ For workspace policy, add or merge this table in
 [experiments]
 enabled = true
 max_running = 2
-config_keys = ["workflow.explore.max_calls_per_run"]
+config_keys = ["workflow.explore.max_calls_per_run", "visual_review.reviewer"]
 ```
 
-Each overlay config key must be in both the built-in typed allowlist and
-`experiments.config_keys`; the workspace list alone does not add support. The
-current built-in allowlist contains `workflow.explore.max_calls_per_run`, an
-integer from `1` to `100`. Use `orbit config show --all` to inspect effective
-values with their source, or `orbit config get <key>` for one value.
+Each overlay config key needs two permissions: the built-in typed allowlist
+and `experiments.config_keys`. The workspace list alone enables nothing else;
+only allowlisted keys are supported, and any other key, a value of the wrong
+type, or a number outside its bounds is refused when the experiment starts.
+The built-in allowlist holds exactly two keys:
+
+- `workflow.explore.max_calls_per_run`, an integer from `1` to `100`: the
+  explorer call budget for the treated run.
+- `visual_review.reviewer`, a boolean: whether the treated delivery runs the
+  mock comparison reviewer and its verifier.
+
+To opt in, list only the keys the arms will override, for example
+`config_keys = ["visual_review.reviewer"]` for a reviewer-only comparison.
+Read the workspace permission back with
+`orbit config get experiments.config_keys`, and use
+`orbit config show --all` to inspect effective values with their source, or
+`orbit config get <key>` for one value.
 
 An operator creates an experiment as a draft, edits a draft with `update`, or
 copies a definition into a new draft with `clone`. `start` opens the first
@@ -611,18 +623,25 @@ and actual crew without rewriting enrollment. An agent session may only use thes
 read-only commands:
 
 - `orbit experiment list`
-- `orbit experiment show <id>`
-- `orbit experiment readout <id>`
+- `orbit experiment show <id-or-name>`
+- `orbit experiment readout <id-or-name>`
 
 The other experiment operations are operator-only.
 
 Choose `shadow` to record assignments without applying treatments. Choose
 `live` to apply the assigned arm's instructions, skills, tools, crew and
-allowlisted config values to work. Readouts calculate per-arm outcomes from
-the recorded assignments and work records. For the list and readouts, use
-`orbit experiment list`, `orbit experiment show <id>` and
-`orbit experiment readout <id>`, or open the dashboard's **Analytics ›
-Experiments** page for per-arm enrollment and readouts.
+allowlisted config values to work. Verify state from the command line with
+`orbit experiment list [--status <status>]`,
+`orbit experiment show <id-or-name>` (arms and event log) and
+`orbit experiment readout <id-or-name> [--metric <name>]` (per-arm outcomes,
+intervals and verdict, withheld while collection or delivery checks are
+unmet). Readouts calculate per-arm outcomes from the recorded assignments
+and work records. Or open the dashboard's **Analytics › Experiments** page
+for the list with per-arm enrollment and each experiment's readout: the
+detail renders from the experiment record immediately while the readout
+loads beside it, so a slow or failed readout holds only the **Result** and
+**Trust** tabs, which show their own loading or error state with a Retry
+instead of failing the page. The header and **Setup** tab stay available.
 
 ## Decision assistance
 
