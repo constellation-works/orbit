@@ -72,7 +72,7 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
-use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
 use orbit_types::workflow::SourceRepairBinding;
@@ -129,22 +129,12 @@ pub(crate) fn current_run_requeue_stands(task: &Task, history: &[TaskHistoryEntr
     let Some(run_id) = task.job_run_id.as_deref() else {
         return false;
     };
-    for entry in history.iter().rev() {
-        if entry.event == CANDIDATE_DISCARDED_EVENT {
-            return false;
-        }
-        if let Some(TaskDecision::FinalRecovery {
-            run_id: decided,
-            outcome,
-            ..
-        }) = &entry.decision
-            && entry.by == SYSTEM_ACTOR_LABEL
-            && decided == run_id
-        {
-            return *outcome == RecordedFinalRecovery::Requeued;
-        }
-    }
-    false
+    let after_discard = history
+        .iter()
+        .rposition(|entry| entry.event == CANDIDATE_DISCARDED_EVENT)
+        .map_or(0, |index| index + 1);
+    helpers::authoritative_final_recovery_outcome(&history[after_discard..], run_id)
+        == Some(&RecordedFinalRecovery::Requeued)
 }
 
 impl OrbitRuntime {

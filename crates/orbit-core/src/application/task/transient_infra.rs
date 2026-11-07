@@ -41,7 +41,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
     TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
@@ -60,7 +60,7 @@ const MAX_DEFERRALS: usize = 5;
 /// Minutes the cleared-infra requeue waits after a transient authentication
 /// error before it tries the same block again.
 const DEFERRAL_BACKOFF_MINUTES: i64 = 10;
-use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::helpers::{self, SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::requeue::CandidateRequeue;
 use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
 use crate::OrbitRuntime;
@@ -129,7 +129,9 @@ impl OrbitRuntime {
             return Ok(None);
         };
         if !untouched_since(&history[index + 1..])
-            || latest_final_recovery(&history, &run_id) != Some("escalated")
+            || helpers::authoritative_final_recovery_outcome(&history, &run_id)
+                .map(|outcome| outcome.as_str())
+                != Some("escalated")
         {
             return Ok(None);
         }
@@ -447,20 +449,4 @@ fn untouched_since(after: &[TaskHistoryEntry]) -> bool {
         entry.to_status.is_none()
             || (entry.by == SYSTEM_ACTOR_LABEL && entry.to_status == Some(TaskStatus::Blocked))
     })
-}
-
-/// The outcome name of the latest typed final-recovery decision Orbit
-/// recorded for `run_id`.
-fn latest_final_recovery<'a>(history: &'a [TaskHistoryEntry], run_id: &str) -> Option<&'a str> {
-    history
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.decision {
-            Some(TaskDecision::FinalRecovery {
-                run_id: recorded,
-                outcome,
-                ..
-            }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => Some(outcome.as_str()),
-            _ => None,
-        })
 }
