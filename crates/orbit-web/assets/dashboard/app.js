@@ -2150,7 +2150,7 @@ async function refreshDashboard({ poll = false } = {}) {
     }
   }
   const revision = getWorkspaceRevision();
-  // Refresh stays available so a slow request never locks navigation or retry.
+  // The next refresh stays available so a slow request never locks navigation or retry.
   const jobs = runPanelPoll(poll, () => activeRefreshJobs({ poll }));
   const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
