@@ -253,11 +253,7 @@ none of them resolves a resident key from the cycle's mutating tools today:
 - **Guarded `orbit.task.update` with `request_id`.** Edit, comment and review each dedupe on a
   receipt in task history. A promote is a status edit, so its only caller-supplied key is this
   `request_id`.
-- **`orbit.agent.invoke` `idempotency_key`.** A retry handle: a key used by a recent submission
-  resolves that run, matched over a bounded window of the job's recent runs, and an explorer dedupes
-  against its parent's prior explores. It accepts any non-empty string, so a resident-shaped key is
-  accepted there. The cycle's contract does not name this tool as keyed, so the design does not rely
-  on it.
+
 
 Both `request_id` forms accept only 1 to 128 ASCII letters, digits, `.`, `_` or `-`, so the `:` in a
 resident key is refused. Dispatch, requeue and promote do not accept a resident key on any

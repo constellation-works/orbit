@@ -18,7 +18,7 @@
 //! ORB-10453 governed-operation chokepoint before this method is ever reached;
 //! this method owns the rest of the gate the capability check cannot see —
 //! the workspace claim ([`RuntimeKernel::require_workspace_claim`]), the
-//! working-directory confinement shared with `orbit.agent.invoke`, and the
+//! working-directory confinement, and the
 //! audit record naming what actually ran.
 
 use std::process::Command;
@@ -64,7 +64,7 @@ impl RuntimeKernel {
     /// claim admits the caller, and audit the attempt regardless of outcome.
     ///
     /// `working_directory` is confined by `resolve_workspace_cwd`, the same
-    /// helper `orbit.agent.invoke` uses for `cwd`.
+    /// workspace confinement helper.
     pub fn execute_remote_command(
         &self,
         params: RemoteCommandParams,

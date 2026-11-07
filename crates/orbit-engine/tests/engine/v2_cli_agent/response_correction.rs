@@ -727,7 +727,7 @@ fn only_a_read_only_activity_may_declare_response_correction() {
         (
             "orbit.auto_task.add",
             format!(
-                "{READ_ONLY}  tool_disallow_list:\n    - orbit.agent.invoke\n  proc_disallowed_programs: []\n"
+                "{READ_ONLY}  tool_disallow_list:\n    - orbit.search\n  proc_disallowed_programs: []\n"
             ),
         ),
         (
@@ -750,10 +750,9 @@ fn only_a_read_only_activity_may_declare_response_correction() {
 // [ORB-22448] These coordination writes used to pass admission even though a
 // correction repeats the entire activity under the same tool grant.
 fn assert_coordination_mutations_refused(deny_mode: bool) {
-    for yaml in [
-        include_str!("../../../../orbit-core/assets/activities/agent_explore.yaml"),
-        include_str!("../../../../orbit-core/assets/activities/task_pilot.yaml"),
-    ] {
+    for yaml in [include_str!(
+        "../../../../orbit-core/assets/activities/task_pilot.yaml"
+    )] {
         orbit_engine::load_activity_asset(yaml).expect("the shipped activity remains admissible");
         let mut registry = orbit_tools::ToolRegistry::new();
         registry.register_builtins();

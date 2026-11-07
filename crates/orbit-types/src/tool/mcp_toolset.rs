@@ -56,9 +56,6 @@ pub enum McpToolset {
     Analytics,
     /// A decision channel's own callbacks (submit and digest).
     DecisionChannel,
-    /// Agent invocation (`orbit.agent.invoke`). A managed implement or
-    /// review-repair run that is offered explorer delegation enables it.
-    AgentInvoke,
     /// Fleet notices: post, close, list and show.
     Notice,
     /// Resident mandates: the authority grant, relay and control, show,
@@ -71,7 +68,7 @@ pub enum McpToolset {
 
 impl McpToolset {
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 20] = [
         Self::Core,
         Self::TasksRead,
         Self::TasksWrite,
@@ -89,7 +86,6 @@ impl McpToolset {
         Self::Experiments,
         Self::Analytics,
         Self::DecisionChannel,
-        Self::AgentInvoke,
         Self::Notice,
         Self::Resident,
         Self::Local,
@@ -133,7 +129,6 @@ impl McpToolset {
             Self::Experiments => "experiments",
             Self::Analytics => "analytics",
             Self::DecisionChannel => "decision-channel",
-            Self::AgentInvoke => "agent-invoke",
             Self::Notice => "notice",
             Self::Resident => "resident",
             Self::Local => "local",

@@ -26,7 +26,6 @@ use orbit_common::governance::authorization::{
     governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_common::security::child_env::ACTIVITY_NAME_ENV;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -35,12 +34,7 @@ use orbit_types::workflow::RESIDENT_CYCLE_JOB;
 use crate::RuntimeKernel;
 use crate::tool_exec::CapabilityEnforcement;
 
-/// Canonical tool name of the agent invocation, named once so the admission
-/// and the governed-operation registry cannot drift apart.
-pub(crate) const AGENT_INVOKE_OPERATION_ID: &str = "orbit.agent.invoke";
-
-/// Canonical tool name of the delegated-human decision submission, named
-/// once like [`AGENT_INVOKE_OPERATION_ID`].
+/// Canonical tool name of the delegated-human decision submission, named once for its admission.
 pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
 
 /// Canonical tool name of the decision digest. It shares the submission's
@@ -48,36 +42,15 @@ pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
 /// which holds a callback session rather than a capability.
 pub(crate) const DECISION_DIGEST_OPERATION_ID: &str = "orbit.decision.digest";
 
-/// Canonical tool name of the explicit ship submission, named once like
-/// [`AGENT_INVOKE_OPERATION_ID`].
+/// Canonical tool name of the explicit ship submission, named once for its admission.
 pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 
 /// Canonical tool name of a delivery pull request's landing.
 pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
 
-/// How [`RuntimeKernel::admit_agent_invoke`] admitted one caller.
+/// Identity facts retained after operator admission.
 #[derive(Debug)]
-pub enum AgentInvokeAdmission {
-    /// An operator, for the trusted-host invocation outside the sandbox.
-    Operator(AgentInvokeAuthorizer),
-    /// An agent inside a managed run, for the sandboxed explorer only. The
-    /// explorer submission decides whether this run may delegate at all.
-    ManagedRun(ManagedRunCaller),
-}
-
-/// The managed run an agent caller belongs to, as its process envelope names
-/// it. Never a grant: the explorer admission checks the run record, its
-/// worktree and the workspace's explore policy before anything durable exists.
-#[derive(Debug, Clone)]
-pub struct ManagedRunCaller {
-    pub run_id: String,
-    /// The catalog activity the engine stamped on the caller's provider.
-    pub activity: Option<String>,
-}
-
-/// Identity facts retained after trusted-host admission.
-#[derive(Debug)]
-pub struct AgentInvokeAuthorizer {
+pub struct OperatorAuthorizer {
     pub provenance: CallerProvenance,
     /// Caller label an SSH-originated MCP session forwarded, for attribution
     /// in the durable admission. Never a grant [ORB-12564].
@@ -113,16 +86,6 @@ impl RuntimeKernel {
                 None => return Ok(()),
             },
         };
-        // [ORB-16814] An agent inside a managed run never holds the operator
-        // grant this row requires, and never gets the trusted-host invocation
-        // it guards. Its call goes on to `admit_agent_invoke`, which offers it
-        // only the sandboxed read-only explorer and refuses every run but an
-        // eligible implement or review-repair run.
-        if tool_name == AGENT_INVOKE_OPERATION_ID
-            && crate::run_input::managed_run_context_run_id_from_env().is_some()
-        {
-            return Ok(());
-        }
         // A resident cycle holds no operator grant; its authority to dispatch
         // and land is the `dispatch` and `merge` right a human granted on its
         // mandate. Core's cycle guard decides that on the tool host, for the
@@ -183,57 +146,6 @@ impl RuntimeKernel {
         )
     }
 
-    /// Admit one `orbit.agent.invoke` caller [ORB-11354] [ORB-16814].
-    ///
-    /// The single canonical admission for both invocation modes. Every
-    /// surface that can submit one — the `orbit.agent.invoke` tool and the
-    /// `orbit run agent` CLI — calls this before anything durable exists, so a
-    /// refusal happens before a run record and long before a process.
-    ///
-    /// * **A managed run is never an operator.** A process carrying a managed
-    ///   run's envelope (`ORBIT_MANAGED_RUN_CONTEXT` with its run id) is routed
-    ///   to the sandboxed explorer branch whatever its session asserts, so no
-    ///   run can admit an unsandboxed process. The explorer branch is strictly
-    ///   narrower: it stamps no trusted-host admission and refuses every run but
-    ///   an implement or review-repair run with exploration enabled.
-    /// * **Everyone else is held to the trusted-host operation.** The process
-    ///   envelope counts, as for every operator operation: an agent declared in
-    ///   the environment resolves as `agent` and is refused.
-    ///
-    /// A session that arrived over SSH is admitted on the same terms as a local
-    /// one: holding `operator` is the whole test [ORB-12564]. There is no
-    /// second, destination-side grant, because the caller reached this machine
-    /// through an SSH login that already lets it start any process it likes.
-    /// What keeps an *agent* from reaching here is caller-side and unchanged: a
-    /// federated server running as an agent never propagates operator into a
-    /// destination's argv.
-    pub fn admit_agent_invoke(
-        &self,
-        session_context: &ToolSessionContext,
-    ) -> Result<AgentInvokeAdmission, OrbitError> {
-        if let Some(run_id) = crate::run_input::managed_run_context_run_id_from_env() {
-            let activity = std::env::var(ACTIVITY_NAME_ENV)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-            return Ok(AgentInvokeAdmission::ManagedRun(ManagedRunCaller {
-                run_id,
-                activity,
-            }));
-        }
-        self.admit_trusted_host_agent_invoke(session_context)
-            .map(AgentInvokeAdmission::Operator)
-    }
-
-    /// Hold one caller to the operator-only trusted-host invocation, returning
-    /// how the authorizing operator was identified [ORB-11354].
-    pub fn admit_trusted_host_agent_invoke(
-        &self,
-        session_context: &ToolSessionContext,
-    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
-        self.admit_operator_operation(AGENT_INVOKE_OPERATION_ID, session_context)
-    }
-
     /// Admit one governed operator operation against the process envelope as
     /// well as the session, so a managed run shelling out to the CLI resolves
     /// as `agent` and is refused. Returns how the operator was identified.
@@ -241,7 +153,7 @@ impl RuntimeKernel {
         &self,
         operation_id: &str,
         session_context: &ToolSessionContext,
-    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
+    ) -> Result<OperatorAuthorizer, OrbitError> {
         let operation = governed_tool(operation_id).ok_or_else(|| {
             OrbitError::Execution(format!(
                 "'{operation_id}' is missing from the governed operation registry"
@@ -251,7 +163,7 @@ impl RuntimeKernel {
         let caller = CallerCapabilities::resolve(&envelope);
         self.decide_with_envelope(operation, envelope)?;
 
-        Ok(AgentInvokeAuthorizer {
+        Ok(OperatorAuthorizer {
             provenance: caller.provenance(),
             remote_caller_machine_id: caller.remote_caller_machine_id().map(ToOwned::to_owned),
         })

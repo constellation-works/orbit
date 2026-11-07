@@ -601,16 +601,9 @@ pilot uses `workflow.purpose_crews.task_pilot` when configured, otherwise the
 for the run, and an empty fallback pool uses the default crew. Recovery never
 inherits a failed task's crew. See [Purpose pools](../../reference/config/#purpose-pools).
 
-With `workflow.explore.enabled` and an eligible
-`workflow.purpose_crews.explorer` pool, implementing and review-repair agents
-can ask bounded, read-only questions in their own worktree through
-`orbit.agent.invoke`. Explorers return the paths they read and cannot delegate
-again. This is separate from the operator's host investigation command,
-`orbit run agent`, which is deprecated and will be removed.
-
 `workflow.mid_run_steering.enabled` lets operator comments added after dispatch
 reach later managed prompts. A bounded checkpoint holds promotion while new
-guidance is undelivered. Both exploration and steering are off by default;
+guidance is undelivered. Steering is off by default;
 see [Configuration](../../reference/config/).
 
 Use `orbit task update <id> --crew <name>` to select a crew explicitly.
@@ -758,8 +751,7 @@ host into the shipped executors:
 
 - **macOS**: `sandbox-exec`, with the profile compiled to SBPL. Dispatch fails
   closed if the trusted `sandbox-exec` executable is missing, unless the
-  executor sets `allow_fallback: true` (a read-only explorer takes the same
-  provider read-only mode as on Linux). If the executable exists but cannot
+  executor sets `allow_fallback: true`. If the executable exists but cannot
   apply the profile (exit 71, `sandbox_apply: Operation not permitted`), the run
   fails and no fallback applies.
 - **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap` or, when that is
@@ -768,9 +760,7 @@ host into the shipped executors:
   `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
   is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`
   is missing or its namespace-and-mount probe fails, unless the executor sets
-  `allow_fallback: true`. The one exception is a read-only explorer: it does
-  not need `allow_fallback`, and instead runs under its provider's own
-  read-only mode (Codex), while a provider without one is refused.
+  `allow_fallback: true`.
 - **Other platforms**: release binaries ship for macOS and Linux only (x64 and
   arm64). A source build on any other OS seeds its executors with no OS
   sandbox. Process supervision, tool policy, and Orbit's in-process guards for

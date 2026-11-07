@@ -65,7 +65,7 @@ The common `agent_loop` fields are:
 - optional `response_correction` (`{max_rounds, min_remaining_seconds}`; bounds
   the fresh invocations a read-only activity may get to replace a reply that
   says `success` and carries `error`, or a clean prose ending with no envelope,
-  inside its own wall-clock budget — see §7.6a; `agent_explore` and `task_pilot`
+  inside its own wall-clock budget — see §7.6a; `task_pilot`
   declare it)
 - optional `regression_risk_instruction` (declaring it asks the host, through
   `RuntimeHost::regression_risk_for_agent_input`, for the task's
@@ -389,18 +389,7 @@ to read files and inspect with git/rg, never to build or validate a repair.
 The other checkout callers do not need this preparation: delivery and
 step/final-recovery activities reuse managed worktrees; source inspections
 create standalone repositories and require the read-only `reviewer` profile,
-so neither backend grants source writes. `agent_invoke_pipeline` creates no
-checkout and uses explicitly admitted `trustedHostExecution` outside Orbit's
-filesystem sandbox on both platforms. `agent_explore_pipeline` creates no
-checkout either: it reuses its calling implement run's worktree read-only under
-the `reviewer` profile when the executor sandbox wraps it. A provider without
-that wrapper starts only in an enforced read-only mode (Codex); otherwise
-dispatch refuses before spawn. Admission draws only explorer crews that have one
-of the two (an executor OS sandbox this host supports, or a provider read-only
-mode) and refuses before any run exists when none does; delegation is not offered
-then. A sandboxed caller's submission goes through its run's plugin broker, so the
-explorer's worker starts on the host beside the caller's sandbox rather than nested
-in it, where neither Bubblewrap nor Seatbelt can start ([ORB-20566]). It never carries a trusted-host admission. Managed `proc.spawn` inherits its
+so neither backend grants source writes. Managed `proc.spawn` inherits its
 worker's Bubblewrap/Seatbelt boundary without adding Landlock. The retained
 Landlock read API does not handle agent writes; its production caller is the
 explicit plugin boundary. That boundary creates absent concrete write-grant
@@ -926,18 +915,16 @@ requirements are normalized in the task store and freeze once the task enters
 
 [ORB-13315] gives an `agent_loop` activity one of two tool policies.
 
-The seeded agent loops (`agent_explore`, `agent_implement`, `agent_invoke`,
+The seeded agent loops (`agent_implement`,
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
 `review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
 `verify_finding`) declare `tool_disallow_list`. They refuse registered
-control-plane mutations. Every seeded loop except `agent_implement` and
-`agent_review_repair` also refuses `orbit.agent.invoke`; those two keep it so
-they can delegate read-only exploration. Task writes (`orbit.task.add`,
+control-plane mutations. Task writes (`orbit.task.add`,
 `orbit.task.update` and `orbit.task.artifact.put`) are refused by
-`agent_explore`, `agent_invoke`, `final_recovery`,
+`final_recovery`,
 `review_reconciliation_review`, `task_pilot` and `verify_finding`. Friction
 writes (`orbit.friction.add` and `orbit.friction.update`) are refused by
-`agent_explore`, `agent_invoke`, `review_reconciliation_review`, `task_pilot`
+`review_reconciliation_review`, `task_pilot`
 and `verify_finding`; `final_recovery` does not refuse them. Their
 `proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
 no tool for run cancellation, plugin administration, config mutation, or
@@ -1004,7 +991,7 @@ tools, inactive tools and tools that are not agent-facing fail
 `agent_implement`. That activity, and any activity that is not one of the
 shipped non-implementers, still fails `RequiredToolAdmission` when the
 disallow list covers a requirement. The failure names the tool and the
-activity. The shipped non-implementers are `agent_explore`, `agent_invoke`,
+activity. The shipped non-implementers are
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
 `review_reconciliation_review`, `step_failure_recovery`, `task_pilot`,
 `triage_escalation` and `verify_finding`. For those, a

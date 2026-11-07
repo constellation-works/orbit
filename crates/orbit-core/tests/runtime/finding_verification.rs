@@ -82,7 +82,6 @@ fn verifier_resolved_tools_preserve_its_read_only_boundary() {
             .any(|tool| tool == "orbit.task.show")
     );
     for tool in [
-        "orbit.agent.invoke",
         "orbit.auto_task.add",
         "orbit.auto_task.mint",
         "orbit.auto_task.update",

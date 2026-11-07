@@ -519,19 +519,10 @@ other required command such as formatting, lint, goldens or static analysis.
 
 ### Read-only delegation
 
-You may hand read-only questions (locate code, trace callers, summarize
-a module, find the tests covering a path) to a cheaper agent:
-- `orbit.agent.invoke` with one focused `prompt`, a `cwd` inside your
-  worktree, `wait_seconds` (≤600) and a unique `idempotency_key`. The
-  answer carries `answer.summary`, `answer.findings` and
-  `answer.paths_read`. Calls are budgeted; when one is refused, do the
-  work yourself.
-- Your provider's own read-only subagents (for example Claude's Agent
-  tool on a small model).
-
-Delegate only reading, never edits, validation, commits or dispatch. An
-explorer's answer is a lead: read what you rely on yourself before you
-change or cite it.
+When the provider supports read-only subagents, use them only for focused
+reading questions. Never delegate edits, validation, commits or dispatch.
+Read the cited files yourself before relying on an answer. Orbit no longer
+provides a separate explorer tool or activity.
 
 ## Step 5 — Summarize and hand off
 

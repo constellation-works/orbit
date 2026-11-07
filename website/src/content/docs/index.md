@@ -145,7 +145,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Choose a second-agent review point: before landing with <code>review.timing = "before_landing"</code>, before PR with the deprecated <code>review.timing = "before_pr"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. With PR delivery, leave off <code>--complete</code> to stop at <code>review</code> with the pull request open; local delivery merges before stopping at <code>review</code>. Or <a href="getting-started/first-task/">ship your first task by hand</a>. Optional <a href="concepts/agents/#crews">read-only exploration and operator steering</a> support work already in progress.</p>
+  <p class="orbit-walk-next">Choose a second-agent review point: before landing with <code>review.timing = "before_landing"</code>, before PR with the deprecated <code>review.timing = "before_pr"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. With PR delivery, leave off <code>--complete</code> to stop at <code>review</code> with the pull request open; local delivery merges before stopping at <code>review</code>. Or <a href="getting-started/first-task/">ship your first task by hand</a>. Optional <a href="concepts/agents/#crews">operator steering</a> support work already in progress.</p>
 </section>
 
 <section class="orbit-section">

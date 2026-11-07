@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
 use orbit_types::workflow::{
     ExperimentActivityOverlay, ExperimentOverlayRecord, ExploreBriefAdmission,
 };
@@ -25,13 +25,12 @@ use super::super::policy::{
 };
 use super::super::prepare::{
     SourceCheckout, activity_tool_context, invocation_timeout_seconds, prepare_source_checkout,
-    require_conflict_recovery_target, trusted_host_admission,
+    reject_removed_trusted_host_execution, require_conflict_recovery_target,
 };
 use super::CliDispatchContext;
 
 pub(super) struct PreparedCliDispatch<'a> {
     pub(super) provider: String,
-    pub(super) trusted_host: Option<TrustedHostAdmission>,
     pub(super) cli_executor: ResolvedCliExecutor,
     pub(super) inspection_tools: Option<InspectionTools>,
     pub(super) image_input: Option<ImageInputPlan>,
@@ -229,7 +228,7 @@ pub(crate) fn dispatch_cli_invocation(
         host.acquire_deferred_footprint(run_id, activity_name)?;
     }
     let provider = spec.provider.as_str().to_string();
-    let trusted_host = trusted_host_admission(spec, activity_name, input)?;
+    reject_removed_trusted_host_execution(spec, activity_name)?;
     // Reject an inspection configuration that cannot start (a non-reviewer
     // profile, a provider with no CLI runtime) before executor lookup can
     // classify it as a transient missing-CLI error.
@@ -240,8 +239,7 @@ pub(crate) fn dispatch_cli_invocation(
     // Like inspection, an image-input run its lane or crew cannot serve is
     // refused before any session or checkout exists.
     let image_input = admit_image_input(&provider, spec, input, cli_executor.image_input.as_ref())?;
-    let timeout_seconds =
-        invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
+    let timeout_seconds = invocation_timeout_seconds(spec);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
     let stall_window = host.agent_stall_window();
 
@@ -338,7 +336,6 @@ pub(crate) fn dispatch_cli_invocation(
         },
         PreparedCliDispatch {
             provider,
-            trusted_host,
             cli_executor,
             inspection_tools,
             image_input,

@@ -58,9 +58,9 @@ rules as `tools`. A task's `required_tools` cannot re-grant a disallowed tool.
 On `agent_implement`, and on any activity outside the shipped non-implementer
 set, a covered requirement refuses the run before launch. `final_recovery`,
 `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
-`review_reconciliation_review`, `task_pilot` and `agent_invoke` drop that
+`review_reconciliation_review` and `task_pilot` drop that
 requirement from the requested list and record a note; it stays out of the
-callable set. The shipped `agent_explore`, `verify_finding`,
+callable set. The shipped `verify_finding`,
 `image_input_probe`, `resident_cycle`, `triage_escalation`, `visual_review` and
 `visual_verify` activities use the same non-implementer rule.
 
@@ -77,8 +77,8 @@ deprecation warning. Declare `tools` or `tool_disallow_list`.
 Being on the allowlist never replaces runtime role, capability, policy,
 filesystem, subprocess, or authentication checks.
 
-Optional `steering_instruction` and `explore_instruction` fields add guidance
-only when mid-run steering or read-only exploration is enabled and available.
+The optional `steering_instruction` field adds guidance only when mid-run
+steering is enabled.
 See [Agent execution](../../concepts/agents/#runtime-path)
 for the corresponding workspace settings.
 
@@ -411,7 +411,7 @@ matches what you are bounding:
 
 | Field | Where | Bounds |
 |-------|-------|--------|
-| `wall_clock_timeout_seconds` | On an `agent_loop` activity spec | One CLI agent invocation (`max_iterations` is inert; see Retired agent fields). For reviewer runs, the host's `review.minutes` deadline replaces this bound; a trusted-host or explorer run input `timeout_seconds` can also shorten it. |
+| `wall_clock_timeout_seconds` | On an `agent_loop` activity spec | One CLI agent invocation (`max_iterations` is inert; see Retired agent fields). For reviewer runs, the host's `review.minutes` deadline replaces this bound. |
 | `timeout_seconds` / `interval_seconds` | On a `loop:` block | The loop's total elapsed time and the pause between passes (see Loops). |
 | `timeout_ms` | In a deterministic `local_shell` activity's `config` | One child process; see Deterministic local shell below. |
 

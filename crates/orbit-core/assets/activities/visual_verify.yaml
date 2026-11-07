@@ -24,7 +24,6 @@ spec:
     Writes nothing; `visual_settle` validates and records the verdicts in
     `visual/review.json`, shadow only.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

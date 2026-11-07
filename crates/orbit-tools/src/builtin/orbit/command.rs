@@ -8,8 +8,7 @@
 //! entry point, at the governed-operation chokepoint in
 //! `orbit_common::governance::authorization`) and the workspace claim (enforced in
 //! `OrbitRuntime::execute_remote_command`, the same chokepoint `orbit.workflow.ship`
-//! uses). `working_directory` is confined by the same helper `orbit.agent.invoke`
-//! uses for `cwd`: it must be absolute and inside the selected workspace's
+//! uses). `working_directory` is confined to the selected workspace for `cwd`: it must be absolute and inside the selected workspace's
 //! checkout or a linked worktree under `.orbit/state/worktrees/`.
 //!
 //! The self-dispatch guard below mirrors `orbit.workflow.ship`/`run.resume`: a

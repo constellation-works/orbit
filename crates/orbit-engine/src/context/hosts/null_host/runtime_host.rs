@@ -700,9 +700,6 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), DispatchError> {
         NullRuntimeHost::acquire_deferred_footprint(self, run_id, activity_name)
     }
-    fn explore_delegation_available(&self) -> bool {
-        NullRuntimeHost::explore_delegation_available(self)
-    }
     fn resolve_activity_tool_denials(
         &self,
         task_ids: &[String],

@@ -17,7 +17,7 @@ use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
 
-use super::{agent, command, operation, pipeline};
+use super::{command, operation, pipeline};
 use crate::ToolRegistry;
 use orbit_common::governance::search::SEARCH;
 
@@ -50,11 +50,6 @@ pub fn register(registry: &mut ToolRegistry) {
     // in the opt-in `resident` toolset the manager and resident roles serve.
     operation::register_noun(registry, &RESIDENT);
     operation::register_noun(registry, &orbit_common::governance::evolution::EVOLUTION);
-    // Agent invocation is workspace-scoped: the admission is made against the
-    // checkout that owns it, and Core is where that decision lives. Its
-    // toolset is opt-in: a managed run offered explorer delegation enables
-    // it, and the deprecated operator path reaches the tool through the CLI.
-    registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);
     // Command execution is workspace-scoped; Core retains its domain and claim
     // validation.
     registry.register_mcp(

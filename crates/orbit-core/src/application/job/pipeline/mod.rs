@@ -61,7 +61,7 @@ mod submit;
 mod wait;
 mod worker;
 
-pub(crate) use admission::{input_hash, pipeline_run_queue_position};
+pub(crate) use admission::input_hash;
 pub use notices::{SubmissionKind, SubmissionNotices};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
@@ -139,7 +139,6 @@ pub(crate) fn reserved_reconciliation_key_error(job_name: &str) -> OrbitError {
 pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field; \
-         trusted host execution is admitted per invocation by the governed `orbit.agent.invoke` \
-         operation and cannot be requested through ordinary job input"
+         trusted host invocation has been removed and cannot be requested through job input"
     ))
 }

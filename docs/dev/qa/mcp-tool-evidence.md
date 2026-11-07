@@ -13,7 +13,6 @@ This matrix records behavior of agent-visible and operator-only MCP tools. The `
 
 | Tool | Function | Refusal | Persistence | Workspace / authority | Limit |
 | --- | --- | --- | --- | --- | --- |
-| orbit_agent_invoke | S-agent | S-agent-denial | — | S-agent-denial | Synthetic CLI response; real providers untested |
 | orbit_agents_scorecard | I-agents | I-agents | — | — | Tool and CLI success plus unknown-role refusal; dashboard API prints the same payload; no stdio proof |
 | orbit_agents_show | I-agents | I-agents | — | — | Tool detail, ambiguous-crew `row_model` selection and refusal; CLI prints the same payload; no stdio proof |
 | orbit_attention | — | — | — | — | No named behavior evidence mapped in this matrix |

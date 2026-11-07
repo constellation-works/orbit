@@ -34,7 +34,7 @@ pub struct ListenArgs {
     pub role: Option<String>,
     /// Advertise these toolsets beside the role's or the default surface,
     /// as `orbit mcp serve --toolset` takes them, such as `leases`,
-    /// `experiments`, `analytics`, `decision-channel`, `agent-invoke`,
+    /// `experiments`, `analytics`, `decision-channel`,
     /// `notice`, or `all`. Replaces the `machine.mcp.toolsets` host config
     /// for this listener.
     #[arg(long, value_name = "TOOLSETS")]

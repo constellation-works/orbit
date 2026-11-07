@@ -1,42 +1,12 @@
-//! The trusted-host execution contract [ORB-11354].
+//! Compatibility types for stored trusted-host admissions.
 //!
-//! Ordinary managed activities run their provider subprocess inside the
-//! executor's sandbox. Exactly one activity does not: the operator-only
-//! exploration invocation, which exists precisely to reach the host the way
-//! the operator's own shell would. This module owns the three facts that mode
-//! is made of, in the leaf crate both the engine and the application layer can
-//! read:
-//!
-//! 1. [`TRUSTED_HOST_ACTIVITY`] — the one activity name allowed to declare it.
-//! 2. [`TRUSTED_HOST_ADMISSION_KEY`] — the reserved run-input key that carries
-//!    an operator's admission to the worker.
-//! 3. [`TrustedHostAdmission`] — what that admission records.
-//!
-//! # This is a mode, not a privilege
-//!
-//! Trusted host execution removes Orbit's *filesystem sandbox* from one
-//! provider subprocess. It does not hand the child any Orbit capability: the
-//! child still runs with managed-run provenance, so it resolves as an agent at
-//! every capability chokepoint and cannot perform a governed operation. That is
-//! deliberate, and it is also not an isolation boundary — the subprocess runs
-//! as the same OS user as Orbit and can read and write anything that user can.
-//! The honest summary is in
-//! `crates/orbit-core/assets/skills/orbit/references/tool-surface.md`.
-//!
-//! # Why the flag alone is not enough
-//!
-//! Activity assets live in a workspace directory an operator can edit, so a
-//! YAML key can never be the admission by itself. The engine requires the flag
-//! *and* an admission stamped into the run input by the canonical governed
-//! submission, and the flag is legal only on [`TRUSTED_HOST_ACTIVITY`]. A
-//! definition that declares the flag without an admission fails closed rather
-//! than degrading to a sandboxed run, so a broken admission path is loud.
+//! Host invocation has been removed. Old run inputs still deserialize, and
+//! ordinary submissions and replay retain their reserved-key protections.
+//! No activity may declare trusted-host execution and no stored admission
+//! authorizes a new process.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// The one activity name permitted to declare `trustedHostExecution: true`.
-pub const TRUSTED_HOST_ACTIVITY: &str = "agent_invoke";
 
 /// Reserved run-input key carrying an operator's trusted-host admission.
 ///
@@ -114,17 +84,13 @@ pub fn strip_trusted_host_admission(input: &mut Value) -> bool {
 /// (`orbit_common::security::redaction`), and the sibling
 /// `AssetLoadError::ToolAllowlist` names the same value on the same grounds.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "activity `{activity}` declares `trustedHostExecution: true`, which only the built-in \
-     `{TRUSTED_HOST_ACTIVITY}` activity may declare; an unsandboxed provider subprocess is \
-     admitted per invocation by an operator, never by an asset"
-)]
+#[error("activity `{activity}` declares removed `trustedHostExecution: true`; use a task workflow")]
 pub struct TrustedHostActivityError {
     /// Name of the offending activity asset.
     pub activity: String,
 }
 
-/// Reject `trustedHostExecution` on any activity but [`TRUSTED_HOST_ACTIVITY`].
+/// Reject the removed `trustedHostExecution` mode on every activity.
 ///
 /// Called from asset load, so a hand-written or edited asset is refused before
 /// it can reach a dispatcher.
@@ -132,7 +98,7 @@ pub fn validate_trusted_host_activity(
     activity: &str,
     declares_trusted_host: bool,
 ) -> Result<(), TrustedHostActivityError> {
-    if declares_trusted_host && activity != TRUSTED_HOST_ACTIVITY {
+    if declares_trusted_host {
         return Err(TrustedHostActivityError {
             activity: activity.to_string(),
         });

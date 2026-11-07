@@ -52,13 +52,6 @@ pub fn is_host_credentialed_read(tool: &str) -> bool {
     HOST_CREDENTIALED_READS.contains(&tool)
 }
 
-/// The built-in a sandboxed managed agent submits a read-only explorer
-/// through. The broker submits it on the host, so the explorer's worker, and
-/// the sandbox it creates, start beside the caller's sandbox instead of nested
-/// inside it, where the kernel refuses a new namespace (Ubuntu's AppArmor
-/// `unpriv_bwrap`) and Seatbelt refuses a second profile [ORB-20566].
-pub const BROKERED_EXPLORER_TOOL: &str = crate::authorization::AGENT_INVOKE_OPERATION_ID;
-
 /// The built-in a sandboxed resident cycle starts a leaf run through. The
 /// broker submits it on the host, so the leaf's worker starts beside the
 /// cycle's read-only sandbox instead of inside it, where it could neither write

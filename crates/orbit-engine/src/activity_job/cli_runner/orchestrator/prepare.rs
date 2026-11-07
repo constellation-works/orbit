@@ -4,66 +4,36 @@
 use std::path::{Path, PathBuf};
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, TrustedHostAdmission};
+use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
 use super::super::super::dispatcher::{DispatchError, ResolvedSandbox};
 use super::super::super::workspace::resolve_subprocess_cwd;
 use super::super::inspection::SourceInspection;
-use super::super::spawn::{PreparedSandbox, UnavailableWrapper, prepare_sandbox_for_dispatch};
+use super::super::spawn::{PreparedSandbox, prepare_sandbox_for_dispatch};
 use super::super::supervisor::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
 use crate::context::RuntimeHost;
 
-/// [ORB-11354] Trusted host execution needs both halves: the built-in
-/// activity declares the mode, and the operator's canonical submission
-/// stamps the admission into the run input. A declaration without an
-/// admission is a broken admission path, not a request for a sandboxed run,
-/// so it fails closed here rather than silently downgrading.
-pub(super) fn trusted_host_admission(
+/// Trusted-host invocations have been removed. Keep refusing legacy assets
+/// rather than allowing a stored admission to authorize a new process.
+pub(super) fn reject_removed_trusted_host_execution(
     spec: &AgentLoopSpec,
     activity_name: &str,
-    input: &Value,
-) -> Result<Option<TrustedHostAdmission>, DispatchError> {
-    Ok(if spec.trusted_host_execution {
-        Some(TrustedHostAdmission::from_run_input(input).ok_or_else(|| {
-            DispatchError::CliInvocationPermanent(format!(
-                "activity `{activity_name}` declares trusted host execution but this run carries \
-                 no operator admission; submit it through the governed `orbit.agent.invoke` \
-                 operation"
-            ))
-        })?)
-    } else {
-        None
-    })
+) -> Result<(), DispatchError> {
+    if spec.trusted_host_execution {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "activity `{activity_name}` requests removed trusted host execution; use a task workflow"
+        )));
+    }
+    Ok(())
 }
 
-/// The provider's wall-clock bound in seconds: the activity's declared
-/// timeout, only ever shortened by the run input.
-pub(super) fn invocation_timeout_seconds(
-    spec: &AgentLoopSpec,
-    activity_name: &str,
-    trusted_host: Option<&TrustedHostAdmission>,
-    input: &Value,
-) -> u64 {
-    let declared_timeout_seconds = if spec.wall_clock_timeout_seconds == 0 {
+/// The provider's wall-clock bound in seconds from the activity declaration.
+pub(super) fn invocation_timeout_seconds(spec: &AgentLoopSpec) -> u64 {
+    if spec.wall_clock_timeout_seconds == 0 {
         DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS
     } else {
         spec.wall_clock_timeout_seconds
-    };
-    // [ORB-11354] An operator submitting an exploration says how long they are
-    // willing to wait. The request can only *shorten* the activity's declared
-    // bound, so the asset stays the ceiling and no run input can extend an
-    // unsandboxed subprocess past it. Only the admitted mode and an explorer,
-    // whose admission bounds each call [ORB-16814], read the key; every other
-    // activity keeps its declared timeout verbatim.
-    let reads_request = trusted_host.is_some() || activity_name == EXPLORE_ACTIVITY;
-    match input
-        .get("timeout_seconds")
-        .and_then(Value::as_u64)
-        .filter(|seconds| *seconds > 0 && reads_request)
-    {
-        Some(requested) => requested.min(declared_timeout_seconds),
-        None => declared_timeout_seconds,
     }
 }
 
@@ -151,40 +121,20 @@ pub(super) fn prepare_source_checkout(
     })
 }
 
-/// An admitted trusted-host invocation skips sandbox resolution entirely
-/// rather than resolving one and discarding it: there is no profile to
-/// compile, no wrapper to probe, and no inner-sandbox flag to neutralize.
-/// Every other activity, including every managed task job, is unchanged.
+/// Resolve the activity's ordinary executor sandbox.
 pub(super) fn resolve_dispatch_sandbox(
     host: &dyn RuntimeHost,
     provider: &str,
     fs_profile: Option<&str>,
     subprocess_cwd: Option<&Path>,
-    trusted_host: Option<&TrustedHostAdmission>,
 ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-    match trusted_host {
-        Some(_) => Ok(None),
-        None => host.resolve_executor_sandbox(provider, fs_profile, subprocess_cwd),
-    }
+    host.resolve_executor_sandbox(provider, fs_profile, subprocess_cwd)
 }
 
-/// Prepare the resolved sandbox for spawn, or record the trusted-host absence
-/// of one. An explorer whose wrapper cannot start is not refused here: it
-/// continues unwrapped, and the provider dispatch refuses any provider without
-/// a read-only mode [ORB-16814].
+/// Prepare the resolved sandbox for spawn under the executor's fallback policy.
 pub(super) fn prepare_dispatch_sandbox<'a>(
-    activity_name: &str,
-    trusted_host: Option<&TrustedHostAdmission>,
     resolved_sandbox: Option<&'a ResolvedSandbox>,
 ) -> Result<PreparedSandbox<'a>, DispatchError> {
-    let on_unavailable = if activity_name == EXPLORE_ACTIVITY {
-        UnavailableWrapper::ProviderReadOnly
-    } else {
-        UnavailableWrapper::RefuseUnlessFallback
-    };
-    Ok(match trusted_host {
-        Some(_) => PreparedSandbox::none_trusted_host(),
-        None => prepare_sandbox_for_dispatch(resolved_sandbox, on_unavailable)
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
-    })
+    prepare_sandbox_for_dispatch(resolved_sandbox)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))
 }

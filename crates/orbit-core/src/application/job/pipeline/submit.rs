@@ -22,10 +22,6 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) action_key: Option<&'a str>,
     /// Caller retry key admitted atomically with the run [ORB-13560].
     pub(crate) retry_key: Option<RetryKey<'a>>,
-    /// Whether this submission is the canonical trusted-host admission
-    /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
-    /// input; every other submission is refused for supplying it.
-    pub(crate) trusted_host: bool,
     /// Whether this submission is the governed review reconciliation
     /// admission. Only it may carry
     /// [`REVIEW_RECONCILIATION_ADMISSION_KEY`](orbit_types::workflow::REVIEW_RECONCILIATION_ADMISSION_KEY).
@@ -70,7 +66,6 @@ impl<'a> PipelineSubmission<'a> {
             actor,
             action_key: None,
             retry_key: None,
-            trusted_host: false,
             reconciliation: false,
             trigger: JobRunTrigger::cli(),
         }

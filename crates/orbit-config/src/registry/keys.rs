@@ -113,6 +113,30 @@ const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review se
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        "workflow.explore.enabled",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
+        "workflow.explore.max_answer_bytes",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
+        "workflow.explore.max_calls_per_run",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
+        "workflow.explore.max_concurrent_per_run",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
+        "workflow.explore.timeout_seconds",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
+        "workflow.purpose_crews.explorer",
+        "ignored: explorer delegation was removed; remove this key",
+    ),
+    (
         "commit.planned_by_trailer",
         "ignored: Planned-By is no longer written; read the implementer from Co-authored-by or task attribution",
     ),

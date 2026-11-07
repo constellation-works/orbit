@@ -95,16 +95,15 @@ impl OrbitRuntime {
             actor,
             action_key,
             retry_key,
-            trusted_host,
             reconciliation,
             trigger,
         } = submission;
-        // [ORB-11354] The reserved admission key is writable by exactly one
-        // caller. Refusing it here — on the single path every submission
+        // The removed trusted-host admission key must never authorize a new
+        // process. Refusing it here — on the single path every submission
         // surface funnels through — is what stops `orbit run job`, a resume,
         // an automation key, or a child dispatch from manufacturing an
         // unsandboxed run out of ordinary job input.
-        if !trusted_host && run_input_declares_trusted_host(&input) {
+        if run_input_declares_trusted_host(&input) {
             return Err(reserved_trusted_host_key_error(job_name));
         }
         if !reconciliation && run_input_declares_review_reconciliation(&input) {

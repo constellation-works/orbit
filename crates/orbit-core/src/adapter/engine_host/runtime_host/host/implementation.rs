@@ -782,10 +782,6 @@ impl RuntimeHost for OrbitRuntime {
         self.record_resident_continuity_rebuilt_for_run(run_id)
     }
 
-    fn explore_delegation_available(&self) -> bool {
-        self.explore_delegation_offered()
-    }
-
     fn steering_gate(
         &self,
         run_id: &str,

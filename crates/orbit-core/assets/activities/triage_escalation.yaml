@@ -23,7 +23,6 @@ spec:
     rejects or archives, and holds no task-update, lifecycle or dispatch
     tool. Blocked tasks are not triaged here: final recovery decides them.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

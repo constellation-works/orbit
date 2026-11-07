@@ -104,7 +104,6 @@ from_registry=(
   "PluginPinError:orbit-types"
   "PolicyError:orbit-types"
   "ProviderModelError:orbit-types"
-  "ProviderSandboxError:orbit-types"
   "RecordError:orbit-types"
   "ResourceError:orbit-types"
   "RetiredBackendError:orbit-types"

@@ -65,12 +65,6 @@ pub struct AgentLoopSpec {
     /// or with nothing marked, the rendered instruction is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression_risk_instruction: Option<String>,
-    /// Read-only exploration delegation an implement or review-repair agent
-    /// may use, appended to the instruction only when the host enables
-    /// `workflow.explore` and has an explorer crew to draw [ORB-16814].
-    /// Absent or unavailable, the rendered instruction offers no delegation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explore_instruction: Option<String>,
     /// How the agent uses the task context's `explore_brief`, the task
     /// pilot's map of the change, appended to the instruction only when the
     /// host delivers a brief for this prompt. Declaring it is what asks the
@@ -209,14 +203,7 @@ pub struct AgentLoopSpec {
     /// mode. Absent in legacy activity assets and persisted snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proc_disallowed_programs: Option<Vec<String>>,
-    /// Run this activity's provider subprocess directly on the host, outside
-    /// the executor's filesystem sandbox [ORB-11354].
-    ///
-    /// Legal only on the built-in
-    /// [`TRUSTED_HOST_ACTIVITY`](crate::workflow::activity_job::TRUSTED_HOST_ACTIVITY)
-    /// — asset load rejects it anywhere else — and inert without a per-invocation
-    /// operator admission in the run input. The flag names the mode; it never
-    /// grants it. See `crate::workflow::activity_job::trusted_host`.
+    /// Retired mode, retained to parse legacy assets and refuse their load.
     #[serde(rename = "trustedHostExecution", default)]
     pub trusted_host_execution: bool,
     /// The dispatching crew's `[crews.<name>] env` entries, set by crew

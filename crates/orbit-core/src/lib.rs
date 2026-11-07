@@ -176,9 +176,8 @@ pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord}
 pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
 pub use application::distributed::{DrainEntryRefusal, WorkspacePullRequest};
 pub use application::job::{
-    AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
-    DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
-    PipelineWaitStatus,
+    CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWindowExtensionRequest,
+    DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitStatus,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,

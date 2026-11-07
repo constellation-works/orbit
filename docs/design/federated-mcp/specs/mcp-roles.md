@@ -46,7 +46,7 @@ toolset surface introduced by [ORB-20234].
   `plugins`. The selection name `default` stands for them, so an existing
   `--toolset default` or `machine.mcp.toolsets = ["default"]` keeps its
   meaning. `leases`, `experiments`, `analytics`, `decision-channel`,
-  `agent-invoke`, `notice` [ORB-21211] and `resident` [ORB-21242] stay opt-in.
+  `notice` [ORB-21211] and `resident` [ORB-21242] stay opt-in.
 
 ## Roles
 

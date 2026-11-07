@@ -45,8 +45,9 @@ CLI command only.
 - If a treatment sets a `config` overlay, list every key it sets under
   `experiments.config_keys` (default `[]`). Starting refuses an arm that
   sets any other key. The overlay itself only admits keys Orbit has opted
-  in for experiments; today that is `workflow.explore.max_calls_per_run`,
-  an integer from `1` to `100`, and `visual_review.reviewer`, a boolean.
+  in for experiments; the active key is `visual_review.reviewer`. The legacy
+  `workflow.explore.max_calls_per_run` key is retained for historical records and ignored,
+  with its former integer bounds of `1` to `100`.
 - For a `live` experiment, have the treatment ready at the base revision:
   instruction files must exist there and pass the instruction admission
   rules, skill bundle directories must exist there, added tools must be
@@ -378,7 +379,8 @@ Read the warnings before the verdict:
   that suppresses an arm cannot count an older run's dispatch as its treatment.
   Config-only and empty arms have no delivery check.
   Delivery shows the overlaid step ran and succeeded, not that the agent
-  followed the instruction; read the explorer uptake for that.
+  followed the instruction; inspect recorded tool calls when interpreting
+  historical treatments.
 - **Per-protocol view.** `per_protocol` (CLI: `per-protocol (delivered runs
   only)`; dashboard arm card: `Per-protocol`) is the primary metric with each
   checked treatment arm reduced to its delivered tasks. The other metrics
@@ -421,24 +423,9 @@ Read the warnings before the verdict:
   metrics, and the readout reports a `tool_trace_incomplete` warning. Raising
   `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` avoids truncation for later runs;
   already-recorded invocations are not re-marked.
-- **Explorer uptake.** Each arm reports `tasks_with_explorer_call`: how many
-  of its analysed tasks recorded at least one explorer-delegation call during
-  an implement invocation at or after they were assigned. A task counts once.
-  The stored name matches `orbit.agent.invoke` or `orbit_agent_invoke`,
-  including an MCP name whose last segment is one of those. The count is read
-  from the invocation's recorded tool calls. A task with no recorded call whose
-  implement invocation lost its early tool calls to the output capture bound
-  cannot show that it never delegated, so it is counted in the arm's
-  `tasks_explorer_unobserved` rather than treated as a confirmed zero. The
-  readout reports an `explorer_trace_incomplete` warning for those tasks. A
-  later truncated invocation does not make a complete first invocation's
-  first-edit metrics unmeasured.
-
-The readout is descriptive, not a significance oracle. It reports no
-p-value for the treatment difference itself; the interval excluding zero
-in the better direction is the winner rule. Small samples give wide
-intervals, and a crew overlay changes who does the work as well as how,
-so compare the crew mix before you credit the treatment alone.
+- **Historical explorer uptake.** Explorer delegation has been removed. Concluded
+  experiment readouts retain their `tasks_with_explorer_call`,
+  `tasks_explorer_unobserved` and `explorer_trace_incomplete` fields for audit.
 
 ## Conclude or abandon
 

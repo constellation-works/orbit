@@ -27,8 +27,7 @@
 //! which surfaces *list* a tool. It is an audience decision — what an agent
 //! reading `tools/list` is pointed at — and it authorizes nothing.
 //! The MCP list adapter further filters `tools/list` by the session's fixed grants,
-//! omitting governed tools those grants cannot authorize. `orbit.agent.invoke`
-//! remains discoverable because of its separate managed-run explorer admission.
+//! omitting governed tools those grants cannot authorize.
 //! This only changes advertisement:
 //! the tool registry's `execute` never consults availability, so a tool
 //! registered active but unadvertised is still reachable through

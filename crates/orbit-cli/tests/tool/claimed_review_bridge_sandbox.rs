@@ -734,7 +734,7 @@ fn broker_run(
         tool_deny_policy: Some(ActivityToolDenyPolicy {
             activity: activity.to_string(),
             disallow_list: vec![
-                "orbit.agent.invoke".to_string(),
+                "orbit.command.exec".to_string(),
                 "orbit.task.update".to_string(),
             ],
         }),

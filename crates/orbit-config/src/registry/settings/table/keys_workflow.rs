@@ -43,40 +43,6 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<String>| resolve_distributed_completion(raw),
     },
-    workflow_explore_enabled: bool => bool {
-        key: "workflow.explore.enabled", value_type: "bool",
-        description: "Let implement and review-repair runs delegate read-only exploration to explorer crews.",
-        section: ConfigSection::Delivery, order: 160,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
-    workflow_explore_max_answer_bytes: u32 => u32 {
-        key: "workflow.explore.max_answer_bytes", value_type: "integer",
-        description: "Largest explorer answer, in bytes, returned to the calling agent.",
-        section: ConfigSection::Delivery, order: 165,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 16_384, 167, 262_144, "workflow.explore.max_answer_bytes"),
-    },
-    workflow_explore_max_calls_per_run: u32 => u32 {
-        key: "workflow.explore.max_calls_per_run", value_type: "integer",
-        description: "Explorer invocations one implement or review-repair run may submit.",
-        section: ConfigSection::Delivery, order: 161,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 6, 100, "workflow.explore.max_calls_per_run"),
-    },
-    workflow_explore_max_concurrent_per_run: u32 => u32 {
-        key: "workflow.explore.max_concurrent_per_run", value_type: "integer",
-        description: "Explorer invocations one run may have in flight at once.",
-        section: ConfigSection::Delivery, order: 162,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 2, 16, "workflow.explore.max_concurrent_per_run"),
-    },
-    workflow_explore_timeout_seconds: u32 => u32 {
-        key: "workflow.explore.timeout_seconds", value_type: "integer",
-        description: "Wall-clock bound, in seconds, of one explorer invocation.",
-        section: ConfigSection::Delivery, order: 163,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 600, 3_600, "workflow.explore.timeout_seconds"),
-    },
     workflow_explore_brief_enabled: bool => bool {
         key: "workflow.explore_brief.enabled", value_type: "bool",
         description: "Ask the task pilot for an explore brief, a bounded map of the change stored as a task artifact.",
@@ -378,12 +344,6 @@ macro_rules! with_workflow_keys {
     workflow_purpose_crews_baseline_red_repair: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.baseline_red_repair", value_type: "array<string>",
         description: "Weighted crew pool for tasks the red-base re-check files.",
-        section: ConfigSection::Delivery, order: 106,
-        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
-    },
-    workflow_purpose_crews_explorer: Vec<String> => Vec<String> {
-        key: "workflow.purpose_crews.explorer", value_type: "array<string>",
-        description: "Weighted crew pool for read-only exploration a run delegates.",
         section: ConfigSection::Delivery, order: 106,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },

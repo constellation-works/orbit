@@ -12,7 +12,6 @@ pub(crate) mod delivery;
 pub mod delivery_attention;
 mod drain_port;
 mod exec;
-mod explore_analytics;
 mod final_recovery;
 mod forge_hold_resume;
 mod orphan_adoption;
@@ -56,14 +55,7 @@ pub(crate) fn log_best_effort<T>(
 
 pub(crate) use activity_tool_requirements::{drops_disallowed_requirements, granted_tool_refusal};
 pub(in crate::application) use admission_port::JobAdmissionPort;
-pub use agent::{
-    AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
-    DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
-};
-pub use agent::{
-    AgentInvocation, BoundedExploreAnswer, EXPLORE_JOB_ID, ExploreInvocationSummary,
-    ExploreSubmission,
-};
+pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
 pub(in crate::application) use automation_port::JobAutomationPort;
 pub use catalog::CatalogReferenceLayer;
@@ -72,9 +64,6 @@ pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_la
 pub use crew_pools::{TaskCrewBackfill, TaskCrewChange};
 pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
-pub use explore_analytics::{
-    EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,
-};
 pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pilot_submit::{TaskPilotRefusal, TaskPilotSubmitError};
 pub use pipeline::{

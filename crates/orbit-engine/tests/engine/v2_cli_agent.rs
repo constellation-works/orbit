@@ -52,7 +52,6 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 #[cfg(unix)]
 mod build_budget;
 #[cfg(unix)]
-mod explore;
 #[cfg(unix)]
 mod explore_brief;
 #[cfg(unix)]
@@ -1441,7 +1440,7 @@ fn workspace_catalog_refuses_crafted_tool_policy_violations() {
         Case {
             name: "agent_invoke",
             policy: "  trustedHostExecution: true\n  tools:\n    - orbit.task.show\n",
-            expected: None,
+            expected: Some("trusted_host_activity"),
         },
     ];
 
@@ -1607,7 +1606,6 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         instruction: "cli smoke".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
-        explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
@@ -1727,7 +1725,6 @@ fn synthetic_loop_session_job() -> JobV2 {
                 instruction: String::new(),
                 steering_instruction: None,
                 regression_risk_instruction: None,
-                explore_instruction: None,
                 explore_brief_instruction: None,
                 notice_instruction: None,
                 notice_posting_instruction: None,

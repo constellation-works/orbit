@@ -155,18 +155,6 @@ credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was reje
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
 
-**Explorer submissions.** A managed implement or review-repair agent's `orbit.agent.invoke`
-is the second exception ([ORB-20566]). Submitted inside the agent's sandbox, the explorer's
-detached worker would inherit that sandbox, and its own Bubblewrap or Seatbelt boundary would
-nest inside it: Ubuntu's AppArmor userns restriction confines every process under `bwrap` to
-`unpriv_bwrap`, which refuses a new namespace, and Seatbelt refuses a second profile. With
-`ORBIT_PLUGIN_BROKER` set and the managed-run envelope present, the nested `orbit` forwards the
-submission, and the broker runs explorer admission on the host for the run it serves (its job
-run and activity), never a run the request or the agent's environment names. The explorer's
-worker then starts beside the caller's sandbox and creates its own. Only the submission is
-brokered: the broker refuses `wait_seconds`, and the nested `orbit` waits for the answer itself
-by reading the run record, so a long wait holds no broker connection.
-
 **A resident cycle's ship.** A resident cycle's `orbit.workflow.ship` is brokered for a similar
 reason: started inside the cycle's read-only sandbox, the leaf's worker could neither write its
 worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the managed-run envelope
@@ -351,7 +339,7 @@ existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
 registration is a plugin backend, plus the five host-credentialed reads, the claimed
-worker's owner calls above, a host-submitted explorer (`orbit.agent.invoke`) and the guarded
+worker's owner calls above and the guarded
 resident actions (`orbit.workflow.ship`, `orbit.decision.raise`, `orbit.workflow.land` and
 the move to `done` via `orbit.task.update`) below. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
@@ -496,14 +484,9 @@ service side regardless.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
   nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
-  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS`, a host-submitted explorer
-  submission and a resident cycle's guarded ship, decision raise, landing and move to `done`
+  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS` and a resident cycle's guarded ship, decision raise, landing and move to `done`
   (§3). Claimed-owner calls also pass
-  the claim-specific scope checks described above; explorer submissions pass the activity
-  policy, agent-facing and deny-policy checks for the run the broker serves, and resident
-  actions run only when the served job run is a cycle, through the tool host's cycle guard.
-  The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
-  brokered call, where an in-process call with no activity would be unrestricted.
+  the claim-specific scope checks described above.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
   bound to the run's task and job run. An exec backend is confined by the §5 intersection.

@@ -100,7 +100,6 @@ Two separate execution channels spawn agents, and they do not share a run store:
 
 | Channel | Spawned by | Observable through |
 | --- | --- | --- |
-| `agent_invoke` | the Worker daemon | bridge `agent_run_list` / `agent_run_status` |
 | ship pipeline (`workflow_ship`) `agent_implement` | the pipeline worker process | this runbook's surfaces below |
 
 **Bridge `agent_run_list` does not cover the ship pipeline.** A `workflow_ship` implementation
@@ -499,74 +498,13 @@ The dashboard's queued-window **Cancel** is queued-only (`POST /api/runs/<id>/ca
 
 Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
 
-## Operator agent invocations
+## Historical agent invocations
 
-A run of `agent_invoke_pipeline` is one operator invocation of an agent for exploration
-or debugging (the deprecated `orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It is a
-single-step run that creates no worktree, has no task ownership or delivery tail, so most of
-this runbook's task-recovery steps do not apply to one.
-
-`--cwd` may name the registered primary checkout, a directory inside it, or an
-existing linked worktree root beneath the workspace's `.orbit/state/worktrees/`.
-For a linked root, governed submission derives the assigned checkout identity
-from its Git common directory and carries matching internal `workspace_path`
-and `repo_root` fields to the activity. The admission and audit name that linked
-checkout; the provider starts there. The primary remains the registered owner,
-not the assigned `repo_root`. Unrelated repositories and mismatched pairs fail
-before provider startup. Primary interior directories retain their requested
-cwd without declaring a linked-worktree pair.
-
-Four differences matter when triaging one:
-
-- **It is unsandboxed by design.** The provider subprocess runs on the host as the same
-  operating-system user as Orbit, admitted per invocation by an operator. A sandbox
-  denial is never the explanation for one failing, and the admission is recorded as a
-  `trusted_host.execution_admitted` audit event naming the authorizing operator, the
-  workspace, and the working directory. Remote admissions also retain the
-  destination-resolved caller machine ID, invocation mode, and actual identity proof:
-  strict grants are `key-bound`; explicitly cooperative same-OS-account SSH grants are
-  `cooperative` and `self-asserted`.
-- **Cancel it the ordinary way.** `orbit run cancel <run_id> --confirm` signals the owner process
-  (TERM then KILL) and terminates the process tree, exactly as for any other run.
-- **It cannot be resumed.** `orbit job resume` and `submit_resume_run` refuse a run that
-  carries an admission, because that admission covered one invocation and a resume would
-  reuse it without a new authorization. Submit a fresh invocation instead. `orbit job
-  replay` is likewise not a workaround: the replayed input carries no admission, so the
-  activity fails closed.
-- **A retry key resolves the original run.** Reusing `--idempotency-key` returns that
-  run's persisted admission, timeout, provider sandbox, and sandbox warning, even if
-  the retry names different settings or the workspace default has changed. Use a new
-  key to request a new invocation.
-
-Read the outcome with `orbit run show <run_id>` — its `Invocation:` line distinguishes a
-completed answer from a mid-turn stop, a timeout, and a cancellation — and
-`orbit run logs <run_id>` for the full captured output.
-
-Submission warnings in `orbit run agent` are scrubbed with the shared secret
-redactor before appearing in wait progress, human output, or the JSON `warnings`
-array. Queue and provider sandbox warnings remain visible with sensitive values
-replaced by redaction markers.
-
-## Read-only explorer runs
-
-A run of `agent_explore_pipeline` is a read-only explorer that an implement or review-repair
-agent delegated through `orbit.agent.invoke` (see
-[CONFIG.md](../CONFIG.md#workflowexplore--read-only-exploration-for-implementing-agents)).
-It is a single-step run in its caller's worktree with no task ownership; its input names
-the caller as `parent_run_id`. A stuck explorer only holds one of its caller's
-`workflow.explore.max_concurrent_per_run` slots: cancel it with `orbit run cancel <RUN_ID>`,
-and the calling agent continues without the answer. Never resume or resubmit one by hand.
-
-An explorer that fails at once with `bwrap: No permissions to create a new namespace`,
-`workspace_read_unavailable`, or `refusing explorer provider ... no enforced read-only sandbox`
-was started inside its caller's sandbox, where no nested sandbox can start. A sandboxed
-caller's submission goes through its run's plugin broker, which starts the explorer beside the
-sandbox instead; check that the calling run's provider had `ORBIT_PLUGIN_BROKER` set (the worker
-log warns `plugin broker unavailable` when it did not) and that every host runs a build that
-brokers `orbit.agent.invoke`. A submission refused with `no explorer crew can run under an
-enforced read-only sandbox on this host` creates no run: give an explorer crew's executor a
-sandbox the host supports, or add a crew whose provider has a read-only mode, to
-`workflow.purpose_crews.explorer`.
+The operator invocation and explorer routes have been removed. Stored
+`agent_invoke_pipeline` and `agent_explore_pipeline` runs still read through
+`orbit run show <RUN_ID>` and `orbit run logs <RUN_ID>`. A legacy trusted-host
+admission cannot authorize a new process or resume. Use a task workflow for
+new work.
 
 ## Resume from checkpoints
 

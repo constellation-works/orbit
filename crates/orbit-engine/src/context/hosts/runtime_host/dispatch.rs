@@ -243,12 +243,6 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError>;
 
-        /// Whether this host offers read-only exploration delegation: the
-        /// workspace enables `workflow.explore` and an explorer crew can run on
-        /// this host [ORB-16814]. When false, an activity's
-        /// `explore_instruction` is never appended.
-        fn explore_delegation_available(&self) -> bool;
-
         /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.
         /// When false (the default), an activity's `steering_instruction` is
         /// never appended, so rendered prompts stay byte-identical.

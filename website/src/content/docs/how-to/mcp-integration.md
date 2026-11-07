@@ -129,7 +129,6 @@ toolsets it enables. `orbit tool list` shows each tool's toolset.
 | `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
-| `agent-invoke` | `orbit.agent.invoke`. A managed implement or review-repair run that is offered explorer delegation enables it on its own server; the operator invocation is deprecated. |
 | `notice` | `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and `orbit.notice.show`: fleet notices, short expiring announcements every agent and operator in their scope should see |
 | `resident` | `orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`: resident orchestrator mandates, their authority, the live cycle's checkpoint record, widening measures and the evolution capability-gap ledger. Widening a mandate's authority from an MCP session raises a decision request for the human instead of applying; `orbit evolution decline` is operator-only and CLI-only, so it is not listed over MCP |
 | `local` | Tools no MCP server lists (`proc.spawn`, `github.*`, the drain tools); `orbit tool run` and activities reach them |
@@ -216,7 +215,7 @@ Use the existing guides for the other public families:
 | Tools | Guide |
 |---|---|
 | `orbit.task.*`, `orbit.search`, `orbit.friction.*` | [Tasks and lifecycle](../../concepts/tasks/) and [your first task](../../getting-started/first-task/). |
-| `orbit.agent.invoke`, `orbit.agents.*` | [Agents and crews](../../concepts/agents/). |
+| `orbit.agents.*` | [Agents and crews](../../concepts/agents/). |
 | `orbit.workflow.ship`, `orbit.workflow.land`, `orbit.workflow.auto`, `orbit.workflow.run.*` | [Delivery workflows](../../getting-started/workflows/) and [delivery windows](../continuous-delivery/). |
 | `orbit.pipeline.invoke` | [Activities and jobs](../../concepts/activities-jobs/), [write an activity](../write-activity/), and [Activity and Job YAML](../../reference/activity-job-yaml/). |
 | `orbit.routine.control`, `orbit.auto_task.*` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |

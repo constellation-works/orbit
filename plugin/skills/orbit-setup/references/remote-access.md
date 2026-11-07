@@ -153,36 +153,6 @@ A destination upgraded from the older model may still carry
 startup names them once in a warning, `orbit doctor` reports them, and deleting
 them is the whole migration. `orbit mcp callers` no longer exists.
 
-### Remote host-agent invocation
-
-Deprecated: the operator invocation will be removed and is listed only by a
-server started with `--toolset agent-invoke`. Prefer tasks and `orbit run ship`. Until removal, a
-direct call still behaves as below.
-
-Remote `orbit_agent_invoke` is admitted when the session holds `operator` — the
-same test as a local invocation, because the caller reached this machine through
-an SSH login that already lets it start any process it likes. Start the calling
-federated or remote-proxy server with `--operator` and the invocation works; an
-agent-served session is refused.
-
-The durable admission and the `trusted_host.execution_admitted` event record
-`caller_machine_id` for attribution. There is no identity proof or trust mode to
-check any more: there is only one.
-
-After changing the calling side's authority, close and recreate the MCP
-connection — a live session keeps the authority it was established with.
-
-A minimal smoke is one short, read-only invocation with an explicit destination
-workspace selector, checkout `cwd`, bounded timeout, and the configured crew.
-Ask it to report one harmless fact and explicitly not to modify files or start
-other work, then verify the run reaches a terminal state.
-
-Admission is accident resistance, not process isolation. The invoked provider
-runs outside Orbit's filesystem sandbox as the same operating-system user as the
-destination Orbit process and can access everything that user can. Keep the
-prompt read-only when that is the intent; a tool declaration does not confine
-the provider's own shell.
-
 ## Dashboard
 
 ```bash

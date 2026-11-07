@@ -170,10 +170,6 @@ const RUN_WORKFLOWS: &[GroupedRow] = &[
         "Preflight proposed/backlog tasks and persist validated selectors",
     ),
     ("job", "Run an arbitrary job by ID"),
-    (
-        "agent",
-        "Invoke an agent on the host for exploration or debugging (deprecated)",
-    ),
 ];
 
 const RUN_AUDITS: &[GroupedRow] = &[

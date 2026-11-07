@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use super::activity_job::{Provider, RETIRED_BACKEND_MIGRATION, provider_sandbox_modes};
+use super::activity_job::RETIRED_BACKEND_MIGRATION;
 use super::final_recovery::MAX_DECISION_TEXT_CHARS;
 use super::review::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
@@ -34,22 +34,6 @@ pub enum JobRunStateError {
          cancelled, interrupted, or held)"
     )]
     StepState { state: JobRunState },
-}
-
-/// A `provider_sandbox` override the provider does not offer.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum ProviderSandboxError {
-    #[error(
-        "`provider_sandbox` is empty; expected one of {}",
-        provider_sandbox_modes(*.provider).join(", ")
-    )]
-    Empty { provider: Provider },
-    #[error(
-        "`provider_sandbox` `{mode}` is not supported for {}; expected one of {}",
-        .provider.as_str(),
-        provider_sandbox_modes(*.provider).join(", ")
-    )]
-    Unsupported { provider: Provider, mode: String },
 }
 
 /// A value of the retired `backend` key other than the inert `cli`.

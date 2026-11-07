@@ -246,12 +246,6 @@ impl RuntimeKernel {
         self.context.settings().regression_risk()
     }
 
-    /// `[workflow.explore]` as admitted: whether implement and review-repair
-    /// runs may delegate read-only exploration, and its per-run budgets.
-    pub fn explore_settings(&self) -> orbit_config::ExploreSettings {
-        self.context.settings().explore()
-    }
-
     /// `[workflow.explore_brief]` as admitted: whether the task pilot is
     /// asked for explore briefs, for which tasks, and whether they reach the
     /// implementer.

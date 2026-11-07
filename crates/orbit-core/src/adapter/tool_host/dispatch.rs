@@ -122,9 +122,6 @@ fn execute_admitted(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AgentInvoke => {
-            super::agent_tools::invoke(runtime, session_context, input, agent, model)
-        }
         OrbitBuiltinAction::AutoTask(verb) => {
             super::auto_task_tools::dispatch(runtime, verb, input)
         }

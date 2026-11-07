@@ -1,10 +1,8 @@
 // Analytics › Cost: managed-execution cost and token usage.
 // The family leaderboard, narrative, agent cards and insights panel are gone.
-// The page reads GET /api/cost: { window, orchestration, explore_comparison }.
-// A header band (title, window, scope, range) sits above two tabs: Spend &
-// tokens renders into #scoreboard-orchestration, Read-only exploration into
-// #scoreboard-exploration. router.js owns which tab is shown; both bodies
-// render on every response so a tab switch never refetches.
+// The page reads managed execution spend from GET /api/cost.
+// A header band (title, window, scope, range) sits above the Spend & tokens
+// view, which renders into #scoreboard-orchestration.
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
@@ -19,8 +17,8 @@ function wireScoreboardWindowSelector() {
 
 const $ = (id) => document.getElementById(id);
 
-const COST_CHROME = ["scoreboard-orchestration", "scoreboard-exploration"];
-const COST_COUNTS = ["scoreboard-orchestration-count", "scoreboard-explore-count"];
+const COST_CHROME = ["scoreboard-orchestration"];
+const COST_COUNTS = ["scoreboard-orchestration-count"];
 
 function setWindowRange(text, title = "") {
   const node = $("scoreboard-window-range");
@@ -88,9 +86,6 @@ export function fetchAndRenderScoreboard() {
   };
   return Promise.all([
     requestPanel("scoreboard-orchestration", path, request, render, "scoreboard-orchestration-count"),
-    // renderScoreboard already paints both hosts, so this render is a no-op;
-    // this entry exists only to carry the status note in the exploration body.
-    requestPanel("scoreboard-exploration", path, request, () => {}, "scoreboard-explore-count"),
   ]);
 }
 
@@ -311,75 +306,6 @@ function renderOrchestrationSummary(orchestration) {
   return children;
 }
 
-function finiteOrNull(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function formatDurationMs(value) {
-  const ms = finiteOrNull(value);
-  if (ms === null) return "—";
-  const minutes = ms / 60000;
-  return minutes >= 1 ? `${minutes.toFixed(1)} min` : `${Math.round(ms / 1000)} s`;
-}
-
-function exploreCohortCells(cohort) {
-  const runs = asScoreboardNumber(cohort?.runs);
-  if (runs === 0) return [el("td", { text: "0" }), el("td", { text: "—" }), el("td", { text: "—" }), el("td", { text: "—" })];
-  const priced = asScoreboardNumber(cohort.priced_runs);
-  const known = asScoreboardNumber(cohort.footprint_known_runs);
-  const rate = finiteOrNull(cohort.footprint_miss_rate);
-  return [
-    el("td", { text: fmtScoreboardCount(runs) }),
-    el("td", { text: formatDurationMs(cohort.mean_duration_ms) }),
-    el("td", { text: cohort.mean_cost_usd == null ? "—" : `${formatUsd(cohort.mean_cost_usd)} (n=${priced})` }),
-    el("td", { text: rate === null ? "—" : `${Math.round(rate * 100)}% (${fmtScoreboardCount(cohort.footprint_miss_runs)}/${known})` }),
-  ];
-}
-
-// Implement runs with and without read-only explorer calls, per implementing
-// crew. Each cohort shows its sample count so a thin cohort reads as such.
-function renderExploreComparison(comparison) {
-  const crews = Array.isArray(comparison?.crews) ? comparison.crews : [];
-  const description = el("p", { class: "scoreboard-explore-description", text: "Implement runs that delegated explorer calls against those that did not, per implementing crew. Cost is the implementing crew's own; explorer spend is shown separately." });
-  if (crews.length === 0) {
-    return [
-      description,
-      el("div", { class: "empty-state" }, [el("div", { class: "text", text: "No implement runs in this window." })]),
-    ];
-  }
-  const head = el("tr", {}, [
-    el("th", { text: "crew" }),
-    el("th", { text: "cohort" }),
-    el("th", { text: "runs" }),
-    el("th", { text: "mean duration" }),
-    el("th", { text: "mean cost" }),
-    el("th", { text: "footprint misses" }),
-    el("th", { text: "explorer calls · cost" }),
-  ]);
-  const rows = [];
-  for (const row of crews) {
-    for (const [label, cohort] of [["with explore", row.with_explore], ["without", row.without_explore]]) {
-      const calls = asScoreboardNumber(cohort?.explore_calls);
-      rows.push(el("tr", {}, [
-        el("td", { class: "crew", text: label === "with explore" ? row.crew : "" }),
-        el("td", { text: label }),
-        ...exploreCohortCells(cohort),
-        el("td", { text: calls === 0 ? "—" : `${fmtScoreboardCount(calls)} · ${formatUsd(cohort.explore_cost_usd)}` }),
-      ]));
-    }
-  }
-  const children = [
-    description,
-    el("div", { class: "scoreboard-table-wrap scoreboard-explore-table" }, [
-      el("table", { class: "scoreboard-table" }, [el("thead", {}, [head]), el("tbody", {}, rows)]),
-    ]),
-  ];
-  if (comparison.truncated) {
-    children.push(el("p", { class: "scoreboard-explore-footnote", text: `Reads the newest ${fmtScoreboardCount(comparison.runs_scanned)} implement runs; older runs in this window are not counted.` }));
-  }
-  return children;
-}
-
 function renderScoreboard(summary) {
   // Idempotent attach of the window-selector click handler (guarded
   // internally so re-renders don't double-bind).
@@ -398,21 +324,12 @@ function renderScoreboard(summary) {
   paintWindowRange(summary?.orchestration);
   const orchestrationHost = $("scoreboard-orchestration");
   if (orchestrationHost) syncNodes(orchestrationHost, renderOrchestrationSummary(summary?.orchestration));
-  const explorationHost = $("scoreboard-exploration");
-  if (explorationHost) syncNodes(explorationHost, renderExploreComparison(summary?.explore_comparison));
   const orchestrationCount = $("scoreboard-orchestration-count");
   if (orchestrationCount) {
     const count = Array.isArray(summary?.orchestration?.buckets)
       ? summary.orchestration.buckets.length
       : 0;
     orchestrationCount.textContent = count === 0 ? "—" : pluralize(count, "bucket");
-  }
-  const exploreCount = $("scoreboard-explore-count");
-  if (exploreCount) {
-    const count = Array.isArray(summary?.explore_comparison?.crews)
-      ? summary.explore_comparison.crews.length
-      : 0;
-    exploreCount.textContent = count === 0 ? "—" : pluralize(count, "crew");
   }
 }
 

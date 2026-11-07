@@ -149,14 +149,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/attach_script_files.yaml"),
     ),
     (
-        "agent_invoke",
-        include_str!("../../orbit-core/assets/activities/agent_invoke.yaml"),
-    ),
-    (
-        "agent_explore",
-        include_str!("../../orbit-core/assets/activities/agent_explore.yaml"),
-    ),
-    (
         "image_input_probe",
         include_str!("../../orbit-core/assets/activities/image_input_probe.yaml"),
     ),
@@ -423,14 +415,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
 /// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
 /// only.
 pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
-    (
-        "agent_explore_pipeline",
-        include_str!("../../orbit-core/assets/jobs/agent_explore_pipeline.yaml"),
-    ),
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../orbit-core/assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
     (
         "image_input_probe_pipeline",
         include_str!("../../orbit-core/assets/jobs/image_input_probe_pipeline.yaml"),

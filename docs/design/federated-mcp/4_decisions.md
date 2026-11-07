@@ -208,7 +208,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 
 ### Consequences
 
-- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.agent.invoke`, `orbit.workflow.ship`, and `orbit.command.exec`.
+- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.workflow.ship` and `orbit.command.exec`.
 - `crates/orbit-mcp/src/remote/callers.rs` and `ssh_auth.rs` are gone, with `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, `~/.orbit/mcp-ssh-acceptance/`, the setgid login-shell launcher, `CallerIdentityProof`, `RemoteAgentInvokeMode`, `RemoteCallerGrant`, and `CallerProvenance::RemoteGrant`. Roughly 2,500 lines of authorization machinery leave with them.
 - Trusted-host admission is `operator`, full stop. The durable admission keeps `caller_machine_id` for attribution and no longer records an identity proof or a trust mode, because there is only one.
 - Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.

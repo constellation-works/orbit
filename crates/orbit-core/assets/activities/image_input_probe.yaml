@@ -56,7 +56,6 @@ spec:
     Return exactly one Orbit response envelope:
     {"schemaVersion":1,"status":"success","result":{"canary":"<the code>"},"error":null}
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

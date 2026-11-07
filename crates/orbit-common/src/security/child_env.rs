@@ -72,9 +72,8 @@ pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
 pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
 /// Opt-in MCP toolsets the activity's nested `orbit mcp serve` advertises
 /// beside its own selection, comma-separated as `--toolset` takes them. The
-/// dispatch stamps `agent-invoke` for a run it offers explorer delegation. A
-/// toolset changes advertisement only and grants nothing: every call keeps
-/// its own admission.
+/// dispatch stamps toolsets for the activity's resolved tools. A toolset
+/// changes advertisement only and grants nothing: every call keeps its admission.
 pub const ACTIVITY_MCP_TOOLSETS_ENV: &str = "ORBIT_ACTIVITY_MCP_TOOLSETS";
 
 /// Where a sandboxed agent's run plugin broker listens. A nested

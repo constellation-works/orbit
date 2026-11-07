@@ -38,9 +38,6 @@ pub enum CrewPurpose {
     /// Tasks the CI failure, Dependabot and code-scanning sweeps file, and
     /// merged-head repairs a review reconciliation files.
     SweepTasks,
-    /// Read-only exploration an implement or review-repair run delegates
-    /// through `orbit.agent.invoke`.
-    Explorer,
     /// The mock comparison reviewer and its in-line verifier. Only crews
     /// whose executor declares `image_input` are drawn.
     VisualReview,
@@ -56,7 +53,7 @@ const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 9] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
@@ -64,7 +61,6 @@ impl CrewPurpose {
         Self::Review,
         Self::BaselineRedRepair,
         Self::SweepTasks,
-        Self::Explorer,
         Self::VisualReview,
         Self::PilotWarningTriage,
     ];
@@ -80,7 +76,6 @@ impl CrewPurpose {
             Self::Review => "review",
             Self::BaselineRedRepair => "baseline_red_repair",
             Self::SweepTasks => "sweep_tasks",
-            Self::Explorer => "explorer",
             Self::VisualReview => "visual_review",
             Self::PilotWarningTriage => "pilot_warning_triage",
         }
@@ -107,7 +102,6 @@ impl CrewPurpose {
             Self::Review => "workflow.purpose_crews.review",
             Self::BaselineRedRepair => "workflow.purpose_crews.baseline_red_repair",
             Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
-            Self::Explorer => "workflow.purpose_crews.explorer",
             Self::VisualReview => "workflow.purpose_crews.visual_review",
             Self::PilotWarningTriage => "workflow.purpose_crews.pilot_warning_triage",
         }
@@ -134,9 +128,7 @@ impl CrewPurpose {
         match self {
             Self::TaskPilot | Self::AutoFix => Some("workflow.low_complexity_crews"),
             Self::FailureRecovery => Some("workflow.medium_complexity_crews"),
-            // An explorer is a cheap crew by intent; with no pool there is no
-            // explorer, and agent callers are refused.
-            Self::FinalRecovery | Self::Review | Self::Explorer => None,
+            Self::FinalRecovery | Self::Review => None,
             Self::BaselineRedRepair | Self::SweepTasks | Self::VisualReview => {
                 Some("the task's complexity pool, then workflow.default_crew")
             }

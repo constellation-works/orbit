@@ -516,7 +516,7 @@ fn grouped_command_help_stays_aligned_without_stacked_rows() {
     fs::create_dir_all(&work).expect("fixture work");
 
     let run_sections: &[(&str, &[&str])] = &[
-        ("Workflows", &["auto", "ship", "task-pilot", "job", "agent"]),
+        ("Workflows", &["auto", "ship", "task-pilot", "job"]),
         (
             "Audits",
             &[

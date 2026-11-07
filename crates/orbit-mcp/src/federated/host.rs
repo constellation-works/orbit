@@ -658,7 +658,6 @@ fn session_cannot_authorize_governed_tool(
         .iter()
         .find(|operation| {
             operation.surface == OperationSurface::Tool
-                && operation.id != "orbit.agent.invoke"
                 && mcp_advertised_tool_name(operation.id) == advertised_name
         })
         .is_some_and(|operation| authorization::authorize(operation, &caller).is_err())

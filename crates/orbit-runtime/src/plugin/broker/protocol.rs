@@ -24,8 +24,8 @@ pub(crate) const REQUEST_TOO_LARGE: &str = "plugin_broker_request_too_large";
 /// The request body is not a version-1 request object.
 pub(crate) const INVALID_REQUEST: &str = "plugin_broker_invalid_request";
 /// The run does not authorize this call. The broker admits a plugin tool, one
-/// of the read-only `github.*` built-ins, a claimed worker's owner call, an
-/// explorer submission, or a resident cycle's ship, raise, land or move to
+/// of the read-only `github.*` built-ins, a claimed worker's owner call, or
+/// a resident cycle's ship, raise, land or move to
 /// `done`. Any other tool, a call its activity policy, tool-deny policy or the
 /// plugin's grants refuse, and a request naming a cwd or workspace outside the
 /// run all answer with this code.
