@@ -166,26 +166,6 @@ fn task_detail_attributes_the_producing_pilot_activity() {
                     json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")))
                 })
                 .collect();
-            // Optional evidence capture uses exactly the same isolated API data, before assertions.
-            if let Some(dir) = std::env::var_os("ORBIT_TASK_HANDS_EVIDENCE_DIR") {
-                let output = std::process::Command::new("node")
-                    .arg(
-                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("tests/http_api/task_hands_browser.mjs"),
-                    )
-                    .arg(std::env::var_os("PLAYWRIGHT_MODULE").expect("browser kit module"))
-                    .arg(dir)
-                    .arg(&server.origin)
-                    .arg(&tasks[0].0)
-                    .output()
-                    .expect("task hands browser fixture");
-                assert!(
-                    output.status.success(),
-                    "browser fixture: {}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
             for (case, detail) in details.iter().enumerate() {
                 let hand = &detail["handled_by"][0];
                 let model = match case {

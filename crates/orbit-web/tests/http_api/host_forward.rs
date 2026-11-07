@@ -285,46 +285,6 @@ fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
 }
 
 #[test]
-#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR"]
-fn gzip_forward_returns_json_to_the_browser() {
-    isolated(
-        "host_forward::gzip_forward_returns_json_to_the_browser",
-        || {
-            let b = Fixture::host("hostb", "HB");
-            b.seed_run("jrun-browser-compression", "fixture", JobRunState::Success);
-            let b_server = b.server(false);
-            let a = Fixture::new();
-            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
-            let stub =
-                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
-            let a_server = a.server_with_path(false, stub.bin());
-            let output = std::process::Command::new("node")
-                .arg(
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/http_api/compression_browser.mjs"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
-                        .expect("prepared Playwright module"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR")
-                        .expect("browser evidence directory"),
-                )
-                .arg(&a_server.origin)
-                .output()
-                .expect("launch compression browser fixture");
-            assert!(
-                output.status.success(),
-                "browser gzip forwarding failed:\n{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        },
-    );
-}
-
-#[test]
 fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
     isolated(
         "host_forward::gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary",

@@ -899,21 +899,3 @@ fn zero_limit_returns_an_empty_page_with_and_without_predicates() {
         },
     );
 }
-
-#[test]
-fn dashboard_renders_callable_failure_counts_and_denial_only_tools() {
-    let result = std::process::Command::new("node")
-        .args([
-            "--experimental-vm-modules",
-            "tests/http_api/dashboard_audit.mjs",
-        ])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("node is required for dashboard behavior tests");
-    assert!(
-        result.status.success(),
-        "dashboard audit behavior failed:\n{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-}

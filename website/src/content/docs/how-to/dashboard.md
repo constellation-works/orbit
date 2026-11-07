@@ -186,8 +186,9 @@ delivery window is active, **Refresh**, and one warning chip only when a reading
 is elevated or worse. Hover, focus or click a provider chip to open a dialog with
 each of its windows, when they reset, the gate that holds crews back and what the
 pressure means; click or **Pin open** keeps it open, and Esc or a click outside
-closes it. `+N more` (and, on narrow screens, the single summary chip) lists
-every provider. Counts in
+closes it. `+N more` (and, on narrower screens, the single summary chip) lists
+every provider. At 760px wide or less, the top bar leaves out the provider chips
+and the fleet drain pill. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
 under **Runs**, and doctor errors, warnings, and failing routines under
 **Health**. Click a rail count to open the view behind it. The rail has no

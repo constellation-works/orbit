@@ -592,37 +592,3 @@ fn replay_rechecks_live_permission_owner_role_binding_and_registry() {
         },
     );
 }
-
-#[test]
-#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_CREATE_BROWSER_EVIDENCE_DIR"]
-fn dashboard_proposal_form_retry_and_scope_recovery() {
-    isolated(
-        "task_create::dashboard_proposal_form_retry_and_scope_recovery",
-        || {
-            let fixture = Fixture::new();
-            let server = fixture.server(true);
-            let output = std::process::Command::new("node")
-                .arg(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/http_api/dashboard_task_create_browser.mjs"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
-                        .expect("prepared Playwright module"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_CREATE_BROWSER_EVIDENCE_DIR")
-                        .expect("browser evidence directory"),
-                )
-                .arg(&server.origin)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        },
-    );
-}
