@@ -451,7 +451,13 @@ fn validate_completion(
     let completed_at = trusted.completed_at;
     let (candidate, evidence, artifacts) = admitted_evidence(runtime, contract, &trusted)?;
     let (verdict, adapter_digest) = run_adapter(
-        runtime, step, checked, contract, &trusted, &candidate, &artifacts, task,
+        runtime,
+        step,
+        checked,
+        contract,
+        &trusted,
+        (&candidate, &artifacts),
+        task,
     )?;
     if verdict.status != AutoTaskResultStatus::Passed {
         let reasons = verdict
@@ -847,17 +853,16 @@ fn surveyed_task_ids(subject: &str) -> Vec<String> {
     ids
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_adapter(
     runtime: &OrbitRuntime,
     step: &StepContext,
     checked: &CheckedAutoTaskStep,
     contract: &AutoTaskCompletionContract,
     trusted: &TrustedIdentity,
-    candidate: &AutoTaskEvidenceCandidate,
-    artifacts: &Map<String, Value>,
+    evidence: (&AutoTaskEvidenceCandidate, &Map<String, Value>),
     task: &Task,
 ) -> Result<(AutoTaskAdapterVerdict, String), String> {
+    let (candidate, artifacts) = evidence;
     let unavailable = |why: String| {
         format!(
             "`{}` evidence is unavailable: adapter `{}` {why}",

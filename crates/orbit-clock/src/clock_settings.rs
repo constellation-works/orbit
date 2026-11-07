@@ -18,6 +18,7 @@ const CLOCK_SETTINGS_FILE: &str = "clock.toml";
 pub const LAUNCHD_LABEL: &str = "com.orbit.sweep";
 /// systemd unit base name (Linux).
 pub const SYSTEMD_UNIT: &str = "orbit-sweep";
+/// Default interval between sweep ticks, in seconds.
 pub const DEFAULT_CLOCK_CADENCE_SECONDS: u64 = 60;
 const MIN_CLOCK_CADENCE_SECONDS: u64 = 60;
 const MAX_CLOCK_CADENCE_SECONDS: u64 = 3_600;
@@ -27,6 +28,7 @@ const MAX_CLOCK_CADENCE_SECONDS: u64 = 3_600;
 /// shares one clock.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ClockSettings {
+    /// Interval between sweep ticks, in whole minutes expressed as seconds.
     pub cadence_seconds: u64,
 }
 
@@ -39,6 +41,7 @@ impl Default for ClockSettings {
 }
 
 impl ClockSettings {
+    /// Require a whole-minute cadence between 60 and 3,600 seconds inclusive.
     pub fn validate(self) -> Result<Self, OrbitError> {
         if !(MIN_CLOCK_CADENCE_SECONDS..=MAX_CLOCK_CADENCE_SECONDS).contains(&self.cadence_seconds)
             || !self.cadence_seconds.is_multiple_of(60)
@@ -52,6 +55,8 @@ impl ClockSettings {
     }
 }
 
+/// Read and validate `clock.toml` beneath the existing global root, using
+/// defaults when the file is absent. Reject settings that resolve outside it.
 pub fn load_clock_settings(global_root: &Path) -> Result<ClockSettings, OrbitError> {
     let path = validated_clock_settings_path(global_root)?;
     let raw = match fs::read_to_string(&path) {
@@ -73,6 +78,8 @@ pub fn load_clock_settings(global_root: &Path) -> Result<ClockSettings, OrbitErr
         .validate()
 }
 
+/// Validate and atomically write `clock.toml` beneath the existing global root.
+/// Reject settings paths that resolve outside it.
 pub fn save_clock_settings(global_root: &Path, settings: ClockSettings) -> Result<(), OrbitError> {
     let settings = settings.validate()?;
     let rendered = toml::to_string(&settings).map_err(|error| {

@@ -1148,7 +1148,6 @@ main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; wid
 .task-create :disabled { opacity: 0.7; }
 .task-create .action { min-height: 36px; }
 /* The head's primary action: New task, in the accent. */
-/* FIXME: */
 #task-create-open {
   display: inline-flex;
   align-items: center;
