@@ -392,6 +392,30 @@ class RelativeImportTests(unittest.TestCase):
             "contracts/clock_settings/nested.rs":
                 "use super::super::{ScheduleDisplayState};\n",
         }, rejected=False)
+        # [ORB-22674] A chain that climbs one step past application, to the crate
+        # root, and then descends `application::<higher>` names the same module
+        # as a chain that lands on application, so it is refused at each depth.
+        for relative, source in (
+            ("contracts/mod.rs", "use super::super::application::routines::Probe;\n"),
+            ("contracts/mod.rs", "use super::super::{application::routines::Probe};\n"),
+            ("contracts/mod.rs", "use super::super::{\n    application::routines::Probe,\n};\n"),
+            ("contracts/clock_settings.rs",
+             "use super::super::super::application::routines::Probe;\n"),
+            ("contracts/clock_settings.rs",
+             "use super::super::super::{application::auto_tasks::Probe};\n"),
+            ("contracts/clock_settings.rs",
+             "use super::super::super::{\n    application::routines::Probe,\n};\n"),
+            ("contracts/clock_settings.rs",
+             "fn probe() { super::super::super::application::routines::clock::load(); }\n"),
+            ("contracts/clock_settings/nested.rs",
+             "use super::super::super::super::application::routines::Probe;\n"),
+            ("contracts/clock_settings/nested.rs",
+             "use super::super::super::super::{application::routines::Probe};\n"),
+            ("contracts/clock_settings/nested.rs",
+             "use super::super::super::super::{\n    application::auto_tasks::Probe,\n};\n"),
+        ):
+            with self.subTest(relative=relative, source=source):
+                self.check_files({relative: source}, rejected=True)
 
     def test_moved_clock_and_display_contracts_stay_in_contracts(self):
         # [ORB-22623] A second definition would bring the back-edge's owner back.
