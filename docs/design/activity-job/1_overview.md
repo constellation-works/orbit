@@ -23,7 +23,8 @@ keyed bind/mint, parked CEL waits, admission rechecks and partial-branch checkpo
 ([ORB-20158]), and opt-in completion contracts validate a step's result against owner
 records and a granted workspace adapter ([ORB-20165]). The condition-history consumer
 ([ORB-20397]) and the disabled release-readiness composition ([ORB-20166]) remain
-`someday`, outside the shipped scope. Historical `reuse_when` matching is not implemented. No separate
+`someday`, outside the shipped scope. A step's `reuse_when` can settle it on a revalidated
+accepted result instead of minting ([ORB-22649]). No separate
 auto-sequence lifecycle is introduced; ordinary ordering and `when` skips remain.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.
@@ -151,5 +152,6 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
 - [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
 - [ORB-20397] — Expose accepted-result history through condition success facts (someday).
+- [ORB-22649] — Add historical result reuse to auto-task job steps.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -112,8 +112,22 @@ pub struct StepFacts {
     pub task_id: Option<String>,
 }
 
+/// The candidate accepted result a `reuse_when` reads as `result`: the
+/// definition's latest receipt, under the field names the checker types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultFacts {
+    /// An `AutoTaskResultStatus` spelling.
+    pub status: String,
+    pub revision: Option<String>,
+    pub completed_at: DateTime<Utc>,
+    pub contract: String,
+    pub definition_digest: String,
+    pub task_id: String,
+    pub run_id: Option<String>,
+}
+
 /// Everything a job wait expression (`wait_until`, `expire_when`,
-/// `spec.expire_when`) reads for one step pass
+/// `reuse_when`, `spec.expire_when`) reads for one step pass
 /// (`docs/design/activity-job/specs/auto-task-step.md` §2).
 #[derive(Debug, Clone)]
 pub struct JobWaitFacts {
@@ -129,6 +143,11 @@ pub struct JobWaitFacts {
     pub task_id: Option<String>,
     pub prev: Option<StepFacts>,
     pub steps: BTreeMap<String, StepFacts>,
+    /// The candidate a `reuse_when` judges, left unbound everywhere else.
+    /// The caller judges no candidate when the definition has no accepted
+    /// result, and holds when its history is unreadable, so an unbound
+    /// `result` never stands for either.
+    pub result: Option<ResultFacts>,
 }
 
 /// A three-valued result.
@@ -303,6 +322,9 @@ impl ConditionEvaluator {
                     .map(|(id, step)| (id.clone(), step_value(step))),
             ),
         );
+        if let Some(result) = &facts.result {
+            context.add_variable_from_value("result", result_value(result));
+        }
         Self {
             context,
             unavailable: Vec::new(),
@@ -761,6 +783,26 @@ fn self_value(facts: &SelfFacts) -> Value {
     }
     if let Some(at) = facts.last_succeeded_at {
         fields.push(("last_succeeded_at".to_string(), timestamp(at)));
+    }
+    map_value(fields)
+}
+
+fn result_value(result: &ResultFacts) -> Value {
+    let mut fields = vec![
+        ("status".to_string(), string(&result.status)),
+        ("completed_at".to_string(), timestamp(result.completed_at)),
+        ("contract".to_string(), string(&result.contract)),
+        (
+            "definition_digest".to_string(),
+            string(&result.definition_digest),
+        ),
+        ("task_id".to_string(), string(&result.task_id)),
+    ];
+    if let Some(revision) = &result.revision {
+        fields.push(("revision".to_string(), string(revision)));
+    }
+    if let Some(run) = &result.run_id {
+        fields.push(("run_id".to_string(), string(run)));
     }
     map_value(fields)
 }

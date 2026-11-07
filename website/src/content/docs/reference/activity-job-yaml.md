@@ -933,7 +933,7 @@ auto-task step.
 | `when` | Unchanged: evaluated once, false skips the step. A skipped step is `skipped`, never accepted evidence, so use `wait_until` for prerequisites. |
 | `wait_until` | CEL readiness predicate: false or unknown waits, true is ready. Absent means ready when the job reaches the step. |
 | `expire_when` | CEL predicate: true ends the unfinished step as `timeout`. |
-| `reuse_when` | CEL predicate over a candidate `result` that lets the step reuse accepted evidence. |
+| `reuse_when` | CEL predicate over the named auto-task's latest accepted `result`; true lets the step settle on it, after Orbit checks it, instead of minting. |
 | `require_result` | Typed result contract; `release-readiness/v1` is the one registered. |
 | `spec.expire_when` | Required on a job with auto-task steps: `now >= job.started_at + duration('<d>')` or `now >= timestamp('<RFC3339>')`, positive and at most 168h after admission. |
 
@@ -993,14 +993,21 @@ When the job reaches an auto-task step, the step:
    scoped holds. So does a step with `require_result` unless the definition
    declares the same contract under `completion` and its adapter script is
    granted.
-4. When ready, binds an open instance under `skip_if_open` dedupe, or mints
+4. When ready, first tries `reuse_when` against the named auto-task's latest
+   accepted result. When it is true and Orbit confirms that result covers
+   this execution's pinned revision, is within the contract's maximum age,
+   and still passes the evidence and adapter checks, the step is `done` on
+   that result without a new task. A result that fails those checks does not
+   count, whatever the predicate says. With no accepted result the step goes
+   on to bind or mint. When the accepted-result history can't be read, or the
+   predicate is unknown, the step waits instead of minting.
+5. Otherwise binds an open instance under `skip_if_open` dedupe, or mints
    one task. The mint uses no schedule slot and records which run and step
    it was for, so a retry after a lost reply finds the same task. A step
-   mints at most one task per execution; `reuse_when` does not match yet.
-   With `require_result`, a finished task counts only once Orbit has checked
+   mints at most one task per execution. With `require_result`, a finished task counts only once Orbit has checked
    its evidence against its own records and the adapter answers `passed`.
-   Earlier results are checked again for exact source and age before a later
-   step with a contract mints.
+   Earlier results, reused ones included, are checked again for exact source
+   and age before a later step mints.
 
 While a step waits, the run stays `running` and counts against
 `max_active_runs`, but no worker, provider, worktree or drain slot is held:

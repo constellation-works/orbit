@@ -22,7 +22,7 @@ pub use check::{
 };
 pub use evaluate::{
     AcceptedHistoryFacts, BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, JobWaitFacts,
-    OperandValue, OriginFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
+    OperandValue, OriginFacts, ResultFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
 };
 pub use firing::{
     ConditionObservation, PassOutcome, PassSettings, SubjectObservation, advance_pass,

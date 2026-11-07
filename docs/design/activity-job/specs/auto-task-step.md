@@ -309,9 +309,10 @@ The routine uses `overlap: forbid`, a matching 1440-minute horizon and zero retr
 the parked job retains its active identity and `max_active_runs: 1`. Expiry stops
 new admission and retains bindings and partial evidence; it does not cancel an
 already-running child. Normal authority, approval and host admission still apply.
-There is deliberately no `reuse_when`: historical result reuse is not built
-([ORB-22649]). Every execution obtains fresh checks, while restart preserves and
-revalidates accepted checkpoints rather than reminting them.
+There is deliberately no `reuse_when` in this composition: every execution
+obtains fresh checks, while restart preserves and revalidates accepted checkpoints
+rather than reminting them. A job that wants to reuse a recent accepted check adds
+`reuse_when` to that step ([ORB-22649], below).
 
 For independently eligible checks, the existing parallel structure can replace
 QA and security, retaining the same outer expiry and typed contracts:
@@ -492,7 +493,9 @@ enablement, provider work and release timing remain operator decisions.
   consume no schedule cursor. The board view excludes only the step's own
   bound task, so two parallel `board.empty` branches serialize: one binds and
   the other parks until it finishes. A task, host or file condition has no
-  bindable subject in a job step and holds. `reuse_when` never matches yet.
+  bindable subject in a job step and holds. After those rechecks and the
+  prior-proof revalidation, a step with `reuse_when` judges it before binding or
+  minting (see Reuse below).
 - **Parking.** A waiting, held or bound step parks the run. The run stays
   `running`, so it counts against `max_active_runs`. Its checkpoint records
   the park and its worker exits, holding no provider, thread, worktree or
@@ -557,9 +560,20 @@ enablement, provider work and release timing remain operator decisions.
   source against the current integration revision, age and finding disposition, even when
   a checkpoint reused it. A raw `done`, a skipped step or a no-op cannot discharge it. The
   observation path stays read-only; the start guard checks records only.
-- **Not built.** `reuse_when` still never matches, because its `result` binding belongs to
-  condition evaluation. Each execution mints fresh evidence, which is safe but not cheap.
-  "Valid reuse" here is the prior-step checkpoint revalidated at admission.
+- **Reuse.** [ORB-22649] binds `result` in `reuse_when` to the definition's latest
+  accepted receipt (`auto_task_accepted_history`). The admission fence judges it after the
+  rechecks above and before binding or minting. Missing history judges no candidate, and
+  the step binds or mints. Unreadable history, or a predicate that is unknown, holds the
+  step, because whether a reusable result exists cannot be decided. A true predicate is not
+  enough. The owner then revalidates the receipt as if this execution had bound its task:
+  same definition, contract and frozen digest, this execution's pinned revision, the
+  contract's `max_age_minutes` (the "expired" bound), a creation receipt for the same
+  inputs, unchanged completion time and evidence, and a `passed` adapter verdict now. A
+  receipt that fails any check does not match: the step mints fresh evidence and the reason
+  is logged. A matched receipt settles the step `done` with `minted: false`, bound to the
+  original task, which never starts again. Its checkpointed result is revalidated like any
+  other before a later step mints, so a reused proof that has aged or lost its adapter
+  verdict holds that later step.
 
 ## 8. Acceptance and honest limitations
 

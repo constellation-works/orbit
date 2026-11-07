@@ -13,6 +13,8 @@ use orbit_core::{
 };
 use serde_json::{Value, json};
 
+#[path = "auto_task_reuse.rs"]
+mod reuse;
 #[path = "auto_task_shared_completion.rs"]
 mod shared_completion;
 

@@ -68,4 +68,8 @@ pub enum AutoTaskAdmission {
     Held(String),
     /// The step or job expired: admits nothing.
     Expired(String),
+    /// `reuse_when` matched an accepted result the owner revalidated for this
+    /// execution: the step settles `done` on that receipt and nothing is
+    /// minted or bound to start.
+    Reused(Box<AutoTaskReceipt>),
 }
