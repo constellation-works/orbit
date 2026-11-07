@@ -82,7 +82,9 @@ impl RuntimeKernel {
         }
         // The `plugin:<ns>` layer loads last, so a workspace file of the same
         // name shadows a plugin's activity and a shipped default stays
-        // authoritative (L-0060). `orbit run show` prints which layer answered
+        // authoritative (L-0060). A name withdrawn for a stale workspace-local
+        // file stays withdrawn here: the plugin layer must not revive it.
+        // `orbit run show` prints which layer answered
         // for each reference, which is what makes the shadowing legible.
         for plugin in self.plugin_load().active() {
             let files: Vec<PathBuf> = plugin.definitions.activities.clone();

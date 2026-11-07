@@ -63,6 +63,12 @@ path and the remedy, and keeps every other activity usable. A job that
 references the retired activity fails with that same named error, telling
 you to fix or remove the stale file (a removed activity or key will not
 return — migrate as the error directs, for example to a task workflow).
+The withdrawal also reserves the name against lower-precedence layers
+loaded afterwards, such as plugin activities: a plugin file with the same
+name does not revive the activity or silently replace the refused job.
+An activity already supplied by a higher-precedence explicit or global
+layer before the stale workspace file is seen stays authoritative and
+usable, and unrelated workspace and plugin activities keep loading.
 `orbit doctor` reports the same file as a finding with its path and remedy,
 so you can find and retire it before it affects a scheduled job that
 references it.

@@ -318,6 +318,114 @@ fn stale_workspace_activity_is_isolated_and_reported() {
     assert!(fault.remediation.contains("agent_invoke.yaml"), "{fault:?}");
 }
 
+#[test]
+fn withdrawn_workspace_activity_stays_refused_over_plugin_layer() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "withdrawn_workspace_activity_stays_refused_over_plugin_layer",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{
+        ResolveError, V2ActivityCatalog, load_job_asset, resolve_job_target_refs,
+    };
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let resolve = |catalog: &V2ActivityCatalog, job: &str, activity: &str| {
+        let mut job = load_job_asset(&job_yaml(job, activity)).expect("job asset");
+        resolve_job_target_refs(&mut job.spec, catalog)
+    };
+
+    // Withdrawn workspace-local name colliding with a valid plugin file.
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let workspace = root.path().join("workspace-activities");
+    let plugin = root.path().join("plugin-activities");
+    std::fs::create_dir_all(&workspace).expect("workspace activities");
+    std::fs::create_dir_all(&plugin).expect("plugin activities");
+    let stale = workspace.join("probe.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace activity");
+    std::fs::write(
+        workspace.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+    let plugin_probe = plugin.join("probe.yaml");
+    std::fs::write(&plugin_probe, agent_loop_yaml("probe", "")).expect("plugin probe");
+    let plugin_only = plugin.join("plugin_only.yaml");
+    std::fs::write(&plugin_only, agent_loop_yaml("plugin_only", "")).expect("plugin-only");
+
+    let mut catalog = V2ActivityCatalog::new();
+    let (_, failures) = catalog
+        .load_dir_skipping_retired_prefer_existing_where_best_effort(&workspace, |_| true)
+        .expect("workspace layer loads best-effort");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(catalog.get("probe").is_none());
+    assert!(catalog.unavailable_reason("probe").is_some());
+    catalog
+        .load_files_prefer_existing(&[plugin_probe, plugin_only])
+        .expect("plugin layer loads");
+
+    assert!(
+        catalog.get("probe").is_none(),
+        "plugin must not revive a withdrawn workspace activity"
+    );
+    let reason = catalog
+        .unavailable_reason("probe")
+        .expect("withdrawal survives plugin layer");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("plugin_only").is_some());
+
+    let error = resolve(&catalog, "referencing_job", "probe")
+        .expect_err("job referencing withdrawn activity is refused over plugin layer");
+    assert!(
+        matches!(&error, ResolveError::ActivityUnavailable { name, .. } if name == "probe"),
+        "expected ActivityUnavailable for probe, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    resolve(&catalog, "unrelated_job", "good_activity").expect("unrelated workspace job resolves");
+    resolve(&catalog, "plugin_job", "plugin_only").expect("unrelated plugin job resolves");
+
+    // An authoritative entry loaded before the stale workspace file retains
+    // precedence: the stale file neither displaces it nor withdraws the name.
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let global = root.path().join("global-activities");
+    let workspace = root.path().join("workspace-activities");
+    std::fs::create_dir_all(&global).expect("global activities");
+    std::fs::create_dir_all(&workspace).expect("workspace activities");
+    let authoritative = global.join("probe.yaml");
+    std::fs::write(&authoritative, agent_loop_yaml("probe", "")).expect("global probe");
+    std::fs::write(
+        workspace.join("probe.yaml"),
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace probe");
+    let mut catalog = V2ActivityCatalog::new();
+    catalog
+        .load_dir_skipping_retired_prefer_existing(&global)
+        .expect("global layer loads");
+    let (_, failures) = catalog
+        .load_dir_skipping_retired_prefer_existing_where_best_effort(&workspace, |_| true)
+        .expect("workspace layer loads best-effort");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(catalog.source("probe"), Some(authoritative.as_path()));
+    assert!(catalog.unavailable_reason("probe").is_none());
+    resolve(&catalog, "authoritative_job", "probe").expect("authoritative probe still resolves");
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_retirement_confines_linked_and_regular_skill_assets() {

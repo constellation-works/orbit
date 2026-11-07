@@ -14,7 +14,7 @@
 //! canonical directory deduplication, first-wins layering, and duplicate-name
 //! detection for the typed activity and job catalogs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -191,8 +191,13 @@ impl V2ActivityCatalog {
                 },
                 ExistingNamePolicy::Reject,
                 |_| true,
+                &BTreeSet::new(),
             )
             .map(|_| ())
+    }
+
+    fn withdrawn_names(&self) -> BTreeSet<String> {
+        self.unavailable.keys().cloned().collect()
     }
 
     /// Load `dir` as a lower-precedence layer, skipping retired schemaVersion 1
@@ -204,11 +209,13 @@ impl V2ActivityCatalog {
         &mut self,
         dir: &Path,
     ) -> Result<Vec<PathBuf>, CatalogError> {
+        let withdrawn = self.withdrawn_names();
         self.inner.load_dir(
             dir,
             &ActivityCatalogAdapter { skip_retired: true },
             ExistingNamePolicy::PreferExisting,
             |_| true,
+            &withdrawn,
         )
     }
 
@@ -223,11 +230,13 @@ impl V2ActivityCatalog {
     where
         F: FnMut(&str) -> bool,
     {
+        let withdrawn = self.withdrawn_names();
         self.inner.load_dir(
             dir,
             &ActivityCatalogAdapter { skip_retired: true },
             ExistingNamePolicy::PreferExisting,
             include_name,
+            &withdrawn,
         )
     }
 
@@ -240,8 +249,10 @@ impl V2ActivityCatalog {
     /// specific remedy it carries — so a job referencing it is refused with
     /// [`ResolveError::ActivityUnavailable`] while unrelated jobs keep
     /// resolving. Non-parse failures (unreadable directories, duplicate
-    /// names inside `dir`) remain hard errors. Returns the retired files
-    /// skipped and the parse failures withdrawn, for the caller to report.
+    /// names inside `dir`) remain hard errors. A name already withdrawn by
+    /// an earlier layer is not revived by this layer. Returns the retired
+    /// files skipped and the parse failures withdrawn, for the caller to
+    /// report.
     pub fn load_dir_skipping_retired_prefer_existing_where_best_effort<F>(
         &mut self,
         dir: &Path,
@@ -251,12 +262,14 @@ impl V2ActivityCatalog {
         F: FnMut(&str) -> bool,
     {
         let mut errors = Vec::new();
+        let withdrawn = self.withdrawn_names();
         let skipped = self.inner.load_dir_best_effort(
             dir,
             &ActivityCatalogAdapter { skip_retired: true },
             ExistingNamePolicy::PreferExisting,
             include_name,
             &mut errors,
+            &withdrawn,
         )?;
         for error in &errors {
             if let CatalogError::Parse { path, .. } = error {
@@ -278,16 +291,19 @@ impl V2ActivityCatalog {
     /// A plugin ships files rather than a directory it owns outright, so this
     /// is the file-shaped counterpart of
     /// [`Self::load_dir_skipping_retired_prefer_existing`]: names already in
-    /// the catalog stay, and the returned paths are the retired assets that
-    /// were skipped.
+    /// the catalog stay, names withdrawn by an earlier layer (recorded in
+    /// `unavailable`) are not revived by this lower-precedence layer, and
+    /// the returned paths are the retired assets that were skipped.
     pub fn load_files_prefer_existing(
         &mut self,
         files: &[PathBuf],
     ) -> Result<Vec<PathBuf>, CatalogError> {
+        let withdrawn = self.withdrawn_names();
         self.inner.load_files(
             files,
             &ActivityCatalogAdapter { skip_retired: true },
             ExistingNamePolicy::PreferExisting,
+            &withdrawn,
         )
     }
 
@@ -409,6 +425,7 @@ impl V2JobCatalog {
                 ExistingNamePolicy::PreferExisting,
                 |_| true,
                 &mut errors,
+                &BTreeSet::new(),
             )
             .map(|_| errors)
     }
@@ -422,6 +439,7 @@ impl V2JobCatalog {
                 files,
                 &JobCatalogAdapter,
                 ExistingNamePolicy::PreferExisting,
+                &BTreeSet::new(),
             )
             .map(|_| ())
     }
@@ -472,12 +490,20 @@ impl<T> LayeredCatalog<T> {
         adapter: &A,
         existing_name_policy: ExistingNamePolicy,
         include_name: F,
+        withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
         F: FnMut(&str) -> bool,
     {
-        self.load_dir_inner(dir, adapter, existing_name_policy, include_name, None)
+        self.load_dir_inner(
+            dir,
+            adapter,
+            existing_name_policy,
+            include_name,
+            None,
+            withdrawn_names,
+        )
     }
 
     fn load_dir_best_effort<A, F>(
@@ -487,6 +513,7 @@ impl<T> LayeredCatalog<T> {
         existing_name_policy: ExistingNamePolicy,
         include_name: F,
         errors: &mut Vec<CatalogError>,
+        withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
@@ -498,6 +525,7 @@ impl<T> LayeredCatalog<T> {
             existing_name_policy,
             include_name,
             Some(errors),
+            withdrawn_names,
         )
     }
 
@@ -509,6 +537,7 @@ impl<T> LayeredCatalog<T> {
         files: &[PathBuf],
         adapter: &A,
         existing_name_policy: ExistingNamePolicy,
+        withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
@@ -529,6 +558,9 @@ impl<T> LayeredCatalog<T> {
             local_entries.insert(asset.name, (asset.spec, path.clone()));
         }
         for (name, (spec, path)) in local_entries {
+            if withdrawn_names.contains(&name) {
+                continue;
+            }
             if let Some(prev) = self.sources.get(&name) {
                 match existing_name_policy {
                     ExistingNamePolicy::Reject => {
@@ -550,6 +582,7 @@ impl<T> LayeredCatalog<T> {
         existing_name_policy: ExistingNamePolicy,
         mut include_name: F,
         mut parse_errors: Option<&mut Vec<CatalogError>>,
+        withdrawn_names: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
@@ -584,6 +617,9 @@ impl<T> LayeredCatalog<T> {
         })?;
 
         for (name, (spec, path)) in local_entries {
+            if withdrawn_names.contains(&name) {
+                continue;
+            }
             if !include_name(&name) {
                 continue;
             }
