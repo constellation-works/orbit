@@ -229,7 +229,8 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 ///
 /// Pattern-based redaction still independently catches provider-shaped tokens
 /// (`ghp_…`, `sk-…`).
-// pub(crate) for sibling-layout tests in security/tests/redaction.rs.
+// pub(crate) keeps the eligibility check reachable within the crate without
+// widening the public API; behavior is covered via the public redaction entry points.
 pub(crate) fn is_redactable_value(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.len() >= 4
