@@ -5,7 +5,7 @@ last_updated: 2026-11-07
 last_validated: 2026-11-07
 status: Draft
 stage: shipped
-next: "Operator may enable a precedent category after shadow evidence; channel shipped"
+next: "Review the plugin-raised decision design (ORB-22824), then file its slices"
 feature: human-decision-channel
 doc_role: scope
 type: design
@@ -223,6 +223,13 @@ requests in operator-enabled categories can be answered without the human.
 [consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
 rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are done.
 
+Designed, not implemented: plugin-raised decision requests ([ORB-22824]), with scribe's
+consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a
+human answers and core runs that tool once with the answer, never through precedent or
+the model, and only on the host that owns the task. [2_design.md](./2_design.md) §12
+holds the contract, slices and compatibility notes;
+[4_decisions.md](./4_decisions.md) records the standing rules.
+
 Resident orchestrators use this channel as their human path
 ([resident-orchestrator](../resident-orchestrator/2_design.md#3-authority)). A new
 `resident_authority` gate carries a manager-relayed authority grant, quoted verbatim, and the
@@ -263,6 +270,7 @@ agent-raised requests on human-crew tasks. Slice [ORB-21242] is done.
 
 ## Task References
 
+- [ORB-22824] — designs plugin-raised decision requests with an apply callback (2_design.md §12)
 - [ORB-21242] — resident-orchestrator slice 1: implements the `resident_authority` decision gate
 - [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — implements model-answer provenance, the `model_answer_review` gate and veto.
