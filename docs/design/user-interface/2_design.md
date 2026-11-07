@@ -413,9 +413,12 @@ occupancy has a slot meter (continuous past 24, hatched past its limit), an
 accessible used/ceiling label, a binding-constraint explanation and the
 per-pipeline split. Throttle, provider, crew and pilot holds remain visible.
 Forecast peaks use compact meters against admission thresholds; their tooltips
-keep timing, amount and headroom. The current or retained forecast includes
-its time and mode, admitted/held tasks and protection decisions, using past
-tense and current task statuses for history. An ended window distinguishes
+keep timing, amount and headroom, while the first-hour sparkline is hidden in
+the dock and the meter is shown whether or not a series is recorded. A live
+built forecast includes its time and mode with its current-pass admitted/held
+tasks and protection decisions in present tense (shadow hypothetical). A
+retained forecast shows only its time, mode and peaks with the conditional
+ended note below and lists no decisions or task statuses. An ended window distinguishes
 zero, positive and unknown shared occupancy, while a live pull or winding-down
 window is never labelled ended. The independent default backlog forecast
 (30-day lookback, no arrivals) links to Analytics › Forecast with p50–p90 time
