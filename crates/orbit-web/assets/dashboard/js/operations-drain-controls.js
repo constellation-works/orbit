@@ -2,7 +2,7 @@ import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { revealDockStart } from './log-tail.js';
 import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, pinnedInfoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
 import { $, autoDrainNumber, feedback, operationsState, pendingOperations, selectedWorkspace } from './operations-shared.js';
-import { autoDrainCounts, autoDrainLiveWindow, autoDrainPhase, autoDrainReasons, throttleNames, throttledResources } from './operations-drain-capacity.js';
+import { autoDrainAdmissionHold, autoDrainCounts, autoDrainLiveWindow, autoDrainPhase, autoDrainReasons } from './operations-drain-capacity.js';
 
 let drainControlCallbacks = null;
 
@@ -560,11 +560,12 @@ export function renderAutoDrainStart(payload, reasons) {
 }
 
 function autoDrainStartFoot(payload, form) {
-  const resources = throttledResources(payload.capacity);
-  const held = resources.length
+  const pull = drainCheckout(payload, selectedWorkspace()?.id).replica;
+  const hold = autoDrainAdmissionHold(payload.capacity || {}, { pull });
+  const held = hold
     ? el("p", { class: "drain-start-held" }, [
       el("span", { class: "drain-banner-icon small", "aria-hidden": "true" }),
-      el("span", { text: `Starts now, but nothing is admitted until the ${throttleNames(resources)} throttle clears.` }),
+      el("span", { text: hold.summary }),
     ])
     : null;
   return el("div", { class: "drain-start-foot" }, [held, drainFieldRefusal(autoDrainStartRefusal(payload)), autoDrainStartButton(payload, form)]);
