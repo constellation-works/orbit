@@ -132,12 +132,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Ux Rules](./design/ux-rules/1_scope.md) | Apply ORB-19976's operator handoff so UX reviews consume routine results | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Evaluate the live experiment before default promotion | claude |
 
-### Designing (5)
+### Designing (4)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
-| [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
@@ -185,10 +184,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
-### Parked (2)
+### Parked (3)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume | claude |
 

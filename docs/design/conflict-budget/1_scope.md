@@ -1,11 +1,11 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-10-31
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
-stage: designing
-next: "Parked for free time (Daniel, 2026-11-02). When picked up: settle the open questions (sum vs max, where weights live), then file phase 1"
+stage: parked
+next: "Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1"
 feature: conflict-budget
 doc_role: scope
 type: design
