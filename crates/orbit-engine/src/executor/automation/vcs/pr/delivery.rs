@@ -463,10 +463,11 @@ impl std::fmt::Display for CheckWaitRefusal {
 /// after policy rules out failed gates. A completed neutral/skipped result
 /// is never pending. An absent check is pending only
 /// while current branch policy names it as required [ORB-16339]; when that
-/// policy is unreadable, owner consumers get the bounded unsettled-poll grace
-/// auto-fix already applies. When readable policy names nothing missing or
-/// pending either and every reported check explicitly succeeded, owner
-/// consumers get the same bounded grace, because the
+/// policy is unreadable, `Owner` and `Completion` consumers get the bounded
+/// unsettled-poll grace auto-fix already applies in its own verdict. When
+/// readable policy names nothing missing or pending either and every
+/// reported check explicitly succeeded, `Owner` and `Completion` consumers
+/// get the same bounded grace, because the
 /// provider's merge state can lag behind checks that have already passed.
 /// This grants only another bounded observation
 /// within the caller's deadline; only the provider's mergeable state can merge.
