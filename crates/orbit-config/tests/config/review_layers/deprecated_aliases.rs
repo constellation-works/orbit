@@ -4,6 +4,7 @@
 
 use tempfile::tempdir;
 
+use super::isolated;
 use super::operation::{capture_logs, warned_deprecated};
 use super::review_layers_write_config;
 use orbit_config::ConfigRoots;
@@ -53,6 +54,19 @@ fn load_error(global_body: &str, workspace_body: &str) -> String {
 
 #[test]
 fn every_deprecated_spelling_loads_like_its_replacement_and_warns() {
+    // Warning capture races tracing's process-wide callsite-interest cache
+    // when the suite runs in parallel: a sibling test that loads a
+    // deprecated spelling without a subscriber can mark the deprecation
+    // warning callsite disabled before this test installs its capture
+    // subscriber, so `capture_logs` records nothing and the warning
+    // assertions fail. Run the body in an isolated child, like the other
+    // log-capture fixtures, so every callsite is first evaluated with the
+    // capture subscriber installed.
+    if !isolated(
+        "deprecated_aliases::every_deprecated_spelling_loads_like_its_replacement_and_warns",
+    ) {
+        return;
+    }
     let cases: &[(&str, Layers, Layers, &[&str])] = &[
         (
             "the review crew",
