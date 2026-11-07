@@ -95,5 +95,11 @@ completion:
     ```
 
     A clean review has an empty `findings` list. Report every task spawned from
-    this review. An open high or critical finding holds the step until it is
-    resolved.
+    this review. New findings omit `disposition` or set it to `new`, and must
+    have the exact `spawned_from` edge to this review. For a duplicate covered
+    by an existing task, report `{"task_id": "<existing task>", "severity":
+    "<severity>", "disposition": "duplicate"}` and include that task in
+    `task_refs` so the owner reads it back. Keep its original provenance; a
+    task spawned from this review cannot be declared a duplicate. An open
+    high or critical finding, including a duplicate, holds the step until it
+    is resolved.

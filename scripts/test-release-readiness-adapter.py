@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise native macOS proof through the public readiness adapter executable."""
+"""Exercise security findings and native proof through the readiness executable."""
 
 import copy
 import hashlib
@@ -23,6 +23,82 @@ IDENTITY_PATHS = (
     "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
     "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
 )
+
+
+class SecurityReadinessRegression(unittest.TestCase):
+    def test_deduplicated_findings_preserve_provenance_and_blockers(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        existing = {
+            "id": "existing-finding", "status": "done", "priority": "high",
+            "relations": [{"type": "spawned_from", "target": "earlier-review"}],
+        }
+        new = {**existing, "id": "new-finding",
+               "relations": [{"type": "spawned_from", "target": "current-review"}]}
+        duplicate = {"task_id": existing["id"], "severity": "high", "disposition": "duplicate"}
+        filed = {"task_id": new["id"], "severity": "high"}
+        cases = [
+            ("resolved-duplicate", [duplicate], [], [existing], "passed", None),
+            ("clean-review", [], [], [], "passed", None),
+            ("new-finding", [filed], [new], [new], "passed", None),
+            ("mixed-findings", [duplicate, filed], [new], [existing, new], "passed", None),
+            ("missing-reference", [duplicate], [], [], "unavailable", "finding-unresolved"),
+            ("missing-task", [duplicate], [], [{"id": existing["id"], "status": "missing"}],
+             "unavailable", "finding-unresolved"),
+            ("omitted-new-finding", [duplicate], [new], [existing], "unavailable", "finding-omitted"),
+            ("mislinked-new-finding", [{**duplicate, "disposition": "new"}], [], [existing],
+             "unavailable", "finding-unlinked"),
+            ("implicit-new-finding", [{"task_id": existing["id"], "severity": "high"}], [], [existing],
+             "unavailable", "finding-unlinked"),
+            ("mislinked-spawn", [{"task_id": existing["id"], "severity": "high"}], [existing], [existing],
+             "unavailable", "finding-unlinked"),
+            ("unknown-disposition", [{**duplicate, "disposition": "resolved"}], [], [existing],
+             "unavailable", "finding-malformed"),
+            ("new-disguised-as-duplicate", [{**filed, "disposition": "duplicate"}], [new], [new],
+             "unavailable", "finding-not-duplicate"),
+            ("mislinked-spawn-disguised-as-duplicate", [duplicate], [existing], [existing],
+             "unavailable", "finding-not-duplicate"),
+        ]
+        # Either the reported severity or the owner's priority must hold open
+        # release blockers, even when the other source downplays the finding.
+        for disposition, finding, task, spawned in (
+            ("duplicate", duplicate, existing, []), ("new", filed, new, [new]),
+        ):
+            for severity in ("high", "critical"):
+                for source in ("finding", "task"):
+                    open_task = {**task, "status": "in-progress",
+                                 "priority": severity if source == "task" else "low"}
+                    reported = {**finding, "severity": severity if source == "finding" else "low"}
+                    cases.append((f"open-{disposition}-{source}-{severity}", [reported],
+                                  [open_task] if spawned else [], [open_task],
+                                  "blocked", "unresolved-findings"))
+        for name, findings, spawned, referenced, status, code in cases:
+            with self.subTest(name=name):
+                request = {
+                    "contract": "release-readiness/v1", "form": "security-review",
+                    "trusted": {"source_revision": REVISION, "task_id": "current-review"},
+                    "tasks": {"spawned": spawned, "referenced": referenced},
+                    "evidence": {"artifacts": {
+                        "proof.json": {"json": {}},
+                        "security-review-evidence.json": {"json": {
+                            "source_revision": REVISION,
+                            "scope": [{"area": area, "summary": "Reviewed with evidence",
+                                       "evidence": ["proof.json"]}
+                                      for area in ("application-code", "dependencies",
+                                                   "secret-handling", "configuration")],
+                            "findings": findings,
+                        }},
+                    }},
+                }
+                result = subprocess.run(
+                    [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+                    input=json.dumps(request), text=True, capture_output=True, timeout=30,
+                    cwd=scratch)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                verdict = json.loads(result.stdout)
+                self.assertEqual(verdict["status"], status, verdict)
+                self.assertEqual(verdict["reasons"][0]["code"] if verdict["reasons"] else None,
+                                 code, verdict)
 
 
 class NativeReadinessRegression(unittest.TestCase):
