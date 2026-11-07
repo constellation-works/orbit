@@ -747,8 +747,10 @@ established, never as a pass.
 
 Explorer delegation has been removed. Existing `workflow.explore.*` and
 `workflow.purpose_crews.explorer` settings load with a deprecation warning
-and have no effect; remove them with `orbit config unset <key>`. Historical
-run answers and concluded experiment readouts remain readable.
+and have no effect; remove them with `orbit doctor --fix-retired-config-keys`,
+which backs up each affected file first, or delete the lines by hand from the
+`config.toml` that sets them. Historical run answers and concluded experiment
+readouts remain readable.
 
 ## Settable keys
 
