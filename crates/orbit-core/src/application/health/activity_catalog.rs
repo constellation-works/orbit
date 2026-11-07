@@ -218,7 +218,15 @@ fn inspect_activity_file(path: &Path, raw: &str, registered_tools: &[&str]) -> A
                     format!("`{}` spec.backend: {value} — {error}", path.display()),
                     repairable_backend(value).then_some(FIX_RETIRED_ACTIVITY_BACKENDS_CMD),
                 ),
-                None => (format!("`{}` — {error}", path.display()), None),
+                None => (
+                    format!(
+                        "`{}` — {error}; remedy: fix or remove this stale activity file \
+                         (a removed activity or key will not return — migrate as the error \
+                         directs, for example to a task workflow), then rerun `orbit doctor`",
+                        path.display()
+                    ),
+                    None,
+                ),
             };
             ActivityInspection::Fault(ActivityCatalogFault {
                 name: file_stem_name(path),

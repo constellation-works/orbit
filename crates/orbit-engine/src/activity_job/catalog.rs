@@ -231,6 +231,48 @@ impl V2ActivityCatalog {
         )
     }
 
+    /// Best-effort variant of
+    /// [`Self::load_dir_skipping_retired_prefer_existing_where`]: a file that
+    /// fails to parse (for example a stale copy declaring a removed key) is
+    /// withdrawn alone instead of failing the whole catalog. The withdrawn
+    /// name (the file stem, matching the doctor scan) is recorded in
+    /// `unavailable` with the parse error — which names the file and the
+    /// specific remedy it carries — so a job referencing it is refused with
+    /// [`ResolveError::ActivityUnavailable`] while unrelated jobs keep
+    /// resolving. Non-parse failures (unreadable directories, duplicate
+    /// names inside `dir`) remain hard errors. Returns the retired files
+    /// skipped and the parse failures withdrawn, for the caller to report.
+    pub fn load_dir_skipping_retired_prefer_existing_where_best_effort<F>(
+        &mut self,
+        dir: &Path,
+        include_name: F,
+    ) -> Result<(Vec<PathBuf>, Vec<CatalogError>), CatalogError>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let mut errors = Vec::new();
+        let skipped = self.inner.load_dir_best_effort(
+            dir,
+            &ActivityCatalogAdapter { skip_retired: true },
+            ExistingNamePolicy::PreferExisting,
+            include_name,
+            &mut errors,
+        )?;
+        for error in &errors {
+            if let CatalogError::Parse { path, .. } = error {
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !name.is_empty() && self.get(&name).is_none() {
+                    self.unavailable.insert(name, error.to_string());
+                }
+            }
+        }
+        Ok((skipped, errors))
+    }
+
     /// Load an explicit list of activity files as one lower-precedence layer.
     ///
     /// A plugin ships files rather than a directory it owns outright, so this

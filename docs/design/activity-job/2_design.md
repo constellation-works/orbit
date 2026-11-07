@@ -223,6 +223,17 @@ across kinds (§4 above): skills merge workspace-over-global while activities
 keep shipped defaults authoritative. Provenance of the file Orbit wrote is the
 same question for every kind.
 
+Workspace-local activity files that fail to parse — the stale-copy case, such
+as a copy of a bundled activity a release retired or one declaring a removed
+key like `trustedHostExecution: true` — are isolated at catalog load rather
+than failing the whole catalog: the runtime withdraws that one file, logs a
+warning naming its path and the remedy, and records it unavailable with the
+parse error, so unrelated jobs still build and run while a job referencing
+that name is refused with the same named error (`ActivityUnavailable`).
+Global and explicit catalog layers stay fail-closed, and duplicate names
+inside one directory remain a hard error. `orbit doctor` reports the same
+stale file as an activity fault with its path and the fix-or-remove remedy.
+
 Activity *fault* detection is the exception: it walks every production catalog
 directory (env override, global managed tree, workspace `.orbit/resources/activities/`)
 and applies the same `load_activity_catalog_asset` + tool-policy validation catalog

@@ -49,6 +49,24 @@ Each step has exactly one body:
 - `fan_out` with `fan_in`
 - `loop`
 
+## Workspace-local copies and retired activities
+
+Activities and jobs may also live under `.orbit/resources/activities/` and
+`.orbit/resources/jobs/` in a workspace. Those files are not managed by
+`orbit workspace sync`, so an upgrade can leave a stale local copy of a
+bundled activity that a release retired, or one declaring a removed key
+(such as `trustedHostExecution: true`).
+
+A stale workspace-local activity file does not take down the workspace:
+Orbit excludes that one file from the catalog, logs a warning naming its
+path and the remedy, and keeps every other activity usable. A job that
+references the retired activity fails with that same named error, telling
+you to fix or remove the stale file (a removed activity or key will not
+return — migrate as the error directs, for example to a task workflow).
+`orbit doctor` reports the same file as a finding with its path and remedy,
+so you can find and retire it before it affects a scheduled job that
+references it.
+
 ## Why both exist
 
 Activities make execution reusable. Jobs make orchestration explicit. Agent

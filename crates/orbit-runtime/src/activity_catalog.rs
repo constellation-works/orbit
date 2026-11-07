@@ -29,7 +29,11 @@ impl RuntimeKernel {
     /// Duplicate names inside one directory tree are still a hard error
     /// (`CatalogError::DuplicateName`). An activity whose tool allowlist does
     /// not validate against the registered tools is withdrawn alone and
-    /// refused when a job references it.
+    /// refused when a job references it. A workspace-local file that fails
+    /// to parse (a stale copy of a retired activity, or one declaring a
+    /// removed key) is likewise withdrawn alone with a warning naming the
+    /// file, so unrelated jobs still run; only a job referencing that name
+    /// is refused, with the same parse error.
     pub fn v2_activity_catalog(
         &self,
     ) -> Result<
@@ -53,13 +57,26 @@ impl RuntimeKernel {
                     );
                 }
                 V2ActivityCatalogDirKind::WorkspaceLocal => {
-                    warn_skipped_retired_activity_assets(
-                        dir.path(),
-                        catalog.load_dir_skipping_retired_prefer_existing_where(
+                    // A stale workspace-local copy (e.g. of a retired bundled
+                    // activity, or one declaring a removed key) must not fail
+                    // every job in the workspace: withdraw that file alone,
+                    // warn with its path and remedy, and let unrelated jobs
+                    // build. A job referencing the withdrawn name is refused
+                    // with the same named error. Global and explicit layers
+                    // stay fail-closed above.
+                    let (skipped, failures) = catalog
+                        .load_dir_skipping_retired_prefer_existing_where_best_effort(
                             dir.path(),
                             |name| !is_default_activity_name(name),
-                        )?,
-                    );
+                        )?;
+                    warn_skipped_retired_activity_assets(dir.path(), skipped);
+                    for failure in &failures {
+                        tracing::warn!(
+                            target: "orbit.core.assets",
+                            error = %failure,
+                            "skipping invalid workspace-local activity file; fix or remove the stale file it names (a removed activity or key will not return — migrate as the error directs, for example to a task workflow), then rerun the job; jobs that reference this activity will be refused with the same error"
+                        );
+                    }
                 }
             }
         }
