@@ -32,9 +32,10 @@ refs help, or would they turn this layer into a generic workflow engine?
 
 **Auto-task direction partly delivered.** The bounded
 [`auto-task:<name>` target](./specs/auto-task-step.md) has schema/explain and durable
-bind/mint, parked CEL waits and partial-branch checkpoints. Readiness evidence
-adapters/history ([ORB-20165]), their condition-fact consumer ([ORB-20397]) and
-the disabled composition ([ORB-20166]) remain `someday`. Existing skip guards stay
+bind/mint, parked CEL waits and partial-branch checkpoints, plus opt-in completion
+contracts and accepted-result history ([ORB-20165]). Their condition-fact consumer
+([ORB-20397]), the disabled composition ([ORB-20166]) and historical `reuse_when`
+matching remain `someday`. Existing skip guards stay
 separate; no auto-sequence carrier, nested-job or cross-workspace reference was added.
 
 ### 1.3 Is the provider model too closed-set?
@@ -151,7 +152,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - [ORB-19985] — Execute granted Linux script steps under linux-bwrap-script-v1.
 - [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
 - [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
-- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history.
 - [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
 - [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
 - [ORB-20397] — Expose accepted-result history through condition success facts (someday).

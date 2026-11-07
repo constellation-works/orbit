@@ -2078,7 +2078,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - [ORB-19985] — Execute granted Linux script steps under linux-bwrap-script-v1.
 - [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
 - [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
-- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history.
 - [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
 - [ORB-20397] — Expose accepted-result history through condition success facts (someday).
 - [ORB-20566] — Admit read-only exploration only through an enforceable host/provider boundary.

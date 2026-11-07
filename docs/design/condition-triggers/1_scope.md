@@ -245,11 +245,12 @@ belong only to the job wait/reuse environment. These are not part of the base sc
 or already-filed condition-language phase-1 scope. They grant no free-text or
 arbitrary-artifact access. No new trigger carrier is needed.
 
-**Job-composition extension: someday.**
+**Job-composition extension: partly shipped.**
+Completion contracts and accepted-result history ([ORB-20165]) are shipped.
 Readiness triggers still lack two reads: `board.empty` as a condition field (the
 condition `board` above exposes only per-bucket `empty`) and literal
-`auto_tasks['name']` accepted-completion reads. The readiness adapters
-([ORB-20165], [ORB-20397], [ORB-20166]) are also someday.
+`auto_tasks['name']` accepted-completion reads ([ORB-20397]), plus the disabled
+composition ([ORB-20166]) and historical `reuse_when` matching; those remain someday.
 
 Rules:
 
