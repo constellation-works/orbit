@@ -347,7 +347,11 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
             )
         };
         assert_eq!(opened, 0, "open PTY: {}", std::io::Error::last_os_error());
+        // SAFETY: openpty succeeded (asserted above), so `master_fd` is an open pty
+        // master that no other handle owns; this File takes sole ownership and closes it.
         let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        // SAFETY: openpty succeeded (asserted above), so `slave_fd` is the distinct, open
+        // pty slave of that pair that no other handle owns; this File takes sole ownership.
         let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
         let mut actual = libc::winsize {
             ws_row: 0,
