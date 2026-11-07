@@ -128,7 +128,7 @@ export function autoDrainPhase(payload) {
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
 
-export function autoDrainCapacity(capacity, counts, blocked) {
+export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = {}) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
@@ -139,8 +139,7 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   // and free slots there is nothing to explain, so no line shows.
   let summary = "";
   let detail = "";
-  const pulling = autoDrainPhase({ capacity }).pulling;
-  const hold = autoDrainAdmissionHold(capacity, { pull: pulling });
+  const hold = autoDrainAdmissionHold(capacity, { pull });
   if (hold) {
     summary = hold.summary;
     detail = hold.detail;

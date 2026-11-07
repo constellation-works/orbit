@@ -1,6 +1,6 @@
 import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
-import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
+import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
 import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
@@ -280,7 +280,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   }
   body.append(...[
     autoDrainWindow(payload),
-    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length),
+    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length, { pull: drainCheckout(payload).replica }),
     ...holds,
     autoDrainForecast(payload),
     autoDrainFoot(payload),
