@@ -45,7 +45,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY,
-    DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_HANDOFF_REVOKE, GovernedOperation,
 };
 use orbit_core::application::review::{
     DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
@@ -193,10 +193,12 @@ pub(super) async fn approve_handoff_action(
         state,
         query,
         runtime,
-        &DASHBOARD_HANDOFF_APPROVE,
-        "handoff.approve",
-        audited,
-        arguments,
+        OwnerMutation {
+            operation: &DASHBOARD_HANDOFF_APPROVE,
+            audit_name: "handoff.approve",
+            target: audited,
+            arguments,
+        },
         move |runtime| {
             runtime.approve_handoff_as_operator(
                 &handoff_id,
@@ -255,10 +257,12 @@ pub(super) async fn retry_handoff_action(
         state,
         query,
         runtime,
-        &DASHBOARD_HANDOFF_RETRY,
-        "handoff.retry",
-        handoff_id,
-        arguments,
+        OwnerMutation {
+            operation: &DASHBOARD_HANDOFF_RETRY,
+            audit_name: "handoff.retry",
+            target: handoff_id,
+            arguments,
+        },
         move |runtime| retry_handoff_response(runtime, &request),
     )
     .await
@@ -313,10 +317,12 @@ pub(super) async fn revoke_handoff_action(
         state,
         query,
         runtime,
-        &DASHBOARD_HANDOFF_REVOKE,
-        "handoff.revoke",
-        audited,
-        arguments,
+        OwnerMutation {
+            operation: &DASHBOARD_HANDOFF_REVOKE,
+            audit_name: "handoff.revoke",
+            target: audited,
+            arguments,
+        },
         move |runtime| {
             runtime.revoke_handoff_as_operator(
                 &handoff_id,
@@ -378,10 +384,12 @@ pub(super) async fn recover_claim_action(
         state,
         query,
         runtime,
-        &DASHBOARD_CLAIM_RECOVER,
-        "claim.recover",
-        audited,
-        arguments,
+        OwnerMutation {
+            operation: &DASHBOARD_CLAIM_RECOVER,
+            audit_name: "claim.recover",
+            target: audited,
+            arguments,
+        },
         move |runtime| {
             runtime.recover_claim_as_operator(
                 &claim_id,
@@ -396,23 +404,35 @@ pub(super) async fn recover_claim_action(
     .await
 }
 
+/// One owner mutation as the shared body consumes it: the governed operation
+/// that authorizes it, the audit name and target it is recorded under, and the
+/// arguments it is audited with.
+struct OwnerMutation {
+    operation: &'static GovernedOperation,
+    audit_name: &'static str,
+    target: String,
+    arguments: Value,
+}
+
 /// The shared body of owner mutations: authorize, require an explicit
 /// workspace, run the domain transaction off the async pool, audit the outcome,
 /// and translate a refusal into the code the client acts on.
-#[allow(clippy::too_many_arguments)]
 async fn run_owner_action<F>(
     state: DashboardState,
     query: OperationsQuery,
     runtime: std::sync::Arc<OrbitRuntime>,
-    operation: &'static orbit_common::governance::authorization::GovernedOperation,
-    audit_name: &'static str,
-    target: String,
-    arguments: Value,
+    mutation: OwnerMutation,
     action: F,
 ) -> Response
 where
     F: FnOnce(&OrbitRuntime) -> Result<Value, OrbitError> + Send + 'static,
 {
+    let OwnerMutation {
+        operation,
+        audit_name,
+        target,
+        arguments,
+    } = mutation;
     // Workspace selection first: an action aimed at the wrong workspace is a
     // malformed request, not a denial, and auditing it as one would be a lie.
     let workspace = match explicit_workspace(&query) {
