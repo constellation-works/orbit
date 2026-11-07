@@ -546,8 +546,10 @@ function panelMessage(bodyId, state) {
   const previousText = note.textContent;
   // Only a cold load and an error need to take up room in the panel. "Updated"
   // and "Refreshing" stay in the live region for assistive tech but are not
-  // painted, so a 30s poll never shifts the rows under the reader.
-  const quiet = !state.error && (state.loaded || !state.pending);
+  // painted, so a 30s poll never shifts the rows under the reader. A message
+  // area (`host !== body`) paints only errors: a refresh, page change or first
+  // load writes its loading note to the live region and nothing above the dock.
+  const quiet = !state.error && (state.loaded || !state.pending || host !== body);
   note.className = state.error
     ? "panel-placeholder action-error"
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";

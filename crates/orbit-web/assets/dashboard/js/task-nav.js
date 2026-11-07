@@ -650,13 +650,12 @@ export function renderTaskPagination(context) {
     : {};
   previous.disabled = Boolean(state.loading) || !state.canPrevious;
   next.disabled = Boolean(state.loading) || !state.canNext;
-  // One page needs no pager. Its loading and failure text is in the Tasks
-  // message area, so neither brings the pager back nor moves the list.
+  // One page needs no pager. Its failure text is in the Tasks message area, so
+  // it neither brings the pager back nor moves the list. A page load shows no
+  // loading text here; the disabled buttons are its visible signal.
   const pager = previous.closest ? previous.closest(".task-pagination") : null;
   if (pager) pager.hidden = !state.canPrevious && !state.canNext;
-  const text = state.error
-    ? `Page failed: ${state.error}`
-    : state.loading ? "Loading task page…" : "";
+  const text = state.error ? `Page failed: ${state.error}` : "";
   if (text && text !== status.textContent) raiseMessageSlot(status);
   status.textContent = text;
   status.className = state.error ? "error" : "";
