@@ -551,11 +551,6 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
-            // The deprecated path of the crew ladder report, registry-driven like
-            // codebase.
-            Commands::Crew(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Crew))
-            }
             // Visual capture is registry-driven like codebase; its Write
             // effect (serving the checkout and writing captures) makes its
             // runtime need required through the registry operation.
@@ -567,9 +562,6 @@ impl Commands {
                 use super::super::agents::AgentsSubcommand;
                 match &command.command {
                     AgentsSubcommand::Operation(invocation) => {
-                        registry_operation(invocation, runtime_dispatch!(Agents))
-                    }
-                    AgentsSubcommand::Ladder(invocation) => {
                         registry_operation(invocation, runtime_dispatch!(Agents))
                     }
                     // The probe submits one canary run per crew, so it opens

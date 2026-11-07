@@ -74,7 +74,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
 ];
 
 /// Default auto-tasks a prior release shipped and this one no longer seeds.
-pub const RETIRED_DEFAULT_AUTO_TASKS: &[&str] = &["blocked-task-triage"];
+pub const RETIRED_DEFAULT_AUTO_TASKS: &[&str] = &["blocked-task-triage", "crew-ladder-review"];
 
 /// Default auto-tasks a prior release shipped and this one demoted because
 /// they had not proven their yield. Nothing replaced them, so unlike a
@@ -84,7 +84,6 @@ pub const RETIRED_DEFAULT_AUTO_TASKS: &[&str] = &["blocked-task-triage"];
 pub const DEMOTED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "backlog-hygiene",
     "ci-budget-watch",
-    "crew-ladder-review",
     "design-sync",
     "flaky-test-hunt",
     "structure-sweep",

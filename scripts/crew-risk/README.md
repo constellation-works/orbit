@@ -1,9 +1,6 @@
 # Crew risk observational report
 
 These scripts are for manual contributor analysis from an Orbit source checkout.
-They are separate from a workspace's `crew-ladder-review` auto-task, where one
-is defined, which uses workspace ladder and experiment readouts without invoking
-these scripts.
 
 `report.py` is the supported entrypoint. It exports facts read-only from an
 explicit registered **owning** workspace, or consumes a frozen JSON/gzip snapshot,
@@ -81,7 +78,7 @@ or crew configuration digest. Live exports preserve those as **unknown**, never
 infer them from today's crew configuration. `observational-v2` refuses to combine
 such identities into curves/comparisons; its manifest retains observed counts.
 An enriched snapshot with captured execution-time identity can supply them.
-Ladder experiment readouts remain the authority for assigned/executed/settled,
+Experiment readouts remain the authority for assigned/executed/settled,
 14-day quality, grading adoption, total delivery cost/time and trial verdicts;
 this helper's completed-task proxy endpoint cannot supply those absent facts.
 
@@ -108,8 +105,8 @@ size percentiles. Unlike the brittle original assertion, sparse/singular fits
 are suppressed: at least 30 rows, five outcomes of each class and at least 400
 finite bootstrap refits are required. Counts and gaps survive suppression.
 
-Seven-day observed links are exploratory ascertainment proxies, **not** the
-ladder's mature fourteen-day quality endpoint or a proposed thirty-day risk
+Seven-day observed links are exploratory ascertainment proxies, **not** a
+mature fourteen-day quality endpoint or a proposed thirty-day risk
 calibration. Size is a post-treatment final diff; routing, reviewer, calendar,
 related-task and unobserved coverage differences prevent causal capability or
 effort claims. Missing links do not prove absence of defects. Lower observed
@@ -141,4 +138,4 @@ it deliberately retains unknown effort/digest and cannot support effort claims.
 Temporal and within-tier results should preserve the original counts and numeric
 results; plot layout/group discovery/suppression and serialized output hashes
 intentionally change. Policy commit dates are not verified deployment times.
-Historical-v1 is a reproducibility route, not evidence for a ladder revision.
+Historical-v1 is a reproducibility route, not evidence for a crew revision.

@@ -540,13 +540,13 @@ budget within it.
 
 Any place that names a crew can also pick its effort with `<crew>@<effort>`:
 complexity, type and purpose pools, review pools, `workflow.default_crew`,
-`workflow.crew_ladder.rungs`, a task's `crew` and `--crew`. In a pool the weight
+a task's `crew` and `--crew`. In a pool the weight
 still follows: `hard_complexity_crews = ["opus@medium:100", "opus:100"]`.
 
 - The reference effort wins over the crew's own `effort` and the activity's
   inline setting; a reference without `@` behaves exactly as before.
 - `opus@medium` and `opus` are separate pool members, with their own weights,
-  and runs, scorecards, experiments and the crew ladder record them separately.
+  and runs, scorecards and experiments record them separately.
   They share the crew's account, limits and holds: a provider failure hold,
   including a capacity or unavailability one, or a pull drain's exclusion on
   either one covers the crew and all of its effort references.
@@ -789,19 +789,6 @@ readouts remain readable.
 | `workflow.crew_performance_window_days` | **Advanced.** integer · **Default:** `30`<br>Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. The seeded `crew_performance_refresh` routine rebuilds the snapshot hourly over this window; `orbit run readiness` shows its age, window and type list, or why it is unusable (`missing`, `stale` after 24 hours, or `type_list_changed`). |
 | `workflow.auto_effort.bands` | **Advanced.** table · **Default:** `{}`<br>Per crew, the ordered bands a `<crew>@auto` pool entry resolves through. Each band has an `effort` the crew accepts and at least one of `complexity`, `below_files`, `below_lines`. See [effort chosen per draw](#effort-chosen-per-draw-auto). |
 | `workflow.auto_effort.explore_share` | **Advanced.** number · **Default:** `0.1`<br>Share of `@auto` draws, `0`–`0.5`, dispatched at another effort the crew can run at. |
-| `workflow.crew_ladder.mode` | **Advanced.** string · **Default:** `off`<br>`off` or `shadow`. With `shadow`, each tier listed in `workflow.crew_ladder.tiers` (none by default) whose floor (the cheapest rung that is an enabled, weighted member of its complexity pool) has a rung below it keeps one shadow experiment owned by `system:crew-ladder`: a `control` arm with no overlay and a `candidate` arm whose crew overlay is that one rung, weighted `1 − explore_rate` and `explore_rate`. Trials are reconciled at delivery admission while `experiments.enabled` is true, count toward `experiments.max_running`, and yield to a running operator crew experiment on the tier; a changed candidate, weight or population concludes the old trial with no winner and starts a new one. Shadow trials record assignments and change no task's crew. `propose` and `auto` are refused at load. Read with `orbit agents ladder`. The model is in [Crew ladder](../../concepts/agents/#crew-ladder). |
-| `workflow.crew_ladder.rungs` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Crews, cheapest first. Each must be a defined, enabled crew, named once; an unknown or disabled crew fails load naming this key. See [Crew ladder](../../concepts/agents/#rungs-floor-and-candidate). |
-| `workflow.crew_ladder.tiers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Complexity tiers (`low`, `medium`, `hard`, `xhard`) that may run a ladder trial, each once. Empty means no tier runs a trial: the ladder is opt-in per tier. See [Turn on shadow mode](../../concepts/agents/#turn-on-shadow-mode). |
-| `workflow.crew_ladder.explore_rate` | **Advanced.** number · **Default:** `0.10`<br>Share of a tier's tasks assigned to the candidate arm, `0.02`–`0.25`. |
-| `workflow.crew_ladder.margin` | **Advanced.** number · **Default:** `5`<br>Quality points a candidate may trail its tier by and still hold it; greater than `0` and at most `100`. |
-| `workflow.crew_ladder.look_every` | **Advanced.** integer · **Default:** `10`<br>Settled candidate tasks between a trial's looks (`1`–`1000`), no more than `max_sample`. |
-| `workflow.crew_ladder.max_sample` | **Advanced.** integer · **Default:** `60`<br>Candidate tasks after which a trial stops without promotion (`1`–`10000`). |
-| `workflow.crew_ladder.exclude_types` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Task types (`feature`, `bug`, `refactor`, `chore`) ladder trials never enroll. Excluding all four is refused. |
-| `workflow.crew_ladder.watch_window` | **Advanced.** integer · **Default:** `30`<br>Settled tasks per learned ladder member in its demotion check (`1`–`1000`). |
-| `workflow.crew_ladder.retry_after_days` | **Advanced.** integer · **Default:** `30`<br>Days before a failed rung is trialled again (`1`–`365`). |
-| `workflow.crew_ladder.delivery_quality` | **Advanced.** string · **Default:** `off`<br>How ladder trials weigh delivery-quality grades. Only `off` is accepted; `shadow` and `guardrail` are refused at load. |
-| `workflow.crew_ladder.quality_grade_margin` | **Advanced.** number · **Default:** `10`<br>Grade points a candidate may trail its tier by under the delivery-quality check, greater than `0` and at most `100`. |
-| `workflow.crew_ladder.min_grade_coverage` | **Advanced.** number · **Default:** `0.8`<br>Share of settled trial tasks that must carry a delivery-quality grade before the check reads them, greater than `0` and at most `1`. |
 | `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
 | `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
 | `workflow.admission_affinity` | **Advanced.** string · **Default:** `band`<br>How a distributed owner orders admission against its live executors, so each takes work only it can run first. `band` puts that work ahead of priority within a dispatch band, so critical and corrective work still leads; `priority` puts it first only within a priority; `off` keeps the plain band, priority, expiry and age order. Applies to followers' pulls and the owner's own drain. |

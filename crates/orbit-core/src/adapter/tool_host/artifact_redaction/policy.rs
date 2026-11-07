@@ -2,7 +2,6 @@ use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
-use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
@@ -280,12 +279,6 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
-        OrbitBuiltinAction::Crew(verb) => match verb {
-            CrewVerb::Ladder => ActionPolicy {
-                declared: verb.spec().params,
-                ..NO_REDACTION
-            },
-        },
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture | VisualVerb::AcceptDispute => ActionPolicy {
                 declared: verb.spec().params,
@@ -366,9 +359,6 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
-        },
-        OrbitBuiltinAction::Crew(verb) => match verb {
-            CrewVerb::Ladder => false,
         },
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture => false,
