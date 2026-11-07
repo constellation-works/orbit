@@ -230,12 +230,14 @@ code-drift classification below.
   implementer `git diff <inspection_revision> HEAD -- <path>` to run. It does not inline the
   patch, which could exceed the brief's own size cap.
 - **No re-pilot at admission.** That would put a pilot run (minutes) on the critical path of
-  every stale run. The pilot routine only covers `proposed`/`backlog` tasks, and a workspace
-  that wants briefs refreshed before admission can already set
-  `source_sensitivity = "context_files"`. Phase 2 reports how often briefs drop. A high drop
-  rate is a reason to revisit, not a reason to build re-piloting first. Recomputing the
-  current material fingerprint at dispatch is not a re-pilot: it is the deterministic
-  fingerprint comparison `fresh_task_pilot_assessment` already performs, with no pilot
+  every stale run. The pilot routine only covers `proposed`/`backlog` tasks. A brief is
+  refreshed before admission only by an explicit `orbit task repilot`. Setting
+  `source_sensitivity = "context_files"` does not change that: a covered source move leaves an
+  applied assessment fresh (`assets/routines/task_pilot.yaml` freshness note;
+  `crates/orbit-core/tests/runtime/task_pilot/freshness.rs`). Phase 2 reports how often briefs
+  drop. A high drop rate is a reason to revisit, not a reason to build re-piloting first.
+  Recomputing the current material fingerprint at dispatch is not a re-pilot: it is the
+  deterministic, status-neutral comparison `brief_material_current` performs, with no pilot
   invocation, and it is required even though no re-pilot runs.
 - **Constants, not config.** 3 files and 200 lines are constants in phase 3. The trial reports
   `fresh`/`drifted`/`dropped` counts, and a setting is added only if the readout shows a
@@ -412,9 +414,10 @@ config change only.
 - **Turns to first edit is provider-dependent.** It depends on how each provider names edit
   tools. Shell-only editing is invisible. The metric compares arms within a provider, not
   across providers.
-- **Briefs lag the base.** A task can wait days between its pilot and its run. With the
-  default `source_sensitivity = "ignore"`, nothing refreshes the brief, and the admission
-  thresholds drop it instead. The trial's drop rate shows what that costs.
+- **Briefs lag the base.** A task can wait days between its pilot and its run. Nothing
+  re-pilots at admission whatever `source_sensitivity` is set to, so only an explicit
+  `orbit task repilot` refreshes the brief; otherwise the admission thresholds drop it. The
+  trial's drop rate shows what that costs.
 - **Tag-at-filing discipline.** Assignment depends on the orchestrator tagging at filing. A
   task tagged late gets no brief until it is piloted again, and it still counts in the brief
   arm under intention to treat.
