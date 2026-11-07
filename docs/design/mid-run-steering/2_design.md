@@ -1,7 +1,7 @@
 ---
 title: Mid-Run Operator Steering — Design
 owner: codex
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 last_validated: 2026-11-06
 status: Implemented
 feature: mid-run-steering
@@ -72,7 +72,7 @@ Two additive keys in the existing `workflow.*` namespace, documented in [CONFIG.
 | `workflow.mid_run_steering.enabled` | `false` | Record watermarks, deliver at safe points, and enforce the promotion gate for runs in this workspace. |
 | `workflow.mid_run_steering.max_rounds` | `2` | Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed`. |
 
-`orbit doctor` reports the resolved values beside the workspace's other workflow settings. `orbit init` does not enable steering for new workspaces. Reconsidering the default requires a separate reviewed change.
+`orbit doctor` reports the resolved values beside the workspace's other workflow settings. A new global config seeded by `orbit init` sets `workflow.mid_run_steering.enabled = true`; when the key is absent the built-in default `false` applies, so a workspace that omits the key inherits the seeded global value rather than the built-in default. Reconsidering the built-in default requires a separate reviewed change.
 
 ### Enablement during a run
 
