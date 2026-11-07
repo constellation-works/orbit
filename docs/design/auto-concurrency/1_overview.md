@@ -81,7 +81,11 @@ that are too low leave capacity idle while backlog waits; ceilings that are
 too high slow work and risk exhausting host memory.
 
 Orbit already has a reactive guard: the resource throttle holds admission
-once CPU, memory or disk stays above 90%. That reacts to load that has
+once CPU, memory, disk or (on Linux) I/O pressure stays at or above its high
+mark.
+A local drain may still admit eligible CPU-light auto-tasks while CPU alone
+is held and reserved slots remain; memory, disk and I/O pressure hold them
+too, and pull drains do not use that budget. That reacts to load that has
 already arrived. A task's load arrives late: an agent spends its first
 minutes reading and planning, and its builds and validation come later. So a
 reactive check admits tasks while they look light and finds out when their
@@ -115,8 +119,10 @@ admission look ahead.
   memory high mark. The throttle defaults to Linux load, a different signal
   from forecast CPU utilization; `workflow.resource_throttle.cpu_source = "utilization"` opts
   into busy tick accounting. CPU thresholds remain independently configured.
-- **Backstop** — the existing resource throttle. It still holds all
-  admission when real pressure arrives.
+- **Backstop** — the existing resource throttle. Memory, disk and I/O holds
+  stop all admission; a CPU-only hold may leave reserved CPU-light slots open
+  in local drains. Pull drains do not use that budget, and their executor's
+  throttle holds new claims.
 
 ## 3. At a Glance
 
