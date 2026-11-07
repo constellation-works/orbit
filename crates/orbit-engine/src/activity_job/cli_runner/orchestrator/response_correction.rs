@@ -1,6 +1,7 @@
-//! Bounded correction of a reply the response parser rejected, either for
+//! Bounded correction of rejected provider output, either for
 //! saying `success` and carrying an `error` object [ORB-22426] or for ending a
-//! clean turn in prose with no envelope [ORB-22427].
+//! clean turn in prose with no envelope [ORB-22427], or for Claude's exact
+//! structured-output retry exhaustion terminal [ORB-22663].
 //!
 //! The parser stays the authority: a correction hands the rejected reply back
 //! to a fresh invocation, and the step succeeds only if that invocation's own
@@ -29,6 +30,8 @@ const CORRECTION_INPUT_KEY: &str = "response_correction";
 pub(super) const CONTRADICTORY_REPLY: &str = "contradictory_reply";
 /// `rejection` of a clean turn that ended without an envelope.
 pub(super) const MISSING_ENVELOPE: &str = "missing_envelope";
+/// `rejection` of Claude's provider-owned structured-output retry exhaustion.
+pub(super) const STRUCTURED_OUTPUT_EXHAUSTED: &str = "structured_output_retry_exhausted";
 
 /// Why a requested correction did not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +104,7 @@ impl ResponseCorrectionRun<'_> {
                 round = rounds,
                 max_rounds = self.policy.max_rounds,
                 remaining_seconds = remaining.as_secs(),
-                "correcting a reply the response parser rejected"
+                "correcting rejected provider output"
             );
             let mut correction_spec = self.spec.clone();
             correction_spec.wall_clock_timeout_seconds = remaining.as_secs().max(1);

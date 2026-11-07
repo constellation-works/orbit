@@ -45,6 +45,7 @@ pub(super) struct CompletionFailureInput<'a> {
     pub(super) provider_auth_error: Option<String>,
     pub(super) provider_refusal: Option<String>,
     pub(super) provider_limit: Option<String>,
+    pub(super) structured_output_exhaustion: Option<String>,
     pub(super) muse_terminal_failure: Option<String>,
     pub(super) sandbox_write_diagnostic: &'a Option<String>,
     pub(super) print_timeout: Option<Duration>,
@@ -82,6 +83,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         provider_auth_error,
         provider_refusal,
         provider_limit,
+        structured_output_exhaustion,
         muse_terminal_failure,
         sandbox_write_diagnostic,
         print_timeout,
@@ -215,6 +217,11 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 provider_invocation_diagnostic(trace_stdout_text, stderr_text.as_ref())
                     .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction))
             })
+            .or_else(|| {
+                structured_output_exhaustion
+                    .as_ref()
+                    .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
+            })
             // Antigravity writes terminal `ERROR` on stdout and often
             // leaves stderr empty. Read the raw capture: normalization
             // drops failed terminals so they cannot satisfy completion.
@@ -332,6 +339,11 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         } else {
             Some(diagnostic)
         }
+    } else if let Some(diagnostic) = structured_output_exhaustion {
+        Some(with_sandbox_write_attribution(
+            diagnostic,
+            sandbox_write_diagnostic.as_deref(),
+        ))
     } else if let Some(budget) = print_timeout.filter(|_| print_timeout_reached) {
         Some(with_sandbox_write_attribution(
             format!(

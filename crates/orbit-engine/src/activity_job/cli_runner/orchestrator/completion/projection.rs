@@ -13,18 +13,18 @@ use super::super::super::stdout_preview::{
 };
 use super::super::limit::{record_limit, record_usage_windows, structured_provider_limit};
 use super::ProviderExit;
-use super::failure;
 use super::frames::{
     provider_reported, provider_reported_failure, structured_provider_auth_error,
     structured_provider_refusal,
 };
+use super::{failure, frames};
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
     muse_terminal_failure_diagnostic, normalize_cli_stdout, project_cli_response,
     provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_long_prompt_requests, provider_usage_limit,
+    provider_invocation_diagnostic, provider_long_prompt_requests, provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
 use serde_json::Value;
@@ -156,6 +156,7 @@ pub(in super::super) fn project_completion(
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
     let raw_stdout_text = String::from_utf8_lossy(stdout.protocol_bytes());
+    let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
     let stdout_preview =
         stdout_text_preview(raw_stdout_text.as_ref(), redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
@@ -213,6 +214,10 @@ pub(in super::super) fn project_completion(
     let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
     // [ORB-14695] So does Claude's terminal error result for a usage limit.
     let provider_limit = structured_provider_limit(&provider, stdout.protocol_bytes());
+    let structured_output_exhaustion = (!stdout.truncated())
+        .then(|| frames::claude_structured_output_exhaustion(&provider, stdout.protocol_bytes()))
+        .flatten()
+        .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction));
     // [ORB-16597] A non-completed Muse terminal's own failure reason, for
     // the operator diagnostic on either exit path. Classification of that
     // reason stays with the shared readers above and below.
@@ -226,6 +231,7 @@ pub(in super::super) fn project_completion(
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
+        && structured_output_exhaustion.is_none()
         && muse_terminal_failure.is_none()
         && !completion_protocol_violation
         && !print_timeout_reached
@@ -242,6 +248,7 @@ pub(in super::super) fn project_completion(
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
+        && structured_output_exhaustion.is_none()
         && muse_terminal_failure.is_none()
         && !print_timeout_reached)
         .then(|| {
@@ -272,7 +279,7 @@ pub(in super::super) fn project_completion(
             .and_then(|result| result.as_ref().err())
     })
     .flatten();
-    let response_correction_request = parse_rejection
+    let mut response_correction_request = parse_rejection
         .and_then(|error| {
             if is_success_carrying_error_violation(error) {
                 if completion_protocol_violation {
@@ -296,7 +303,7 @@ pub(in super::super) fn project_completion(
                 && !provider_reported_ending(
                     &provider,
                     stdout.protocol_bytes(),
-                    &String::from_utf8_lossy(stderr.protocol_bytes()),
+                    &stderr_text,
                     duration,
                 );
             if !clean_omission {
@@ -322,6 +329,35 @@ pub(in super::super) fn project_completion(
                 "rejected_reply_truncated": truncated,
             })
         });
+
+    // A failed process remains failed. Only this provider-owned formatting
+    // terminal may ask the existing read-only loop for a fresh answer. Do not
+    // project prior StructuredOutput tool arguments, or treat a partial stream
+    // as proof that nothing else ended the invocation.
+    if spec.response_correction.is_some()
+        && spec.require_response_envelope
+        && exit_code == Some(1)
+        && !timed_out
+        && !stalled
+        && !stderr.truncated()
+        && !stderr_text.to_ascii_lowercase().contains("api error")
+        && sandbox_write_diagnostic.is_none()
+        && provider_auth_error.is_none()
+        && provider_refusal.is_none()
+        && provider_limit.is_none()
+        && !completion_status_failure
+        && let Some(diagnostic) = structured_output_exhaustion.as_ref()
+        && !provider_reported_ending(&provider, stdout.protocol_bytes(), &stderr_text, duration)
+        && provider_invocation_diagnostic(&trace_stdout_text, &stderr_text).is_none()
+    {
+        response_correction_request = Some(serde_json::json!({
+            "rejection": super::super::response_correction::STRUCTURED_OUTPUT_EXHAUSTED,
+            "rejected_reply": diagnostic,
+            // There is no accepted answer to copy: the terminal diagnostic is
+            // all this request carries, and the whole result must be supplied.
+            "rejected_reply_truncated": true,
+        }));
+    }
 
     // A conflict-recovery provider repairs files only. Once its process has
     // satisfied the activity completion contract, the host-side boundary
@@ -356,7 +392,15 @@ pub(in super::super) fn project_completion(
             duration.as_millis() as u64,
             success,
         )
-    };
+    }
+    .or_else(|| {
+        spec.response_correction.map(|_| {
+            // A provider formatting failure has no valid Orbit envelope, but
+            // its invocation still belongs in the correction's trace history.
+            ParsedStdout::parse(trace_stdout_text.as_ref())
+                .cli_invocation_trace(duration.as_millis() as u64)
+        })
+    });
     // [ORB-19680] Prompt-size price tiers key on each request's own prompt,
     // which the totals above cannot show. Codex identifies its rollout from
     // thread.started and turn.started, which can live in the redacted retained
@@ -405,6 +449,7 @@ pub(in super::super) fn project_completion(
         provider_auth_error,
         provider_refusal,
         provider_limit,
+        structured_output_exhaustion,
         muse_terminal_failure,
         sandbox_write_diagnostic: &sandbox_write_diagnostic,
         print_timeout,

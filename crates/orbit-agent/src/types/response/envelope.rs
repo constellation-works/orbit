@@ -88,6 +88,19 @@ impl<'a> ParsedStdout<'a> {
         self.raw
     }
 
+    /// Extract telemetry independently of response-envelope validity or exit
+    /// alignment. A failed formatting attempt still spent provider tokens.
+    /// Invalid JSON yields only the observed duration, never an answer.
+    pub fn cli_invocation_trace(&self, duration_ms: u64) -> InvocationTrace {
+        match self.json_documents() {
+            Ok(documents) => extract_invocation_trace(documents, duration_ms),
+            Err(_) => InvocationTrace {
+                duration_ms,
+                ..InvocationTrace::default()
+            },
+        }
+    }
+
     fn json_documents(&self) -> Result<&[Value], OrbitError> {
         self.documents
             .as_ref()
@@ -406,13 +419,7 @@ fn synthesize_trace_from_parsed(
     exec_result: &ExecutionResult,
     parsed: &ParsedStdout<'_>,
 ) -> InvocationTrace {
-    match parsed.json_documents() {
-        Ok(documents) => extract_invocation_trace(documents, exec_result.duration_ms),
-        Err(_) => InvocationTrace {
-            duration_ms: exec_result.duration_ms,
-            ..InvocationTrace::default()
-        },
-    }
+    parsed.cli_invocation_trace(exec_result.duration_ms)
 }
 
 fn synthetic_error_message(exec_result: &ExecutionResult) -> String {
