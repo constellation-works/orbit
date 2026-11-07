@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_config::CrewPerformanceType;
+use orbit_config::TaskTypeDefinition;
 use serde_json::{Value, json};
 
 use super::performance::{
@@ -24,7 +24,7 @@ use crate::application::agents::{AgentFacts, ExecutionScope};
 pub(in crate::application::agents::roles) fn per_task_rows(
     facts: &AgentFacts,
     since: DateTime<Utc>,
-    types: &[CrewPerformanceType],
+    types: &[TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<Value> {
     let work = work_by_row(facts, since, execution);
@@ -116,7 +116,7 @@ fn raw_against(
 pub(in crate::application::agents::roles) fn by_type_cells(
     facts: &AgentFacts,
     since: DateTime<Utc>,
-    types: &[CrewPerformanceType],
+    types: &[TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<Value> {
     let work = work_by_row(facts, since, execution);

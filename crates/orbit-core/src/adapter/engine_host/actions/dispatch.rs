@@ -165,12 +165,6 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
-        // The hourly crew-performance snapshot refresh: rebuild the
-        // by-type cell matrix from a scorecard scan and persist it for
-        // draws. No-ops without scanning while the feature is off.
-        CoreDeterministicAction::CrewPerformanceRefresh => runtime
-            .refresh_crew_performance_snapshot()
-            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // Publish only this workspace, with an explicit successful skip when unbound.
         CoreDeterministicAction::TaskPublication => runtime
             .run_workspace_task_publication()

@@ -95,8 +95,7 @@ Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
 Seeded schedules are disabled until an operator deliberately enables them, except
-two shipped defaults that are seeded enabled when the seeding policy selects
-them: the `crew-performance-refresh` routine (it no-ops while
-`workflow.crew_performance` is `off`) and the `host-health` auto-task. Preserve
+the `host-health` auto-task, which is seeded enabled when the seeding policy
+selects it. Preserve
 existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.

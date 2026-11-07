@@ -264,7 +264,6 @@ Retired features are removed from this table along with their folder.
 | Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Cloud Dispatch | [docs/design/cloud-dispatch/](./cloud-dispatch/) | claude |
 | Crew Credentials | [docs/design/crew-credentials/](./crew-credentials/) | claude |
-| Crew Performance | [docs/design/crew-performance/](./crew-performance/) | claude |
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Experiments | [docs/design/experiments/](./experiments/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |

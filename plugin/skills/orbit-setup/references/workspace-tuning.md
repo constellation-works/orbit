@@ -260,7 +260,7 @@ revisit each one whenever you retune the tiers. Guidance:
 
 `workflow.type_complexity_crews.<type>.<tier>` overrides one tier's pool for
 one kind of work, such as routing hard UI work to the crew that renders and
-checks UI best. Types come from `[[workflow.crew_performance_types]]`, which
+checks UI best. Types come from `[[workflow.task_types]]`, which
 also feed the implementer scorecard, so define them first:
 
 - Keep the list short (about five to eight types) so each type and tier
@@ -271,8 +271,8 @@ also feed the implementer scorecard, so define them first:
   classify as code work.
 - Derive tags and paths from the backlog survey: the tags the repository
   already uses, and the source trees each kind of work lives in.
-- Editing the list re-sorts history and makes the performance snapshot
-  `type_list_changed` until its next hourly refresh.
+- Editing the list re-sorts the scorecard's history and re-routes open tasks
+  on their next draw.
 
 Then add type pools only where a kind of work measurably needs a different
 crew, usually at `hard`. Every member must be a defined, enabled crew with a
@@ -294,22 +294,13 @@ implementer scorecard's size curves once deliveries accumulate, and keep
 so both efforts keep getting data. Bands, signals, refusals and readback
 verification: [Automatic effort selection](configuration.md#automatic-effort-selection-crewauto).
 
-### Draw policy: `workflow.crew_selection` and `workflow.crew_performance`
+### Draw policy: `workflow.crew_selection`
 
 - **`crew_selection`**: `static` draws on the configured weights.
   `usage_pressure` scales each member by its provider's weekly usage pressure,
   so capacity about to reset is spent first. Use it when the pools span
   subscription providers that report weekly usage windows; leave `static` for
   pay-per-use accounts or a single provider.
-- **`crew_performance`**: weighs draws by each crew's implementer score on the
-  task's type and tier. Always start in `shadow_comparative` or
-  `shadow_absolute`: draws stay unchanged and the factor is recorded. After
-  draws accumulate, read
-  `orbit agents scorecard --role implementers --by-type --shadow --window 30d`
-  and switch to the live mode only when the cells you care about have enough
-  deliveries (`n`) and the would-be shares look right. `comparative` moves
-  each crew toward the types it does best; `absolute` moves work toward the
-  best crew for each type. Choosing to go live is the user's decision.
 - **Provider limits.** Keep `workflow.provider_limit_max_used_pct` near its
   default so a nearly exhausted window stops new draws. Use
   `provider_limit_overrides` (`provider:100` to wait for exhaustion,
@@ -407,7 +398,7 @@ Changes apply to deliveries recorded afterwards.
 1. **Write the workspace file on the owner** from the operator's shell.
    `orbit config set <key> <value>` writes scalars and arrays. Write tables
    (`generated_paths`, `type_complexity_crews`, `lock_modes`,
-   `crew_performance_types`) in the file, where they stay readable;
+   `task_types`) in the file, where they stay readable;
    `review_skip_tags` and `tag_instructions` can only be written there. Keep a dated backup of the
    previous file and record the previous values where the user tracks
    operational changes.
@@ -455,16 +446,16 @@ light_delivery_paths = ["docs/**", "**/*.md", "!app/**", "!gateway/**", ".github
 pattern = '^gateway/api/openapi\.json$'
 mode = "shared"
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "review"
 tags = ["no-diff-expected"]
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "ui"
 tags = ["ui"]
 paths = ["app/**"]
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "gateway"
 paths = ["gateway/**"]
 

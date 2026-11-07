@@ -77,13 +77,7 @@ Delivery workflows run `git push` and `git fetch` against your repository's
 remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
 host you configured, under that host's terms. Scheduled routines that contact
-GitHub or perform delivery are shipped disabled until you enable them. The
-crew-performance refresh is a local exception: it is seeded enabled and
-scheduled hourly. While `workflow.crew_performance` is `off` (the default),
-its action skips the scan and writes no snapshot. Unattended hourly runs
-require the host's Orbit scheduler clock to be enabled, but an operator can
-still run a due refresh with `orbit clock tick` while scheduled ticks are
-paused.
+GitHub or perform delivery are shipped disabled until you enable them.
 
 ### Task publication (optional)
 

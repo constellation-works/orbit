@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use orbit_config::{CrewPerformanceType, classify_task_type};
+use orbit_config::{TaskTypeDefinition, classify_task_type};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
@@ -695,7 +695,7 @@ pub(super) fn admitted_tags(task: &TaskFacts, since: DateTime<Utc>) -> &[String]
 pub(super) fn configured_type(
     task: &TaskFacts,
     since: DateTime<Utc>,
-    types: &[CrewPerformanceType],
+    types: &[TaskTypeDefinition],
 ) -> String {
     classify_task_type(types, admitted_tags(task, since), &task.context_files).to_string()
 }

@@ -47,6 +47,11 @@ pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
         "scheduled shipping was removed; `orbit run auto` drains dispatch the backlog and \
          `orbit run ship` ships on demand",
     ),
+    (
+        "crew_performance_refresh_pipeline",
+        "crew-performance weighting and the scorecard snapshot it refreshed were removed; \
+         workflow.type_complexity_crews routes by type with no snapshot",
+    ),
 ];
 
 /// Why a routine targeting `job` is retired, when that job is one a prior

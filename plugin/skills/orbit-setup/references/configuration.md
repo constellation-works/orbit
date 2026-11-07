@@ -148,7 +148,7 @@ orbit config get seeding.auto_tasks
 orbit routine list
 orbit auto-task list
 
-orbit config set seeding.routines '["worktree_gc", "store_gc", "crew_performance_refresh"]'
+orbit config set seeding.routines '["worktree_gc", "store_gc", "task_pilot"]'
 orbit config set seeding.auto_tasks '["doc-duties", "qa-sweep"]'
 orbit config get seeding.routines
 orbit config get seeding.auto_tasks
@@ -177,9 +177,8 @@ orbit doctor
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
   from enabling it: shipped auto-tasks start disabled, except `host-health`,
-  which ships enabled. Every routine except `crew-performance-refresh` starts
-  disabled; that one starts enabled and no-ops while
-  `workflow.crew_performance` is `off`. Preserve existing enablement choices.
+  which ships enabled. Every routine starts disabled. Preserve existing
+  enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use
@@ -198,11 +197,6 @@ list` and sync warnings for actual definitions and enablement. `orbit doctor`
 does not report excluded defaults as missing. Its `seeding-policy` row explains
 non-default policies; no such row is emitted when both keys are `all`.
 
-If `workflow.crew_performance` is anything other than `off` and the routine
-policy excludes `crew_performance_refresh`, doctor adds a `seeding-policy`
-warning: nothing refreshes the snapshot crew draws read. Either keep crew
-performance off or include that routine and sync; also verify the host clock
-and routine state as described in [Crew performance snapshot](automation.md#crew-performance-snapshot).
 For applying policy together with config and plugin enables from a reviewed
 file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 
@@ -227,9 +221,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
 | `workflow.crew_selection` | `static` (default) draws on configured weights; `usage_pressure` scales task creation, re-rate and admission draws by each crew's weekly usage pressure (`weight × clamp(pressure^strength, 1/cap, cap)`) and re-draws a system-chosen crew at admission, keeping its crew source. A pull follower re-draws a claimed leaf's system-chosen crew on its own readings and reports per-crew pressure so the owner offers it first, among tied tasks, the ones whose pools hold its highest-pressure crews. Explicit crews are never re-drawn. `workflow.usage_pressure_cap` (default 8, at least 1) and `workflow.usage_pressure_strength` (default 1.0, at least 0; 0 disables) tune it. Not the run's recorded `crew_selection`. |
 | `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider, or for a crew that sets `env`, its own account (`opus-credits:200usd/30d`). Spend is this host's invocation ledger. None by default. |
-| `workflow.crew_performance_types` | Ordered task types for the implementer scorecard's by-type matrix (`orbit agents scorecard --role implementers --by-type`). Each entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first matching type, else `other`. Empty (default) means every task is `other`. |
-| `workflow.crew_performance` | `off` (default), `absolute`, `comparative`, `shadow_absolute` or `shadow_comparative`. A live mode weighs task creation, re-rate and admission draws by each pool member's implementer score on the task's type and tier from the hourly snapshot (`weight × pressure_factor × clamp(exp(strength × advantage / 100), 1/cap, cap)`) and records `applied: true`. `absolute` favours the best crew for the type; `comparative` the type each crew does best against its own mean. Shadow computes and records the same factor with `applied: false` and draws as `off` would; usage pressure still applies, and the snapshot still refreshes. Before enabling a live mode, `orbit agents scorecard --role implementers --by-type --shadow --window 30d` shows each crew's static share, the share actually drawn, and the would-be share with the recorded factor. Draws with no performance record are listed separately and counted as static. Composes with `workflow.crew_selection`; never re-draws an assigned or explicit crew by itself. A missing, stale or mismatched snapshot gives factor 1 with the reason recorded. `workflow.crew_performance_strength` (default 3, at least 0; 0 disables) and `workflow.crew_performance_cap` (default 4, at least 1) tune it. Only `off` skips the hourly snapshot scan. Fed by the seeded `crew-performance-refresh` routine — [automation.md](automation.md#crew-performance-snapshot). |
-| `workflow.crew_performance_window_days` | Evidence window in days (1..=90, default 30) the crew-performance snapshot is built from. Fed by the seeded `crew-performance-refresh` routine — [automation.md](automation.md#crew-performance-snapshot). |
+| `workflow.task_types` | Ordered task types that `workflow.type_complexity_crews` routes by and the implementer scorecard's by-type matrix (`orbit agents scorecard --role implementers --by-type`) splits by. Each entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first matching type, else `other`. Empty (default) means every task is `other`. The former name `workflow.crew_performance_types` loads into it with a deprecation warning until 2026-12-07; `orbit doctor --fix-retired-config-keys` rewrites it. `workflow.crew_performance`, `_strength`, `_cap` and `_window_days` are deprecated and ignored: crew-performance weighting was removed. |
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |

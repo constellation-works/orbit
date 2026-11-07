@@ -224,7 +224,7 @@ class DiscoveryCliTest(unittest.TestCase):
         block_lines = [
             line.strip()
             for line in text.splitlines()
-            if line.strip() in ("[[workflow.crew_performance_types]]",)
+            if line.strip() in ("[[workflow.task_types]]",)
             or line.strip().startswith(("name = ", "tags = ", "paths = "))
         ]
         self.assertEqual(

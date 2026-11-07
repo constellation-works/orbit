@@ -397,14 +397,11 @@ impl OrbitRuntime {
         };
         let (crews, draw_source) = self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
         let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
-        // The claimed snapshot carries no tags or context files to type the
-        // task by, and a follower keeps no performance snapshot of its own,
-        // so this re-draw weighs this host's usage pressure only.
+        // This re-draw weighs this host's usage pressure.
         let weighting = weighted_candidates(
             &mut crews,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
-            || None,
         );
         if weighting.is_none() {
             return Ok(None);

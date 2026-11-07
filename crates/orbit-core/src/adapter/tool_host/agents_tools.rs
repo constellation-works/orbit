@@ -21,7 +21,6 @@ pub(super) fn dispatch(
     )?
     .with_execution(input.optional_string("execution")?.as_deref())?;
     let by_type = input.optional_bool("by_type")?.unwrap_or(false);
-    let shadow = input.optional_bool("shadow")?.unwrap_or(false);
     let per_task = input.optional_bool("per_task")?.unwrap_or(false);
     match verb {
         AgentsVerb::Scorecard if per_task => {
@@ -30,20 +29,12 @@ pub(super) fn dispatch(
                     "per_task is only supported for implementers".to_string(),
                 ));
             }
-            if shadow || by_type {
+            if by_type {
                 return Err(OrbitError::InvalidInput(
-                    "per_task cannot be combined with by_type or shadow".to_string(),
+                    "per_task cannot be combined with by_type".to_string(),
                 ));
             }
             runtime.agent_per_task_export(&query)
-        }
-        AgentsVerb::Scorecard if shadow => {
-            if !by_type || role != AgentRole::Implementers {
-                return Err(OrbitError::InvalidInput(
-                    "shadow is only supported for implementers with by_type".to_string(),
-                ));
-            }
-            runtime.agent_shadow_scorecard(&query)
         }
         AgentsVerb::Scorecard if by_type => {
             if role != AgentRole::Implementers {

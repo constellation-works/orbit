@@ -27,9 +27,8 @@ and auto-tasks file recurring chores as ordinary tasks.
 :::tip[Let your agent set it up]
 Ask your agent to **schedule a weekly QA sweep** or **publish task snapshots
 weekly**. The `orbit-setup` skill installs the clock, then enables the
-routine or auto-task you asked for. Most ship disabled; the hourly crew-performance
-refresh and the `host-health` auto-task are enabled by default. The refresh does
-no scan while crew performance is off.
+routine or auto-task you asked for. Most ship disabled; the `host-health`
+auto-task is enabled by default.
 :::
 
 ## The host scheduler clock
@@ -91,9 +90,8 @@ becomes true for a subject (`condition`); see
   publication, worktree and store GC, CI and dependency-alert sweeps, the
   daily UX-rules routine, the finding-verification and pilot-warning
   triage routines, and the resident-cycle and weekly evolution-pass
-  routines, all with `enabled: false`. The hourly crew-performance
-  refresh routine and the `host-health` auto-task are seeded enabled. While
-  crew performance is off, the refresh skips the scan and writes no snapshot.
+  routines, all with `enabled: false`. The `host-health` auto-task is seeded
+  enabled.
 
 Routine files and scheduler state are per machine; git does not share them.
 

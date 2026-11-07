@@ -26,10 +26,6 @@ use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::application::auto_tasks::retired::{RETIRED_AUTO_TASK_FILES, RetiredAutoTask};
 use crate::application::routines::seed::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
 
-/// The routine whose seeded-enabled default records the hourly
-/// crew-performance snapshot.
-pub const CREW_PERFORMANCE_REFRESH_ROUTINE: &str = "crew_performance_refresh";
-
 // `orbit-config` admits policy names against its own lists; these keep them
 // equal to the embedded asset tables, so a default added or retired here
 // without updating config admission fails the build.

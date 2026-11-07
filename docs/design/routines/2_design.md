@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-02
+last_updated: 2026-11-07
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -384,8 +384,9 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
 and `task_publication.yaml` with workspace-unique names and `enabled: false`.
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
-enabled: hourly at :23 it skips scanning and writes no snapshot while
-`workflow.crew_performance` is `off`, but still records a job run.
+enabled hourly; [ORB-22804] retired it (template under `routines/retired/`, its
+`crew_performance_refresh_pipeline` job in `RETIRED_ROUTINE_JOBS`) with crew-performance
+weighting.
 [ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
 `missed_run: skip`, `overlap: forbid`, owner-only, and a successful
 `publication_unbound` skip when no publication target is configured.
@@ -1109,6 +1110,7 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-17744] moved blocked-task triage onto the block_escalated state routine.
 - [ORB-20629] retired that routine and the `block_escalated` trigger; final recovery decides blocked tasks.
 - [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
+- [ORB-22804] retired that routine and its job with crew-performance weighting.
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
 

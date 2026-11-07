@@ -334,7 +334,6 @@ impl OrbitRuntime {
                 &mut members,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
-                || None,
             );
             let members = permitted_candidates(members, &pool.source, allowlist.as_ref())?;
             Some(
@@ -388,27 +387,13 @@ impl OrbitRuntime {
             source = filtered_source;
             implementer_without_vision = without_vision;
         }
-        // [ORB-17770] Weigh the narrowed pool by usage pressure and crew
-        // performance; an explicit run crew is the operator's call and has
-        // no draw to weigh. Performance never widens the pool: only the
-        // usage-pressure view above re-draws an assigned crew.
+        // [ORB-17770] Weigh the narrowed pool by usage pressure; an
+        // explicit run crew is the operator's call and has no draw to weigh.
         let weighting = if explicit.is_none() {
             weighted_candidates(
                 &mut crews,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
-                || {
-                    experiment_pool
-                        .is_none()
-                        .then(|| {
-                            self.crew_performance_read(
-                                task.complexity,
-                                &task.tags,
-                                &task.context_files,
-                            )
-                        })
-                        .flatten()
-                },
             )
         } else {
             None
@@ -487,7 +472,7 @@ impl OrbitRuntime {
             // The odds this draw ran on, renormalised over the permitted
             // members, so `orbit run show` can explain the choice.
             // A weighted draw adds each member's `pressure` [ORB-17770]
-            // and `performance` factor, and the `effective_weight` it drew on.
+            // and the `effective_weight` it drew on.
             "eligible_pool": candidates
                 .iter()
                 .map(|candidate| match &weighting {
@@ -516,7 +501,6 @@ impl OrbitRuntime {
         }
         if let Some(pool) = experiment_pool {
             input[SELECTION_KEY]["experiment_overlay_digest"] = json!(pool.digest);
-            input[SELECTION_KEY]["performance_weighting"] = json!(false);
             if let Some(planned) = planned.filter(|planned| planned != &selected.crew.name) {
                 input[SELECTION_KEY]["deviation"] = json!({
                     "intended_crew": planned, "actual_crew": selected.crew.name, "reason": source,
@@ -812,28 +796,10 @@ fn usage_pressure_redraw_note(
             |pressure| pressure.describe(now),
         )
     };
-    let mut note = format!(
+    format!(
         "crew redrawn from {source} (`{original}`) to {source} (`{replacement}`) at admission \
          under usage pressure: `{original}` {}, `{replacement}` {}",
         describe(original),
         describe(replacement),
-    );
-    // The re-draw names the performance factor only when it changed the
-    // tickets. A shadow factor is recorded on the run and left out of
-    // this note, because the draw did not use it.
-    if weighting.performance_applied()
-        && let Some((mode, _)) = weighting.performance_lens()
-    {
-        let performance = |crew: &str| {
-            weighting
-                .performance_description(crew)
-                .unwrap_or_else(|| "×1".to_string())
-        };
-        note.push_str(&format!(
-            "; crew performance {mode}: `{original}` {}, `{replacement}` {}",
-            performance(original),
-            performance(replacement),
-        ));
-    }
-    note
+    )
 }

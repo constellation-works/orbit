@@ -292,13 +292,10 @@ orbit clock repair                   # rewrite a unit naming a missing, moved or
 orbit clock set --cadence-seconds 300
 ```
 
-The shipped `crew_performance_refresh` routine is enabled; its scheduled
-pipeline still records a job run hourly (`23 * * * *`). While
-`workflow.crew_performance` is off (the default), that run skips scanning and
-writes no snapshot. The `host-health` auto-task is the one shipped auto-task
+The `host-health` auto-task is the one shipped auto-task
 enabled by default: once the clock above is installed, it runs a daily
 host-health pass (`10 7 * * *`). Every other shipped auto-task, and every
-shipped routine except `crew_performance_refresh`, remains disabled by default;
+shipped routine, remains disabled by default;
 enabling them follows the
 [automation reference](../../crates/orbit-core/assets/skills/orbit-setup/references/automation.md).
 The service's `ExecStart` names the Orbit binary that installed it, so rerun

@@ -105,7 +105,7 @@ const SELECTION: &[ParamSpec] = &[
 const BY_TYPE: &[ParamSpec] = &[both(
     "by_type",
     ParamType::Switch,
-    "Split implementers into (crew, model, tier, type) cells using workflow.crew_performance_types, with two-level shrinkage; implementers only.",
+    "Split implementers into (crew, model, tier, type) cells using workflow.task_types, with two-level shrinkage; implementers only.",
     CliArgKind::flag("by-type"),
     "Show implementers split by task type within each tier",
 )];
@@ -114,18 +114,9 @@ const BY_TYPE: &[ParamSpec] = &[both(
 const PER_TASK: &[ParamSpec] = &[both(
     "per_task",
     ParamType::Switch,
-    "Export one row per implemented task for offline analysis, with its crew, model, tier, configured type, tags, context-file path prefixes and per-term counts; implementers only, and not with by_type or shadow.",
+    "Export one row per implemented task for offline analysis, with its crew, model, tier, configured type, tags, context-file path prefixes and per-term counts; implementers only, and not with by_type.",
     CliArgKind::flag("per-task"),
     "Export one row per implemented task for offline analysis",
-)];
-
-/// The shadow share report, implementers with `--by-type` only.
-const SHADOW: &[ParamSpec] = &[both(
-    "shadow",
-    ParamType::Switch,
-    "For implementers with by_type, report each crew's static, drawn and would-be share from recorded draws instead of the cell matrix. Draws without a performance record are counted separately as static.",
-    CliArgKind::flag("shadow"),
-    "Compare recorded draw shares with the shares the recorded factor would have given",
 )];
 
 const MODEL: &[ParamSpec] = &[mcp_only(
@@ -138,18 +129,18 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type`, `shadow` and `per_task` switch implementers' output to a per-type cell matrix, a draw-share report or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    tool_description: "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     cli_about: "Show one role's scorecard rows by crew and model",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.\n\n`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,\ndrawn and would-be share from recorded draws in the window.\n\n`--per-task` (implementers only) exports one row per implemented task for offline analysis;\nuse --json for the machine-readable export.",
+            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.\n\n`--per-task` (implementers only) exports one row per implemented task for offline analysis;\nuse --json for the machine-readable export.",
         ),
         flag_order: &[],
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[ROLE, SELECTION, BY_TYPE, SHADOW, PER_TASK, MODEL],
+    params: &[ROLE, SELECTION, BY_TYPE, PER_TASK, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

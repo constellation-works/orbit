@@ -23,11 +23,9 @@
 //! in the state trigger's owner. Most seeded routines are disabled when
 //! written; they exist so a fresh workspace gets reviewable, opt-in schedules
 //! without silently enabling unattended work. `worktree_gc` and `task_pilot`
-//! are seeded enabled, and so is `crew_performance_refresh`, because, while
-//! `workflow.crew_performance` is `off`, its action skips the scan and
-//! writes no snapshot (it still records a job run each hour). `enabled` is
-//! the operator's: a refresh onto a changed template keeps the on-disk
-//! value, so a workspace seeded while a default was disabled stays disabled.
+//! are seeded enabled. `enabled` is the operator's: a refresh onto a changed
+//! template keeps the on-disk value, so a workspace seeded while a default was
+//! disabled stays disabled.
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -94,10 +92,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/store_gc.yaml"),
     ),
     (
-        "crew_performance_refresh",
-        include_str!("../../../assets/routines/crew_performance_refresh.yaml"),
-    ),
-    (
         "ux-rules",
         include_str!("../../../assets/routines/ux-rules.yaml"),
     ),
@@ -131,6 +125,10 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "blocked_task_triage",
         include_str!("../../../assets/routines/retired/blocked_task_triage.yaml"),
+    ),
+    (
+        "crew_performance_refresh",
+        include_str!("../../../assets/routines/retired/crew_performance_refresh.yaml"),
     ),
 ];
 

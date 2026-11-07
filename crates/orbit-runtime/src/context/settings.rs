@@ -106,12 +106,9 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
-    /// `workflow.crew_performance_types`: the scorecard's task-type lens.
-    crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
-    /// `workflow.crew_performance`: whether the snapshot refresh scans.
-    crew_performance: orbit_config::CrewPerformanceMode,
-    /// `workflow.crew_performance_window_days`: the snapshot's window.
-    crew_performance_window_days: u32,
+    /// `workflow.task_types`: the ordered task types type pools route by
+    /// and the implementer scorecard's by-type lens.
+    task_types: Vec<orbit_config::TaskTypeDefinition>,
     /// `[decision_channel] enabled`: raise decision requests for held work.
     decision_channel_enabled: bool,
     /// `lease.*`: whether path leases are accepted and the per-class guards
@@ -180,9 +177,7 @@ impl OrbitRuntimeSettings {
             orbit_common::fs::path_filter::PathFilter,
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
-        crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
-        crew_performance: orbit_config::CrewPerformanceMode,
-        crew_performance_window_days: u32,
+        task_types: Vec<orbit_config::TaskTypeDefinition>,
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
@@ -237,9 +232,7 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
             regression_risk,
-            crew_performance_types,
-            crew_performance,
-            crew_performance_window_days,
+            task_types,
             decision_channel_enabled,
             lease_policy,
             experiments,
@@ -277,12 +270,8 @@ impl OrbitRuntimeSettings {
         &self.notice
     }
 
-    pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
-        &self.crew_performance_types
-    }
-
-    pub(crate) fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
-        self.crew_performance
+    pub(crate) fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {
+        &self.task_types
     }
 
     /// Admitted attachment policy for scheduled task publication.
@@ -293,10 +282,6 @@ impl OrbitRuntimeSettings {
     /// Whether the operator explicitly accepts unscanned routine attachments.
     pub fn publication_routine_allow_unscanned_attachments(&self) -> bool {
         self.publication_routine_allow_unscanned_attachments
-    }
-
-    pub(crate) fn crew_performance_window_days(&self) -> u32 {
-        self.crew_performance_window_days
     }
 
     pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {

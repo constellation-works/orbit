@@ -21,7 +21,9 @@
 //!   "strict"`; a boolean `machine.worker_containment` is read by the row's
 //!   own resolver, so the file keeps its spelling and still warns;
 //! - `workflow.validation_env.login_shell` / `.interactive` →
-//!   `workflow.validation_env.shell_probe`.
+//!   `workflow.validation_env.shell_probe`;
+//! - `workflow.crew_performance_types` → `workflow.task_types`, the same
+//!   ordered entries under the name type-pool routing reads [ORB-22804].
 //!
 //! The paired switches layered one key at a time, so a workspace file could
 //! state one half and inherit the other. Translating such a file needs the
@@ -79,6 +81,7 @@ const REPLACEMENT_KEYS: &[&str] = &[
     crate::operation::REVIEW_MINUTES_KEY,
     WORKER_CONTAINMENT_KEY,
     SHELL_PROBE_KEY,
+    crate::TASK_TYPES_KEY,
 ];
 
 /// Why a document is translated.
@@ -119,6 +122,11 @@ fn translate(
     translate_review_timing(document, lower, config_path, purpose)?;
     translate_worker_containment(document, config_path)?;
     translate_shell_probe(document, lower, config_path)?;
+    rename(
+        document,
+        crate::LEGACY_TASK_TYPES_KEY,
+        crate::TASK_TYPES_KEY,
+    );
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-//! Type crew pools: per `workflow.crew_performance_types` type and complexity
+//! Type crew pools: per `workflow.task_types` type and complexity
 //! tier, a weighted pool (`workflow.type_complexity_crews.<type>.<tier>`)
 //! that replaces that tier's complexity pool for a task of the type.
 //!
@@ -44,8 +44,7 @@ impl OrbitRuntime {
         // Classification compiles path globs, so a workspace without type
         // pools skips it.
         pools.iter().next()?;
-        let task_type =
-            orbit_config::classify_task_type(self.crew_performance_types(), tags, context_files);
+        let task_type = orbit_config::classify_task_type(self.task_types(), tags, context_files);
         if task_type == OTHER_TYPE {
             return None;
         }

@@ -233,6 +233,27 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.crew_ladder.min_grade_coverage",
         CREW_LADDER_REMOVED_NOTE,
     ),
+    // [ORB-22804] The task-type list keeps routing type pools under its new
+    // name; the performance weighting and its scorecard snapshots are gone.
+    (
+        "workflow.crew_performance_types",
+        "translated to workflow.task_types, the same ordered entries \
+     workflow.type_complexity_crews routes by; rename the tables to [[workflow.task_types]]. \
+     This spelling stops being recognised after 2026-12-07",
+    ),
+    ("workflow.crew_performance", CREW_PERFORMANCE_REMOVED_NOTE),
+    (
+        "workflow.crew_performance_strength",
+        CREW_PERFORMANCE_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_performance_cap",
+        CREW_PERFORMANCE_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_performance_window_days",
+        CREW_PERFORMANCE_REMOVED_NOTE,
+    ),
     // [ORB-22805] The explore brief was removed on 2026-11-07. Each key loads,
     // warns and is ignored; code-health-sweep deletes these entries after
     // 2026-12-07, when they become ordinary unknown settings.
@@ -247,6 +268,11 @@ const EXPLORE_BRIEF_REMOVED_NOTE: &str = "ignored: the task pilot's explore brie
 const CREW_LADDER_REMOVED_NOTE: &str = "ignored: the crew ladder and its standing shadow trials \
      were removed; route each tier with workflow.<tier>_complexity_crews and delete the \
      [workflow.crew_ladder] table. This key stops being recognised after 2026-12-07";
+
+const CREW_PERFORMANCE_REMOVED_NOTE: &str = "ignored: crew-performance weighting, its \
+     scorecard snapshots and the crew_performance_refresh routine were removed; route by type \
+     with workflow.type_complexity_crews and delete the key. This key stops being recognised \
+     after 2026-12-07";
 
 const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks, the one pool \
      every sweep-filed task (CI failure, Dependabot and code scanning, merged-head repair) draws \

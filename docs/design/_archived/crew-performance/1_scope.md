@@ -1,9 +1,7 @@
 ---
 title: "Scope: performance-weighted crew selection"
 owner: claude
-status: Draft
-stage: shipped
-next: "Operator picks a workflow.crew_performance default from the shadow share report"
+status: Deprecated
 feature: crew-performance
 doc_role: scope
 type: design
@@ -15,12 +13,14 @@ last_validated: 2026-11-07
 
 # Scope: performance-weighted crew selection
 
-Status: phases 1–4 are done — type list and cell report [ORB-17814], hourly snapshot [ORB-17816], weighted draws [ORB-17817], and the shadow share report [ORB-17818].
+Status: deprecated. Crew-performance weighting, its snapshot, refresh routine and shadow share report were removed in [ORB-22804]; the type list survives as `workflow.task_types`, which type pools (`workflow.type_complexity_crews`) and the implementer by-type scorecard read. Kept as reference only.
+
+History: phases 1–4 shipped — type list and cell report [ORB-17814], hourly snapshot [ORB-17816], weighted draws [ORB-17817], and the shadow share report [ORB-17818].
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
-operator's preference among them. [Usage pressure](../usage-pressure/1_scope.md) scales those
+operator's preference among them. [Usage pressure](../../usage-pressure/1_scope.md) scales those
 weights by how much provider capacity is about to expire. The implementer scorecard
-([agent scorecards §5.2](../agent-scorecards/2_design.md#52-implementers), [ORB-17779]) already
+([agent scorecards §5.2](../../agent-scorecards/2_design.md#52-implementers), [ORB-17779]) already
 scores every crew against the fleet's rates for the same complexity tier. This scope adds a
 second multiplier, from that score split by task type, without changing which crews a pool may
 draw.
@@ -77,7 +77,7 @@ paths = ["web/**"]
   list is a lens, not a record.
 - The list is configuration because the useful split is workspace-specific. Orbit ships no
   types beyond `other`, which keeps it generic. Auto-concurrency's work class
-  ([§3.1](../auto-concurrency/2_design.md#31-work-class)) is a resource grouping
+  ([§3.1](../../auto-concurrency/2_design.md#31-work-class)) is a resource grouping
   (`change`, `no-diff`, `auto-task:<template>`) and too coarse for quality: a dashboard change
   and a refactor are both `change`.
 - A type earns its place by a visibly different score in the report, the same rule
@@ -176,14 +176,14 @@ An explicit crew, a parked crew and a task outside a pool are never touched.
 ### Evidence snapshot
 
 A draw never scans. The scorecard's cold scan takes about 5 seconds on `ws_orbit`
-([§8](../agent-scorecards/2_design.md#8-scan-cache-and-budget)), which is too slow for task
+([§8](../../agent-scorecards/2_design.md#8-scan-cache-and-budget)), which is too slow for task
 creation and every admission pass.
 
 - The scan writes a **performance snapshot** to the workspace store: one row per cell with its
   raw score, `n`, the shrunk score and the crew mean, plus the window, the type list's hash and
   `computed_at`.
 - The snapshot's cells read implementer execution scope `all`: managed and interactive tasks,
-  never unclassified ones ([agent-scorecards §5.2](../agent-scorecards/2_design.md#52-implementers), [ORB-20391]).
+  never unclassified ones ([agent-scorecards §5.2](../../agent-scorecards/2_design.md#52-implementers), [ORB-20391]).
   Cells carry outcome scores only, with no token, cost or run-time field, so the managed-only
   cost rule has nothing to narrow here, and keeping interactive outcomes leaves draws unchanged.
 - A seeded routine refreshes it hourly. A dashboard scorecard scan refreshes it too.
@@ -264,7 +264,7 @@ changes no draws, pools, weights or configuration, and no routine runs it.
   the list and the report shows whether each type earns its place.
 - **Scoring reviewers, orchestrators or pilots for routing.** Only implementer draws.
 - **Cost.** Cost stays shown, never scored
-  ([§4.5](../agent-scorecards/2_design.md#45-cost-is-shown-never-scored)).
+  ([§4.5](../../agent-scorecards/2_design.md#45-cost-is-shown-never-scored)).
 - **Optimal assignment.** Draws happen one task at a time, so comparative advantage is a greedy
   approximation of the assignment problem, not a batch solver.
 

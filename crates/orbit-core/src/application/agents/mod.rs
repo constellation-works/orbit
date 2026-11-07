@@ -25,12 +25,10 @@ mod attribution;
 mod candidates;
 mod facts;
 mod hands;
-mod performance;
 mod query;
 mod records;
 mod roles;
 mod score;
-mod shadow;
 
 pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};

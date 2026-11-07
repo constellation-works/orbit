@@ -27,8 +27,8 @@ them at the claim base into `AdmissionReceipt::tag_instructions` so a follower a
 text. **Crew pool draws** (`crates/orbit-core/src/application/job/crew_pools/draw.rs`) pick a
 crew by weighted ticket draw and record it as `crew_selection` on the run input and
 `crew_source` on the task; `seeded_crew_ticket` already makes keyed draws reproducible (review
-admission, keyed task creation). [Crew performance](../crew-performance/1_scope.md) scales
-those weights, with a shadow mode that records a factor without applying it. A task's
+admission, keyed task creation). [Crew performance](../_archived/crew-performance/1_scope.md)
+scaled those weights until its removal in [ORB-22804]. A task's
 `required_tools` widens its activity's tool baseline
 (`adapter/engine_host/runtime_host/activity_tools.rs::admit_required_tools`). The analytics side has the shared trend
 ladder (`crates/orbit-web/src/api/diagnostics/trend.rs`) behind the tokens-per-task

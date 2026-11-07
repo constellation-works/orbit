@@ -705,7 +705,7 @@ fn validate_preset_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// Flatten `[config]` into dotted keys, so `"workflow.crew_performance"` and
+/// Flatten `[config]` into dotted keys, so `"workflow.crew_selection"` and
 /// a nested `[config.workflow]` table both name the same key.
 fn flatten_config(prefix: String, table: toml::Table, out: &mut Vec<(String, toml::Value)>) {
     for (key, value) in table {

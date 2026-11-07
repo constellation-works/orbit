@@ -619,12 +619,8 @@ provider_limit_explicit_crews = "wait"
 crew_selection = "static"
 usage_pressure_cap = 8
 usage_pressure_strength = 1.0
-crew_performance_types = []
+task_types = []
 # [workflow.type_complexity_crews.<type>] <tier> = [...]  (unset)
-crew_performance = "off"
-crew_performance_strength = 3
-crew_performance_cap = 4
-crew_performance_window_days = 30
 ```
 
 | Key | Default | What it does |
@@ -636,7 +632,7 @@ crew_performance_window_days = 30
 | `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too while `workflow.purpose_crews.failure_recovery` is unset. |
 | `workflow.hard_complexity_crews` | `[]` | The same, for `hard`. |
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
-| `workflow.type_complexity_crews.<type>.<tier>` | unset | Pool a task of [type](#crew-performance-types) `<type>` at complexity `<tier>` draws from instead of `workflow.<tier>_complexity_crews`. See [type pools](#type-pools-by-task-type-and-complexity). |
+| `workflow.type_complexity_crews.<type>.<tier>` | unset | Pool a task of [type](#task-types) `<type>` at complexity `<tier>` draws from instead of `workflow.<tier>_complexity_crews`. See [type pools](#type-pools-by-task-type-and-complexity). |
 | `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `sweep_tasks`, `visual_review`, `pilot_warning_triage`). Unset or `[]` keeps the purpose's earlier route; `visual_review` then draws from the task's complexity pool, in both cases keeping only crews whose executor declares `image_input` and that do not set `vision = false`. `pilot_warning_triage` keeps only crews whose executor declares `inspection_args`, and falls back to `workflow.hard_complexity_crews` while unset or when no member qualifies. `final_recovery` (default `["sol:100", "opus:20"]`, `[]` disables it; see [final recovery pool](#final-recovery-pool)), `review` and `pre_landing_review` (see [automatic review](#review-and-operation--automatic-review)) keep their own rules. See [purpose crew pools](#purpose-crew-pools). |
 | `workflow.provider_limit_max_used_pct` | `90` | **Advanced.** Admission skips a crew while a live usage window of its provider or model is exhausted or used at or above this percent (`1`–`100`; `100` skips only on exhaustion). See [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. An entry may instead name a crew that sets [`env`](#per-crew-credentials-env) (`opus-credits:off`), its own account. |
@@ -645,11 +641,9 @@ crew_performance_window_days = 30
 | `workflow.crew_selection` | `static` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members: `static` uses the configured weights; `usage_pressure` scales each by its crew's weekly usage pressure and re-draws a system-chosen crew at admission. This is the policy key; the `crew_selection` object in `orbit run show` and run input is the recorded draw. See [usage-pressure draws](#usage-pressure-draws). |
 | `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
 | `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
-| `workflow.crew_performance_types` | `[]` | **Advanced.** Ordered task types for the implementer scorecard's by-type matrix, each a `[[workflow.crew_performance_types]]` table with `name`, `tags` and `paths`. See [crew performance types](#crew-performance-types). |
-| `workflow.crew_performance` | `off` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members by crew performance: `off`, `absolute` (toward the crew that scores best on the task's type), `comparative` (toward the type each crew does best against its own mean), `shadow_absolute` or `shadow_comparative`. Shadow computes and records the same factor and does not apply it, so the draw matches `off` apart from usage pressure. Independent of `workflow.crew_selection`; when a live mode is on, the two factors multiply. Only `off` makes the seeded refresh routine no-op without scanning. See [performance-weighted draws](#performance-weighted-draws) and [crew performance snapshot](#crew-performance-snapshot). |
-| `workflow.crew_performance_strength` | `3` | **Advanced.** `k` in the performance factor `clamp(exp(k × advantage / 100), 1/cap, cap)`. A number of at least `0`; `0` disables the factor. |
-| `workflow.crew_performance_cap` | `4` | **Advanced.** The performance factor is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
-| `workflow.crew_performance_window_days` | `30` | **Advanced.** Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. Values outside that range are refused. |
+| `workflow.task_types` | `[]` | **Advanced.** Ordered task types that [type pools](#type-pools-by-task-type-and-complexity) route by and the implementer scorecard's by-type matrix splits by, each a `[[workflow.task_types]]` table with `name`, `tags` and `paths`. See [task types](#task-types). |
+| `workflow.crew_performance_types` | — | **Deprecated.** The former name of `workflow.task_types`, read into it with a deprecation warning until 2026-12-07. A file that also sets `workflow.task_types` keeps that. `orbit doctor --fix-retired-config-keys` rewrites it. |
+| `workflow.crew_performance`, `workflow.crew_performance_strength`, `workflow.crew_performance_cap`, `workflow.crew_performance_window_days` | — | **Deprecated, ignored.** Crew-performance weighting, its scorecard snapshots and the `crew_performance_refresh` routine were removed [ORB-22804]. Load with a deprecation warning until 2026-12-07; `config get`/`set` refuse them. Route by type with `workflow.type_complexity_crews`, and delete the keys. |
 | `workflow.auto_ship` | — | **Deprecated, ignored.** The ship sweep it opted into was removed. Loads with a deprecation warning; `config get`/`set` refuse it. Dispatch with `orbit run auto` drains or `orbit run ship`, and delete the key. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -676,28 +670,24 @@ crew_performance_window_days = 30
 | `visual_review.max_findings` | `15` | Most findings accepted from one comparison review (1–100); extras are dropped and counted, as are findings whose evidence names an image outside the delivery's capture or a region outside its image (`invalid_evidence`). |
 | `visual_review.require_established` | `false` | `true` holds a delivery whose capture is not established (`delivery_visual_not_established`). To release it, clear the setting and resume the held run (settlement rereads it); a fresh delivery on a host with a verified browser kit captures it. |
 
-### Crew performance types
+### Task types
 
-`workflow.crew_performance_types` is an ordered list of task types, one `[[workflow.crew_performance_types]]` table per type with a `name` and at least one of `tags` or `paths`:
+`workflow.task_types` is an ordered list of task types, one `[[workflow.task_types]]` table per type with a `name` and at least one of `tags` or `paths`:
 
 ```toml
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "review"
 tags = ["no-diff-expected"]
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "ui"
 tags = ["ui"]
 paths = ["web/**"]
 ```
 
-A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; under [`workflow.crew_performance`](#performance-weighted-draws) a draw classifies the task with the same list.
+A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. Two readers use the list: [type pools](#type-pools-by-task-type-and-complexity) route a task of a type through `workflow.type_complexity_crews`, and the implementer scorecard's by-type matrix (`orbit agents scorecard --role implementers --by-type`) splits its cells by type. The scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history.
 
-### Crew performance snapshot
-
-A crew draw must never run the scorecard scan, so the by-type cell matrix is persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)` cell with its raw score, `n`, crew mean and shrunk score, plus the evidence window, a hash of the type list it was built with, and `computed_at`. The seeded `crew_performance_refresh` routine (hourly, seeded enabled) runs `job:crew_performance_refresh_pipeline` to rebuild it; each refresh replaces the previous snapshot atomically. Run it on demand with `orbit run job crew_performance_refresh_pipeline`.
-
-While `workflow.crew_performance` is `off` (the default) the refresh writes no snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly routine still records a job run). `off` is the only mode that skips the scan. `absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`). A stored snapshot is usable only while fresh: a reader gets the typed reason `missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a different `workflow.crew_performance_types` list) otherwise. `orbit run readiness` prints one line for the snapshot — its computed time, window and type list, or the unusable reason — and `--json` carries the same under `crew_performance`. [Performance-weighted draws](#performance-weighted-draws) read it and treat every unusable reason as factor 1.
+The list was named `workflow.crew_performance_types` before [ORB-22804]. That spelling still loads into `workflow.task_types` with a deprecation warning until 2026-12-07, with the same entries; a file that sets both keeps `workflow.task_types`. `orbit doctor --fix-retired-config-keys` rewrites it.
 
 ### Unlocked context paths
 
@@ -1819,11 +1809,11 @@ hard = ["opus"]
 medium = ["sol:200", "opus:50"]
 ```
 
-`workflow.type_complexity_crews` routes crews by task kind. A task's type is the one [`workflow.crew_performance_types`](#crew-performance-types) gives it from its current tags and context files, the same lens the implementer scorecard measures by. When `workflow.type_complexity_crews.<type>.<tier>` is set for that type and the task's complexity, the pool replaces `workflow.<tier>_complexity_crews` for that draw; any other task, `other` included, draws from its complexity pool exactly as before.
+`workflow.type_complexity_crews` routes crews by task kind. A task's type is the one [`workflow.task_types`](#task-types) gives it from its current tags and context files, the same lens the implementer scorecard measures by. When `workflow.type_complexity_crews.<type>.<tier>` is set for that type and the task's complexity, the pool replaces `workflow.<tier>_complexity_crews` for that draw; any other task, `other` included, draws from its complexity pool exactly as before.
 
-- **Entries** are written like a complexity pool's (`crew` or `crew:weight`), but every entry must name a defined, enabled crew with a positive weight, and a pool must not be empty: remove the key to fall back to the complexity pool. The type must be a `workflow.crew_performance_types` name and the tier one of `low`, `medium`, `hard` or `xhard`. Each refusal is a load error naming the full key.
+- **Entries** are written like a complexity pool's (`crew` or `crew:weight`), but every entry must name a defined, enabled crew with a positive weight, and a pool must not be empty: remove the key to fall back to the complexity pool. The type must be a `workflow.task_types` name and the tier one of `low`, `medium`, `hard` or `xhard`. Each refusal is a load error naming the full key.
 - **Layering.** Each `<type>.<tier>` pool is one setting: a workspace pool replaces the same type and tier from global, and the global's other pools still apply.
-- **Precedence.** An explicit crew, then a [purpose pool](#purpose-crew-pools), then the type pool, then the complexity pool, then `default_crew`. A type pool whose members are all excluded by executor `host_os` or the task's `os:` tags falls through to the complexity pool. OS filtering, [usage-pressure](#usage-pressure-draws) and [performance](#performance-weighted-draws) weights apply to type-pool members as to complexity-pool members.
+- **Precedence.** An explicit crew, then a [purpose pool](#purpose-crew-pools), then the type pool, then the complexity pool, then `default_crew`. A type pool whose members are all excluded by executor `host_os` or the task's `os:` tags falls through to the complexity pool. OS filtering and [usage-pressure](#usage-pressure-draws) weights apply to type-pool members as to complexity-pool members.
 - **Provenance.** A type-pool draw records `crew_source: type:<type>/<tier>` (such as `type:ui/hard`), and its `crew_assigned` or `crew_redrawn` history names that source. `orbit task show` prints the source. Admission keeps that `type:` source in `crew_selection.source` in `orbit run show` while the task keeps its assigned member; a draw from the whole type pool records the pool's key, `workflow.type_complexity_crews.<type>.<tier>`, with `; usage pressure` appended when usage pressure weighs it. A provider hold or usage limit adds its own note to the source it applies to (`; provider hold excludes <crews> until <time>` or `; provider limit: <detail>`), ahead of any pressure suffix.
 - **Where it draws.** Creation, `task update --crew ""`, a complexity re-rate before admission and fresh admission. A tag or context-file edit that moves an unreserved proposed, backlog or someday task with a pool, type or default source to another type pool redraws it in the same update, as a re-rate does. Implicit edits preserve the crew and source of admitted deliveries, including stopped runs and preserved candidates, in-progress or review work, and work reserved by a non-terminal delivery run or protecting execution claim, even before setup binds the run to the task. Scope metadata still changes under its existing authority rules; it never rewrites recorded run crew/model facts or emits a redraw for a crew that did not run. Local admission serializes selection, run insertion and crew writeback with task edits. An authorized recovery or requeue permits a genuinely fresh admission to evaluate the updated classification and record its selected crew; a candidate resume keeps its original admission provenance. Explicit audited crew corrections retain their existing authority rules.
 - **Admission** keeps a `type:` crew while the task still classifies to that type and tier and the crew is an enabled, positive-weight member of the pool. Otherwise the task draws from the pool it now routes to. A [provider usage limit](#provider-usage-limits) or [failure hold](#provider-failure-holds) covering the crew redraws from the pool's other members, then the complexity pool, then `default_crew`. A claimed leaf on a follower keeps the owner's type-pool crew, because the claimed snapshot carries no tags or context files to classify by.
@@ -1831,7 +1821,7 @@ medium = ["sol:200", "opus:50"]
 
 **Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. Without `--allow-crew`, readiness (and the dashboard Drain card) applies the live drain's own set and reports it as `capacity.allowed_crews`. When a previously drawn purpose, type, or complexity pool crew is excluded, admission redraws from permitted members of that same pool and records the actual crew on the task and run. An explicit or legacy pinned crew still waits; a pool with no permitted member also waits. The allowlist still applies to system and review activities at dispatch.
 
-**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws) and `performance` under [performance-weighted draws](#performance-weighted-draws)), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
+**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws); a run admitted before [ORB-22804] may also carry a `performance` factor per member), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
 
 ### Provider failure holds
 
@@ -1934,47 +1924,6 @@ With `workflow.crew_selection = "usage_pressure"` and a positive strength, crew 
 - **Pull offer order.** A follower under `usage_pressure` also reports each crew's weekly pressure in its pull capability (recomputed each pass; absent under `static`, and an absent report reads as neutral `1`). The owner orders that follower's offers by it only below band, priority, expiry and census reach/affinity: of tasks tied on all of those, the one whose pool contains the follower's highest-pressure crew is offered first. Pressure never overrides a higher priority or an expiring task, never gates admission, and owner-local dispatch, which has no pressure input, orders exactly as before.
 
 Under `static`, or with the keys unset, every seeded draw uses its original configured weights and consumes the same random tickets; recorded members omit pressure fields. The pressure is this host's reading; a drain admitting on this host weighs its own readings.
-
-#### Performance-weighted draws
-
-```toml
-[workflow]
-crew_performance = "comparative"    # default "off"; or "absolute", "shadow_absolute", "shadow_comparative"
-crew_performance_strength = 3       # default; 0 disables
-crew_performance_cap = 4            # default
-```
-
-With `workflow.crew_performance` set to `absolute` or `comparative` and a positive strength, task pool draws also weigh each member by its crew's implementer score on the task's type within its complexity tier, read from the [crew performance snapshot](#crew-performance-snapshot). The task's type comes from [`workflow.crew_performance_types`](#crew-performance-types) and its tier from its complexity (`unassessed` when it has none).
-
-- **Factor.** Each member's cell `(crew, current model, tier, type)` gives a score and the crew's tier mean. `absolute` and `shadow_absolute` read the advantage `score − 100`, `comparative` and `shadow_comparative` read `score − crew mean`, and the factor is `clamp(exp(strength × advantage / 100), 1/cap, cap)`: at the default strength, +10 points is ×1.35 and −10 is ×0.74. A crew with no cell for the type reads its crew mean (so comparative is ×1), and a crew with no evidence for its current model in that tier reads 100. Evidence from a crew's earlier model does not count.
-- **Effective weight.** Under `absolute` or `comparative`, a member draws on `weight × pressure_factor × performance_factor`, ×1000 and rounded to whole tickets, with the pressure factor `1` unless [usage-pressure draws](#usage-pressure-draws) apply too. A weight of `0` stays undrawable, the factor never adds a crew outside the pool, and the usage-limit gate and provider holds still narrow the pool first.
-- **Shadow.** `shadow_absolute` and `shadow_comparative` compute that same factor and record it, and the draw uses the weights it would use with the mode `off`. Usage pressure still scales the tickets. Set one of these before turning a live mode on: the draws stay where they are, and the [shadow report](#reading-a-shadow-trial) shows what the factor would have changed. A strength of `0` records nothing, the same as `off`. Shadow still builds the snapshot.
-- **Draws it covers.** Task creation, `task update --crew ""`, the re-draw after a complexity change, and delivery admission of a task drawn from its whole pool. Performance alone never re-draws an assigned crew at admission; under `usage_pressure` the pressure re-draw carries a live performance factor too. A shadow factor is left out of that history note, because it did not change the crew. Explicit crews, a single candidate and tasks outside a pool are untouched. Activity, review and verifier pools, and a pull follower's claimed-leaf re-draw, take no performance factor.
-- **Unusable snapshot.** A missing, stale (over 24 hours) or `type_list_changed` snapshot, or one the store cannot read (`unreadable`), gives every member factor 1 and records the reason; with usage pressure off the draw then uses the configured weights exactly.
-- **Provenance.** Each `eligible_pool` member of the recorded `crew_selection` gains a `performance` object: `mode`, `applied`, `tier`, `type`, `factor`, and either the cell's `score`, `crew_mean`, `n`, `evidence` (`cell`, `crew_mean` or `none`) and the snapshot's `computed_at`, or `unusable` with the reason. `applied` is true under `absolute` and `comparative`, and false under either shadow mode. A record written before shadow mode has no `applied` field; readers treat that as applied. A scaled draw records `effective_weight` too. `orbit run show` prints each applied member's factor and the mode and type under `Crew Selection:` (`eligible=haiku:40×1.57, luna:30×1.27, gemini-flash:30×0.74 performance=absolute type=review`). A shadow line keeps the configured weight and adds `applied=false`. An admission pressure re-draw's `crew_redrawn` history entry appends both crews' performance factors only when `applied` is true.
-
-With the keys unset or `off`, every draw and its recorded selection is what it was without them.
-
-#### Reading a shadow trial
-
-Before setting `workflow.crew_performance` to `absolute` or `comparative`, set `shadow_absolute` or `shadow_comparative` and let draws accumulate. Each draw stays on the same weights as `off` (usage pressure still applies) and stores the factor it did not use.
-
-Then read the window with:
-
-```
-orbit agents scorecard --role implementers --by-type --shadow --window 30d
-```
-
-`--json` returns the same report. `--shadow` is refused without `--by-type`, and for any role other than implementers. The window is the scorecard's existing `--window` (`1h`, `24h`, `7d`, `30d`, `90d` or `all`; default `30d`). A call without `--shadow` keeps the ranking, or the cell matrix when only `--by-type` is set.
-
-For each pool and task type the report lists every crew that appeared in a draw:
-
-- **Draws** — how many times that crew was selected, and how many draws the pool and type had.
-- **Static share** — the crew's configured weight divided by the pool's configured weight, averaged over those draws.
-- **Drawn share** — the same average using the weight the draw actually used. That is the configured weight, or the usage-pressure weight when pressure was on.
-- **Would-be share** — the share if the recorded factor had been applied on top of the weight the draw used. Under a live mode the factor is already in the drawn weight, so would-be matches drawn. A large gap between drawn and would-be is the work that would move if you switched that shadow mode on.
-
-`comparative` would-be stays near static inside one crew's own mix and moves work between types. `absolute` moves work toward the highest-scoring crew. Draws that recorded no performance object are listed afterwards, with static and drawn shares and no would-be share, and counted as static. They are not mixed into the comparison as factor 1. A pool name is the draw's source up to the first `;`, so a usage-pressure redraw stays with the pool it came from. Choosing which mode to enable, and how long to watch, is the operator's.
 
 #### Budgets for providers that report no usage
 
@@ -2963,7 +2912,7 @@ At a task's first delivery admission, running experiments (shadow or live) match
 
 A `live` experiment applies its arm's instructions, skills, tools, crew pool and allowed config values. `start` refuses, in either mode, an instruction file or skill bundle missing or inadmissible at the workspace's current base (its base branch as last fetched from `origin`, else the local branch), an unsupported skill provider, an added tool that is not a registered, agent-facing, enabled tool named exactly, and a removed tool that is unknown or that the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`).
 
-A crew overlay is `{"crew":{"pool":[{"crew":"sol","weight":1},{"crew":"astra","weight":2}]}}`. It replaces the task's normal admission pool, including a crew assigned at task creation. `start` checks that every member exists and is enabled; crews have no per-complexity restrictions, so each may run every tier in the population. Admission still filters members by executor host support and run allowlists. Weekly usage pressure still weighs the pool, while crew-performance weighting is off because the crew is the treatment. Provider holds and limits still apply, including the existing complexity-pool fallback. `crew_selection` records the pool, weights, overlay digest and `performance_weighting: false`; a changed draw records `deviation` with the intended crew, actual crew and reason. An explicit run crew remains authoritative, recorded with source `explicit`. When treatment selects the crew, write-back records it on `task.crew` as `experiment:<id>/<arm>`. An override retains its own admission provenance rather than being attributed to the experiment; the immutable assignment remains available to intention-to-treat analysis. Claimed leaves freeze the follower's draw and its evidence in pipeline state's `crew_selection` before dispatch. An arm without a crew overlay keeps ordinary routing.
+A crew overlay is `{"crew":{"pool":[{"crew":"sol","weight":1},{"crew":"astra","weight":2}]}}`. It replaces the task's normal admission pool, including a crew assigned at task creation. `start` checks that every member exists and is enabled; crews have no per-complexity restrictions, so each may run every tier in the population. Admission still filters members by executor host support and run allowlists. Weekly usage pressure still weighs the pool. Provider holds and limits still apply, including the existing complexity-pool fallback. `crew_selection` records the pool, weights and overlay digest; a changed draw records `deviation` with the intended crew, actual crew and reason. An explicit run crew remains authoritative, recorded with source `explicit`. When treatment selects the crew, write-back records it on `task.crew` as `experiment:<id>/<arm>`. An override retains its own admission provenance rather than being attributed to the experiment; the immutable assignment remains available to intention-to-treat analysis. Claimed leaves freeze the follower's draw and its evidence in pipeline state's `crew_selection` before dispatch. An arm without a crew overlay keeps ordinary routing.
 
 The current typed config allowlist is:
 
@@ -3018,7 +2967,7 @@ auto_tasks = "none"
 - **Narrowing retires by digest.** A default the policy leaves out is retired exactly as a default a release dropped: an unedited file Orbit seeded is removed, and a locally edited one moves under `.orbit/.retired-managed/` with a warning to migrate it under a new user-authored name. A file Orbit never recorded is left alone.
 - **Widening reseeds.** Adding a name back, or returning to `"all"`, seeds the shipped file again on the next sync.
 - **Opt-outs.** An opt-out recorded with `orbit auto-task delete` survives while the policy leaves that auto-task out. `orbit auto-task restore` refuses a left-out name and names the policy. For routines, a list policy is the durable per-name opt-out.
-- **Diagnostics.** `orbit workspace show` prints both policies, the defaults they leave out, and the applied preset (JSON `seeding` and `preset`). `orbit doctor` does not report a left-out default as missing, and its `seeding-policy` row warns while `workflow.crew_performance` is not `off` and `seeding.routines` leaves out `crew_performance_refresh`, since nothing then refreshes the snapshot crew draws read.
+- **Diagnostics.** `orbit workspace show` prints both policies, the defaults they leave out, and the applied preset (JSON `seeding` and `preset`). `orbit doctor` does not report a left-out default as missing.
 
 #### Workspace presets
 
@@ -3036,7 +2985,7 @@ routines = ["graph-refresh"]
 auto_tasks = ["graph-reindex"]
 
 [config]                         # optional: workspace keys, nested tables or dotted keys
-"workflow.crew_performance" = "off"
+"workflow.crew_selection" = "static"
 [config.review]
 minutes = 45
 ```
@@ -3127,6 +3076,8 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `machine.worker_containment = true`/`false`, `machine.worker_containment_strict` | Become `machine.worker_containment`: `true` is `warn`, `false` is `off`, and `worker_containment_strict = true` is `strict` (refused beside `false`). |
 | `workflow.validation_env.login_shell`, `interactive` | Become `workflow.validation_env.shell_probe`: `login_shell = false` is `off`, `interactive = false` is `login`, otherwise `interactive`. |
 | `workflow.auto_ship` | Ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` drains or `orbit run ship`. Delete the key. |
+| `workflow.crew_performance_types` | Becomes `workflow.task_types`, the same ordered entries. Recognised until 2026-12-07. |
+| `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap`, `crew_performance_window_days` | Ignored: crew-performance weighting and its snapshots were removed. Delete the keys. Recognised until 2026-12-07. |
 | `scoring.enabled` | Ignored: the agent-family scoreboard was retired and nothing records scoreboard metrics. Delete the `[scoring]` table. Recognised until 2026-11-12; after that it is an unknown key. |
 | `workflow.crew_ladder.mode`, `rungs`, `tiers`, `explore_rate`, `margin`, `look_every`, `max_sample`, `exclude_types`, `watch_window`, `retry_after_days`, `delivery_quality`, `quality_grade_margin`, `min_grade_coverage` | Ignored: the crew ladder, its standing shadow trials and `orbit agents ladder` were removed. Route each tier with `workflow.<tier>_complexity_crews` and compare crews with [experiments](#experiments--experiments-over-agent-treatments). Delete the `[workflow.crew_ladder]` table. Recognised until 2026-12-07; after that they are unknown keys. |
 | `workflow.explore_brief.enabled`, `tags`, `deliver` | Ignored: the task pilot's explore brief was removed. The pilot no longer returns a brief, no implement dispatch receives one, and the brief-accuracy diagnostics endpoint is gone. Existing `explore-brief.json` task artifacts and `activity.explore_brief_applied` audit rows stay readable. Delete the `[workflow.explore_brief]` table. Recognised until 2026-12-07; after that they are unknown keys. |

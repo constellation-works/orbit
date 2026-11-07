@@ -1155,41 +1155,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.crew_performance": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.crew_performance_cap": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.crew_performance_strength": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.crew_performance_types": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.crew_performance_window_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.crew_selection": {
       "scope": "built-in",
       "state": "default",
@@ -1507,6 +1472,13 @@
       "shadowed_by": []
     },
     "workflow.task_pilot_freshness.source_sensitivity": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.task_types": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",

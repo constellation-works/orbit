@@ -1,7 +1,7 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-07
 last_validated: 2026-11-03
 status: Implemented
 stage: shipped
@@ -42,15 +42,15 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
 `dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
-`resident_cycle`, `evolution_pass`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
+`resident_cycle`, `evolution_pass`, `worktree_gc`, `store_gc`,
 `task_publication` and `ux-rules`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
 seeded enabled in a newly initialized workspace [ORB-22802]; a workspace seeded earlier keeps
 its `enabled` value, because a template refresh never changes it. Other defaults are
-`enabled: false`, except `crew_performance_refresh`, added by [ORB-17816], which is seeded enabled and runs hourly
-at :23. With `workflow.crew_performance = "off"` it skips the scan and writes no
-snapshot, while still recording a job run. [ORB-18378] added disabled weekly
+`enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
+with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited
+copy. [ORB-18378] added disabled weekly
 `task_publication` (Sunday 04:47 host-local time), which publishes only its own
 owner workspace and skips an unbound publication target. Other scheduled work
 requires an explicit checkout-local opt-in through `enabled: true`. Re-init
@@ -150,7 +150,7 @@ fragmentation this feature exists to end.
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | Done — [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
 | Per-user definitions, seeded through init/sync | `crates/orbit-core/src/application/routines/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
 | Replica-local cron GC | `crates/orbit-core/src/application/routines/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
-| Hourly performance refresh and weekly publication defaults | `crates/orbit-core/assets/routines/crew_performance_refresh.yaml`, `crates/orbit-core/assets/routines/task_publication.yaml` | Done — [ORB-17816], [ORB-18378] |
+| Hourly performance refresh (retired [ORB-22804]) and weekly publication defaults | `crates/orbit-core/assets/routines/retired/crew_performance_refresh.yaml`, `crates/orbit-core/assets/routines/task_publication.yaml` | Done — [ORB-17816], [ORB-18378] |
 | Resident cycle and weekly evolution-pass defaults | `crates/orbit-core/assets/routines/resident_cycle.yaml`, `crates/orbit-core/assets/routines/evolution_pass.yaml` | Done — [ORB-21244], [ORB-21249] |
 
 ---
@@ -176,6 +176,7 @@ fragmentation this feature exists to end.
 - [ORB-14173] allowed replica-local scheduled worktree GC.
 - [ORB-16354] enabled replica-local store GC.
 - [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
+- [ORB-22804] retired that routine with crew-performance weighting.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
 - [ORB-21244] added the `resident_due` state trigger and the seeded `resident_cycle` routine.
 - [ORB-21249] added the seeded disabled weekly `evolution_pass` routine and manager digest.

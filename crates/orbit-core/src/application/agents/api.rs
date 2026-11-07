@@ -4,7 +4,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::{AgentFacts, AgentQuery, AgentRole, attribution, facts, roles, score, shadow};
+use super::{AgentFacts, AgentQuery, AgentRole, attribution, facts, roles, score};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -36,7 +36,7 @@ impl OrbitRuntime {
         Ok(agent_by_type_scorecard(
             &self.agent_scan()?,
             query,
-            self.crew_performance_types(),
+            self.task_types(),
             Duration::ZERO,
         ))
     }
@@ -48,16 +48,9 @@ impl OrbitRuntime {
         Ok(agent_per_task_export(
             &self.agent_scan()?,
             query,
-            self.crew_performance_types(),
+            self.task_types(),
             Duration::ZERO,
         ))
-    }
-
-    /// The implementer shadow share report for `query`: each crew's static,
-    /// drawn and would-be share per pool and type, from recorded draws in
-    /// the window. This does not scan tasks.
-    pub fn agent_shadow_scorecard(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
-        shadow::report(self, query)
     }
 
     pub(crate) fn agent_role_detail_for_surface(
@@ -180,7 +173,7 @@ pub fn agent_scorecard(
 pub fn agent_by_type_scorecard(
     facts: &AgentFacts,
     query: &AgentQuery,
-    types: &[orbit_config::CrewPerformanceType],
+    types: &[orbit_config::TaskTypeDefinition],
     cache_ttl: Duration,
 ) -> Value {
     let since = query.since(facts);
@@ -243,7 +236,7 @@ pub fn agent_size_curves(
 pub fn agent_per_task_export(
     facts: &AgentFacts,
     query: &AgentQuery,
-    types: &[orbit_config::CrewPerformanceType],
+    types: &[orbit_config::TaskTypeDefinition],
     cache_ttl: Duration,
 ) -> Value {
     let since = query.since(facts);

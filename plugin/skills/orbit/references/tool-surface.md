@@ -595,10 +595,7 @@ MCP it is in the `analytics` toolset.
   average. A role whose terms are not computed yet answers
   `status: not_computed`, with its terms and no rows.
 - **Switches.** `by_type` returns one cell per (crew, model, tier, type) with
-  `n`, `raw`, `crew_mean` and `score`, plus the type list used. `shadow` (with
-  `by_type`) returns each crew's draw count and its static, drawn and would-be
-  share per pool and type over the window; draws with no performance record are
-  counted separately as static. `per_task` returns one row per implemented task
+  `n`, `raw`, `crew_mean` and `score`, plus the type list used. `per_task` returns one row per implemented task
   with its crew, model, tier, configured type, tags, context-file selectors, path
   prefixes and per-term counts, plus the type list used. Without these switches,
   the ranking is returned.
@@ -624,8 +621,7 @@ MCP it is in the `analytics` toolset.
   Experiment arms break down invocations linked to their enrolled tasks.
   Run show exposes `agent_executions` on the run and displayed steps, captured
   before launch so interrupted runs remain inspectable.
-- **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0), except
-  the `shadow` report, which reads recorded draws only.
+- **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0).
 - The dashboard's Agents view reads this payload.
 
 ## Common MCP arguments

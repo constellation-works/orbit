@@ -403,12 +403,12 @@ pub(crate) fn format_child_dispatch_lines(state: Option<&PipelineState>) -> Vec<
 ///
 /// Absent for manually dispatched runs, which record no selection. A pool
 /// admitted before weights existed lists plain names, and is rendered as the
-/// bare names it was stored as. A performance-weighted draw appends each
-/// member's factor (`haiku:40×1.57`) and names the mode and task type, or
-/// the reason the snapshot was not used. A shadow record (`applied` false)
-/// keeps the configured weight and says `applied=false`, because the factor
-/// was not drawn. An older record with no `applied` field still shows the
-/// factor.
+/// bare names it was stored as. A draw recorded while crew-performance
+/// weighting existed (before ORB-22804) appends each member's factor
+/// (`haiku:40×1.57`) and names the mode and task type, or the reason the
+/// snapshot was not used. A shadow record (`applied` false) keeps the
+/// configured weight and says `applied=false`, because the factor was not
+/// drawn. An older record with no `applied` field still shows the factor.
 pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> Option<String> {
     let selection = input?.get("crew_selection")?.as_object()?;
     let text = |key: &str| {

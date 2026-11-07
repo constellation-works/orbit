@@ -613,11 +613,10 @@ preserved. The run records its selection; see
 [crew pools](../../reference/config/#crews).
 
 With `workflow.crew_selection = "usage_pressure"`, pool draws favour crews
-whose weekly allowance would otherwise go unused. The optional
-`workflow.crew_performance` setting also weights draws by per-task-type
-implementer performance; it is off by default. Inspect the cells with
-`orbit agents scorecard --role implementers --by-type`, or add `--shadow` to
-compare recorded shares with the performance-weighted shares. See
+whose weekly allowance would otherwise go unused. Task types
+(`workflow.task_types`) give a kind of work its own pool per tier through
+`workflow.type_complexity_crews`; inspect how each crew does by type with
+`orbit agents scorecard --role implementers --by-type`. See
 [Configuration](../../reference/config/#crews) for both settings.
 
 ## Platform support
