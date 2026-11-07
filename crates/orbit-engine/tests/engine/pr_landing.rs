@@ -1170,6 +1170,37 @@ fn required_checks_the_head_has_not_reported_are_awaited_before_completion(sandb
         }
     }
 }
+/// [ORB-22486] A BLOCKED head whose only running check is not required by
+/// readable policy stops at once; the rollup-only wait is owner landing only
+/// and never arms auto-merge, pinned or not.
+fn a_running_non_required_check_stops_blocked_completion_without_auto_merge(sandbox: &Path) {
+    use orbit_types::workflow::DeliveryRefusal;
+    for pinned in [true, false] {
+        let case = if pinned { "pinned" } else { "unpinned" };
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_checks(&["optional_pending"]);
+        fx.write_forge("gates", "test");
+        let mut input = fx.complete_input();
+        if !pinned {
+            input.as_object_mut().unwrap().remove("published_head_sha");
+            input.as_object_mut().unwrap().remove("reviewed_head_sha");
+        }
+        let error = action_err(&host, "pr_complete", &input);
+        assert!(
+            matches!(
+                error,
+                OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::RequirementsUnsatisfied,
+                    ..
+                }
+            ),
+            "{case}: stops as delivery_requirements_unsatisfied: {error}"
+        );
+        assert_eq!(fx.status_reads(), 1, "{case}: stops on the first read");
+        assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+    }
+}
 // Batch merge of the checked head [ORB-15701]
 fn batch_merge_input(fx: &Fixture) -> Value {
     json!({
@@ -6313,6 +6344,7 @@ check() {
             if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
             if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
             printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
+        optional_pending) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"__typename":"CheckRun","name":"optional","status":"IN_PROGRESS","conclusion":"","isRequired":false}' ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
         # A completed skip (a docs-only head) or neutral result.
@@ -6397,6 +6429,7 @@ status() {
     case "$observed" in
         mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
+        optional_pending) merge_state=BLOCKED; rollup=$(check optional_pending) ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         # Branch protection accepts a skipped or neutral required check.
@@ -6899,7 +6932,7 @@ PYVIEW
                 if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
                 rollup=$(check "$observed")
                 case "$observed" in
-                    mixed_*|paired_failure|paired_failure_reversed) ;;
+                    mixed_*|paired_failure|paired_failure_reversed|optional_pending) ;;
                     *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
                 esac
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
@@ -7076,7 +7109,7 @@ test_groups! {
     base_race_candidate_identity => [a_base_race_refresh_refuses_a_changed_candidate_without_another_merge, an_already_merged_refresh_reconciles_without_another_merge_request],
     merge_refusal_bounds => [other_merge_refusals_fail_on_the_first_request, repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget],
     recovered_base_advances => [conflicting_base_advances_after_recovery_are_chased_until_the_bound, a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands],
-    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion, blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance],
+    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion, blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance, a_running_non_required_check_stops_blocked_completion_without_auto_merge],
     review_fix_revalidation => [a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges, a_failed_review_revalidation_rejects_and_preserves_both_commits, a_red_base_during_pr_revalidation_holds_the_task],
     review_repair_leases => [a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease, a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes],
     claimed_validation_failures => [identityless_diagnostics_hold_only_for_matching_completed_runs, a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs, a_claimed_candidate_that_cannot_reach_the_network_fails_transient, a_required_command_red_on_the_base_holds_the_task_without_a_pr],

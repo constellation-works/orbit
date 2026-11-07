@@ -304,6 +304,10 @@ fn ensure_matches(
 pub(in crate::executor::automation::vcs) enum BlockedCheckWait<'a> {
     /// Owner landing retains its failed-rollup refusal and captured owed checks.
     Owner(&'a [String]),
+    /// Completion without auto-fix shares the bounded policy graces, but a
+    /// running check current policy does not require never waits: the head
+    /// stays BLOCKED and stops as requirements unsatisfied.
+    Completion,
     /// Auto-fix classifies failures against policy before deciding to recover.
     AutoFix,
 }
@@ -468,6 +472,9 @@ impl std::fmt::Display for CheckWaitRefusal {
 /// within the caller's deadline; only the provider's mergeable state can merge.
 /// Owner landing also waits on a running rollup when neither required-check
 /// view identifies a pending check, provided current policy reports no failure.
+/// Completion without auto-fix never takes that wait: a running check that
+/// policy does not require leaves the head BLOCKED, so it stops at once and
+/// never reaches the pending dispatch that could arm auto-merge.
 /// `None` performs the bounded immediate read used by zero-wait completion;
 /// a watch always passes its original absolute deadline.
 pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
@@ -502,19 +509,20 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         }
         refusal
     })?;
-    let owed = match wait {
-        BlockedCheckWait::Owner(owed) => {
-            if !matches!(state, PrMergeState::Mergeable)
-                && checks
-                    .iter()
-                    .any(|check| check.state == Some(CheckState::Failed))
-            {
-                return Ok(state);
-            }
-            owed
-        }
-        BlockedCheckWait::AutoFix => &[],
+    let owed: &[String] = match wait {
+        BlockedCheckWait::Owner(owed) => owed,
+        BlockedCheckWait::Completion | BlockedCheckWait::AutoFix => &[],
     };
+    if matches!(
+        wait,
+        BlockedCheckWait::Owner(_) | BlockedCheckWait::Completion
+    ) && !matches!(state, PrMergeState::Mergeable)
+        && checks
+            .iter()
+            .any(|check| check.state == Some(CheckState::Failed))
+    {
+        return Ok(state);
+    }
     let mut required_input = json!({"pr":pr,"workspace_path":workspace.to_string_lossy()});
     if let Some(deadline_ms) = deadline_ms {
         required_input["deadline_ms"] = json!(deadline_ms);
@@ -625,9 +633,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     match missing {
         Ok(assessment) if assessment.missing.is_empty() && assessment.pending.is_empty() => {
             // The rollup can report checks still running before either policy
-            // view identifies them as required. An owner may keep observing
-            // within its existing deadline, but BLOCKED grants no merge
-            // authority. A failed policy gate still keeps its refusal.
+            // view identifies them as required. Owner landing may keep
+            // observing within its existing deadline, but BLOCKED grants no
+            // merge authority. Completion without auto-fix stops instead.
+            // A failed policy gate still keeps its refusal.
             if matches!(wait, BlockedCheckWait::Owner(_))
                 && assessment.failed.is_empty()
                 && checks
@@ -645,7 +654,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
             // a genuine block still returns BLOCKED after the bound and
             // is never bypassed. Auto-fix keeps its own unsettled grace.
             match wait {
-                BlockedCheckWait::Owner(_)
+                BlockedCheckWait::Owner(_) | BlockedCheckWait::Completion
                     if assessment.failed.is_empty()
                         && !required.checks.is_empty()
                         && required
@@ -675,7 +684,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         }
         // Auto-fix applies the same grace in its own BLOCKED verdict.
         Err(why) => match wait {
-            BlockedCheckWait::Owner(_) if unreported.unsettled_polls < UNSETTLED_BLOCKED_POLLS => {
+            BlockedCheckWait::Owner(_) | BlockedCheckWait::Completion
+                if unreported.unsettled_polls < UNSETTLED_BLOCKED_POLLS =>
+            {
                 unreported.unsettled_polls += 1;
                 unreported.last = UnreportedWait::Unsettled(why);
                 Ok(PrMergeState::Pending)
