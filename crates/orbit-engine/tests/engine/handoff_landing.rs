@@ -1362,7 +1362,14 @@ fn owner_landing_waits_out_pending_only_block_before_checks_pass() {
                         Some(&HandoffLandingStep::Complete)
                     );
                 } else {
-                    assert!(result.is_err(), "pending checks cannot extend the deadline");
+                    let error = result.unwrap_err().to_string();
+                    // [ORB-22485] The rollup-only wait names its running checks.
+                    assert!(
+                        error.contains("within 15s")
+                            && error.contains("CI / clippy")
+                            && error.contains("still running"),
+                        "deadline: {error}"
+                    );
                     assert_eq!(waits, [5, 5, 5]);
                     assert_not_sent(&host.forge, &["pr.merge"], "checks still pending");
                     assert_steps(
@@ -1706,6 +1713,18 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 assert_eq!(evidence["repairable"], false);
                 let ev_reason = evidence["reason"]["value"].as_str().unwrap();
                 assert!(ev_reason.contains(reason), "{case}: {ev_reason}");
+                // [ORB-22485] A landing stopped only by running rollup checks
+                // names them in the durable stop reason the refusal surfaces.
+                if case == "optional" {
+                    assert!(
+                        error.contains("optional") && error.contains("still running"),
+                        "{case}: {error}"
+                    );
+                    assert!(
+                        ev_reason.contains("optional") && ev_reason.contains("still running"),
+                        "{case}: {ev_reason}"
+                    );
+                }
                 assert_eq!(evidence["accepted"]["candidate"]["value"], head);
                 assert_eq!(evidence["emission_proof"]["state"], "not_collected");
                 assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");

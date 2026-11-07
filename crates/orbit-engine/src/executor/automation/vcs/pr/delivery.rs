@@ -324,6 +324,9 @@ enum UnreportedWait {
     Pending(Vec<String>),
     /// Branch policy could not be read, so a bounded grace stands in for it.
     Unsettled(String),
+    /// Branch policy names nothing missing or pending, but the rollup still
+    /// reports checks running. Owner landing waits within its deadline.
+    RollupPending(Vec<String>),
     /// Branch policy names nothing missing or pending, but the provider
     /// still reports BLOCKED: its merge state may lag the checks that just
     /// passed, so a bounded grace re-polls it.
@@ -379,6 +382,9 @@ impl UnreportedChecks {
             ),
             UnreportedWait::Pending(names) => {
                 format!(" (required checks still pending: {})", names.join(", "))
+            }
+            UnreportedWait::RollupPending(names) => {
+                format!(" (checks still running: {})", names.join(", "))
             }
             UnreportedWait::Unsettled(why) => format!(
                 " (the head reported no pending required check and branch policy is \
@@ -644,6 +650,20 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
                     .iter()
                     .any(|check| check.state == Some(CheckState::Pending))
             {
+                let running: Vec<String> = checks
+                    .iter()
+                    .filter(|check| check.state == Some(CheckState::Pending))
+                    .map(|check| {
+                        let name = check.name.as_deref().unwrap_or_default();
+                        check
+                            .workflow_name
+                            .as_deref()
+                            .filter(|workflow| !workflow.is_empty())
+                            .map(|workflow| format!("{workflow} / {name}"))
+                            .unwrap_or_else(|| name.to_string())
+                    })
+                    .collect();
+                unreported.last = UnreportedWait::RollupPending(running);
                 return Ok(PrMergeState::Pending);
             }
             // Nothing is owed and every reported check explicitly
