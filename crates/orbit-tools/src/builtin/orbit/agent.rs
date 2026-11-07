@@ -95,31 +95,18 @@ impl Tool for OrbitAgentInvokeTool {
         ToolSchema {
             name: "orbit.agent.invoke".to_string(),
             description:
-                "Submit an asynchronous agent invocation for exploration or debugging and return \
-                 its run ID, or wait for its answer with `wait_seconds`. Queued submissions \
-                 include `queued: true`, a one-based `queue_position` and a warning. \
-                 An operator's invocation is deprecated and will be removed; it runs on the \
-                 host outside Orbit's filesystem sandbox, \
-                 as the same OS user as Orbit, so it can reach anything that user can; it is \
-                 admitted per invocation and requires operator capability — the same test for a \
-                 session that arrived over SSH as for a local one. An implement or review-repair \
-                 agent may instead delegate a read-only question when `workflow.explore.enabled` \
-                 is on: it gets a sandboxed explorer from the explorer crew pool that reads its \
-                 own worktree, cannot write or change Orbit state, and is bounded by per-run \
-                 call, concurrency, timeout and answer-size budgets. The explorer starts \
-                 beside the caller's sandbox, never inside it; when no explorer crew can run \
-                 under an enforced read-only sandbox on this host the call is refused before \
-                 any run exists, naming the setting to fix, so continue without delegating. \
-                 Every other agent is refused, and a refusal never stops the caller's run. An \
-                 operator can track it with `orbit.workflow.run.show`, which requires operator \
-                 capability and refuses agent sessions. A session with a shell on the owning host \
-                 can use `orbit run show <RUN_ID> --json`; its `run.agent_invocation` contains the \
-                 answer and progress. The answer carries the agent's summary, findings, next_steps, \
-                 any other result fields and its bounded final message; progress carries its latest \
-                 message and last activity while it runs. Agent sessions can wait for the answer \
-                 with `wait_seconds`. Read the complete output with `orbit run logs <RUN_ID>` and \
-                 stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, \
-                 and dispatches nothing."
+                "Submit one asynchronous agent invocation for exploration or debugging and return \
+                 its run ID, or wait for its answer with `wait_seconds`. An operator's invocation \
+                 is deprecated: it runs outside Orbit's filesystem sandbox as the same OS user as \
+                 Orbit, so it can reach anything that user can, and needs operator capability. An \
+                 implement or review-repair agent may instead delegate a read-only question to a \
+                 sandboxed explorer that reads its own worktree and writes nothing when \
+                 `workflow.explore.enabled` is on; with no eligible explorer crew the call is \
+                 refused before any run exists, so continue without delegating. Every other caller \
+                 is refused, a refusal never stops the caller's run, and an invocation changes no \
+                 task, opens no pull request and dispatches nothing. Queueing, budgets, answer and \
+                 progress fields, and run observation: installed Orbit skill \
+                 `references/tool-surface.md`, section `Host agent invocation`."
                     .to_string(),
             parameters,
             builtin: true,
