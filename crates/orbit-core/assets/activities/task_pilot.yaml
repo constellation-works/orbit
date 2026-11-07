@@ -801,6 +801,23 @@ spec:
       claim-host replay; that replay is the evidence, the worker's nested skip
       is not. When the test is outside every required gate, flag that scope
       mismatch instead.
+    - **Evidence reachability.** Check who can produce each criterion's evidence,
+      not just where it lives. An implementation leaf holds agent capability
+      and runs on one host. If it needs owner-only or operator-only evidence
+      that it cannot produce on its execution host through its granted tools
+      or the claimed-workspace bridge, return a `utility_warnings` entry with
+      `holds_promotion: true`. Name the criterion number and quote its required
+      evidence, cite the unavailable records or authority boundary, and request
+      a criterion rewrite or a separate owner/operator validation task before
+      admission. For example, an authoritative audit rescan is unreachable
+      when the leaf has neither the audit records nor an authorized query tool,
+      even on the owner host. A machine name, local shell or similarly named
+      log is not proof of access. Do not substitute operational logs for the
+      authoritative audit, infer a successful rescan from a code change, or
+      weaken the criterion. Criteria evidenced by local candidate checks or
+      bridge-readable task records get no reachability hold. Preserve the
+      explicit Friction criteria and Post-deploy routes; do not invent a
+      post-deploy measurement to excuse an unreachable criterion.
     - **Owner machine.** Require `required_machine` only when a criterion needs
       evidence unavailable through the claimed-workspace bridge: authoritative
       local audits, services or data. Read the description's evidence contract
@@ -811,8 +828,10 @@ spec:
       `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`.
       Otherwise, or when it is null, use `utility_warnings`. Never guess a cursor,
       substitute follower data, widen broker scope or remove tools. Machine
-      routing grants no authority: preserve independent re-home, re-authoring or
-      operator holds. Portable scans whose reads fit the bridge need no machine
+      routing grants no authority and does not clear an Evidence reachability
+      hold: verify that an agent leaf on that machine can access the evidence,
+      and preserve independent re-home, re-authoring or operator holds.
+      Portable scans whose reads fit the bridge need no machine
       requirement.
     - **Post-deploy.** When only the deployed build on a named host can
       evidence a criterion after merge (its live service's latency, the
