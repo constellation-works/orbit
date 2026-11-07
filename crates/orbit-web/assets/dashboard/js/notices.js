@@ -296,9 +296,21 @@ async function closeChosenNotice(session) {
     if (session.visit.isCurrent()) await refreshNoticesAfterWrite();
     return;
   }
+  // Only replace focus lost with this form. A control the operator has already
+  // moved to owns its focus, and any focus chosen during the refresh does too.
+  const focused = document.activeElement;
+  let restoreCloseFocus = focused === document.body
+    || focused?.closest(".notice-close-form")?.closest(".notice-row")?.dataset.key === `notice-${id}`;
+  const supersedeCloseFocus = () => { restoreCloseFocus = false; };
+  document.addEventListener("focusin", supersedeCloseFocus);
   closing = null;
   openedNotices.delete(id);
-  await refreshNoticesAfterWrite();
+  try {
+    await refreshNoticesAfterWrite();
+  } finally {
+    document.removeEventListener("focusin", supersedeCloseFocus);
+  }
+  if (!session.visit.isCurrent() || closing || !restoreCloseFocus) return;
   // The closed row took the operator's focus with it.
   (document.querySelector("#notices-body .notice-row-toggle") || $(`notices-tab-${shownList}`))?.focus();
 }
