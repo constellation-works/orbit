@@ -88,15 +88,15 @@ th,
 #audit-search,
 #friction-search {
   flex: 0 1 280px;
-  min-width: 160px;
+  min-width: 140px;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 7px;
-  height: 32px;
-  padding: 0 12px;
+  height: 25px;
+  padding: 0 11px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   outline: none;
   transition: border-color 0.15s ease;
 }

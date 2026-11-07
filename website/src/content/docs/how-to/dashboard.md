@@ -503,7 +503,8 @@ command. Copy only puts text on your clipboard; nothing runs from the panel. Whe
 the body has neither steps nor commands, the panel says so. The body format is in
 [Human crews](../../reference/config/#human-crews).
 
-The **My work** chip on the Tasks page shows only your human crew's open tasks.
+The **My work** chip, under **More** on the Tasks page, shows only your human
+crew's open tasks.
 
 ### Decision cards
 

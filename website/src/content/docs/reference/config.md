@@ -457,8 +457,8 @@ so does giving it the name of an agent crew. A human crew:
   to `done`, and agents keep the normal lifecycle on the task;
 - is left out of crew analytics, performance rankings and provider usage.
 
-The dashboard tags these tasks `for <name>`. The **My work** chip on the Tasks
-page shows only your human crew's open tasks.
+The dashboard tags these tasks `for <name>`. The **My work** chip, under
+**More** on the Tasks page, shows only your human crew's open tasks.
 
 `orbit init` adds a human crew named after your OS user when the global config
 has none. At a terminal it asks you to confirm or change the name. Without a

@@ -19,8 +19,9 @@
    the canvas, and each status group below is its own card. */
 #tasks-panel { background: transparent; border: 0; border-radius: 0; overflow: visible; }
 /* Head: the title and how many tasks show, then the search box and the
-   primary New task button on the right. Search, Clear and New task are 42px
-   tall so the Clear target keeps at least 40px at any sub-pixel offset. */
+   primary New task button on the right. Search and New task are 30px tall;
+   the transparent Clear button overflows the box so its target stays above
+   40px at any sub-pixel offset. */
 .panel > header.tasks-head {
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -47,7 +48,7 @@
 }
 .task-search-wrap #task-search {
   width: 100%;
-  height: 42px;
+  height: 30px;
   padding: 0 64px 0 34px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -59,7 +60,7 @@
 .task-search-icon {
   position: absolute;
   left: 11px;
-  top: 13px;
+  top: 7px;
   width: 16px;
   height: 16px;
   color: var(--fg-mute);
@@ -68,7 +69,7 @@
 #task-search-clear {
   position: absolute;
   right: 2px;
-  top: 0;
+  top: -6px;
   min-width: 56px;
   min-height: 42px;
   border: 0;
@@ -1166,20 +1167,20 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
 .task-create :disabled { opacity: 0.7; }
 .task-create .action { min-height: 36px; }
 /* The head's primary action: New task, in the accent. */
+/* FIXME: */
 #task-create-open {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 42px;
-  padding: 0 14px;
+  gap: 6px;
+  padding: 0 12px;
   border: 0;
   border-radius: var(--radius);
   background: var(--accent);
   color: var(--bg);
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
-#task-create-open svg { width: 14px; height: 14px; flex: none; }
+#task-create-open svg { width: 12px; height: 12px; flex: none; }
 #task-create-open:hover:not(:disabled) { background: var(--accent-hover); }
 #task-create-open[aria-expanded="true"] { background: var(--accent-hover); }
 .task-create textarea { resize: vertical; }

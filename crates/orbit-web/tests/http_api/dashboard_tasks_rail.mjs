@@ -47,12 +47,14 @@ class Node {
     this.own = '';
     children.forEach(child => this.append(child));
   }
-  append(child) {
-    if (child == null) return;
-    if (typeof child === 'string') { this.own += child; return; }
-    if (child.parentNode) child.parentNode.removeChild(child);
-    child.parentNode = this;
-    this.children.push(child);
+  append(...children) {
+    for (const child of children) {
+      if (child == null) continue;
+      if (typeof child === 'string') { this.own += child; continue; }
+      if (child.parentNode) child.parentNode.removeChild(child);
+      child.parentNode = this;
+      this.children.push(child);
+    }
   }
   appendChild(child) { this.append(child); return child; }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
@@ -1787,6 +1789,7 @@ if (process.argv.includes('--browser')) {
       assert.equal(inactiveCount.active, false, 'the waiting chip starts inactive');
       assert.ok(inactiveCount.contrast >= 4.5, `inactive informational count contrast is at least 4.5:1 (got ${inactiveCount.contrast})`);
       await page.screenshot({ path: `.orbit/tmp/tasks-list-dark-${width}.png` });
+      await page.locator('#task-filter .chip-more').click();
       await page.locator('.waiting-filter').click();
       await page.waitForFunction(() => document.querySelector('.waiting-filter')?.classList.contains('active'));
       const activeCount = await inspectChipColors();

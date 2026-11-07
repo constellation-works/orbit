@@ -726,10 +726,10 @@ export function buildChips(context) {
     Object.assign(node.dataset, attrs);
     return node;
   };
-  // The open statuses lead as chips with a dot and a count; the closed ones,
-  // All and Not ready wait behind More, a disclosure. A quiet chip that is on
-  // stays in view while More is closed, so the filter the list obeys is
-  // always on screen.
+  // The open statuses lead as chips with a dot and a count; My work, Waiting
+  // on you, the closed statuses, All and Not ready wait behind More, a
+  // disclosure. A quiet chip that is on stays in view while More is closed, so
+  // the filter the list obeys is always on screen.
   const defaults = new Set(defaultActiveStatuses(context));
   const primary = el("div", { class: "chip-group" });
   const secondary = el("div", { class: "chip-group chip-group-quiet", id: "task-filter-more" });
@@ -746,17 +746,17 @@ export function buildChips(context) {
     });
     (defaults.has(status) ? primary : secondary).appendChild(node);
   }
-  const myWork = chip("My work", { role: "my-work" }, false, "Open tasks assigned to your human crew: operator work no drain or task pilot picks up");
+  const myWork = chip("My work", { role: "my-work" }, true, "Open tasks assigned to your human crew: operator work no drain or task pilot picks up");
   myWork.classList.add("my-work-filter");
   myWork.addEventListener("click", () => {
     myWorkOnly = !myWorkOnly;
     navigateTasksHash(context);
   });
-  primary.appendChild(myWork);
-  const waiting = chip("Waiting on you", { role: "waiting" }, false, "Open human-crew tasks and tasks with an open decision");
+  const waiting = chip("Waiting on you", { role: "waiting" }, true, "Open human-crew tasks and tasks with an open decision");
   waiting.classList.add("waiting-filter");
   waiting.addEventListener("click", () => { waitingOnly = !waitingOnly; navigateTasksHash(context); });
-  primary.appendChild(waiting);
+  secondary.prepend(waiting);
+  secondary.prepend(myWork);
   const allChip = chip("All", { role: "all" }, true);
   allChip.addEventListener("click", () => {
     setActiveStatuses(context, new Set(statusOrder(context)));
@@ -779,7 +779,7 @@ export function buildChips(context) {
     type: "button",
     "aria-controls": "task-filter-more",
     "aria-expanded": "false",
-    title: "Closed statuses, All, Not ready and Pilot warnings",
+    title: "My work, Waiting on you, closed statuses, All, Not ready and Pilot warnings",
   }, [el("span", { text: "More" })]);
   more.addEventListener("click", () => {
     const open = more.getAttribute("aria-expanded") !== "true";
