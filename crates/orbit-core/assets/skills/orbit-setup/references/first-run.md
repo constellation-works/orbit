@@ -131,13 +131,15 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **One shipped default is seeded enabled:** the `host-health` auto-task, when
-  the seeding policy selects it. Every routine and every other auto-task ships
-  disabled: the automation layer is installed but dark until someone reviews and
-  opts in. The `host-health` auto-task files a daily host-health review on the
-  workspace owner once the host clock is installed; `orbit auto-task toggle
-  host-health off` turns it off, and `orbit routine disable <routine-name>`
-  turns the routine off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
+- **Two shipped routines are seeded enabled when selected by the seeding
+  policy:** `worktree-gc` and `task-pilot`. The
+  `host-health` auto-task is also seeded enabled when selected. Every other shipped routine and
+  auto-task ships disabled until someone opts in. A host clock is still needed
+  for unattended runs.
+  The `host-health` auto-task files a daily host-health review on the workspace
+  owner once the host clock is installed; `orbit auto-task toggle host-health
+  off` turns it off, and `orbit routine disable <routine-name>` turns a routine
+  off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.
@@ -234,9 +236,10 @@ auto_tasks = []
   `[seeding]`, not here.
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
-  a shipped default. The one shipped default seeded enabled, the `host-health`
-  auto-task, is on without an opt-in only when the seeding policy selects it;
-  every shipped routine and other auto-task stays disabled unless someone opts in.
+  a shipped default. The two shipped routines seeded enabled—`worktree-gc`
+  and `task-pilot`—and the `host-health` auto-task
+  are on without an opt-in only when the seeding policy selects them. Every other
+  shipped routine and auto-task stays disabled unless someone opts in.
 
 **Validation and limits.** Orbit validates the whole file against this
 workspace before it writes anything. Nothing is written or registered when any

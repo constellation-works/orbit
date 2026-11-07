@@ -77,7 +77,11 @@ Delivery workflows run `git push` and `git fetch` against your repository's
 remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
 host you configured, under that host's terms. Scheduled routines that contact
-GitHub or perform delivery are shipped disabled until you enable them.
+GitHub or perform delivery are shipped disabled until you enable them. When
+selected by the seeding policy, the local `worktree-gc` and `task-pilot`
+routines seed enabled; the local `host-health`
+auto-task does too. Unattended scheduled runs require the
+host's Orbit scheduler clock to be enabled.
 
 ### Task publication (optional)
 

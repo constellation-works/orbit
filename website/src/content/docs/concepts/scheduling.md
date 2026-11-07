@@ -86,12 +86,13 @@ becomes true for a subject (`condition`); see
   three times its schedule interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
-- **Seeded mostly disabled.** `orbit workspace init` writes task pilot, task
-  publication, worktree and store GC, CI and dependency-alert sweeps, the
-  daily UX-rules routine, the finding-verification and pilot-warning
-  triage routines, and the resident-cycle and weekly evolution-pass
-  routines, all with `enabled: false`. The `host-health` auto-task is seeded
-  enabled.
+- **Seeded routines.** With the default seeding policy, `orbit workspace init`
+  seeds `worktree-gc` and `task-pilot` enabled; it also seeds the `host-health` auto-task enabled. A custom
+  seeding policy can omit any of these defaults. A workspace seeded while
+  `worktree-gc` or `task-pilot` shipped disabled keeps its existing `enabled`
+  value. Other routine defaults, including task publication, store GC, CI and
+  dependency-alert sweeps, UX rules, finding verification, pilot-warning triage,
+  resident-cycle, and evolution-pass, seed disabled.
 
 Routine files and scheduler state are per machine; git does not share them.
 
