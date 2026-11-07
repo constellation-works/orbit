@@ -586,7 +586,6 @@ fn a_bare_unique_rule_id_updates_its_existing_topic_file() {
     );
 }
 
-#[test]
 fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");
@@ -829,7 +828,6 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     );
 }
 
-#[test]
 fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");
@@ -913,7 +911,6 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
     );
 }
 
-#[test]
 fn uncommitted_auto_rule_and_dependency_do_not_answer() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");
@@ -967,7 +964,6 @@ fn uncommitted_auto_rule_and_dependency_do_not_answer() {
     assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }
 
-#[test]
 fn bare_file_stem_topic_does_not_auto_answer() {
     // `pricing` is the stem of decisions/pricing.md, not a rule id. It must not
     // borrow that file's only auto rule, even when the question is different.
@@ -1003,7 +999,6 @@ fn bare_file_stem_topic_does_not_auto_answer() {
     assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }
 
-#[test]
 fn bare_rule_id_in_two_files_does_not_auto_answer() {
     // A rule id that appears in exactly one topic file answers. The same id in
     // a second file is ambiguous, whatever that second rule's auto flag.
@@ -1056,7 +1051,6 @@ fn bare_rule_id_in_two_files_does_not_auto_answer() {
     assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }
 
-#[test]
 fn rule_edits_preserve_unparsed_content_and_crlf() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");
@@ -1093,7 +1087,6 @@ fn rule_edits_preserve_unparsed_content_and_crlf() {
     );
 }
 
-#[test]
 fn unclosed_final_rule_fence_stays_parseable_after_edits() {
     let digest = corpus_content_digest(b"pub fn price() {}\n");
     let closed_current = rule_doc("1", "current", FUTURE, false, &digest);
@@ -1181,3 +1174,14 @@ fn unclosed_final_rule_fence_stays_parseable_after_edits() {
         assert_eq!(proposal.markdown.matches("```yaml").count(), 1);
     }
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    an_operator_approved_auto_rule_answers_and_can_be_reversed,
+    non_auto_stale_and_ambiguous_rules_do_not_answer,
+    uncommitted_auto_rule_and_dependency_do_not_answer,
+    bare_file_stem_topic_does_not_auto_answer,
+    bare_rule_id_in_two_files_does_not_auto_answer,
+    rule_edits_preserve_unparsed_content_and_crlf,
+    unclosed_final_rule_fence_stays_parseable_after_edits,
+);

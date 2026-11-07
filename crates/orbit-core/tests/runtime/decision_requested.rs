@@ -301,7 +301,6 @@ fn stop_run(fx: &Fixture, run_id: &str, state: JobRunState) {
         .unwrap();
 }
 
-#[test]
 fn an_open_request_fires_once_per_binding_and_does_not_refire() {
     let fx = fixture();
     fx.install_job();
@@ -368,7 +367,6 @@ fn an_open_request_fires_once_per_binding_and_does_not_refire() {
     );
 }
 
-#[test]
 fn a_member_settles_when_its_request_is_superseded_before_it_fires() {
     let fx = fixture();
     fx.install_job();
@@ -403,7 +401,6 @@ fn a_member_settles_when_its_request_is_superseded_before_it_fires() {
     assert!(members.active.is_none(), "a superseded request never fires");
 }
 
-#[test]
 fn an_active_member_settles_when_its_request_is_answered() {
     let fx = fixture();
     fx.install_job();
@@ -465,7 +462,6 @@ fn an_active_member_settles_when_its_request_is_answered() {
     );
 }
 
-#[test]
 fn an_active_member_settles_when_its_request_is_superseded() {
     let fx = fixture();
     fx.install_job();
@@ -495,7 +491,6 @@ fn an_active_member_settles_when_its_request_is_superseded() {
     assert!(!members.assessed.contains_key(&task), "{members:?}");
 }
 
-#[test]
 fn member_state_from_before_the_variant_still_loads_and_runs() {
     let fx = fixture();
     fx.install_job();
@@ -567,7 +562,6 @@ fn member_state_from_before_the_variant_still_loads_and_runs() {
     assert!(fx.members().active.is_none());
 }
 
-#[test]
 fn a_notification_run_that_does_not_complete_leaves_its_member_to_retry() {
     let fx = fixture();
     fx.install_job();
@@ -594,7 +588,6 @@ fn a_notification_run_that_does_not_complete_leaves_its_member_to_retry() {
     assert!(members.failed.contains_key(&task), "{members:?}");
 }
 
-#[test]
 fn no_member_is_observed_while_the_decision_channel_is_off() {
     let fx = fixture();
     fx.install_job();
@@ -618,7 +611,6 @@ fn no_member_is_observed_while_the_decision_channel_is_off() {
     assert!(members.active.is_none(), "{members:?}");
 }
 
-#[test]
 fn a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off() {
     let fx = fixture();
     fx.install_job();
@@ -643,3 +635,15 @@ fn a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off() {
     assert_ne!(due.reason, "would_fire", "{due:?}");
     assert!(due.batch.is_empty(), "{due:?}");
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    an_open_request_fires_once_per_binding_and_does_not_refire,
+    a_member_settles_when_its_request_is_superseded_before_it_fires,
+    an_active_member_settles_when_its_request_is_answered,
+    an_active_member_settles_when_its_request_is_superseded,
+    member_state_from_before_the_variant_still_loads_and_runs,
+    a_notification_run_that_does_not_complete_leaves_its_member_to_retry,
+    no_member_is_observed_while_the_decision_channel_is_off,
+    a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off,
+);

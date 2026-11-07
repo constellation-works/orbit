@@ -399,7 +399,7 @@ fn ci_red_missing_auth_degrades_without_failing() {
     );
 }
 
-fn ci_red_stale_head_and_success_are_not_red() {
+fn ci_red_ignores_a_failed_run_on_a_stale_head() {
     let fixture = Fixture::new(true);
     let now = chrono::Utc::now().to_rfc3339();
     // Failure on a different (older) head is not current.
@@ -677,7 +677,7 @@ crate::scenario_table!(
     ci_red_lists_newest_failed_run_on_head,
     ci_red_exclude_kind_makes_no_provider_call,
     ci_red_missing_auth_degrades_without_failing,
-    ci_red_stale_head_and_success_are_not_red,
+    ci_red_ignores_a_failed_run_on_a_stale_head,
     ci_red_folds_into_existing_repair_task,
     ci_red_pending_commit_skips_repair_lookup_and_preserves_journal,
     ci_red_reports_remote_head_when_local_behind,

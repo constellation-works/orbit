@@ -53,7 +53,6 @@ fn merged_delivery(task: &str, base: &str) -> MergedPullRequest {
     }
 }
 
-#[test]
 fn a_blocked_task_whose_pull_request_merged_externally_settles_without_an_agent() {
     let mut fx = fixture();
     let task = fx.task(&[]);
@@ -218,7 +217,6 @@ fn green_fixture(head: &str) -> Fixture {
     fx
 }
 
-#[test]
 fn a_base_red_block_on_the_current_head_requeues_once_the_checks_pass() {
     for storage in BASE_RED_STORAGE {
         let fx = green_fixture(HEAD);
@@ -263,7 +261,6 @@ fn a_base_red_block_on_the_current_head_requeues_once_the_checks_pass() {
     }
 }
 
-#[test]
 fn a_block_that_base_red_history_did_not_cause_stays_blocked_with_green_checks() {
     for storage in BASE_RED_STORAGE {
         // Base-red evidence from an earlier run, then a block for another reason.
@@ -297,3 +294,10 @@ fn a_block_that_base_red_history_did_not_cause_stays_blocked_with_green_checks()
         }
     }
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    a_blocked_task_whose_pull_request_merged_externally_settles_without_an_agent,
+    a_base_red_block_on_the_current_head_requeues_once_the_checks_pass,
+    a_block_that_base_red_history_did_not_cause_stays_blocked_with_green_checks,
+);
