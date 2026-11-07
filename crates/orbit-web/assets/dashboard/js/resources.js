@@ -264,6 +264,12 @@ function profileSection() {
   view.workClass = workClass;
   const all = seriesFor(workClass);
   const hidden = new Set(view.hidden[workClass] || []);
+  // A different workspace or history window may contain only hidden series.
+  // Restore those series so the controls and charts agree on what is visible.
+  if (all.length && all.every((series) => hidden.has(series.key))) {
+    for (const series of all) hidden.delete(series.key);
+    view.hidden[workClass] = [...hidden];
+  }
   const shown = all.filter((series) => !hidden.has(series.key));
   const visible = shown.length ? shown : all;
   const u = units();
@@ -394,7 +400,7 @@ function seriesCards(all, hidden, workClass, u) {
       if (next.has(series.key)) next.delete(series.key);
       else next.add(series.key);
       // The charts always keep one series.
-      if (next.size >= all.length) return;
+      if (!all.some((entry) => !next.has(entry.key))) return;
       view.hidden[workClass] = [...next];
       rerender();
     });

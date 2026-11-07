@@ -30,7 +30,7 @@ function resetOperationsForWorkspace() {
   operationsState.lastAutoTasks = null;
   operationsState.lastAutoDrain = null;
   for (const reset of operationsResetCallbacks) reset();
-  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback"]) feedback(id, "", "");
+  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback", "resident-operation-feedback"]) feedback(id, "", "");
 }
 
 export const OPERATION_FEEDBACK_CLEAR_MS = 60000;
@@ -443,7 +443,8 @@ export function cronText(cron, instant) {
   if (dom !== "*" || month !== "*") return cron;
   if (minute === "*" && hour === "*" && dow === "*") return "every minute";
   const every = /^\*\/(\d+)$/.exec(minute);
-  if (every && hour === "*" && dow === "*") return `every ${every[1]} min`;
+  // Steps restart at the hour: */45 alternates 45- and 15-minute gaps.
+  if (every && Number(every[1]) > 0 && 60 % Number(every[1]) === 0 && hour === "*" && dow === "*") return `every ${every[1]} min`;
   if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {

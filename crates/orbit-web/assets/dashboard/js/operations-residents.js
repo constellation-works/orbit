@@ -675,7 +675,7 @@ function mandateDetail(payload, mandate) {
   }
   const last = mandate.control?.last;
   const history = detailsPanel(`resident-history:${id}`, { class: "resident-disclosure" });
-  history.append(
+  history.append(...[
     el("summary", { text: "Exit criteria and history" }),
     body.exit_criteria?.length ? el("h4", { text: "Exit criteria" }) : null,
     body.exit_criteria?.length ? el("ul", {}, body.exit_criteria.map(item => el("li", { text: item }))) : null,
@@ -683,7 +683,7 @@ function mandateDetail(payload, mandate) {
     historyList(mandate.authority),
     last ? el("h4", { text: "Last control" }) : null,
     last ? el("p", { class: "resident-muted", text: `${last.action} by ${last.by || "-"} · ${when(last.at)}${last.reason ? ` · ${last.reason}` : ""}` }) : null,
-  );
+  ].filter(node => node != null));
   return el("section", { class: "resident-detail", "aria-label": `Detail for ${id}` }, [
     mandate.state_reason ? el("p", { class: "resident-muted", text: mandate.state_reason }) : null,
     ...warnings.map(text => el("p", { class: "resident-stalled", text })),
