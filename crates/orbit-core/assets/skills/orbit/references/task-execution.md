@@ -246,7 +246,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
 Save screenshots under `.orbit/tmp/` and open them to look at the result.
 Don't install Playwright, download a browser or run `sudo` yourself. When the
 variables are absent, the host has no verified kit: record the browser check
-as unavailable, naming `orbit browser-kit install` as the host fix. A missing
+as unavailable, naming `orbit config browser-kit install` as the host fix. A missing
 `lib*.so`, a Skia/FontConfig crash or `Executable doesn't exist` is a host kit
 defect, not a defect in the code under test.
 

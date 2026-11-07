@@ -193,7 +193,7 @@ impl RuntimeKernel {
     }
 
     /// Whether this host's headless browser kit is verified now: installed,
-    /// with the smoke test `orbit browser-kit verify` recorded against the
+    /// with the smoke test `orbit config browser-kit verify` recorded against the
     /// Playwright version and browser revision it holds. Only then may a `ui`
     /// task start here, and only then does a pull drain declare the kit to
     /// its owner. Filesystem reads only, made on every call, so a kit

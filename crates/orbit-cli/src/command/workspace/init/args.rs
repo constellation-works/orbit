@@ -39,7 +39,7 @@ pub struct WorkspaceInitArgs {
     /// Inject (or refresh) an Orbit workflow-rules block in CLAUDE.md and AGENTS.md at the workspace root.
     #[arg(long)]
     pub inject_agent_rules: bool,
-    /// Install the headless browser kit (`orbit browser-kit install`) without
+    /// Install the headless browser kit (`orbit config browser-kit install`) without
     /// asking when the repository has a web UI (a `package.json` or HTML
     /// file). Without it, init asks at a terminal and otherwise only says how.
     #[arg(long)]

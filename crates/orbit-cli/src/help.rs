@@ -298,23 +298,12 @@ const TASK_BUNDLES: &[GroupedRow] = &[
     ),
 ];
 
-const ROOT_ENVIRONMENT: &[GroupedRow] = &[
+const ROOT_SETUP: &[GroupedRow] = &[
     ("init", "Initialize the global Orbit root (~/.orbit)"),
     ("workspace", "Manage workspaces"),
     ("config", "Show or update Orbit configuration"),
-    (
-        "host",
-        "Register and inspect the remote Orbit hosts this machine reaches over SSH",
-    ),
-    (
-        "browser-kit",
-        "Install, verify and remove the headless browser kit workers check UIs with",
-    ),
+    ("host", "Register and inspect remote Orbit hosts"),
     ("plugin", "Install and manage Orbit plugins"),
-    (
-        "application",
-        "Consent to scoped application calls and manage credentials (operator)",
-    ),
     (
         "migrate",
         "Apply or inspect pending .orbit layout/schema migrations",
@@ -325,21 +314,9 @@ const ROOT_ENVIRONMENT: &[GroupedRow] = &[
     ),
 ];
 
-const ROOT_KNOWLEDGE: &[GroupedRow] = &[
+const ROOT_WORK: &[GroupedRow] = &[
     ("task", "Create, update, and manage tasks"),
-    (
-        "visual",
-        "Capture the working tree beside a task's mocks for comparison",
-    ),
-    (
-        "decision",
-        "List, show and answer human decision requests on held work",
-    ),
     ("friction", "Report, list, and triage friction records"),
-    (
-        "evolution",
-        "Record and inspect capability gaps and their measured costs",
-    ),
     ("search", "Search tasks and frictions"),
 ];
 
@@ -350,19 +327,7 @@ const ROOT_OPERATE: &[GroupedRow] = &[
         "script",
         "Grant and inspect workspace scripts a job step may run",
     ),
-    (
-        "experiment",
-        "Define, run and conclude experiments over agent treatments",
-    ),
-    ("lease", "Coordinate path leases with the workspace owner"),
-    (
-        "notice",
-        "Post, close and list fleet notices other agents and operators see",
-    ),
-    (
-        "resident",
-        "Grant, narrow and inspect resident orchestrator mandates",
-    ),
+    ("notice", "Post, close and list fleet notices"),
     (
         "tool",
         "Manage and run Orbit tools, including external MCP plugins",
@@ -373,22 +338,21 @@ const ROOT_OPERATE: &[GroupedRow] = &[
 const ROOT_OBSERVE: &[GroupedRow] = &[
     ("attention", "List what waits on an operator"),
     ("audit", "Query the audit event log"),
-    (
-        "codebase",
-        "Rank the repository paths that are risky for agents to change",
-    ),
-    (
-        "agents",
-        "Score orchestrators, implementers, reviewers and pilots by crew and model",
-    ),
-    (
-        "crew",
-        "Show how crews are laddered across complexity tiers",
-    ),
     ("log", "Tail the unified Orbit log feed"),
     (
         "doctor",
         "Diagnose workspace health, provider CLIs, and filesystem access",
+    ),
+];
+
+const ROOT_ANALYTICS: &[GroupedRow] = &[
+    (
+        "agents",
+        "Score agents by crew and model, and show the crew ladder",
+    ),
+    (
+        "codebase",
+        "Rank the repository paths that are risky for agents to change",
     ),
 ];
 
@@ -397,15 +361,11 @@ const ROOT_SCHEDULER: &[GroupedRow] = &[
         "clock",
         "Inspect, control, and manually tick the machine scheduler",
     ),
-    ("sweep", "Compatibility alias for `orbit clock tick`"),
     (
         "routine",
         "Inspect and control scheduled routines on this machine",
     ),
-    (
-        "auto-task",
-        "Define recurring auto-task templates (the scheduler primitive)",
-    ),
+    ("auto-task", "Define recurring auto-task templates"),
     (
         "automation",
         "Explain what condition-triggered routines and auto-tasks would match",
@@ -418,6 +378,31 @@ const ROOT_SERVICES: &[GroupedRow] = &[
         "Register MCP client integrations and run the MCP server",
     ),
     ("web", "Run the Orbit dashboard"),
+];
+
+const ROOT_ADVANCED: &[GroupedRow] = &[
+    (
+        "application",
+        "Consent to scoped application calls and manage credentials",
+    ),
+    (
+        "decision",
+        "List, show and answer human decision requests on held work",
+    ),
+    (
+        "evolution",
+        "Record and inspect capability gaps and their measured costs",
+    ),
+    (
+        "experiment",
+        "Define, run and conclude experiments over agent treatments",
+    ),
+    ("lease", "Coordinate path leases with the workspace owner"),
+    (
+        "resident",
+        "Grant, narrow and inspect resident orchestrator mandates",
+    ),
+    ("visual", "Capture the working tree beside a task's mocks"),
 ];
 
 /// Display width of a row name in terminal columns (character count is the
@@ -598,23 +583,27 @@ pub(crate) fn root_help_template(term_width: u16, plugin_rows: &[(String, String
         .collect();
     let column = template_column(
         &[
-            ROOT_ENVIRONMENT,
-            ROOT_KNOWLEDGE,
+            ROOT_SETUP,
+            ROOT_WORK,
             ROOT_OPERATE,
             ROOT_OBSERVE,
+            ROOT_ANALYTICS,
             ROOT_SCHEDULER,
             ROOT_SERVICES,
+            ROOT_ADVANCED,
         ],
         &plugin_rows,
     );
     let width = width_option(term_width);
     let mut sections = vec![
-        render_section("Environment", ROOT_ENVIRONMENT, column, width),
-        render_section("Knowledge", ROOT_KNOWLEDGE, column, width),
+        render_section("Setup", ROOT_SETUP, column, width),
+        render_section("Work", ROOT_WORK, column, width),
         render_section("Operate", ROOT_OPERATE, column, width),
         render_section("Observe", ROOT_OBSERVE, column, width),
+        render_section("Analytics", ROOT_ANALYTICS, column, width),
         render_section("Scheduler", ROOT_SCHEDULER, column, width),
         render_section("Services", ROOT_SERVICES, column, width),
+        render_section("Advanced", ROOT_ADVANCED, column, width),
     ];
     if !plugin_rows.is_empty() {
         sections.push(render_dynamic_section(

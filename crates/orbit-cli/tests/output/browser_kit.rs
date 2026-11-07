@@ -128,7 +128,7 @@ fn missing_executable_invalidates_a_recorded_pass() {
     assert!(!inspection.is_verified());
     assert!(inspection.worker_env(&layout).is_empty());
     let output = orbit(&fixture)
-        .args(["browser-kit", "status", "--json"])
+        .args(["config", "browser-kit", "status", "--json"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -141,7 +141,7 @@ fn missing_executable_invalidates_a_recorded_pass() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|problem| problem["fix"] == "orbit browser-kit install")
+            .any(|problem| problem["fix"] == "orbit config browser-kit install")
     );
     assert_eq!(doctor_row(&fixture)["status"], "warning");
 }
@@ -184,7 +184,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: None,
             }),
             state: "unverified",
-            fixes: &["orbit browser-kit verify"],
+            fixes: &["orbit config browser-kit verify"],
             doctor: "warning",
         },
         Case {
@@ -195,7 +195,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: Some(PLAYWRIGHT_VERSION),
             }),
             state: "unverified",
-            fixes: &["orbit browser-kit install"],
+            fixes: &["orbit config browser-kit install"],
             doctor: "warning",
         },
         Case {
@@ -206,7 +206,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: Some(PLAYWRIGHT_VERSION),
             }),
             state: "incomplete",
-            fixes: &["orbit browser-kit install"],
+            fixes: &["orbit config browser-kit install"],
             doctor: "warning",
         },
     ];
@@ -219,7 +219,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
         }
 
         let output = orbit(&fixture)
-            .args(["browser-kit", "status", "--json"])
+            .args(["config", "browser-kit", "status", "--json"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{name}: {output:?}");
@@ -253,7 +253,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
         let remediation = row["remediation"].as_str().unwrap_or_default();
         if case.kit.is_none() {
             assert!(
-                remediation.contains("orbit browser-kit install"),
+                remediation.contains("orbit config browser-kit install"),
                 "{name}: {row}"
             );
         }
@@ -278,9 +278,9 @@ fn kit_changes_are_refused_inside_a_worker() {
         },
     );
     for args in [
-        &["browser-kit", "install"][..],
-        &["browser-kit", "verify"],
-        &["browser-kit", "remove", "--confirm"],
+        &["config", "browser-kit", "install"][..],
+        &["config", "browser-kit", "verify"],
+        &["config", "browser-kit", "remove", "--confirm"],
     ] {
         let output = orbit(&fixture)
             .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
@@ -376,7 +376,7 @@ mod verification_errors {
         fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
         let status = || {
             let output = orbit(&fixture)
-                .args(["browser-kit", "status", "--json"])
+                .args(["config", "browser-kit", "status", "--json"])
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{output:?}");
@@ -399,7 +399,7 @@ mod verification_errors {
             .env("PATH", &bin)
             .env("RUST_LOG", "off")
             .env_remove("ORBIT_FORMAT")
-            .args(["browser-kit", "verify", "--json"]);
+            .args(["config", "browser-kit", "verify", "--json"]);
         deny_probe_spawn(&mut denied);
         let output = assert_cmd::Command::from_std(denied)
             .timeout(test_env::FIXTURE_STEP_DEADLINE)
@@ -427,7 +427,7 @@ mod verification_errors {
 
         let output = orbit(&fixture)
             .env("PATH", &bin)
-            .args(["browser-kit", "verify", "--json"])
+            .args(["config", "browser-kit", "verify", "--json"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -477,7 +477,7 @@ fn workspace_init_offers_the_kit_for_a_web_ui_without_installing_it() {
     let offer = init(&web);
     assert_eq!(offer["status"], "offered", "{offer}");
     assert_eq!(offer["web_ui"], "site/index.html", "{offer}");
-    assert_eq!(offer["next"], "orbit browser-kit install", "{offer}");
+    assert_eq!(offer["next"], "orbit config browser-kit install", "{offer}");
     assert!(
         !KitLayout::for_home(&web.home).root().exists(),
         "init installed a kit nobody asked for"
@@ -643,7 +643,7 @@ echo 'libneeded.so => not found'"#,
                     .env("KIT_TEST_ROOT", &root)
                     .env("KIT_TEST_CASE", case)
                     .env("KIT_TEST_FAIL", if fail { "1" } else { "0" })
-                    .args(["browser-kit", "install", "--json"])
+                    .args(["config", "browser-kit", "install", "--json"])
                     .output()
                     .unwrap()
             };
@@ -836,7 +836,7 @@ echo 'libneeded.so => not found'"#,
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
                 .env("KIT_TEST_ROOT", &root)
                 .env("KIT_TEST_CASE", case)
-                .args(["browser-kit", "install", "--json"])
+                .args(["config", "browser-kit", "install", "--json"])
                 .output()
                 .unwrap();
             assert!(

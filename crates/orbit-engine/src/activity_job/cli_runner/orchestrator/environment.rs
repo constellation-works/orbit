@@ -141,7 +141,7 @@ pub(crate) fn provider_child_environment(
 }
 
 /// Hand the agent the host's headless browser kit when it is verified
-/// (`orbit browser-kit verify`), so a UI check needs no host-specific path.
+/// (`orbit config browser-kit verify`), so a UI check needs no host-specific path.
 ///
 /// Orbit adds the three variables itself rather than admitting them from the
 /// parent, so the allowlist stays explicit, and replaces any same-named value

@@ -1,4 +1,4 @@
-Show how crews are laddered across complexity tiers
+Deprecated alias of `orbit agents ladder`
 
 Usage: orbit crew [OPTIONS] <COMMAND>
 

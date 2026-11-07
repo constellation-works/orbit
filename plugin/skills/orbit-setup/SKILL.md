@@ -39,7 +39,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
-| Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
+| Headless browser kit (`orbit config browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
 | Enable or disable a scheduled routine as an operator, verify it, or tell an enabled routine apart from a host-local pause or the host clock | [Automation — Turning the scheduler on](references/automation.md#turning-the-scheduler-on); [Observe and control](references/automation.md#observe-and-control) |
 | Scheduled execution | [Automation](references/automation.md), including [UX rules checks](references/automation.md#ux-rules-checks) |
 | Configure task-pilot eligibility or freshness, inspect readiness, or request a later assessment | [Automation — Tuning task-pilot](references/automation.md#tuning-which-tasks-task-pilot-prepares); [Orchestration — task-pilot](../orbit-orchestrate/references/orchestration.md) |

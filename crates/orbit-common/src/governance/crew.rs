@@ -1,5 +1,5 @@
-//! The read-only crew operations behind `orbit crew` and the `orbit.crew.*`
-//! tools: the crew ladder report.
+//! The read-only crew operations behind `orbit agents ladder` and the
+//! `orbit.crew.*` tools: the crew ladder report.
 use crate::governance::operation::{
     CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, ToolOnlyRegistration,
     UnknownFields, mcp_only, operation_registry,
@@ -23,7 +23,7 @@ pub const CREW: NounSpec<CrewVerb> = NounSpec {
     cli_name: "crew",
     tool_prefix: "orbit.crew",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Show how crews are laddered across complexity tiers",
+    cli_about: "Deprecated alias of `orbit agents ladder`",
     audit_target_type: "crew",
     audit_target_param: "tier",
     cli_groups: &[],

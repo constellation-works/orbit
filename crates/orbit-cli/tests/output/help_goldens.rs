@@ -806,7 +806,7 @@ fn grouped_help_fits_narrow_tty() {
             let start_heading = match args.first().copied() {
                 Some("run") => "Workflows:",
                 Some("task") => "Tasks:",
-                _ => "Environment:",
+                _ => "Setup:",
             };
             let grouped = output
                 .split_once(start_heading)
@@ -840,7 +840,7 @@ fn clap_help_wraps_to_the_terminal_width_with_a_hanging_indent() {
     let surfaces: [(&[&str], &str); 7] = [
         (&[], "-h"),
         (&["search"], "--help"),
-        (&["browser-kit"], "--help"),
+        (&["config", "browser-kit"], "--help"),
         (&["workspace"], "--help"),
         (&["run"], "--help"),
         (&["task"], "--help"),
@@ -881,7 +881,7 @@ fn public_commands_appear_in_grouped_help() {
     fs::create_dir_all(&work).expect("fixture work");
     for flag in ["-h", "--help"] {
         for (args, group, names) in [
-            (&[][..], "Environment", &["application"][..]),
+            (&[][..], "Advanced", &["application"][..]),
             (&[][..], "Observe", &["attention"][..]),
             (&["run"][..], "Audits", &["settlements-hydrate"][..]),
         ] {

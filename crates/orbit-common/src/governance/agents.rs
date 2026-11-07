@@ -26,7 +26,7 @@ pub const AGENTS: NounSpec<AgentsVerb> = NounSpec {
     cli_name: "agents",
     tool_prefix: "orbit.agents",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Score orchestrators, implementers, reviewers and pilots by crew and model",
+    cli_about: "Score agents by crew and model, and show the crew ladder",
     audit_target_type: "agents",
     audit_target_param: "role",
     cli_groups: &[],

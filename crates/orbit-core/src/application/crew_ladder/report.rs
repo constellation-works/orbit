@@ -1,4 +1,4 @@
-//! The read-only ladder report behind `orbit crew ladder` and
+//! The read-only ladder report behind `orbit agents ladder` and
 //! `orbit.crew.ladder`: per tier, the configured pool, the floor, the
 //! candidate, and the shadow trial with its would-be assignments, or the
 //! reason there is none. It reads the plan the trial sync acts on and

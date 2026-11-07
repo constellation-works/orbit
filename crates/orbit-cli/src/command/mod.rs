@@ -90,55 +90,56 @@ pub(crate) const ROOT_HELP_TEMPLATE: &str = "\
 
 {usage-heading} {usage}
 
-Environment:
+Setup:
   init         Initialize the global Orbit root (~/.orbit)
   workspace    Manage workspaces
   config       Show or update Orbit configuration
-  host         Register and inspect the remote Orbit hosts this machine reaches over SSH
-  browser-kit  Install, verify and remove the headless browser kit workers check UIs with
+  host         Register and inspect remote Orbit hosts
   plugin       Install and manage Orbit plugins
-  application  Consent to scoped application calls and manage credentials
   migrate      Apply or inspect pending .orbit layout/schema migrations
   update       Install a published Orbit release and converge to it
 
-Knowledge:
+Work:
   task         Create, update, and manage tasks
-  visual       Capture the working tree beside a task's mocks for comparison
-  decision     List, show and answer human decision requests on held work
   friction     Report, list, and triage friction records
-  evolution    Record and inspect capability gaps and their measured costs
   search       Search tasks and frictions
 
 Operate:
   run          Run workflows, drain the backlog, and inspect runs
   job          Define, list, and manage job workflows
   script       Grant and inspect workspace scripts a job step may run
-  experiment   Define, run and conclude experiments over agent treatments
-  lease        Coordinate path leases with the workspace owner
-  notice       Post, close and list fleet notices other agents and operators see
-  resident     Grant, narrow and inspect resident orchestrator mandates
+  notice       Post, close and list fleet notices
   tool         Manage and run Orbit tools, including external MCP plugins
   gc           Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
   attention    List what waits on an operator
   audit        Query the audit event log
-  codebase     Rank the repository paths that are risky for agents to change
-  agents       Score orchestrators, implementers, reviewers and pilots by crew and model
-  crew         Show how crews are laddered across complexity tiers
   log          Tail the unified Orbit log feed
   doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
+Analytics:
+  agents       Score agents by crew and model, and show the crew ladder
+  codebase     Rank the repository paths that are risky for agents to change
+
 Scheduler:
   clock        Inspect, control, and manually tick the machine scheduler
-  sweep        Compatibility alias for `orbit clock tick`
   routine      Inspect and control scheduled routines on this machine
-  auto-task    Define recurring auto-task templates (the scheduler primitive)
+  auto-task    Define recurring auto-task templates
   automation   Explain what condition-triggered routines and auto-tasks would match
 
 Services:
   mcp          Register MCP client integrations and run the MCP server
   web          Run the Orbit dashboard
+
+Advanced:
+  application  Consent to scoped application calls and manage credentials
+  decision     List, show and answer human decision requests on held work
+  evolution    Record and inspect capability gaps and their measured costs
+  experiment   Define, run and conclude experiments over agent treatments
+  lease        Coordinate path leases with the workspace owner
+  resident     Grant, narrow and inspect resident orchestrator mandates
+  visual       Capture the working tree beside a task's mocks
 
 Options:
 {options}";
@@ -165,49 +166,40 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // ── Environment ──
+    // ── Setup ──
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
     Host(host::HostCommand),
-    #[command(name = "browser-kit")]
-    BrowserKit(browser_kit::BrowserKitCommand),
     Plugin(plugin::PluginCommand),
-    Application(application::ApplicationCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
 
-    // ── Knowledge ──
+    // ── Work ──
     Task(Box<task::TaskCommand>),
-    Visual(visual::VisualCommand),
-    Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
-    Evolution(evolution::EvolutionCommand),
     Search(search::SearchCommand),
 
     // ── Operate ──
     Run(run::RunCommand),
     Job(job::JobCommand),
     Script(script::ScriptCommand),
-    Experiment(experiment::ExperimentCommand),
-    Lease(lease::LeaseCommand),
     Notice(notice::NoticeCommand),
-    Resident(resident::ResidentCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 
     // ── Observe ──
     Attention(attention::AttentionCommand),
     Audit(audit::AuditCommand),
-    Codebase(codebase::CodebaseCommand),
-    Agents(agents::AgentsCommand),
-    Crew(crew::CrewCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 
+    // ── Analytics ──
+    Agents(agents::AgentsCommand),
+    Codebase(codebase::CodebaseCommand),
+
     // ── Scheduler ──
     Clock(clock::ClockCommand),
-    Sweep(sweep::SweepCommand),
     Routine(routine::RoutineCommand),
     #[command(name = "auto-task")]
     AutoTask(auto_task::AutoTaskCommand),
@@ -216,6 +208,15 @@ pub enum Commands {
     // ── Services ──
     Mcp(mcp::McpCommand),
     Web(web::WebCommand),
+
+    // ── Advanced ──
+    Application(application::ApplicationCommand),
+    Decision(decision::DecisionCommand),
+    Evolution(evolution::EvolutionCommand),
+    Experiment(experiment::ExperimentCommand),
+    Lease(lease::LeaseCommand),
+    Resident(resident::ResidentCommand),
+    Visual(visual::VisualCommand),
 
     // ── plugin-derived command groups ──
     //
@@ -234,4 +235,15 @@ pub enum Commands {
     // next release.
     #[command(hide = true)]
     Orchestrator(orchestrator::OrchestratorCommand),
+    // Deprecated path of `orbit config browser-kit`, kept for the compatibility
+    // window; each use warns on stderr.
+    #[command(name = "browser-kit", hide = true)]
+    BrowserKit(browser_kit::BrowserKitCommand),
+    // Deprecated path of `orbit agents ladder`, kept for the compatibility
+    // window; each use warns on stderr.
+    #[command(hide = true)]
+    Crew(crew::CrewCommand),
+    // Compatibility spelling of `orbit clock tick`.
+    #[command(hide = true)]
+    Sweep(sweep::SweepCommand),
 }

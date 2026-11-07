@@ -959,7 +959,7 @@ candidate.
 ```bash
 orbit config show                  # effective values with source provenance
 orbit config show --all            # include unset advanced keys
-orbit browser-kit status           # a verified kit is required to capture
+orbit config browser-kit status           # a verified kit is required to capture
 ```
 
 `orbit config show` reports the merged table and which file each value came
@@ -1438,13 +1438,13 @@ next admission from any runtime:
 To verify, use the read-only commands below. Neither writes anything:
 
 ```bash
-orbit crew ladder
-orbit crew ladder --json
+orbit agents ladder
+orbit agents ladder --json
 orbit experiment list
 orbit experiment readout <id>
 ```
 
-`orbit crew ladder` prints each tier's pool, floor, candidate and trial, with
+`orbit agents ladder` prints each tier's pool, floor, candidate and trial, with
 the trial's status and its would-be count (tasks assigned to the candidate arm).
 A tier with no trial gets a reason: `mode_off`, `tier_not_listed`,
 `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`,

@@ -858,7 +858,7 @@ together: its `--window` defaults to `30d`, `--min-support` is shared landed
 tasks (default 15), and `--top` is 1–100 (default 10). `--json` on
 `analytics` is the dashboard payload. Pass `--workspace <selector>` for a
 workspace other than the active one. The commands read the rankings and
-change nothing. The full contract is the [CLI reference](../../reference/cli/#observe).
+change nothing. The full contract is the [CLI reference](../../reference/cli/#analytics).
 
 ### Resources
 

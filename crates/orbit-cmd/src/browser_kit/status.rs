@@ -1,4 +1,4 @@
-//! The kit's state as `orbit browser-kit status` and `orbit doctor` report
+//! The kit's state as `orbit config browser-kit status` and `orbit doctor` report
 //! it, and its removal.
 
 use std::path::PathBuf;
@@ -97,11 +97,11 @@ impl KitStatus {
         match kit.playwright_version.as_deref() {
             None => problems.push(install(
                 "the Playwright module is missing from kit/".to_string(),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             )),
             Some(version) if version != PLAYWRIGHT_VERSION => problems.push(install(
                 format!("Playwright {version} is installed; this Orbit release pins {PLAYWRIGHT_VERSION}"),
-                "orbit browser-kit install (moves the kit to the pin and deletes the old browser revisions)",
+                "orbit config browser-kit install (moves the kit to the pin and deletes the old browser revisions)",
             )),
             Some(_) => {}
         }
@@ -111,13 +111,13 @@ impl KitStatus {
                 format!(
                     "the pixel-compare helper {PIXEL_HELPER_PACKAGE} {version} is installed; this Orbit release pins {PIXEL_HELPER_VERSION}, so visual capture is unavailable"
                 ),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             )),
             None => problems.push(install(
                 format!(
                     "the pixel-compare helper {PIXEL_HELPER_PACKAGE} is missing from kit/, so visual capture is unavailable"
                 ),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             )),
         }
         if kit.module_present && (!kit.browser_installed || kit.executable.is_none()) {
@@ -126,13 +126,13 @@ impl KitStatus {
                     "the browser revision chromium_headless_shell-{} is incomplete or missing its executable under browsers/",
                     kit.chromium_revision.as_deref().unwrap_or("?")
                 ),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             ));
         }
         if !kit.env_script_present {
             problems.push(install(
                 "env.sh is missing".to_string(),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             ));
         }
         if !kit.stale_revisions.is_empty() {
@@ -141,14 +141,14 @@ impl KitStatus {
                     "old browser revisions remain: {}",
                     kit.stale_revisions.join(", ")
                 ),
-                "orbit browser-kit install",
+                "orbit config browser-kit install",
             ));
         }
         if problems.is_empty() && !self.verified {
             problems.push(install(
                 "the kit has not passed `verify` at its installed version, so workers receive none of its variables"
                     .to_string(),
-                "orbit browser-kit verify",
+                "orbit config browser-kit verify",
             ));
         }
         problems
@@ -177,7 +177,7 @@ pub(super) fn library_fix(unresolved: &[String]) -> String {
 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn library_fix(_unresolved: &[String]) -> String {
-    "orbit browser-kit install".to_string()
+    "orbit config browser-kit install".to_string()
 }
 
 /// Delete the kit. Nothing else on the host refers to it, and workers stop

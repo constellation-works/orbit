@@ -89,7 +89,7 @@ const CAPTURE: OperationSpec<VisualVerb> = OperationSpec {
              Attaches nothing and records nothing on the task.",
         ),
         after_help: Some(
-            "Needs a verified browser kit (`orbit browser-kit install`) and a view manifest \
+            "Needs a verified browser kit (`orbit config browser-kit install`) and a view manifest \
              in `visual_review.manifests`; without either the command fails naming what is \
              missing. The captures are a self-check aid, not evidence of record: a delivery \
              captures its own on the final candidate.",

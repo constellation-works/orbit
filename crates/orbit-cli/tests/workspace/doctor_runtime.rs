@@ -261,7 +261,7 @@ fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
         warning
             .remediation
             .as_deref()
-            .is_some_and(|fix| fix.contains("`orbit browser-kit install`")),
+            .is_some_and(|fix| fix.contains("`orbit config browser-kit install`")),
         "{warning:?}"
     );
 }

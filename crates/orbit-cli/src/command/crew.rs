@@ -1,4 +1,5 @@
-//! The crew CLI, derived from the crew operation registry.
+//! The crew ladder CLI, derived from the crew operation registry and served as
+//! `orbit agents ladder`. `orbit crew ladder` is its deprecated hidden path.
 //!
 //! `ladder` calls the read-only `orbit.crew.ladder` tool, so `--json` is that
 //! tool's payload. What is left here is the text rendering: the ladder line,
@@ -23,13 +24,22 @@ pub struct CrewCommand {
 
 impl Execute for CrewCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let Invocation { spec, input } = self.command;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
-        let blocks = match spec.verb {
-            CrewVerb::Ladder => ladder_blocks(&value),
-        };
-        Ok(Payload::blocks(value, blocks).into())
+        eprintln!("warning: `orbit crew ladder` is deprecated; use `orbit agents ladder`");
+        crew_ladder_output(self.command, runtime)
     }
+}
+
+/// Run a crew verb and project its payload, for both spellings of the command.
+pub(crate) fn crew_ladder_output(
+    invocation: Invocation<CrewVerb>,
+    runtime: &OrbitRuntime,
+) -> CommandOut {
+    let Invocation { spec, input } = invocation;
+    let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+    let blocks = match spec.verb {
+        CrewVerb::Ladder => ladder_blocks(&value),
+    };
+    Ok(Payload::blocks(value, blocks).into())
 }
 
 /// The ladder line, a row per tier, then each tier's reason.

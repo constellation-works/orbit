@@ -7,7 +7,7 @@ Visual review compares a UI delivery with mock images attached to its task. You 
 
 ## Before you start
 
-- A verified browser kit on the host. Check it with `orbit browser-kit status` and install it with `orbit browser-kit install`. See [Environment commands](../../reference/cli/#environment).
+- A verified browser kit on the host. Check it with `orbit config browser-kit status` and install it with `orbit config browser-kit install`. See [Setup commands](../../reference/cli/#setup).
 - A `[visual_review]` entry in the workspace config that lists your manifest. Paths are relative to the repository root:
 
   ```toml
@@ -219,8 +219,8 @@ Capture, from the self-check and delivery:
 
 | Code | Where it appears | Cause |
 |---|---|---|
-| `browser_kit_missing` | The command fails. | No verified kit. Run `orbit browser-kit install`. |
-| `kit_pin_mismatch` | The command fails. | The kit's Playwright does not match this release. Run `orbit browser-kit install`. |
+| `browser_kit_missing` | The command fails. | No verified kit. Run `orbit config browser-kit install`. |
+| `kit_pin_mismatch` | The command fails. | The kit's Playwright does not match this release. Run `orbit config browser-kit install`. |
 | `no_view_manifest` | The command fails. | A configured manifest cannot be read from the working tree, or declares no view. |
 | `app … declares no setup command` | The command fails. | The view's app has no `setup`. |
 | `setup_failed` | That mock's `error`. | Setup exited, or printed no `ORBIT_VISUAL_URL` within `setup_timeout_s`. |
@@ -230,6 +230,6 @@ Capture, from the self-check and delivery:
 ## Related
 
 - [Visual review configuration](../../reference/config/#visual-review): the `[visual_review]` settings.
-- [CLI commands](../../reference/cli/#jobs-and-tools): `orbit visual capture` and `accept-dispute`.
+- [CLI commands](../../reference/cli/#visual-capture): `orbit visual capture` and `accept-dispute`.
 - [Task artifacts](../../concepts/tasks/#task-artifacts): attaching, listing and reading artifacts.
 - [Run Orbit across hosts](../multi-host/): a `verify-mock-ui` task runs only on hosts with a verified kit.

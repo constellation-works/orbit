@@ -44,7 +44,7 @@ spec:
     `native_os_requirement_resolved`) clears it.
     A task tagged `ui` on a host whose headless browser kit is not verified
     is withheld as `browser_kit_missing`, after any `host_os_mismatch`, with
-    `detail` naming `orbit browser-kit install`. The kit is read every pass.
+    `detail` naming `orbit config browser-kit install`. The kit is read every pass.
     A review-filed bug (type `bug`, tagged `code-review`,
     `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`)
     without a CONFIRMED verdict from `finding_verification_pipeline` is withheld as

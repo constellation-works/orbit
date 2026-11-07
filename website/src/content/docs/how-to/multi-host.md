@@ -137,7 +137,7 @@ Before pulling, check:
   `workflow.purpose_crews.review` while that is unset. The deprecated
   `review.timing = "before_pr"` carries the same requirement.
 - A task tagged `ui` needs a verified browser kit on the follower. Check with
-  `orbit browser-kit status` before pulling UI work.
+  `orbit config browser-kit status` before pulling UI work.
 
 Start a bounded window on the replica checkout:
 

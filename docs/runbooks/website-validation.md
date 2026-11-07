@@ -112,7 +112,7 @@ candidate dependencies, generated pages and output directories are untouched.
 Prefer the host's
 [browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md):
 in a worker, source `"$ORBIT_BROWSER_KIT_ENV"`, which Orbit sets once
-`orbit browser-kit install` has verified the kit; by hand, source
+`orbit config browser-kit install` has verified the kit; by hand, source
 `~/.local/chromium-deps/env.sh`. The disposable installation below is the
 fallback when neither is available.
 

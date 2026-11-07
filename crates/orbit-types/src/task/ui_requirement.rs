@@ -13,7 +13,7 @@ pub const UI_TAG: &str = "ui";
 
 /// What a host without a verified kit runs to get one: it installs the kit
 /// and runs the smoke test that verifies it.
-pub const BROWSER_KIT_INSTALL_COMMAND: &str = "orbit browser-kit install";
+pub const BROWSER_KIT_INSTALL_COMMAND: &str = "orbit config browser-kit install";
 
 /// Whether `tags` carry the `ui` tag — or `verify-mock-ui`, which implies
 /// the `ui` tag's admission routing (visual-review §6.1) — so only a host

@@ -364,7 +364,7 @@ pub(crate) fn kit_not_established(
         return Some((
             "browser_kit_missing",
             format!(
-                "no browser kit at {}; run `orbit browser-kit install` on this host, then retry",
+                "no browser kit at {}; run `orbit config browser-kit install` on this host, then retry",
                 layout.root().display()
             ),
         ));
@@ -374,7 +374,7 @@ pub(crate) fn kit_not_established(
             "kit_pin_mismatch",
             format!(
                 "the kit has Playwright {}; this Orbit release pins {PLAYWRIGHT_VERSION}; run \
-                 `orbit browser-kit install`",
+                 `orbit config browser-kit install`",
                 inspection
                     .playwright_version
                     .as_deref()
@@ -386,8 +386,8 @@ pub(crate) fn kit_not_established(
         return Some((
             "browser_kit_missing",
             format!(
-                "the browser kit at {} has not passed `orbit browser-kit verify` at its \
-                 installed version; run `orbit browser-kit install` (it verifies), then retry",
+                "the browser kit at {} has not passed `orbit config browser-kit verify` at its \
+                 installed version; run `orbit config browser-kit install` (it verifies), then retry",
                 layout.root().display()
             ),
         ));
@@ -397,7 +397,7 @@ pub(crate) fn kit_not_established(
             "browser_kit_missing",
             format!(
                 "the kit's pixel-compare helper {PIXEL_HELPER_PACKAGE} is {} and this release \
-                 pins {PIXEL_HELPER_VERSION} verified by the kit smoke test; run `orbit \
+                 pins {PIXEL_HELPER_VERSION} verified by the kit smoke test; run `orbit config \
                  browser-kit install`, then retry",
                 inspection
                     .pixel_helper_version
