@@ -25,7 +25,6 @@ fn rerun_ci_decision(head: &str) -> serde_json::Value {
     })
 }
 
-#[test]
 fn rerun_ci_reruns_the_failed_checks_once_per_head_and_requeues() {
     let forge = RerunForge::new(HEAD, &["Test (shard 1)"]);
     let fx = fixture_with_forge(&forge);
@@ -71,7 +70,6 @@ fn rerun_ci_reruns_the_failed_checks_once_per_head_and_requeues() {
     );
 }
 
-#[test]
 fn rerun_ci_is_refused_when_the_head_moved() {
     let forge = RerunForge::new(HEAD, &["Test (shard 1)"]);
     let fx = fixture_with_forge(&forge);
@@ -89,7 +87,6 @@ fn rerun_ci_is_refused_when_the_head_moved() {
     assert_eq!(fx.status(&task), "blocked");
 }
 
-#[test]
 fn rerun_ci_is_refused_when_no_required_check_failed() {
     let forge = RerunForge::new(HEAD, &[]);
     let fx = fixture_with_forge(&forge);
@@ -227,3 +224,10 @@ fn resume_run_resumes_the_failed_run_once_within_the_shared_bound() {
         "the escalation says why the step did not run"
     );
 }
+
+crate::scenario_table!(
+    final_recovery_mechanical,
+    rerun_ci_reruns_the_failed_checks_once_per_head_and_requeues,
+    rerun_ci_is_refused_when_the_head_moved,
+    rerun_ci_is_refused_when_no_required_check_failed,
+);
