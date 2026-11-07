@@ -319,6 +319,80 @@ fn stale_workspace_activity_is_isolated_and_reported() {
 }
 
 #[test]
+fn stale_activity_with_mismatched_filename_is_reported_by_declared_name() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "stale_activity_with_mismatched_filename_is_reported_by_declared_name",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{ResolveError, load_job_asset, resolve_job_target_refs};
+
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let (runtime, _, activities) = workspace_runtime(root.path());
+    let stale = activities.join("different_filename.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale activity with mismatched filename");
+    std::fs::write(
+        activities.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+    // An invalid file whose declared name cannot be recovered stays
+    // isolated under its file-stem fallback.
+    let unreadable = activities.join("unreadable_identity.yaml");
+    std::fs::write(&unreadable, "schemaVersion: [unclosed\n").expect("unreadable activity");
+
+    let catalog = runtime
+        .v2_activity_catalog()
+        .expect("catalog builds despite the stale workspace-local activities");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("probe").is_none());
+    let reason = catalog
+        .unavailable_reason("probe")
+        .expect("stale activity is recorded unavailable by its declared name");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains("use a task workflow"), "{reason}");
+    assert!(
+        catalog.unavailable_reason("unreadable_identity").is_some(),
+        "unrecoverable identity keeps the file-stem fallback"
+    );
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let mut unrelated =
+        load_job_asset(&job_yaml("unrelated_job", "good_activity")).expect("unrelated job");
+    resolve_job_target_refs(&mut unrelated.spec, &catalog)
+        .expect("a job not referencing the stale activity still resolves");
+
+    let mut referencing =
+        load_job_asset(&job_yaml("referencing_job", "probe")).expect("referencing job");
+    let error = resolve_job_target_refs(&mut referencing.spec, &catalog)
+        .expect_err("a job referencing the declared name is refused");
+    assert!(
+        matches!(&error, ResolveError::ActivityUnavailable { name, .. } if name == "probe"),
+        "expected ActivityUnavailable for probe, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&stale.display().to_string()),
+        "{error}"
+    );
+    assert!(error.to_string().contains("use a task workflow"), "{error}");
+}
+
+#[test]
 fn withdrawn_workspace_activity_stays_refused_over_plugin_layer() {
     if !crate::admission_audit::isolate(
         module_path!(),

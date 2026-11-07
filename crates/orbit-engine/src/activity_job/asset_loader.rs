@@ -83,6 +83,33 @@ pub enum AssetLoadError {
     },
 }
 
+impl AssetLoadError {
+    /// The declared `metadata.name` this refusal already knows, when it
+    /// carries one. `"<unnamed>"` is the sentinel for a missing name, not
+    /// a recoverable identity.
+    pub(crate) fn declared_activity_name(&self) -> Option<&str> {
+        let name = match self {
+            Self::ToolAllowlist { activity, .. } => activity.as_str(),
+            Self::TrustedHostActivity(error) => error.activity.as_str(),
+            Self::ResponseCorrection { activity, .. } => activity.as_str(),
+            Self::RetiredRole { asset, .. } => asset.as_str(),
+            _ => return None,
+        };
+        (!name.is_empty() && name != "<unnamed>").then_some(name)
+    }
+}
+
+/// The `metadata.name` declared in `yaml`, when the document parses far
+/// enough to recover it. Returns `None` for unreadable documents or a
+/// missing/empty/non-string name.
+pub(crate) fn declared_activity_name_in_yaml(yaml: &str) -> Option<String> {
+    let document: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let name = field(&document, "metadata")
+        .and_then(|metadata| field(metadata, "name"))
+        .and_then(serde_yaml::Value::as_str)?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Activity-asset loader for schemaVersion 2 assets.
 pub fn load_activity_asset(yaml: &str) -> Result<ActivityAsset, AssetLoadError> {
     let res: V2EnvelopeYaml<ActivityV2> =
