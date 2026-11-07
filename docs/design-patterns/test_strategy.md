@@ -562,6 +562,17 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-runtime`'s `task/tests/pr_forge_rerun.rs` cases
+  `rerun_waits_for_running_workflow_before_requesting_failed_jobs`,
+  `rerun_refuses_after_bounded_wait_and_names_running_workflow` and
+  `rerun_still_refuses_without_failed_or_running_workflows_on_head` exercise the
+  public `GhTaskPrForge::rerun_failed_checks` boundary for ORB-22619 / ORB-22211
+  (criterion 2). Thread-local gh replies and a virtual clock force the observed
+  failed-job / running-workflow interleaving and expiry without real waits,
+  credentials or environment mutation. The real recovery integration fixture
+  substitutes the entire forge and cannot exercise this race. The negative
+  case preserves the immediate-refusal contract required by this repair.
+
 - `orbit-exec`'s `build_sandbox/tests/script_macos_inputs.rs::an_input_growing_during_preparation_cannot_escape_the_scratch_cap`
   is a criterion 2 regression for ORB-21492. It calls the public
   `run_script_sandboxed` boundary while a private, test-only hook appends bytes

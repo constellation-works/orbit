@@ -277,7 +277,7 @@ impl TaskPrForge for GhTaskPrForge {
             })?;
             view_pull_request(repo_root, number)?
         } else {
-            let stdout = run_gh(
+            let stdout = task_forge_gh_request(
                 orbit_tools::github_cli::bound_branch_pull_request_request(binding),
                 repo_root,
                 "gh pr list",
@@ -316,7 +316,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::open_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -345,7 +345,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 
     fn merged_pull_requests(&self, repo_root: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::merged_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -384,7 +384,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::pull_request_blockers_request(number),
             repo_root,
             "gh api graphql",
@@ -412,66 +412,15 @@ impl TaskPrForge for GhTaskPrForge {
             })
     }
 
-    /// Reruns the failed jobs of each failed workflow run on the head. A
-    /// run whose reported head is not `head_sha` is never touched.
+    /// Waits up to 120 seconds for in-progress workflows on the head, then
+    /// reruns failed jobs. A run on another head is never touched.
     fn rerun_failed_checks(
         &self,
         repo_root: &Path,
         number: u64,
         head_sha: &str,
     ) -> Result<CheckRerunOutcome, OrbitError> {
-        let stdout = run_gh(
-            orbit_tools::github_cli::commit_workflow_runs_request(head_sha),
-            repo_root,
-            "gh run list",
-        )?;
-        let runs = orbit_tools::github_cli::parse_gh_json(&stdout, "gh run list")?;
-        let runs = runs.as_array().ok_or_else(|| {
-            OrbitError::Execution("gh run list did not return an array".to_string())
-        })?;
-        let failed = runs
-            .iter()
-            .filter(|run| {
-                run.get("headSha").and_then(Value::as_str) == Some(head_sha)
-                    && run.get("status").and_then(Value::as_str) == Some("completed")
-                    && matches!(
-                        run.get("conclusion").and_then(Value::as_str),
-                        Some("failure" | "cancelled" | "timed_out" | "startup_failure")
-                    )
-            })
-            .filter_map(|run| {
-                Some((
-                    run.get("databaseId")?.as_u64()?,
-                    run.get("workflowName")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unnamed workflow")
-                        .to_string(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        if failed.is_empty() {
-            return Err(OrbitError::Execution(format!(
-                "no failed workflow run on head {head_sha} of pull request #{number} can be rerun"
-            )));
-        }
-        let mut rerun = Vec::new();
-        for (run_id, name) in failed {
-            if let Err(error) = run_gh(
-                orbit_tools::github_cli::rerun_failed_jobs_request(run_id),
-                repo_root,
-                "gh run rerun",
-            ) {
-                return Ok(CheckRerunOutcome {
-                    requested: rerun,
-                    uncertain: Some((run_id, name, error.to_string())),
-                });
-            }
-            rerun.push((run_id, name));
-        }
-        Ok(CheckRerunOutcome {
-            requested: rerun,
-            uncertain: None,
-        })
+        super::pr_forge_rerun::rerun_failed_head_workflows(repo_root, number, head_sha)
     }
 
     fn merge_pull_request(
@@ -485,7 +434,7 @@ impl TaskPrForge for GhTaskPrForge {
                 "merging pull request #{number} requires its exact head commit"
             )));
         }
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::repository_merge_methods_request(),
             repo_root,
             "gh repo view",
@@ -533,7 +482,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::authenticated_login_request(),
             repo_root,
             "gh api user",
@@ -553,7 +502,7 @@ impl TaskPrForge for GhTaskPrForge {
         number: u64,
         comment: &str,
     ) -> Result<(), OrbitError> {
-        run_gh(
+        task_forge_gh_request(
             orbit_tools::github_cli::close_pull_request_request(number, comment),
             repo_root,
             "gh pr close",
@@ -563,7 +512,7 @@ impl TaskPrForge for GhTaskPrForge {
 }
 
 fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
-    let stdout = run_gh(
+    let stdout = task_forge_gh_request(
         orbit_tools::github_cli::view_pull_request_request(number),
         repo_root,
         "gh pr view",
@@ -590,7 +539,11 @@ fn has_state(entry: &Value, state: &str) -> bool {
         .is_some_and(|reported| reported.eq_ignore_ascii_case(state))
 }
 
-fn run_gh(mut request: ExecRequest, repo_root: &Path, label: &str) -> Result<String, OrbitError> {
+pub(super) fn task_forge_gh_request(
+    mut request: ExecRequest,
+    repo_root: &Path,
+    label: &str,
+) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
     let result = run_process(&request, &NoSandbox)?;
     if !result.success {
