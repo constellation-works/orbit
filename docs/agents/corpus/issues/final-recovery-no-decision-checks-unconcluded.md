@@ -21,7 +21,7 @@ Do not treat the escalation as a diagnosis. Check whether checks have since conc
 
 ## Fix task
 
-No open fix task found; ORB-19030 (pending required checks escalate instead of retrying) is landed and by search related, not verified.
+No open fix task found; ORB-19030 (pending required checks escalate instead of retrying) is landed (2026-10-27T06:28Z, PR #6452); every occurrence recorded here precedes it and no later occurrence has been recorded.
 
 ## Occurrences
 
@@ -33,3 +33,11 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-25 08:48 | ORB-18124 | jrun-20261025-0757-c31 | no decision, checks unconcluded | human:daniel moved to backlog at 2026-10-25T08:49Z |
 | 2026-10-26 08:29 | ORB-18542 | jrun-20261026-0716-c9 | no decision, checks unconcluded | merged outside Orbit at 2026-10-26T08:54Z, settled done |
 | 2026-10-27 02:47 | ORB-18816 | jrun-20261027-0224-c3 | no decision, checks unconcluded | no clearing event in history; task now done |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 4 occurrence(s) on 4 task(s) (ORB-18096, ORB-18124, ORB-18542, ORB-18816); recurring; route `recovery`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Covered by done ORB-19030 (landed 2026-10-27T06:28Z: pending required checks retry instead of escalating); every occurrence in this slice precedes it and the corpus records none after it. The guard text remains at crates/orbit-engine/src/executor/automation/vcs/pr/recovery.rs:47.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+4 of these occurrence(s) are already recorded in the rows above (ORB-18096, ORB-18124, ORB-18542, ORB-18816); they are not re-added.

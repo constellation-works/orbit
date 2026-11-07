@@ -74,3 +74,15 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | 2026-10-31T04:29:51.635918214Z | ORB-20373 | not recorded in triage comment | new/creation targets lack context_creation_authorized entry; source ORB-20373 history:pilot_triage@2026-10-31T04:29:51.635918214Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-31T04:31:48.211506589Z | ORB-20375 | not recorded in triage comment | new/creation targets lack context_creation_authorized entry; source ORB-20375 history:pilot_triage@2026-10-31T04:31:48.211506589Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-31T04:40:29.877200041Z | ORB-20371 | not recorded in triage comment | new/creation targets lack context_creation_authorized entry; source ORB-20371 history:pilot_triage@2026-10-31T04:40:29.877200041Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 8 occurrence(s) on 5 task(s) (ORB-18079, ORB-18080, ORB-18406, ORB-18473, ORB-19160); recurring; route `authoring`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Covered by done ORB-20624 (landed 2026-11-01T00:10Z: split tasks grant creation for new module files); every occurrence in this slice precedes it.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+7 of these occurrence(s) are already recorded in the rows above (ORB-18079, ORB-18080, ORB-18406, ORB-18473, ORB-19160); they are not re-added.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-10-25T04:25:52Z | ORB-18079 | jrun-20261025-0417-c1 (pilot) | second assessment: surface_warnings new table/mod.rs and fragment files lack context_creation_authorized, with adr_conflicts (include! split contradicts the define_config_settings! matcher); source ORB-18079 history:pilot_warning_triaged@2026-10-25T04:25:52Z | triage disposition=decision outcome=proposed; human:daniel approved the proposal at 2026-10-25T05:16Z; system moved to done at 2026-10-25T06:51Z (PR #6016) |

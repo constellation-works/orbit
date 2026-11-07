@@ -96,3 +96,11 @@ Durable sources: the task `history` and `comments` read with `orbit.task.show` a
 | 2026-11-01T03:28:12Z | ORB-20702 | jrun-20261101-0321-c1 | pilot_warning_triaged disposition=human_only: holding findings adr_conflicts (proposed repricing conflicts with the design decision not to backdate rates) and utility_warnings (criterion 1 needs reviewer approval not recorded on the task); source ORB-20702 history:pilot_warning_triaged | description and acceptance_criteria edited 03:35:54Z, re-piloted clean 03:36:53Z; ORB-20702 done 03:57Z (PR #7420) |
 
 The hold preceded ORB-21012 landing (2026-11-01T19:34Z).
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 6 occurrence(s) on 6 task(s) (ORB-18083, ORB-18291, ORB-18661, ORB-18674, ORB-18754, ORB-19035); recurring; route `authoring`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: grew vs prior pass (ORB-22481 slice had 1). Covered by done ORB-21012 (landed 2026-11-01T19:34Z: hold criteria that contradict the pinned contract before promotion); every occurrence in this slice precedes it.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+6 of these occurrence(s) are already recorded in the rows above (ORB-18083, ORB-18291, ORB-18661, ORB-18674, ORB-18754, ORB-19035); they are not re-added.

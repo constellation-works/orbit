@@ -51,3 +51,11 @@ Durable sources: the task `history` and `comments` read with `orbit.task.show` a
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
 | 2026-10-31T23:32:59Z | ORB-20598 | jrun-20261031-2330-c5 | final_recovery escalate: no candidate; historical denominator semantics undecided; human_action re-pilot to settle unavailable-data semantics; source ORB-20598 history:final_recovery_escalated | re-run jrun-20261101-0030-c7 delivered; ORB-20598 done 2026-11-01T01:06Z |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 1 occurrence(s) on 1 task(s) (ORB-19066); below the recurrence threshold; route `authoring`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Below threshold.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+1 of these occurrence(s) are already recorded in the rows above (ORB-19066); they are not re-added.

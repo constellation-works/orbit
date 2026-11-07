@@ -21,7 +21,7 @@ Rerun the failed jobs on the unchanged head (`gh run rerun <run> --failed`). If 
 
 ## Fix task
 
-No open fix task for the class. Landed fixes found by search for individual signatures, not verified to cover each occurrence: ORB-19037 (lease_listener), ORB-18849 (host_forward), ORB-19343 (web_serve_shutdown).
+No open fix task for the class. Landed fixes found by search for individual signatures, not verified to cover each occurrence: ORB-19037 (lease_listener), ORB-18849 (host_forward), ORB-19343 (web_serve_shutdown). Recovery-side handling landed later: ORB-20738 (2026-11-01, blocked-task recheck requeues a blocked task whose required checks turn green) and ORB-22066 (2026-11-04, hold rather than fail a landing stop after base-suspect CI cycles).
 
 ## Occurrences
 
@@ -47,3 +47,11 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 | --- | --- | --- | --- | --- |
 | 2026-10-28T04:02:16.509311355Z | ORB-19289 | jrun-20261028-0302-c4 | required CI fails on a test outside the candidate diff; source ORB-19289 history:blocked_triage@2026-10-28T04:02:16.509311355Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 | 2026-10-29T07:41:07.183821412Z | ORB-19721 | jrun-20261029-0558-c19 | required CI fails on a test outside the candidate diff; source ORB-19721 history:final_recovery@2026-10-29T07:41:07.183821412Z | final_recovery disposition=escalated recorded in ORB-22246 resume pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 6 occurrence(s) on 6 task(s) (ORB-18164, ORB-18539, ORB-18552, ORB-18555, ORB-18559, ORB-18969); recurring; route `run_failure`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Covered by done run-failure-patterns fixes landed after every occurrence in this slice: ORB-20738 (2026-11-01T04:26Z, blocked-task recheck requeues on green checks) and ORB-22066 (2026-11-04T09:43Z, hold a landing stop after base-suspect CI cycles); per-signature flake fixes ORB-19037, ORB-18849, ORB-19343. No open run-failure-patterns task covers the class, and no new occurrence since the prior cursor, so nothing was filed.
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+6 of these occurrence(s) are already recorded in the rows above (ORB-18164, ORB-18539, ORB-18552, ORB-18555, ORB-18559, ORB-18969); they are not re-added.

@@ -31,3 +31,11 @@ Proposed 2026-11-04 by the pilot-block-patterns pass (ORB-22099). Each hold and 
 | --- | --- | --- | --- | --- |
 | 2026-10-25 19:50 | ORB-18297 | jrun-20261025-1944-c1 (pilot) | cadence criteria need owner-host evidence | human:daniel rejected at 2026-10-25T20:06Z |
 | 2026-10-25 19:50 | ORB-18298 | jrun-20261025-1944-c1 (pilot) | cadence criteria need owner-host evidence | no clearing event read in this pass |
+
+### ORB-22592 owner scan, 2026-11-07
+
+Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at the oldest 60 candidates (last read ORB-19240, sort time `2026-10-27T23:42:56Z`). This slice counts 2 occurrence(s) on 2 task(s) (ORB-18297, ORB-18298); below the recurrence threshold; route `authoring`; disposition `counted`. New since the prior cursor `2026-11-04T14:44:15Z`: 0. Change: new vs prior pass (ORB-22481 slice had 0). Below threshold (2 occurrences on 2 tasks).
+
+Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
+
+2 of these occurrence(s) are already recorded in the rows above (ORB-18297, ORB-18298); they are not re-added.
