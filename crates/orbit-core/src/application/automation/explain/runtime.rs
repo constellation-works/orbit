@@ -161,6 +161,7 @@ impl OrbitRuntime {
             cross_reads: ExplainCrossReads {
                 tasks: checked.reads.task_ids.iter().cloned().collect(),
                 tags: checked.reads.tags.iter().cloned().collect(),
+                auto_tasks: checked.reads.auto_task_histories.iter().cloned().collect(),
             },
             ownership: self.condition_ownership(),
             evaluated_at: now.to_rfc3339(),

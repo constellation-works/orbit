@@ -40,6 +40,7 @@ fn healthy_board_facts(reads: &ConditionReads) -> ConditionFacts {
         board,
         tasks: BTreeMap::new(),
         self_facts: SelfFacts::default(),
+        auto_tasks: BTreeMap::new(),
     }
 }
 
@@ -382,4 +383,47 @@ fn write_condition_definition_with_crew(
         ),
     )
     .unwrap();
+}
+
+#[test]
+fn named_auto_task_history_reads_check_at_load() {
+    // [ORB-22676] A literal name loads in either carrier and is recorded as a
+    // read; its optional field needs has() like any other.
+    for carrier in [ConditionCarrier::Routine, ConditionCarrier::AutoTask] {
+        let checked = check_condition(
+            &workspace_condition(
+                "!has(auto_tasks['release-prep'].last_succeeded_at) \
+                 || now - auto_tasks['release-prep'].last_succeeded_at > duration('24h')",
+            ),
+            carrier,
+        )
+        .unwrap();
+        assert_eq!(
+            checked.reads.auto_task_histories.iter().collect::<Vec<_>>(),
+            ["release-prep"]
+        );
+    }
+    for (when, refusal) in [
+        (
+            "now - auto_tasks['release-prep'].last_succeeded_at > duration('24h')",
+            "is optional",
+        ),
+        (
+            "now > auto_tasks[board.backlog.count > 0 ? 'a' : 'b'].last_succeeded_at",
+            "string literal",
+        ),
+        (
+            "has(auto_tasks['Release Prep'].last_succeeded_at)",
+            "auto-task name",
+        ),
+        (
+            "has(auto_tasks.release.last_succeeded_at)",
+            "string-literal index",
+        ),
+    ] {
+        let error = check_condition(&workspace_condition(when), ConditionCarrier::Routine)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(refusal), "{when}: {error}");
+    }
 }

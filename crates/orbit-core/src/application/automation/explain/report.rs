@@ -63,6 +63,9 @@ pub struct ExplainPrefilter {
 pub struct ExplainCrossReads {
     pub tasks: Vec<String>,
     pub tags: Vec<String>,
+    /// `auto_tasks['<name>']` names whose accepted-result history is read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub auto_tasks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

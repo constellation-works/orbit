@@ -77,6 +77,19 @@ pub struct SelfFacts {
     pub fires_24h: i64,
 }
 
+/// One named auto-task's accepted-result history, read as
+/// `auto_tasks['<name>']`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AcceptedHistoryFacts {
+    /// When the definition's declared completion contract last accepted a
+    /// result; absent when the readable history holds none.
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the history is unavailable: no such definition, no completion
+    /// contract, or a history that could not be read. Any read of this name,
+    /// `has()` included, is then unknown, never "never succeeded".
+    pub unavailable: Option<String>,
+}
+
 /// Everything an expression reads except its subject.
 #[derive(Debug, Clone)]
 pub struct ConditionFacts {
@@ -85,6 +98,9 @@ pub struct ConditionFacts {
     /// The `tasks['<ID>']` cross-reads that exist; a missing ID is unknown.
     pub tasks: BTreeMap<String, TaskFacts>,
     pub self_facts: SelfFacts,
+    /// The `auto_tasks['<name>']` histories gathered; a name left out is
+    /// unknown.
+    pub auto_tasks: BTreeMap<String, AcceptedHistoryFacts>,
 }
 
 /// One auto-task step as a job wait reads it (`self.prev`, `steps['<id>']`).
@@ -183,9 +199,10 @@ pub struct TopLevelClause {
 /// Binds facts as CEL variables once per explain, and the subject per call.
 pub struct ConditionEvaluator {
     context: Context<'static, 'static>,
-    /// Set when `self.last_succeeded_at` could not be read: any clause that
-    /// reads it is unknown.
-    unreadable: Option<String>,
+    /// Read paths that could not be read, with why: any clause that reads
+    /// one, or anything under it, is unknown even under `has()` or a
+    /// short-circuit that would skip it.
+    unavailable: Vec<(String, String)>,
 }
 
 impl ConditionEvaluator {
@@ -209,9 +226,30 @@ impl ConditionEvaluator {
             ),
         );
         context.add_variable_from_value("self", self_value(&facts.self_facts));
+        // An unavailable history is left unbound as well, so even a read the
+        // path check missed cannot see an empty, "never succeeded" history.
+        context.add_variable_from_value(
+            "auto_tasks",
+            map_value(
+                facts
+                    .auto_tasks
+                    .iter()
+                    .filter(|(_, history)| history.unavailable.is_none())
+                    .map(|(name, history)| (name.clone(), accepted_history_value(history))),
+            ),
+        );
+        let mut unavailable = Vec::new();
+        if let Some(why) = &facts.self_facts.last_succeeded_unreadable {
+            unavailable.push((SELF_LAST_SUCCEEDED.to_string(), why.clone()));
+        }
+        for (name, history) in &facts.auto_tasks {
+            if let Some(why) = &history.unavailable {
+                unavailable.push((auto_task_history_path(name), why.clone()));
+            }
+        }
         Self {
             context,
-            unreadable: facts.self_facts.last_succeeded_unreadable.clone(),
+            unavailable,
         }
     }
 
@@ -267,7 +305,7 @@ impl ConditionEvaluator {
         );
         Self {
             context,
-            unreadable: None,
+            unavailable: Vec::new(),
         }
     }
 
@@ -275,7 +313,7 @@ impl ConditionEvaluator {
     /// scope).
     pub fn truth(&self, expression: &CheckedExpression, subject: Option<&TaskFacts>) -> Truth {
         let scope = self.scope(subject);
-        resolve(&expression.ast, &scope, self.unreadable.as_deref())
+        resolve(&expression.ast, &scope, &self.unavailable)
     }
 
     /// Each top-level `&&` conjunct's value, for closest-miss ranking.
@@ -290,7 +328,7 @@ impl ConditionEvaluator {
             .into_iter()
             .map(|conjunct| TopLevelClause {
                 text: text.of(conjunct),
-                value: resolve(conjunct, &scope, self.unreadable.as_deref()),
+                value: resolve(conjunct, &scope, &self.unavailable),
             })
             .collect()
     }
@@ -303,7 +341,7 @@ impl ConditionEvaluator {
     ) -> ClauseNode {
         let scope = self.scope(subject);
         let text = SourceText::new(expression);
-        clause_node(&expression.ast, &scope, &text, self.unreadable.as_deref())
+        clause_node(&expression.ast, &scope, &text, &self.unavailable)
     }
 
     fn scope(&self, subject: Option<&TaskFacts>) -> Context<'_, 'static> {
@@ -315,22 +353,42 @@ impl ConditionEvaluator {
     }
 }
 
-/// `self.last_succeeded_at` as an expression reads it, bare or under `has()`.
-const LAST_SUCCEEDED_READS: [&str; 2] = ["self.last_succeeded_at", "has(self.last_succeeded_at)"];
+/// The definition's own accepted-result history, as `self` reads it.
+const SELF_LAST_SUCCEEDED: &str = "self.last_succeeded_at";
 
-fn reads_last_succeeded(expr: &IdedExpr) -> bool {
-    let mut reads = Vec::new();
-    collect_reads(expr, &mut Vec::new(), &mut reads);
-    reads
-        .iter()
-        .any(|(path, _)| LAST_SUCCEEDED_READS.contains(&path.as_str()))
+/// The read path of one named auto-task's history, as [`path_of`] spells it.
+fn auto_task_history_path(name: &str) -> String {
+    format!("auto_tasks['{name}']")
 }
 
-fn resolve(expr: &IdedExpr, context: &Context<'_, '_>, unreadable: Option<&str>) -> Truth {
-    if let Some(why) = unreadable
-        && reads_last_succeeded(expr)
-    {
-        return Truth::Unknown(format!("self.last_succeeded_at is unavailable: {why}"));
+/// The unavailable path a read falls under, with why: the path itself or
+/// anything below it, bare or under `has()`.
+fn unavailable_read<'u>(
+    read: &str,
+    unavailable: &'u [(String, String)],
+) -> Option<(&'u str, &'u str)> {
+    let path = read
+        .strip_prefix("has(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .unwrap_or(read);
+    unavailable.iter().find_map(|(root, why)| {
+        let below = path
+            .strip_prefix(root.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']));
+        below.then_some((root.as_str(), why.as_str()))
+    })
+}
+
+fn resolve(expr: &IdedExpr, context: &Context<'_, '_>, unavailable: &[(String, String)]) -> Truth {
+    if !unavailable.is_empty() {
+        let mut reads = Vec::new();
+        collect_reads(expr, &mut Vec::new(), &mut reads);
+        if let Some((root, why)) = reads
+            .iter()
+            .find_map(|(path, _)| unavailable_read(path, unavailable))
+        {
+            return Truth::Unknown(format!("{root} is unavailable: {why}"));
+        }
     }
     match Value::resolve(expr, context) {
         Ok(Value::Bool(true)) => Truth::True,
@@ -351,9 +409,9 @@ fn clause_node(
     expr: &IdedExpr,
     context: &Context<'_, '_>,
     text: &SourceText,
-    unreadable: Option<&str>,
+    unavailable: &[(String, String)],
 ) -> ClauseNode {
-    let truth = resolve(expr, context, unreadable);
+    let truth = resolve(expr, context, unavailable);
     let chain = ["_&&_", "_||_"].into_iter().find(|operator| {
         matches!(&expr.expr, Expr::Call(call)
                 if call.target.is_none() && call.func_name == *operator)
@@ -363,11 +421,11 @@ fn clause_node(
             Some(if operator == "_&&_" { "and" } else { "or" }),
             flatten(expr, operator)
                 .into_iter()
-                .map(|operand| clause_node(operand, context, text, unreadable))
+                .map(|operand| clause_node(operand, context, text, unavailable))
                 .collect(),
             Vec::new(),
         ),
-        None => (None, Vec::new(), operands(expr, context, unreadable)),
+        None => (None, Vec::new(), operands(expr, context, unavailable)),
     };
     ClauseNode {
         text: text.of(expr),
@@ -380,13 +438,13 @@ fn clause_node(
 }
 
 /// The variables an expression may read from outside a comprehension.
-const ROOTS: &[&str] = &["task", "tasks", "board", "self", "now"];
+const ROOTS: &[&str] = &["task", "tasks", "auto_tasks", "board", "self", "now"];
 
 /// The maximal reads in a leaf clause, each with its value.
 fn operands(
     expr: &IdedExpr,
     context: &Context<'_, '_>,
-    unreadable: Option<&str>,
+    unavailable: &[(String, String)],
 ) -> Vec<OperandValue> {
     let mut reads = Vec::new();
     collect_reads(expr, &mut Vec::new(), &mut reads);
@@ -398,9 +456,7 @@ fn operands(
                 return None;
             }
             seen.push(path.clone());
-            if let Some(why) = unreadable
-                && LAST_SUCCEEDED_READS.contains(&path.as_str())
-            {
+            if let Some((_, why)) = unavailable_read(&path, unavailable) {
                 return Some(OperandValue {
                     path,
                     value: serde_json::Value::Null,
@@ -707,6 +763,14 @@ fn self_value(facts: &SelfFacts) -> Value {
         fields.push(("last_succeeded_at".to_string(), timestamp(at)));
     }
     map_value(fields)
+}
+
+fn accepted_history_value(history: &AcceptedHistoryFacts) -> Value {
+    map_value(
+        history
+            .last_succeeded_at
+            .map(|at| ("last_succeeded_at".to_string(), timestamp(at))),
+    )
 }
 
 /// A CEL value as JSON: timestamps in RFC 3339, durations in CEL's seconds

@@ -66,6 +66,10 @@ pub(crate) enum ObjectKind {
     SelfAutoTask,
     Tasks,
     TagCounts,
+    /// `auto_tasks`, indexed only by a string-literal auto-task name.
+    AutoTasks,
+    /// One `auto_tasks['<name>']`: that definition's accepted-result history.
+    AcceptedHistory,
     /// `board` in a job wait: the condition board plus `empty`.
     JobBoard,
     /// `job` whose `source_revision` may be absent.
@@ -97,6 +101,8 @@ impl ObjectKind {
             Self::SelfRoutine | Self::SelfAutoTask => "self",
             Self::Tasks => "tasks",
             Self::TagCounts => "board.by_tag",
+            Self::AutoTasks => "auto_tasks",
+            Self::AcceptedHistory => "auto_tasks['<name>']",
             Self::JobBoard => "board",
             Self::Job | Self::PinnedJob => "job",
             Self::SelfStep => "self",
@@ -116,6 +122,7 @@ impl ObjectKind {
             Self::Bucket => BUCKET_FIELDS,
             Self::SelfRoutine => SELF_ROUTINE_FIELDS,
             Self::SelfAutoTask => SELF_AUTO_TASK_FIELDS,
+            Self::AcceptedHistory => ACCEPTED_HISTORY_FIELDS,
             Self::JobBoard => JOB_BOARD_FIELDS,
             Self::Job => JOB_FIELDS,
             Self::PinnedJob => PINNED_JOB_FIELDS,
@@ -124,7 +131,7 @@ impl ObjectKind {
             Self::StepObservation => STEP_OBSERVATION_FIELDS,
             Self::Result => RESULT_FIELDS,
             Self::ReadinessResult => READINESS_RESULT_FIELDS,
-            Self::Tasks | Self::TagCounts | Self::Steps => &[],
+            Self::Tasks | Self::TagCounts | Self::Steps | Self::AutoTasks => &[],
         }
     }
 
@@ -313,6 +320,11 @@ const SELF_AUTO_TASK_FIELDS: &[Field] = &[
     required("fires_24h", FieldType::Int),
 ];
 
+/// A named auto-task's accepted-result history, read as
+/// `auto_tasks['<name>']` from any condition. Only a result its declared
+/// completion contract accepted moves `last_succeeded_at`.
+const ACCEPTED_HISTORY_FIELDS: &[Field] = &[optional("last_succeeded_at", FieldType::Timestamp)];
+
 /// Which definition kind carries the condition: it decides the clause path
 /// errors name and which `self` fields exist (only an auto-task mints).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -456,6 +468,7 @@ pub(crate) fn variable(
         "task" if scope == ConditionScope::Task => Some(CelType::Object(ObjectKind::Task)),
         "tasks" => Some(CelType::Object(ObjectKind::Tasks)),
         "board" => Some(CelType::Object(ObjectKind::Board)),
+        "auto_tasks" => Some(CelType::Object(ObjectKind::AutoTasks)),
         "self" => Some(CelType::Object(carrier.self_kind())),
         "now" => Some(CelType::Timestamp),
         _ => None,

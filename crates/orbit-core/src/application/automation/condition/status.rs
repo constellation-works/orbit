@@ -144,6 +144,20 @@ pub struct ConditionSelfView {
     pub fires_24h: i64,
 }
 
+/// One `auto_tasks['<name>']` history the condition reads, as the next pass
+/// reads it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConditionAcceptedHistoryView {
+    /// When the named auto-task's completion contract last accepted a result;
+    /// absent when its readable history holds none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the history is unavailable (no such definition, no completion
+    /// contract, or unreadable). Unavailable is not "never succeeded".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
+}
+
 /// A condition definition's durable state, projected.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConditionStatus {
@@ -174,6 +188,9 @@ pub struct ConditionStatus {
     pub skip_counts: BTreeMap<String, u64>,
     #[serde(rename = "self")]
     pub self_view: ConditionSelfView,
+    /// The named auto-task histories the condition reads, by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub auto_tasks: BTreeMap<String, ConditionAcceptedHistoryView>,
     /// Newest first, with each fire's upstream chain.
     pub recent_fires: Vec<ConditionFireView>,
     /// Holding, waiting and fired subjects first.
@@ -208,6 +225,7 @@ pub(crate) fn condition_status(
             last_skip: None,
             skip_counts: BTreeMap::new(),
             self_view: self_view(runtime, definition, None, now),
+            auto_tasks: named_history_view(runtime, definition),
             recent_fires: Vec::new(),
             subjects: Vec::new(),
         });
@@ -267,6 +285,7 @@ pub(crate) fn condition_status(
         last_skip: state.last_skip.clone(),
         skip_counts: state.skip_counts.clone(),
         self_view: self_view(runtime, definition, Some(&state), now),
+        auto_tasks: named_history_view(runtime, definition),
         recent_fires,
         subjects: subjects.into_iter().take(LISTED).collect(),
     })
@@ -378,6 +397,31 @@ fn self_view(
         last_minted_task: facts.last_minted_task,
         fires_24h: facts.fires_24h,
     }
+}
+
+/// The `auto_tasks['<name>']` histories the condition reads, from the same
+/// read the pass and explain use. A condition that does not load reads none.
+fn named_history_view(
+    runtime: &OrbitRuntime,
+    definition: &ConditionDefinition<'_>,
+) -> BTreeMap<String, ConditionAcceptedHistoryView> {
+    let Ok(checked) =
+        orbit_automation::condition::check_condition(definition.condition, definition.carrier)
+    else {
+        return BTreeMap::new();
+    };
+    facts::named_accepted_history(runtime, &checked.reads.auto_task_histories)
+        .into_iter()
+        .map(|(name, history)| {
+            (
+                name,
+                ConditionAcceptedHistoryView {
+                    last_succeeded_at: history.last_succeeded_at,
+                    unavailable: history.unavailable,
+                },
+            )
+        })
+        .collect()
 }
 
 /// Every fire this workspace's condition consumers record, by ID.

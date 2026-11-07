@@ -477,7 +477,19 @@ Each held or skipped fire records `guard_false` or `guard_unknown`.
 | `tasks['<ID>']` | The same fields for one task. The index must be a string literal. |
 | `board` | `by_status['<status>']`, `by_tag['<tag>']` (a literal tag), `drain_running`, and `eligible`, `backlog`, `in_progress`, `blocked`, `review` and `open_runs`, each with `count` and `empty` |
 | `self` | `last_fired` (optional), `fires_24h`; an auto-task also has `last_minted` and `last_minted_task` (optional), and `last_succeeded_at` (optional) when it declares a completion contract: when that contract last accepted a result. It is absent until one is accepted; when the history cannot be read, a clause that reads it is unknown, not "never". A task that merely finished, or a probe that found nothing to do, does not advance it |
+| `auto_tasks['<name>']` | `last_succeeded_at` (optional): when the named auto-task's completion contract last accepted a result, read from any condition or `when` guard, so a routine can wait on another definition. The name must be a string literal. It is absent while the readable history holds no accepted result. If the name is not a defined auto-task, the auto-task declares no completion contract, or its history cannot be read, every clause that reads it is unknown, `has()` included, never "never" |
 | `now` | The evaluation time |
+
+A routine that runs at most once a day after `release-prep` last had a result accepted:
+
+```yaml
+trigger:
+  condition:
+    scope: workspace
+    when: >-
+      !has(auto_tasks['release-prep'].last_succeeded_at)
+      || now - auto_tasks['release-prep'].last_succeeded_at > duration('24h')
+```
 
 Statuses are spelled as stored: `proposed`, `backlog`, `in_progress`, `review`, `done`, `blocked`, `archived`, `rejected`, `someday`. Read an optional field only after testing it, as in `has(task.origin) && task.origin.depth < 3`. A value that cannot be read, such as a `tasks['<ID>']` that does not exist, makes the evaluation unknown, never false.
 
@@ -488,10 +500,10 @@ The language is a subset of CEL: literals, comparison and logic, `in`, `has()`, 
 A condition that fails any check fails to load. The error names the file, the clause (`trigger.condition.when`, `schedule.condition.rearm`) and the line and column inside the expression. Every other definition still loads.
 
 - The expression parses, every identifier and field exists in its scope, every operator is well typed, and the result is `bool`.
-- `tasks[...]` and `board.by_tag[...]` take a string literal, never a computed value.
+- `tasks[...]`, `auto_tasks[...]` and `board.by_tag[...]` take a string literal, never a computed value; an `auto_tasks` name must be a valid auto-task name.
 - A `task` scope has a top-level `&&` conjunct that limits the subjects: `task.status == '<status>'`, `task.status in [...]`, or `'<tag>' in task.tags`.
 - The expression is at most 4 KiB, 200 parse nodes (macros expanded) and two nested comprehensions.
 
-`orbit automation explain <name>` (or `routine:<name>` / `auto-task:<name>` when both kinds share the name) evaluates the condition over live state and writes nothing. It shows the scope, the prefilter, the ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and for one subject (`--subject <task ID>`) each top-level `&&` and `||` clause with its value and the values it read. Each match shows its arm state and remaining hold, and the tracking block shows any stall, the last pass and skip, recent fires with their upstream chain, and `self`. `orbit auto-task list`, `orbit routine list` and the dashboard show the same state.
+`orbit automation explain <name>` (or `routine:<name>` / `auto-task:<name>` when both kinds share the name) evaluates the condition over live state and writes nothing. It shows the scope, the prefilter, the ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and for one subject (`--subject <task ID>`) each top-level `&&` and `||` clause with its value and the values it read. Each match shows its arm state and remaining hold, and the tracking block shows any stall, the last pass and skip, recent fires with their upstream chain, `self`, and each `auto_tasks['<name>']` history the condition reads. `orbit auto-task list`, `orbit routine list` and the dashboard show the same state.
 
 An Orbit release without condition triggers reports each such file as a load error (``unknown field `condition` ``) and keeps loading the rest.

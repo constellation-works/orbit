@@ -1,7 +1,7 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-07
 last_validated: 2026-11-03
 status: Draft
 stage: building
@@ -234,6 +234,7 @@ Every expression may also read the following. Nothing else is in the schema.
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
 | `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `last_succeeded_at` (timestamp, optional; auto-tasks that declare a completion contract only), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3); `last_succeeded_at` is the `accepted_at` of the definition's latest accepted-result receipt, never task `done`, mint or merge state. No accepted result leaves it absent; an unreadable history makes any clause that reads it unknown (and enabling reports it unavailable), never "never succeeded". |
+| `auto_tasks['<name>']` | Another auto-task's accepted-result history: `last_succeeded_at` (timestamp, optional). The index must be a string-literal auto-task name. Readable from any condition and `when:` guard, so a routine can wait on a distinct definition's accepted result [ORB-22676]. | The same receipt history as `self.last_succeeded_at`, read by name. No accepted result leaves it absent. A name that does not resolve to a definition, a definition with no completion contract, and an unreadable history are unavailable: any clause that reads the name, `has()` included, is unknown, never "never succeeded". Task `done`, fires, mints and merges never move it. |
 
 **Job-composition extension: shipped.**
 The auto-task job step ([auto-task steps in existing jobs](../activity-job/specs/auto-task-step.md))
@@ -537,9 +538,12 @@ module), against the scope's declared environment:
 - each admitted operator and function has its CEL overload signature, with no implicit
   numeric conversion; anything else, `matches()` and map literals included, is refused;
 - an optional field (`task.crew`, `task.parent_id`, `task.origin`, `self.last_fired`,
-  `self.last_minted`, `self.last_minted_task`, `self.last_succeeded_at`) is read only where a `has()` test proves
+  `self.last_minted`, `self.last_minted_task`, `self.last_succeeded_at`,
+  `auto_tasks['<name>'].last_succeeded_at`) is read only where a `has()` test proves
   it present: on the right of `&&`, the right of `||` after `!has(...)`, or a guarded
   `?:` branch;
+- `auto_tasks[...]` takes a string literal that is a valid auto-task name, and `has()`
+  tests its field, never the index itself;
 - status literals compared with a task's `status`, and `board.by_status` keys, must be
   stored status spellings (`in_progress`, not `in-progress`);
 - comprehensions range only over lists, and the node limit counts the expanded AST.

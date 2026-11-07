@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_automation::condition::{
-    BoardFacts, ConditionFacts, ConditionReads, OriginFacts, SelfFacts, TaskFacts, TaskPrefilter,
+    AcceptedHistoryFacts, BoardFacts, ConditionFacts, ConditionReads, OriginFacts, SelfFacts,
+    TaskFacts, TaskPrefilter,
 };
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
@@ -59,6 +60,61 @@ pub(crate) fn unreadable_history_note(facts: &SelfFacts) -> Option<String> {
         .map(|why| format!("self.last_succeeded_at: {why}"))
 }
 
+/// The accepted-result history of each auto-task `names` lists, as
+/// `auto_tasks['<name>']` reads it. Only a definition that exists and declares
+/// a completion contract has such a history, and only a result that contract
+/// accepted moves it: a task that merely finished, a fire or a mint never
+/// does. A missing definition, a missing contract and an unreadable history
+/// are unavailable, never "never succeeded"; a readable history with no
+/// accepted result leaves `last_succeeded_at` absent.
+pub(crate) fn named_accepted_history(
+    runtime: &OrbitRuntime,
+    names: &BTreeSet<String>,
+) -> BTreeMap<String, AcceptedHistoryFacts> {
+    names
+        .iter()
+        .map(|name| (name.clone(), accepted_history_of(runtime, name)))
+        .collect()
+}
+
+fn accepted_history_of(runtime: &OrbitRuntime, name: &str) -> AcceptedHistoryFacts {
+    let unavailable = |why: String| AcceptedHistoryFacts {
+        last_succeeded_at: None,
+        unavailable: Some(why),
+    };
+    let definition = match runtime.auto_task_show(name) {
+        Ok(Some(definition)) => definition,
+        Ok(None) => return unavailable(format!("no auto-task `{name}` is defined here")),
+        Err(error) => return unavailable(format!("auto-task `{name}` does not load: {error}")),
+    };
+    if definition.completion.is_none() {
+        return unavailable(format!(
+            "auto-task `{name}` declares no completion contract, so it has no accepted results"
+        ));
+    }
+    match runtime.auto_task_accepted_history(name) {
+        AutoTaskAcceptedHistory::Latest(receipt) => AcceptedHistoryFacts {
+            last_succeeded_at: Some(receipt.accepted_at),
+            unavailable: None,
+        },
+        AutoTaskAcceptedHistory::Missing => AcceptedHistoryFacts::default(),
+        AutoTaskAcceptedHistory::Unreadable(why) => unavailable(why),
+    }
+}
+
+/// Why each unavailable `auto_tasks['<name>']` history could not be read, in
+/// the form the `unavailable` list carries.
+pub(crate) fn unavailable_history_notes(
+    histories: &BTreeMap<String, AcceptedHistoryFacts>,
+) -> impl Iterator<Item = String> + '_ {
+    histories.iter().filter_map(|(name, history)| {
+        history
+            .unavailable
+            .as_ref()
+            .map(|why| format!("auto_tasks['{name}'].last_succeeded_at: {why}"))
+    })
+}
+
 /// The facts plus every task the workspace lists.
 pub(crate) struct GatheredFacts {
     pub(crate) facts: ConditionFacts,
@@ -90,6 +146,8 @@ pub(crate) fn gather(
         .collect::<BTreeMap<_, _>>();
     let mut unavailable = Vec::new();
     let board = board_facts(runtime, reads, &tasks, &inputs.own_tasks, &mut unavailable);
+    let auto_tasks = named_accepted_history(runtime, &reads.auto_task_histories);
+    unavailable.extend(unavailable_history_notes(&auto_tasks));
     let mut cross_reads = BTreeMap::new();
     for id in &reads.task_ids {
         if let Some(task) = tasks.get(id) {
@@ -102,6 +160,7 @@ pub(crate) fn gather(
             board,
             tasks: cross_reads,
             self_facts: inputs.self_facts.clone(),
+            auto_tasks,
         },
         unavailable,
         tasks,
