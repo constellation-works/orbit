@@ -489,7 +489,7 @@ export function applyPushedHostResources(payload) {
 // fetchHostResourcePayloadFor already grants the Hosts view — instead
 // of issuing a second /host/resources request for the same tick. The
 // default, used by the chips' timer and direct callers, always reads
-// fresh, and an explicit Refresh does the same.
+// fresh, and a non-poll dashboard refresh does the same.
 let renderRead = null;
 
 export function fetchAndRenderHostResources({ shareRecent = false } = {}) {

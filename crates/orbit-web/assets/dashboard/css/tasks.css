@@ -15,10 +15,10 @@
   flex-direction: column;
   min-height: 0;
 }
-/* The Tasks column is frameless: its title, search and status chips sit on
-   the canvas, and each status group below is its own card. */
+/* The Tasks column is frameless: its status chips sit on the canvas, and
+   each status group below is its own card. */
 #tasks-panel { background: transparent; border: 0; border-radius: 0; overflow: visible; }
-/* The search box, Settle and New task sit in the top bar while Tasks is open.
+/* The search box and New task sit in the top bar while Tasks is open.
    Search and New task are 30px tall; the transparent Clear button overflows
    the box so its target stays above 40px at any sub-pixel offset. */
 .topbar-task-actions { display: none; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; }

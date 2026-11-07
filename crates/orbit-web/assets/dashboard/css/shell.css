@@ -304,7 +304,7 @@
 :root { --topbar-height: 56px; }
 
 /* ORB-10972: one bar replaces the old header + tabs + health strip stack
-   (~194px). It holds the brand, provider usage, Drain and Refresh; the
+   (~194px). It holds the brand, provider usage and the Tasks controls; the
    host readings and the windowed counts ride on the rail. */
 .topbar {
   flex: 0 0 auto;
@@ -384,8 +384,8 @@
    provider with its name, its worst window's value, a small meter and the
    weekly pressure in muted mono. Detail lives in the dialog it opens (see
    .usage-dialog). A stale provider is dashed and dimmed, a gating-off one
-   dashed, and each says so in a flag. Where the list would not fit beside the
-   drain label and Refresh, one summary chip (the worst provider) replaces it
+   dashed, and each says so in a flag. Where the list would not fit in the bar's
+   spare room, one summary chip (the worst provider) replaces it
    and opens the dialog that lists every provider. */
 .host-resource-group:has(#host-warn:not([hidden])) .provider-usage-chips::before { content: ""; flex: none; align-self: center; width: 1px; height: 18px; background: var(--border-strong); }
 .provider-usage { width: 6.75rem; }
@@ -516,7 +516,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
-   three chips, the aggregate drain label and Refresh still share one row. */
+   three chips and the Tasks controls still share one row. */
 @media (max-width: 1240px) {
   .topbar { padding: 0 14px; gap: 10px; }
 }

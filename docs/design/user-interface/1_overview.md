@@ -51,13 +51,12 @@ than one task holds, with a
 filter by task ID. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 
-The top-bar fleet indicator opens the Tasks dock in **All workspaces** mode.
-There the Auto-drain card lists fleet drains, one tab per host when more
-than one is registered (the chosen tab is remembered), with phase and
+With **All workspaces** selected, the Auto-drain card lists fleet drains,
+one tab per host when more than one is registered (the chosen tab is
+remembered), with phase and
 used/ceiling leaf slots for each workspace. Live drains lead; eligible work,
 waits, holds and queued windows add a second line only when present.
-Selecting a row switches host and workspace. The indicator remains visible
-when an idle workspace is selected. Legacy `#drain`, `#drain/start` and
+Selecting a row switches host and workspace. Legacy `#drain`, `#drain/start` and
 `#drain/log` links open the corresponding Tasks dock content.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
