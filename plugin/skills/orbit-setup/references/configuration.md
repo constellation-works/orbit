@@ -357,10 +357,12 @@ orbit config show
 orbit config show --all
 ```
 
-`orbit config show` annotates the row with `workspace`, `global` or
-`built-in` and the file it came from; a workspace value overrides the global
-one. Use `orbit config show --scope workspace` to inspect one file's values
-without inheriting the other layer.
+`orbit config show` labels configured rows with their `workspace` or `global`
+source, and rows with no configured value show `default`. The text rows do not
+include file paths: see the `Layers (later wins)` banner for layer paths, or
+use `orbit config show --json` for per-key path provenance. A workspace value
+overrides the global one. Use `orbit config show --scope workspace` to inspect
+one file's values without inheriting the other layer.
 
 ## Fleet notices, attention, evolution pass and failing jobs
 
@@ -1979,7 +1981,9 @@ with no lines.
 **Inspect the effective lists.** `orbit config keys --json` confirms both keys
 (`array<string>`, section `delivery`). `orbit config get workflow.test_paths`
 prints the effective value, built-in default included, and
-`orbit config show --all` adds the source: `workspace`, `global` or `built-in`.
+`orbit config show --all` labels configured values `workspace` or `global` and
+values with no configured source `default`. File paths appear in the `Layers
+(later wins)` banner or in `--json` per-key provenance.
 
 **Verify a change on a new delivery.** The lists are compiled when a runtime
 opens the workspace, so restart long-running processes such as `orbit web serve`
