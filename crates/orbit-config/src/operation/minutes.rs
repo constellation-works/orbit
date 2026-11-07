@@ -4,7 +4,6 @@ use orbit_common::OrbitError;
 
 use super::keys::{LEGACY_REVIEW_MINUTES_KEY, REVIEW_MINUTES_KEY};
 use crate::config_document;
-use crate::registry::read_optional;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
@@ -17,7 +16,11 @@ pub(crate) fn translate_legacy_review_minutes(
     config_path: &Path,
 ) -> Result<(), OrbitError> {
     let minutes = bounded(
-        read_optional::<u32>(document, LEGACY_REVIEW_MINUTES_KEY, config_path)?,
+        config_document::read_typed_config_value::<u32>(
+            document,
+            LEGACY_REVIEW_MINUTES_KEY,
+            config_path,
+        )?,
         LEGACY_REVIEW_MINUTES_KEY,
         1,
         MAX_REVIEW_MINUTES,

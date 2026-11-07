@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::ConfigRoots;
-use crate::registry::read_optional;
+use crate::config_document;
 
 /// The `seeding.routines` key as written in `config.toml`.
 pub const SEEDING_ROUTINES_KEY: &str = "seeding.routines";
@@ -257,11 +257,15 @@ pub fn load_workspace_seeding_policies(
                 orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
             ))
         })?;
-        if let Some(value) = read_optional(&document, SEEDING_ROUTINES_KEY, path)? {
+        if let Some(value) =
+            config_document::read_typed_config_value(&document, SEEDING_ROUTINES_KEY, path)?
+        {
             routines = Some(value);
             sources[0] = Some(path.clone());
         }
-        if let Some(value) = read_optional(&document, SEEDING_AUTO_TASKS_KEY, path)? {
+        if let Some(value) =
+            config_document::read_typed_config_value(&document, SEEDING_AUTO_TASKS_KEY, path)?
+        {
             auto_tasks = Some(value);
             sources[1] = Some(path.clone());
         }

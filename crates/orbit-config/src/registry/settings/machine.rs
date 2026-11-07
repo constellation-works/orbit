@@ -2,9 +2,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use super::resolve::{
-    read_optional, resolve_machine_id, resolve_machine_name, resolve_task_prefix,
-};
+use super::resolve::{resolve_machine_id, resolve_machine_name, resolve_task_prefix};
+use crate::config_document;
 use crate::memory_limit::MemoryLimit;
 
 /// Resource limits for each detached pipeline worker (`machine.worker_*`).
@@ -51,9 +50,17 @@ impl MachineSettings {
     /// Admit `[machine]` from one already-parsed document.
     pub(crate) fn admit(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
         let settings = Self {
-            id: resolve_machine_id(read_optional(document, "machine.id", config_path)?)?,
-            name: resolve_machine_name(read_optional(document, "machine.name", config_path)?)?,
-            task_prefix: resolve_task_prefix(read_optional(
+            id: resolve_machine_id(config_document::read_typed_config_value(
+                document,
+                "machine.id",
+                config_path,
+            )?)?,
+            name: resolve_machine_name(config_document::read_typed_config_value(
+                document,
+                "machine.name",
+                config_path,
+            )?)?,
+            task_prefix: resolve_task_prefix(config_document::read_typed_config_value(
                 document,
                 "machine.task_prefix",
                 config_path,

@@ -195,6 +195,4 @@ pub use settings::{
     RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };
 pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
-pub(crate) use settings::{
-    admit_lease_intake_peer_user, admit_lease_listener_settings, read_optional,
-};
+pub(crate) use settings::{admit_lease_intake_peer_user, admit_lease_listener_settings};

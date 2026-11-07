@@ -9,11 +9,11 @@ use orbit_types::identity::{
 };
 use orbit_types::workflow::automation::members::MaterialField;
 use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
-use serde::de::DeserializeOwned;
 
 use super::super::{
     CONSTELLATION_DEFAULT_PROVIDER_ENV, DEFAULT_WORKFLOW_CREW, LEGACY_DEFAULT_WORKFLOW_CREW,
 };
+use crate::config_document;
 use crate::memory_limit::MemoryLimit;
 
 /// Add the physical layer to value-admission errors while preserving other
@@ -190,41 +190,6 @@ pub(super) fn resolve_generated_paths(
 /// Built-in `workflow.purpose_crews.final_recovery`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
-
-pub(crate) fn read_optional<T: DeserializeOwned>(
-    document: &toml::Value,
-    key: &str,
-    config_path: &Path,
-) -> Result<Option<T>, OrbitError> {
-    let mut value = document;
-    for segment in key.split('.') {
-        let table = value.as_table().ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': table path for '{key}' contains a non-table value",
-                redact_home_dir(&config_path.display().to_string())
-            ))
-        })?;
-        let Some(next) = table.get(segment) else {
-            return Ok(None);
-        };
-        value = next;
-    }
-    value.clone().try_into().map(Some).map_err(|error| {
-        // `orbit config set` falls back to a plain string when the value is not
-        // a TOML literal, so `A,B` for a list key lands here as a string.
-        let error = error.to_string();
-        let error = error.trim_end();
-        let hint = if value.is_str() && error.contains("expected a sequence") {
-            "; a list is a TOML array, e.g. '[\"A\",\"B\"]' (quote it in the shell)"
-        } else {
-            ""
-        };
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': invalid value for '{key}': {error}{hint}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
-    })
-}
 
 /// Trim forge logins, drop blanks and duplicates, and keep a stable order.
 /// Forge logins are case-insensitive, so they are compared lowercased.
@@ -511,7 +476,7 @@ pub(crate) fn admit_lease_intake_peer_user(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<Option<String>, OrbitError> {
-    let raw = read_optional(
+    let raw = config_document::read_typed_config_value(
         document,
         crate::registry::LEASE_INTAKE_PEER_USER_KEY,
         config_path,

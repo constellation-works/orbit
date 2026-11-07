@@ -30,7 +30,7 @@ use super::resolve::{
     DEFAULT_APPLICATION_CONSENT_MAX_DAYS, DEFAULT_JOURNAL_RETENTION_DAYS,
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS, DEFAULT_STORE_WARN_BYTES,
     DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list,
-    normalize_logins, normalize_pass_list, read_optional, resolve_agent_stall_minutes, resolve_at,
+    normalize_logins, normalize_pass_list, resolve_agent_stall_minutes, resolve_at,
     resolve_bounded_count, resolve_bounded_minutes, resolve_bounded_range, resolve_branch_template,
     resolve_build_output_env, resolve_choice, resolve_commit_subject_template,
     resolve_cpu_light_leaves, resolve_distributed_completion,
@@ -223,7 +223,7 @@ macro_rules! define_config_settings {
                 scope: AdmissionScope,
             ) -> Result<Self, OrbitError> {
                 $(let $field: $resolved = {
-                    let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
+                    let raw_value: Option<$raw> = $crate::config_document::read_typed_config_value(document, $key, config_path)?;
                     resolve_at(($resolve)(raw_value), config_path)?
                 };)+
                 let mut snapshot = Self {
@@ -254,7 +254,7 @@ macro_rules! define_config_settings {
                 let mut snapshot = self.clone();
                 match key {
                     $($key => {
-                        let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
+                        let raw_value: Option<$raw> = $crate::config_document::read_typed_config_value(document, $key, config_path)?;
                         snapshot.$field = resolve_at(($resolve)(raw_value), config_path)?;
                     },)+
                     _ => return Ok(None),

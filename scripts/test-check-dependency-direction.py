@@ -650,6 +650,47 @@ class RelativeImportTests(unittest.TestCase):
             "use std::collections::BTreeMap;\nuse orbit_common::model_defaults::{\n    A, B,\n};\n"
             "use orbit_types::identity::{Crew, CrewAssignment};\n")}, rejected=False)
 
+    def test_config_domain_modules_cannot_name_the_registry(self):
+        # [ORB-22707] The registry calls these modules' admitters, so they
+        # must not reach back into it, directly or by a crate-root re-export.
+        src = self.root / "crates/orbit-config/src"
+        self.check_rows([(relative, source + "\n") for relative, source in (
+            ("crew/ladder.rs", "use crate::ConfigSnapshot;"),
+            ("crew/performance.rs", "impl crate::ConfigSnapshot {}"),
+            ("operation/policy.rs", "use crate::registry::ConfigSnapshot;"),
+            ("operation/layer.rs", "use super::super::registry::read_optional;"),
+            ("provider_limit/policy.rs", "use crate::{ConfigSnapshot, CrewPerformancePolicy};"),
+            ("provider_limit/budget.rs", "fn probe() { let _ = &crate::CONFIG_KEY_REGISTRY; }"),
+        )], rejected=True, base=src)
+        for leaf, source in (
+            ("aliases.rs", "use crate::registry::read_optional;"),
+            ("attention.rs", "use crate::registry::ConfigSnapshot;"),
+            ("seeding.rs", "use crate::{describe_config_key, raw::Probe};"),
+        ):
+            with self.subTest(leaf=leaf):
+                self.check_config({leaf: source + "\n"}, rejected=True)
+        self.check_rows([(relative, source + "\n") for relative, source in (
+            ("crew/ladder.rs", "use crate::config_document;"),
+            ("operation/policy.rs", "use super::crew::ReviewCrewPool;"),
+            ("provider_limit/policy.rs", "use crate::CrewPerformancePolicy;"),
+        )], rejected=False, base=src)
+        self.check_config({"aliases.rs": "use crate::config_document;\n"}, rejected=False)
+
+    def test_config_document_leaf_admits_only_external_crates(self):
+        leaf = "config_document.rs"
+        for source in (
+            "use crate::registry::Probe;",
+            "use super::raw::Probe;",
+            "fn probe() { crate::config_io::read(); }",
+            "use serde_json::Value;",
+        ):
+            with self.subTest(source=source):
+                self.check_config({leaf: source + "\n"}, rejected=True)
+        self.check_config({leaf: (
+            "use std::path::Path;\nuse orbit_common::OrbitError;\n"
+            "use orbit_common::security::redaction::redact_home_dir;\n"
+            "use serde::de::DeserializeOwned;\n")}, rejected=False)
+
     def check_crate_edge(self, dependency, kind, target, rejected):
         metadata = self.root / "metadata.json"
         manifest = self.root / "crates/orbit-core/Cargo.toml"

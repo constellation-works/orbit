@@ -27,9 +27,11 @@ pub(super) fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocu
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    if let Some(patterns) =
-        crate::registry::read_optional::<Vec<String>>(&value, "worktree.reclaim", path)?
-    {
+    if let Some(patterns) = crate::config_document::read_typed_config_value::<Vec<String>>(
+        &value,
+        "worktree.reclaim",
+        path,
+    )? {
         for pattern in patterns {
             orbit_common::fs::path_glob::RelativePathGlob::new(&pattern)
                 .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;

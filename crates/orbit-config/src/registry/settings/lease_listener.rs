@@ -7,9 +7,9 @@ use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
 use super::resolve::{
-    read_optional, resolve_at, resolve_bounded_count, resolve_bounded_range,
-    resolve_optional_non_empty,
+    resolve_at, resolve_bounded_count, resolve_bounded_range, resolve_optional_non_empty,
 };
+use crate::config_document;
 
 pub(super) const LEASE_LISTENER_BIND_KEY: &str = "lease.listener.bind";
 pub(super) const LEASE_LISTENER_TLS_KEY: &str = "lease.listener.tls";
@@ -254,95 +254,137 @@ pub(crate) fn admit_lease_listener_settings(
     let settings = (|| {
         Ok(LeaseListenerSettings {
             bind: resolve_optional_non_empty(
-                read_optional(document, LEASE_LISTENER_BIND_KEY, config_path)?,
+                config_document::read_typed_config_value(
+                    document,
+                    LEASE_LISTENER_BIND_KEY,
+                    config_path,
+                )?,
                 LEASE_LISTENER_BIND_KEY,
             )?,
-            tls: resolve_lease_listener_tls(read_optional(
+            tls: resolve_lease_listener_tls(config_document::read_typed_config_value(
                 document,
                 LEASE_LISTENER_TLS_KEY,
                 config_path,
             )?)?,
-            behind_proxy: read_optional(document, LEASE_LISTENER_BEHIND_PROXY_KEY, config_path)?
-                .unwrap_or(false),
-            trusted_proxy: resolve_lease_listener_trusted_proxy(read_optional(
+            behind_proxy: config_document::read_typed_config_value(
                 document,
-                LEASE_LISTENER_TRUSTED_PROXY_KEY,
+                LEASE_LISTENER_BEHIND_PROXY_KEY,
                 config_path,
-            )?)?,
+            )?
+            .unwrap_or(false),
+            trusted_proxy: resolve_lease_listener_trusted_proxy(
+                config_document::read_typed_config_value(
+                    document,
+                    LEASE_LISTENER_TRUSTED_PROXY_KEY,
+                    config_path,
+                )?,
+            )?,
             intake_socket: resolve_optional_non_empty(
-                read_optional(document, LEASE_LISTENER_INTAKE_SOCKET_KEY, config_path)?,
+                config_document::read_typed_config_value(
+                    document,
+                    LEASE_LISTENER_INTAKE_SOCKET_KEY,
+                    config_path,
+                )?,
                 LEASE_LISTENER_INTAKE_SOCKET_KEY,
             )?,
-            failed_auth_limit: resolve_lease_listener_failed_auth(read_optional(
-                document,
-                LEASE_LISTENER_FAILED_AUTH_KEY,
-                config_path,
-            )?)?,
-            failed_auth_window_seconds: resolve_lease_listener_failed_auth_window(read_optional(
-                document,
-                LEASE_LISTENER_FAILED_AUTH_WINDOW_KEY,
-                config_path,
-            )?)?,
-            address_per_minute: resolve_listener_address_per_minute(read_optional(
-                document,
-                "lease.listener.limits.address_per_minute",
-                config_path,
-            )?)?,
-            ipv6_prefix_len: resolve_listener_ipv6_prefix_len(read_optional(
-                document,
-                "lease.listener.limits.ipv6_prefix_len",
-                config_path,
-            )?)?,
-            token_reads_per_minute: resolve_listener_token_reads_per_minute(read_optional(
-                document,
-                "lease.listener.limits.token_reads_per_minute",
-                config_path,
-            )?)?,
-            token_writes_per_minute: resolve_listener_token_writes_per_minute(read_optional(
-                document,
-                "lease.listener.limits.token_writes_per_minute",
-                config_path,
-            )?)?,
-            max_streams_per_token: resolve_listener_max_streams_per_token(read_optional(
-                document,
-                "lease.listener.limits.max_streams_per_token",
-                config_path,
-            )?)?,
-            max_in_flight_per_token: resolve_listener_max_in_flight_per_token(read_optional(
-                document,
-                "lease.listener.limits.max_in_flight_per_token",
-                config_path,
-            )?)?,
-            max_connections: resolve_listener_max_connections(read_optional(
-                document,
-                "lease.listener.limits.max_connections",
-                config_path,
-            )?)?,
-            max_in_flight_requests: resolve_listener_max_in_flight_requests(read_optional(
-                document,
-                "lease.listener.limits.max_in_flight_requests",
-                config_path,
-            )?)?,
-            max_body_bytes: resolve_listener_max_body_bytes(read_optional(
-                document,
-                "lease.listener.limits.max_body_bytes",
-                config_path,
-            )?)?,
-            header_timeout_seconds: resolve_listener_header_timeout_seconds(read_optional(
-                document,
-                "lease.listener.limits.header_timeout_seconds",
-                config_path,
-            )?)?,
-            request_timeout_seconds: resolve_listener_request_timeout_seconds(read_optional(
-                document,
-                "lease.listener.limits.request_timeout_seconds",
-                config_path,
-            )?)?,
-            max_tracked_keys: resolve_listener_max_tracked_keys(read_optional(
-                document,
-                "lease.listener.limits.max_tracked_keys",
-                config_path,
-            )?)?,
+            failed_auth_limit: resolve_lease_listener_failed_auth(
+                config_document::read_typed_config_value(
+                    document,
+                    LEASE_LISTENER_FAILED_AUTH_KEY,
+                    config_path,
+                )?,
+            )?,
+            failed_auth_window_seconds: resolve_lease_listener_failed_auth_window(
+                config_document::read_typed_config_value(
+                    document,
+                    LEASE_LISTENER_FAILED_AUTH_WINDOW_KEY,
+                    config_path,
+                )?,
+            )?,
+            address_per_minute: resolve_listener_address_per_minute(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.address_per_minute",
+                    config_path,
+                )?,
+            )?,
+            ipv6_prefix_len: resolve_listener_ipv6_prefix_len(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.ipv6_prefix_len",
+                    config_path,
+                )?,
+            )?,
+            token_reads_per_minute: resolve_listener_token_reads_per_minute(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.token_reads_per_minute",
+                    config_path,
+                )?,
+            )?,
+            token_writes_per_minute: resolve_listener_token_writes_per_minute(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.token_writes_per_minute",
+                    config_path,
+                )?,
+            )?,
+            max_streams_per_token: resolve_listener_max_streams_per_token(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_streams_per_token",
+                    config_path,
+                )?,
+            )?,
+            max_in_flight_per_token: resolve_listener_max_in_flight_per_token(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_in_flight_per_token",
+                    config_path,
+                )?,
+            )?,
+            max_connections: resolve_listener_max_connections(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_connections",
+                    config_path,
+                )?,
+            )?,
+            max_in_flight_requests: resolve_listener_max_in_flight_requests(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_in_flight_requests",
+                    config_path,
+                )?,
+            )?,
+            max_body_bytes: resolve_listener_max_body_bytes(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_body_bytes",
+                    config_path,
+                )?,
+            )?,
+            header_timeout_seconds: resolve_listener_header_timeout_seconds(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.header_timeout_seconds",
+                    config_path,
+                )?,
+            )?,
+            request_timeout_seconds: resolve_listener_request_timeout_seconds(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.request_timeout_seconds",
+                    config_path,
+                )?,
+            )?,
+            max_tracked_keys: resolve_listener_max_tracked_keys(
+                config_document::read_typed_config_value(
+                    document,
+                    "lease.listener.limits.max_tracked_keys",
+                    config_path,
+                )?,
+            )?,
         })
     })();
     resolve_at(settings, config_path)

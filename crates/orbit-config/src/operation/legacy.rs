@@ -3,7 +3,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 
 use super::keys::LEGACY_REVIEW_POLICY_KEY;
-use crate::registry::read_optional;
+use crate::config_document;
 
 /// A retired `operation.review_policy` value, read only to translate it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +33,13 @@ impl LegacyReviewPolicy {
         document: &toml::Value,
         config_path: &Path,
     ) -> Result<Option<Self>, OrbitError> {
-        read_optional::<String>(document, LEGACY_REVIEW_POLICY_KEY, config_path)?
-            .map(|raw| Self::parse(&raw))
-            .transpose()
+        config_document::read_typed_config_value::<String>(
+            document,
+            LEGACY_REVIEW_POLICY_KEY,
+            config_path,
+        )?
+        .map(|raw| Self::parse(&raw))
+        .transpose()
     }
 }
 

@@ -7,8 +7,6 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path_glob::RelativePathGlob;
 use serde::{Deserialize, Serialize};
 
-use crate::ConfigSnapshot;
-
 /// The key as written in `config.toml`.
 pub const CREW_PERFORMANCE_TYPES_KEY: &str = "workflow.crew_performance_types";
 /// The `workflow.crew_performance` key as written in `config.toml`.
@@ -337,34 +335,4 @@ pub(crate) fn admit_crew_performance_types(
         admitted.push(CrewPerformanceType { name, tags, paths });
     }
     Ok(admitted)
-}
-
-impl ConfigSnapshot {
-    /// The admitted `workflow.crew_performance_types`, in configured order.
-    #[must_use]
-    pub fn crew_performance_types(&self) -> &[CrewPerformanceType] {
-        &self.workflow_crew_performance_types
-    }
-
-    /// The admitted `workflow.crew_performance` mode.
-    #[must_use]
-    pub fn crew_performance(&self) -> CrewPerformanceMode {
-        CrewPerformanceMode::parse(&self.workflow_crew_performance).unwrap_or_default()
-    }
-
-    /// The admitted `workflow.crew_performance_window_days`.
-    #[must_use]
-    pub fn crew_performance_window_days(&self) -> u32 {
-        self.workflow_crew_performance_window_days
-    }
-
-    /// The admitted draw-weighting policy: mode, strength and cap.
-    #[must_use]
-    pub fn crew_performance_policy(&self) -> CrewPerformancePolicy {
-        CrewPerformancePolicy {
-            mode: self.crew_performance(),
-            strength: self.workflow_crew_performance_strength,
-            cap: self.workflow_crew_performance_cap,
-        }
-    }
 }
