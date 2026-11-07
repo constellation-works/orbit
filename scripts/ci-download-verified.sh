@@ -150,6 +150,7 @@ deadline = started + args.budget_seconds
 attempts = 0
 outcome = "failed"
 saw_transient = False
+saw_definitive = False
 failure_class = "permanent"
 MAX_BACKOFF_SECONDS = 5
 
@@ -170,7 +171,7 @@ def remaining():
 
 
 def download():
-    global attempts, saw_transient
+    global attempts, saw_transient, saw_definitive
     if not math.isfinite(args.budget_seconds) or not 0 < args.budget_seconds <= 60:
         raise ValueError("budget must be finite, >0 and <=60 seconds")
     url = urlsplit(args.url)
@@ -223,11 +224,12 @@ def download():
                 result.returncode in (6, 7, 28) and (status == "000" or 200 <= int(status) < 400)
                 or result.returncode == 22 and int(status) in (429, 500, 502, 503, 504)
             )
-            saw_transient = saw_transient or transient
-            remaining()
             if not conclusive:
                 raise ValueError("inconclusive HTTP status")
             if result.returncode == 0 and 200 <= int(status) < 300:
+                # A definitive success ends transient retry: later budget
+                # exhaustion during verification is the change's failure.
+                saw_definitive = True
                 digest = hashlib.sha256()
                 with candidate.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):
@@ -241,6 +243,11 @@ def download():
                 return
             if not transient:
                 raise ValueError("permanent or unsupported download failure")
+            # Only transient responses reach the budget check: a conclusive
+            # permanent response above already raised, so the budget cannot
+            # mask it as BudgetSpent.
+            saw_transient = True
+            remaining()
             # Growing, capped, within the same deadline: the deadline is the
             # only limit on attempts.
             delay = min(attempt, MAX_BACKOFF_SECONDS)
@@ -255,7 +262,7 @@ try:
     outcome = "verified"
 except (OSError, ValueError) as error:
     log(f"failure={error}")
-    if isinstance(error, BudgetSpent) and saw_transient:
+    if isinstance(error, BudgetSpent) and saw_transient and not saw_definitive:
         failure_class = "transient"
 finally:
     detail = "" if outcome == "verified" else f" class={failure_class}"
