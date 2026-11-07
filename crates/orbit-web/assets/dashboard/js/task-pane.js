@@ -299,7 +299,7 @@ function buildPaneHead(task, pinned, context) {
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
       ? [id, spacer, back]
-      : [back, id, spacer, full, close]),
+      : [id, spacer, full, close, back]),
     title,
   ]);
   head.dataset.key = key;

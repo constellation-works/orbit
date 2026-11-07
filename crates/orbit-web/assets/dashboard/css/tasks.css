@@ -1082,7 +1082,7 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
 .task-pane-title:focus { outline: none; }
 .task-pane-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-pane-head .panel-placeholder { margin: 10px 0 0; }
-.task-pane-back { display: none; align-items: center; }
+.task-pane-back { display: inline-flex; align-items: center; }
 /* Open full page and close are icon buttons: the glyph is a mask over the
    current colour, the accessible name is the aria-label. */
 .task-pane-icon {
@@ -1118,8 +1118,6 @@ main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !import
 main.tasks-layout.task-page-mode > .col-tasks,
 main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
 main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; width: 100%; max-width: 1280px; }
-main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
-
 /* A phone has no room beside the list: the pane is a full-screen sheet with
    Back in place of the close and full-page controls. */
 @media (max-width: 760px) {
@@ -1137,7 +1135,6 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   /* The active view is a stacking context of its own; lift it so the sheet
      also covers what paints after it, such as the status bar's live dot. */
   .tab-pane.active:has(> main.tasks-layout.task-pane-open) { z-index: 400; }
-  .task-pane-back { display: inline-flex; }
   .task-pane-close,
   .task-pane-full { display: none; }
 }
