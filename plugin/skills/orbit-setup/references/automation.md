@@ -446,8 +446,9 @@ CEL `wait_until`, `expire_when` and `reuse_when` fields. These steps are
 checked when the job loads and explained by `orbit automation explain
 job:<name>`. An enabled job declares `schemaVersion: 3` and runs detached;
 when a step waits, the run parks durably and the owner clock revisits it. A
-step with `require_result` holds because its evidence adapter is not yet
-available. The same fields under
+step with `require_result` also needs the definition's matching `completion`
+block ([auto-tasks](auto-tasks.md#proving-a-job-step-with-a-completion-contract))
+and otherwise holds. The same fields under
 `schemaVersion: 2` fail to load, even when null, so an older Orbit refuses the
 file instead of dropping its waits. The keys are in the website's Activity and job
 YAML reference, Auto-task steps.

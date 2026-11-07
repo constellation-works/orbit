@@ -136,6 +136,7 @@ pub fn split_overrides(
         dedupe,
         skip_if_unchanged,
         skip_unless_blocked_candidates,
+        completion,
         created_by: _,
         created_at: _,
         updated_by: _,
@@ -169,6 +170,7 @@ pub fn split_overrides(
             "skip_unless_blocked_candidates",
             *skip_unless_blocked_candidates != body.skip_unless_blocked_candidates,
         ),
+        ("completion", *completion != body.completion),
         ("template.title", *title != base.title),
         (
             "template.description",

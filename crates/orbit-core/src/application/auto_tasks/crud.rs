@@ -263,6 +263,8 @@ impl OrbitRuntime {
                 // the workspace owns, not through the create surfaces.
                 skip_if_unchanged: None,
                 skip_unless_blocked_candidates: false,
+                // Like the preconditions above: declared in the workspace's YAML.
+                completion: None,
                 created_by: Some(actor.clone()),
                 created_at: now.clone(),
                 updated_by: Some(actor),

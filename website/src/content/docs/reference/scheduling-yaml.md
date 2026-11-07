@@ -142,6 +142,8 @@ If the ref or the cursor cannot be read, no completed sweep matches, or the prob
 
 `skip_unless_blocked_candidates: true` files a task only when at least one blocked task has a block episode that nothing has settled. Otherwise the tick skips with reason `no_blocked_candidates` and records how many blocked tasks it read. A probe that cannot read them files the task and records why. No shipped auto-task sets this. The retired `blocked-task-triage` auto-task is the one that used to carry the flag; final recovery decides blocked tasks now.
 
+`completion` declares the evidence a job step with `require_result` must see: `contract`, `adapter` (a granted script), `form`, `evidence_artifact`, `max_age_minutes`, and optional `read_task_tags` and `evidence_instructions`. A definition without it behaves as before. Adding it makes older Orbit versions refuse the file.
+
 ## Delivery triggers
 
 `schedule.deliveries_landed` on an auto-task and `trigger.deliveries_landed` on a routine use the same object. The consumer watches verified landings on one branch and files work when the debt is due. It is opt-in.

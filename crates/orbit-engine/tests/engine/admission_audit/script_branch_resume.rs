@@ -176,6 +176,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptBranchHost {
                     accepted: true,
                     settled_at: now,
                     observed_at: now,
+                    result: None,
                 }),
             )
         } else {
@@ -188,6 +189,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptBranchHost {
             input_digest: "digest".to_string(),
             definition_hold: None,
             receipt,
+            result_hold: None,
             bound_status: None,
             deadline: Some(now + Duration::hours(24)),
             dynamic_expiry: false,

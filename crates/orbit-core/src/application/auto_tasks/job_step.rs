@@ -4,7 +4,9 @@
 //! keyed task under the auto-task admission fence, record its checkpoints and
 //! park the run, and recheck a minted child before it starts.
 //!
-//! Observation writes nothing. Admission requires a durable reservation, so a
+//! Observation writes no task or run state; judging a completion against its
+//! declared contract ([`super::completion`]) runs the adapter in its own scratch
+//! space on the engine's pass only. Admission requires a durable reservation, so a
 //! lost creation reply resolves to the task its creation receipt names
 //! instead of a second mint. Job mints never read or write a definition's
 //! schedule cursor; they only share its sidecar lock as the fence.
@@ -21,13 +23,13 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{JobStepInvocation, Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     AUTO_TASK_CHECKPOINT_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskReceipt,
-    AutoTaskRunCheckpoint, AutoTaskSchedule, AutoTaskStepRecord, DedupePolicy,
+    AutoTaskRunCheckpoint, AutoTaskSchedule, AutoTaskStepRecord, AutoTaskStepStatus, DedupePolicy,
     FrozenAutoTaskTarget, JobRun, JobRunState, JobV2, ParkedWait, PipelineState, RunStateUpdate,
     auto_task_tag,
 };
 use serde_json::Value;
 
-use super::{cursor_state_path, scheduler};
+use super::{completion, cursor_state_path, scheduler};
 use crate::OrbitRuntime;
 use crate::application::automation::condition::render_placeholders;
 
@@ -132,7 +134,10 @@ pub(crate) fn observe_step(
             step.checked.auto_task
         )));
     }
-    observe_with(runtime, &step, Utc::now())
+    let now = Utc::now();
+    let mut observation = observe_with(runtime, &step, now)?;
+    completion::bind_completion_result(runtime, &step, &mut observation, now);
+    Ok(observation)
 }
 
 /// Record a step's record in the run's checkpoint, freezing its target the
@@ -152,6 +157,16 @@ pub(crate) fn checkpoint_step_record(
         .transpose()?
         .flatten()
         .map(|(_, frozen)| frozen);
+    // Before the step settles, so a crash between the two repeats an idempotent
+    // write instead of leaving an accepted step missing from the history.
+    if record.status == AutoTaskStepStatus::Done
+        && let Some(result) = record
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.result.as_ref())
+    {
+        completion::record_accepted_result(runtime, &record.auto_task, result)?;
+    }
     update_existing_state(runtime, run_id, &mut |run_state, state| {
         let checkpoint = live_checkpoint(run_id, run_state, state)?;
         if let Some(frozen) = &frozen {
@@ -276,6 +291,13 @@ fn admit_step_fenced(
     if let AutoTaskReadiness::Waiting(reason) = observation.readiness {
         return Ok(AutoTaskAdmission::Waiting(reason));
     }
+    // Immediately before anything new is minted, recorded proofs answer the
+    // adapter again: a finding reopened since a reused checkpoint counts here.
+    if let Some(hold) =
+        completion::prior_proof_hold(runtime, &step, now, completion::ProofDepth::Adapter)
+    {
+        return Ok(AutoTaskAdmission::Held(hold));
+    }
     let Some(definition) = step.minting_definition(runtime, now)? else {
         return Ok(AutoTaskAdmission::Held(format!(
             "auto-task `{}` did not resolve",
@@ -304,6 +326,9 @@ fn admit_step_fenced(
     if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
         params.title = render_placeholders(&params.title, None);
         params.description = render_placeholders(&params.description, None);
+    }
+    if let Some(note) = completion::evidence_binding_note(runtime, &step, &definition)? {
+        params.description.push_str(&note);
     }
     params.creation_decision = Some(TaskDecision::JobStepInvocation(JobStepInvocation {
         action_key: record.action_key.clone(),
@@ -497,6 +522,7 @@ pub(super) fn bound_task(
                     accepted: false,
                     settled_at: now,
                     observed_at: now,
+                    result: None,
                 }),
                 None,
             ));
@@ -523,6 +549,7 @@ pub(super) fn bound_task(
             accepted: task.status == TaskStatus::Done,
             settled_at,
             observed_at: now,
+            result: None,
         }),
         None,
     ))
@@ -569,7 +596,7 @@ fn open_instance_mismatch(
     })
 }
 
-fn creation_receipt(history: &[TaskHistoryEntry]) -> Option<&JobStepInvocation> {
+pub(super) fn creation_receipt(history: &[TaskHistoryEntry]) -> Option<&JobStepInvocation> {
     history.iter().find_map(|entry| match &entry.decision {
         Some(TaskDecision::JobStepInvocation(invocation)) => Some(invocation),
         _ => None,

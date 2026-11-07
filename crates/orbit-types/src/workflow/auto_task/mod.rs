@@ -1,6 +1,13 @@
+mod completion;
 mod cursor;
 mod definition;
 
+pub use completion::{
+    AUTO_TASK_ACCEPTED_HISTORY_SCHEMA_VERSION, AUTO_TASK_EVIDENCE_SCHEMA_VERSION,
+    AutoTaskAcceptedHistory, AutoTaskAcceptedHistoryFile, AutoTaskAdapterVerdict,
+    AutoTaskCompletionContract, AutoTaskCompletionReceipt, AutoTaskEvidenceBinding,
+    AutoTaskEvidenceCandidate, AutoTaskEvidenceRef, AutoTaskResultStatus, AutoTaskVerdictReason,
+};
 pub use cursor::{
     AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim, AutoTaskSkipRecord,
     InactivePluginWarning,

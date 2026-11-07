@@ -990,12 +990,17 @@ When the job reaches an auto-task step, the step:
 3. Otherwise waits while `wait_until` is false or unknown, or while the
    named auto-task is missing, disabled, or its own condition or schedule
    guard is false. A definition whose condition is task, host or file
-   scoped, or a step with `require_result`, holds: this release has no
-   evidence adapter for `release-readiness/v1`.
+   scoped holds. So does a step with `require_result` unless the definition
+   declares the same contract under `completion` and its adapter script is
+   granted.
 4. When ready, binds an open instance under `skip_if_open` dedupe, or mints
    one task. The mint uses no schedule slot and records which run and step
    it was for, so a retry after a lost reply finds the same task. A step
    mints at most one task per execution; `reuse_when` does not match yet.
+   With `require_result`, a finished task counts only once Orbit has checked
+   its evidence against its own records and the adapter answers `passed`.
+   Earlier results are checked again for exact source and age before a later
+   step with a contract mints.
 
 While a step waits, the run stays `running` and counts against
 `max_active_runs`, but no worker, provider, worktree or drain slot is held:

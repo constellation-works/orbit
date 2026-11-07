@@ -5,14 +5,15 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-11-01
+last_validated: 2026-11-07
 ---
 
 # Full pre-release QA sweep
 
-`qa-full-sweep` is the intentional, workspace-local sign-off for Orbit. It is
-disabled for periodic scheduling and routes minted work to the `opus` crew.
-It complements the recent-change `qa-sweep`.
+`qa-full-sweep` is the intentional, workspace-local sign-off for Orbit. It
+complements the recent-change `qa-sweep`. Its enablement, schedule and crew are
+live owner settings, so read them with `orbit auto-task show qa-full-sweep`
+rather than from this page.
 
 Orbit also ships a generic, product-agnostic `qa-full-sweep` default that
 coordinates per-area surface-QA chores and a roll-up release decision
@@ -24,15 +25,34 @@ wires dependencies with `orbit.task.update` or a
 `qa_rollup_dependencies_unwired` handoff. Area tasks in that default stay
 portable. This runbook does not change the generic default.
 This workspace's own `.orbit/auto_tasks/qa-full-sweep.yaml` predates it and
-overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
-byte and never retire it, and sync warns that it occupies the bundled
-default's name. That warning is expected here; do not move or rename the file.
+takes its name. The file is ignored by Git, owner-managed and not a managed
+asset, so `orbit workspace sync` and `orbit update` keep it byte for byte and
+never retire it, and sync warns that it occupies the bundled default's name.
+That warning is expected here; do not move, rename or overwrite the file.
 The rest of this runbook describes this workspace's definition and harness.
 The generic default's area brief names this workspace's runbooks only as guarded
 examples: workers use them only when the checkout provides this harness and its
 workspace guide permits it, discovering the repository's own permitted recipe
 otherwise, and retaining `NOT_RUN` with the capability probe when neither a
 usable host kit nor an applicable permitted recipe exists.
+
+## Release-readiness evidence
+
+The native definition is also the full-QA target of a release-readiness job
+step, once its owner opts in. [`examples/release-readiness`](../../examples/release-readiness/README.md)
+holds the disabled security and preparation examples, the adapter manifest and
+the `completion` block to add to the native file. There is no duplicate QA
+definition and no change to the harness or inventory.
+
+The adapter treats `scripts/qa-full-sweep-inventory.json` as a read-only coverage
+contract. A step accepts only complete evidence for the job's pinned revision: the
+report's clean candidate and inventory hash, every required scenario with exactly
+its assertions, the four supplemental forecast scenarios, matching macOS and Linux
+evidence, and a discharge for every required capability gap. The report's
+`INCOMPLETE` decision is accepted only when each remaining finding is a required
+capability gap discharged that way. Anything else leaves the step unavailable.
+A `qa-full-sweep` task that is merely `done`, whatever its message says, is not
+accepted.
 
 ## Mint and run
 

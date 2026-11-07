@@ -17,8 +17,9 @@ This is an extension to existing jobs. Phase 1 (§7) has shipped:
 `require_result` and the CEL facts below load, are checked and are explained.
 Such a job declares `schemaVersion: 3` ([ORB-20237]). Phase 2 ([ORB-20158])
 runs it: keyed bind or mint, parked waits, admission rechecks and
-partial-branch checkpoints. No readiness adapter exists yet, so a step with
-`require_result` holds. It replaces the unmerged proposal for
+partial-branch checkpoints. Phase 3 ([ORB-20165]) validates declared completion
+contracts: a step with `require_result` is accepted only on a system-validated
+receipt. It replaces the unmerged proposal for
 a separate auto-sequence definition type.
 **Auto-sequence** may be an informal name for a job composing auto-tasks; it has
 no separate directory, loader, trigger carrier, commands or lifecycle.
@@ -268,9 +269,10 @@ These examples are disabled design examples. Auto-task job `wait_until`,
 per-bucket `board.backlog.empty`, `board.in_progress.empty`, and
 `board.review.empty` fields, but no aggregate `board.empty`; its
 `auto_tasks['release-prep'].last_succeeded_at` read is also future work. The
-accepted-history read and readiness adapters below are not implemented, so this
-release-readiness flow is not ready to enable. `full-qa-sweep` must resolve to
-the actual intended definition before enabling.
+accepted-history accessor and workspace adapter exist (see "Phase 3 as built"), but
+`reuse_when` does not read a `result` yet, so this release-readiness flow is not
+ready to enable. The target must name the actual definition: full QA is the
+workspace's `qa-full-sweep`, while a step ID may say `full-qa-sweep`.
 The job is an ordinary catalog job with one condition-triggered routine:
 
 ```yaml
@@ -307,7 +309,7 @@ spec:
   expire_when: "now >= job.started_at + duration('24h')"
   steps:
     - id: qa
-      target: auto-task:full-qa-sweep
+      target: auto-task:qa-full-sweep
       wait_until: "board.empty"
       require_result: release-readiness/v1
       reuse_when: >-
@@ -346,7 +348,7 @@ steps:
       join: { mode: all }
       branches:
         - id: qa
-          target: auto-task:full-qa-sweep
+          target: auto-task:qa-full-sweep
           wait_until: "board.empty"
           require_result: release-readiness/v1
         - id: security
@@ -396,9 +398,9 @@ Deliver in phases: (1) disabled schema, target resolution and CEL explain
 (shipped, see "Phase 1 as built" below);
 (2) keyed bind/mint, parked waits, admission and partial-branch checkpoints
 (built, see "Phase 2 as built");
-(3) QA, security and preparation readiness adapters ([ORB-20165], someday),
-the accepted-history condition consumer ([ORB-20397], someday), and disabled
-job/routine examples ([ORB-20166], someday).
+(3) QA, security and preparation readiness contracts (built, see "Phase 3 as
+built"), the accepted-history condition consumer ([ORB-20397], someday), and
+disabled job/routine examples ([ORB-20166], someday).
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
 
@@ -484,8 +486,7 @@ enablement, provider work and release timing remain operator decisions.
   consume no schedule cursor. The board view excludes only the step's own
   bound task, so two parallel `board.empty` branches serialize: one binds and
   the other parks until it finishes. A task, host or file condition has no
-  bindable subject in a job step and holds, as does `require_result`, which
-  has no evidence adapter yet. `reuse_when` never matches yet.
+  bindable subject in a job step and holds. `reuse_when` never matches yet.
 - **Parking.** A waiting, held or bound step parks the run. The run stays
   `running`, so it counts against `max_active_runs`. Its checkpoint records
   the park and its worker exits, holding no provider, thread, worktree or
@@ -515,6 +516,42 @@ enablement, provider work and release timing remain operator decisions.
   7 (`auto-task-job-checkpoints`, a breaking migration), so a binary that
   would drop the checkpoint or reap a parked run cannot open it.
 
+### Phase 3 as built
+
+[ORB-20165] accepts a step's result only on evidence checked against owner records.
+
+- **Opt-in declaration.** `AutoTaskDefinition.completion` names a contract, an adapter
+  script, a form, an evidence artifact and a maximum age. A definition without it
+  serializes and behaves as before, and an older binary refuses a file carrying it.
+  `require_result` and `completion.contract` must both be present and equal; either one
+  alone holds.
+- **Receipt.** The owner supplies the receipt's workspace, definition, digest, task, run,
+  revision and completion time: the frozen target, the pinned revision, the task's
+  recorded history, and a run that actually carried the task. `task.job_run_id` and the
+  `auto-task:<name>` tag are writable, so neither is trusted alone; the creation receipt
+  proves the task was minted for this step. The evidence manifest must match these
+  values and cannot state a time or status. An artifact written after completion, or
+  whose digest differs, is refused. The final message is never read.
+- **Adapter.** A granted workspace script judges the evidence through the existing script
+  step, with its sandbox and digest-bound grant. Its verdict is `passed`, `blocked` or
+  `unavailable`, and only `passed` makes a receipt. Core holds no release severity,
+  QA scenario or version policy; those live in the workspace adapter. Absent adapter, grant,
+  capability or evidence holds and later times out, never falling back to another command.
+- **History.** Only an accepted job-step result advances the per-definition history kept
+  beside the schedule cursor. `auto_task_accepted_history` returns `Latest`, `Missing` or
+  `Unreadable`, which never collapses into missing, and a corrupt file stays in place. A
+  scheduled mint has no creation receipt, so it never advances history. Busy-board and
+  nothing-to-release probes are `blocked`, so they hold and advance nothing.
+- **Hold and recheck.** A completed task whose result holds stays held until expiry, so a
+  finding resolved in time clears it. Before a step with a contract mints, the admission
+  fence revalidates each prior contract step at adapter depth: receipt provenance, exact
+  source against the current integration revision, age and finding disposition, even when
+  a checkpoint reused it. A raw `done`, a skipped step or a no-op cannot discharge it. The
+  observation path stays read-only; the start guard checks records only.
+- **Not built.** `reuse_when` still never matches, because its `result` binding belongs to
+  condition evaluation. Each execution mints fresh evidence, which is safe but not cheap.
+  "Valid reuse" here is the prior-step checkpoint revalidated at admission.
+
 ## 8. Acceptance and honest limitations
 
 - Prove existing `when: false` still skips and never waits. A new false
@@ -539,9 +576,10 @@ Typed target resolution, persistent parking and per-branch checkpoints are real
 work even though this is a smaller authoring model. Board emptiness remains a
 snapshot; admission is rechecked and stale source evidence holds the job. The
 first version excludes dynamic loop/fan-out targets, cross-workspace references
-and arbitrary artifact predicates. QA/security readiness adapters do not exist
-merely because their auto-task templates do; no release-readiness run is ready
-to enable until those contracts are implemented and validated.
+and arbitrary artifact predicates. The QA, security and preparation contracts are
+opt-in workspace configuration, and their examples stay disabled; no
+release-readiness run is ready to enable until an owner installs them, the
+composition exists and a sandboxed adapter launch has been observed.
 
 ## Task References
 
@@ -549,7 +587,7 @@ to enable until those contracts are implemented and validated.
 - [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
 - [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
 - [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
-- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (someday).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (phase 3).
 - [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
 - [ORB-20397] — Expose accepted-result history through condition success facts (someday).
 

@@ -112,6 +112,37 @@ The shipped `code-review`, `qa-sweep` and `qa-full-sweep` defaults carry the
 block against the workspace's base branch. Delivery-triggered definitions do not need it — they
 never fire on a quiet tree.
 
+## Proving a job step with a completion contract
+
+A definition may declare `completion`, a definition-file field, so a job step can
+require more than a `done` task. Without it a definition behaves as before.
+
+```yaml
+completion:
+  contract: my-readiness/v1      # the step's require_result
+  adapter: my-adapter            # a granted script, .orbit/resources/scripts/my-adapter.yaml
+  form: my-form                  # passed to the adapter
+  evidence_artifact: readiness-evidence.json
+  max_age_minutes: 1440
+  read_task_tags: []             # tagged tasks the adapter may read
+  evidence_instructions: |
+    What this workspace's run must leave.
+```
+
+Orbit adds the required evidence binding to the minted task's description. When the
+task finishes, Orbit compares that evidence with its own records of the task, run,
+definition digest, source revision and completion time. The workspace adapter then
+reads the evidence on stdin and answers `passed`, `blocked` or `unavailable`. Only
+`passed` is accepted, and the task's final message is never read. Anything else, including
+a missing grant, a stale source or a blocked verdict, holds the step until its expiry.
+Before a later step mints, each earlier accepted result is checked again for exact
+source and age, even after a checkpoint. A probe that succeeded without doing the
+contract's work answers `blocked` and adds nothing to accepted-result history.
+
+`orbit automation explain job:<name> --json` shows each step's contract, adapter grant
+and latest accepted result, and tells a missing history from an unreadable one.
+`orbit script grant <name>` is the owner's decision; Orbit never grants on its own.
+
 ## Skipping a tick when nothing is blocked
 
 `skip_unless_blocked_candidates: true` — also a definition-file field — mints

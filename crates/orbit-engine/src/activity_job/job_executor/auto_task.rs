@@ -4,8 +4,9 @@
 //! One pass observes the step through the owner, then settles it, parks it,
 //! or reserves and admits its one keyed task. Every record is checkpointed
 //! before the engine relies on it: a failed checkpoint stops the pass before
-//! any admission. Order per pass: a trusted terminal receipt, then expiry,
-//! then an outstanding reservation, which only admission resolves, then a
+//! any admission. Order per pass: a trusted terminal receipt the declared
+//! contract accepts, then expiry, then a held result, then an outstanding
+//! reservation, which only admission resolves, then a
 //! held definition or unmet readiness, then new admission.
 
 use orbit_types::workflow::{AutoTaskReceipt, AutoTaskStepRecord, AutoTaskStepStatus, ParkedWait};
@@ -58,6 +59,16 @@ pub(super) fn run_auto_task_step(
         return Ok(settled_outcome(step, &record));
     }
 
+    if let Some(hold) = observation.result_hold.clone() {
+        return park(
+            ctx,
+            &step.id,
+            &mut record,
+            AutoTaskStepStatus::Held,
+            hold,
+            &observation,
+        );
+    }
     if let Some(task_id) = record.task_id.clone() {
         let status = match observation.bound_status.as_deref() {
             Some("in-progress" | "review") => AutoTaskStepStatus::Running,
@@ -170,6 +181,8 @@ fn settle(record: &mut AutoTaskStepRecord, observation: &AutoTaskObservation) ->
             ..receipt.clone()
         };
         let status = match (receipt.accepted, in_time) {
+            // Done, but its evidence does not satisfy the declared contract.
+            (true, true) if observation.result_hold.is_some() => None,
             (true, true) => Some(AutoTaskStepStatus::Done),
             (false, _)
                 if receipt.task_status == "archived" || receipt.task_status == "rejected" =>

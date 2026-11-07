@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::automation::condition::{evaluate_guard, facts};
 
+use super::completion::contract_admission_hold;
 use super::job_step::{bound_task, parse_frozen_job, resolve_target};
 
 /// One step of a frozen execution, as its checkpoint records it.
@@ -27,6 +28,8 @@ pub(super) struct StepContext {
     pub(super) checkpoint: AutoTaskRunCheckpoint,
     job: JobV2,
     pub(super) checked: CheckedAutoTaskStep,
+    /// Every auto-task step of the frozen job, this one included.
+    pub(super) steps: Vec<CheckedAutoTaskStep>,
     pub(super) record: Option<AutoTaskStepRecord>,
 }
 
@@ -71,11 +74,13 @@ impl StepContext {
             ))
         })?;
         let job = parse_frozen_job(&checkpoint.frozen_job)?;
-        let checked = check_job_waits(&job, checkpoint.started_at)
+        let steps = check_job_waits(&job, checkpoint.started_at)
             .map_err(|error| OrbitError::InvalidInput(format!("frozen job: {error}")))?
-            .steps
-            .into_iter()
+            .steps;
+        let checked = steps
+            .iter()
             .find(|step| step.id == step_id)
+            .cloned()
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
                     "step `{step_id}` is not an auto-task step of run {run_id}'s frozen job"
@@ -87,6 +92,7 @@ impl StepContext {
             checkpoint,
             job,
             checked,
+            steps,
             record,
         })
     }
@@ -112,7 +118,7 @@ impl StepContext {
         }
     }
 
-    fn step_facts(&self, id: &str) -> StepFacts {
+    pub(super) fn step_facts(&self, id: &str) -> StepFacts {
         if let Some(record) = self.checkpoint.steps.get(id) {
             return StepFacts {
                 status: record.status.as_str().to_string(),
@@ -258,15 +264,11 @@ pub(super) fn observe_with(
         Some(frozen) => Some(frozen.clone()),
         None => resolve_target(runtime, name, now)?.map(|(_, frozen)| frozen),
     };
-    let input_digest = orbit_automation::delivery::digest(
-        json!({
-            "auto_task": name,
-            "definition": frozen.as_ref().map(|frozen| &frozen.digest),
-            "require_result": step.checked.require_result,
-            "source_revision": step.checkpoint.source_revision,
-        })
-        .to_string()
-        .as_bytes(),
+    let input_digest = step_input_digest(
+        name,
+        frozen.as_ref().map(|frozen| frozen.digest.as_str()),
+        step.checked.require_result.as_deref(),
+        step.checkpoint.source_revision.as_deref(),
     );
     let bound = record.and_then(|record| record.task_id.as_deref());
     let (receipt, bound_status) = match bound {
@@ -315,6 +317,7 @@ pub(super) fn observe_with(
         input_digest,
         definition_hold: definition_hold(runtime, step, frozen.is_some(), now),
         receipt,
+        result_hold: None,
         bound_status,
         deadline: Some(deadline),
         dynamic_expiry,
@@ -322,6 +325,26 @@ pub(super) fn observe_with(
         readiness,
         recheck_at: (now + Duration::seconds(RECHECK_SECONDS)).min(deadline.max(now)),
     })
+}
+
+/// The digest of what a step's task is minted for. Its creation receipt keeps
+/// this, so evidence can be tied back to one definition and source revision.
+pub(super) fn step_input_digest(
+    auto_task: &str,
+    definition_digest: Option<&str>,
+    require_result: Option<&str>,
+    source_revision: Option<&str>,
+) -> String {
+    orbit_automation::delivery::digest(
+        json!({
+            "auto_task": auto_task,
+            "definition": definition_digest,
+            "require_result": require_result,
+            "source_revision": source_revision,
+        })
+        .to_string()
+        .as_bytes(),
+    )
 }
 
 /// Why the referenced definition holds admission now, judged by its current
@@ -334,12 +357,6 @@ fn definition_hold(
     now: DateTime<Utc>,
 ) -> Option<String> {
     let name = &step.checked.auto_task;
-    if let Some(contract) = &step.checked.require_result {
-        return Some(format!(
-            "require_result `{contract}`: this Orbit has no validated evidence adapter for the \
-             contract, so the step's result would be unavailable; nothing is minted"
-        ));
-    }
     let definition = match runtime.auto_task_show(name) {
         Ok(Some(definition)) => definition,
         Ok(None) => return Some(format!("auto-task `{name}` is missing")),
@@ -350,6 +367,9 @@ fn definition_hold(
     }
     if !definition.enabled {
         return Some(format!("auto-task `{name}` is disabled"));
+    }
+    if let Some(hold) = contract_admission_hold(runtime, step, now) {
+        return Some(hold);
     }
     let (source, clause) = match &definition.schedule {
         AutoTaskSchedule::Condition { condition }

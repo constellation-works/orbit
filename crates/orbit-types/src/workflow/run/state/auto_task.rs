@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::workflow::AutoTaskCompletionReceipt;
+
 /// The checkpoint layout this binary reads and writes. A stored checkpoint
 /// with a higher version was written by a newer binary: this one refuses to
 /// rewrite it rather than drop obligations it cannot represent.
@@ -162,6 +164,10 @@ pub struct AutoTaskReceipt {
     pub settled_at: DateTime<Utc>,
     /// When this execution first observed it.
     pub observed_at: DateTime<Utc>,
+    /// The trusted result, when the definition's completion contract accepted
+    /// the completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<AutoTaskCompletionReceipt>,
 }
 
 /// Why and until when a job execution is parked.

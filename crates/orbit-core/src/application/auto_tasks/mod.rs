@@ -41,6 +41,7 @@ use std::borrow::Cow;
 
 mod body_history;
 mod change_probe;
+mod completion;
 pub mod crud;
 pub mod delete;
 pub(crate) mod demoted;
