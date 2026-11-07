@@ -230,7 +230,15 @@ than failing the whole catalog: the runtime withdraws that one file, logs a
 warning naming its path and the remedy, and records it unavailable with the
 parse error, so unrelated jobs still build and run while a job referencing
 that name is refused with the same named error (`ActivityUnavailable`).
-Global and explicit catalog layers stay fail-closed, and duplicate names
+The withdrawal reserves the name against lower-precedence layers loaded
+afterwards: plugin activity files (and any later `prefer_existing` layer)
+with the same name are skipped rather than reviving the name, so the job
+keeps failing with the workspace-local parse error instead of silently
+running a different implementation. Entries already loaded from an
+authoritative explicit or global layer before the stale workspace file is
+seen are untouched — the stale file neither displaces them nor records a
+withdrawal for that name — and unrelated activities from every layer keep
+loading. Global and explicit catalog layers stay fail-closed, and duplicate names
 inside one directory remain a hard error. `orbit doctor` reports the same
 stale file as an activity fault with its path and the fix-or-remove remedy.
 
