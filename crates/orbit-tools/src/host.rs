@@ -8,7 +8,6 @@ use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
-use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
@@ -119,8 +118,6 @@ pub enum OrbitBuiltinAction {
     /// Read-only operator attention feed.
     Attention(AttentionVerb),
     CommandExec,
-    /// Read-only crew verbs: the crew ladder report.
-    Crew(CrewVerb),
     /// Human decision-request verbs.
     Decision(DecisionVerb),
     DesktopRead,
@@ -180,12 +177,6 @@ impl From<CodebaseVerb> for OrbitBuiltinAction {
 impl From<AutomationVerb> for OrbitBuiltinAction {
     fn from(verb: AutomationVerb) -> Self {
         Self::Automation(verb)
-    }
-}
-
-impl From<CrewVerb> for OrbitBuiltinAction {
-    fn from(verb: CrewVerb) -> Self {
-        Self::Crew(verb)
     }
 }
 

@@ -425,17 +425,6 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
     for expected in ["\"high\"", "\"xhigh\"", "null", "\"unknown\""] {
         assert!(efforts.contains(expected), "{usage}");
     }
-    let ladder = operator_json(&fixture, &["crew", "ladder", "--json"]);
-    let efforts: std::collections::BTreeSet<_> = ladder["effort_breakdown"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| row["reasoning_effort"].to_string())
-        .collect();
-    assert!(
-        efforts.contains("\"high\"") && efforts.contains("\"xhigh\"") && efforts.contains("null"),
-        "{ladder}"
-    );
 }
 
 /// A `<crew>@<effort>` reference runs its crew at that effort and is recorded

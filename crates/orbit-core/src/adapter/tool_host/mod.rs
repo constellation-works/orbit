@@ -4,7 +4,6 @@ mod auto_task_tools;
 mod automation_tools;
 mod codebase_tools;
 mod command_tools;
-mod crew_tools;
 mod decision_tools;
 mod desktop;
 mod dispatch;

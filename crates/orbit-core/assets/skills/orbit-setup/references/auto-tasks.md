@@ -735,9 +735,10 @@ diffs, and the rejection share. A default that stops paying for itself can be
 demoted the same way.
 
 These former defaults were demoted for unproven yield: `backlog-hygiene`,
-`ci-budget-watch`, `crew-ladder-review`, `design-sync`, `flaky-test-hunt`,
-`structure-sweep`, `suppression-ratchet` and `workflow-health-audit`.
-`blocked-task-triage` was retired earlier, superseded by final recovery. Orbit
+`ci-budget-watch`, `design-sync`, `flaky-test-hunt`, `structure-sweep`,
+`suppression-ratchet` and `workflow-health-audit`. `blocked-task-triage` was
+retired earlier, superseded by final recovery, and `crew-ladder-review` was
+retired with the crew ladder it reviewed. Orbit
 no longer seeds a demoted default, but a workspace that already has a copy
 keeps it: `orbit workspace sync` leaves the file, its settings and its schedule
 as they are and reports it once as `migrated` while it drops the copy's managed

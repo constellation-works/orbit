@@ -1,4 +1,0 @@
-[
-  {"argv": ["crew"], "golden": "crew/root.txt"},
-  {"argv": ["crew", "ladder"], "golden": "crew/ladder.txt"}
-]

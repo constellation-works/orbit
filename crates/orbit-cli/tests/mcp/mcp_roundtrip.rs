@@ -1013,12 +1013,11 @@ fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
 /// `machine.mcp.toolsets` host config restores exactly the named groups.
 #[test]
 fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
-    const OPT_IN: [(&str, &str); 8] = [
+    const OPT_IN: [(&str, &str); 7] = [
         ("orbit_lease_list", "leases"),
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
         ("orbit_orchestrator_show", "analytics"),
-        ("orbit_crew_ladder", "analytics"),
         ("orbit_decision_digest", "decision-channel"),
         ("orbit_notice_post", "notice"),
         ("orbit_notice_list", "notice"),

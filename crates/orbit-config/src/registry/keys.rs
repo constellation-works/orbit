@@ -196,7 +196,48 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` \
      drains or `orbit run ship`, and delete the key",
     ),
+    // [ORB-22803] The crew ladder was removed on 2026-11-07. Each key loads,
+    // warns and is ignored; code-health-sweep deletes these entries after
+    // 2026-12-07, when they become ordinary unknown settings.
+    ("workflow.crew_ladder.mode", CREW_LADDER_REMOVED_NOTE),
+    ("workflow.crew_ladder.rungs", CREW_LADDER_REMOVED_NOTE),
+    ("workflow.crew_ladder.tiers", CREW_LADDER_REMOVED_NOTE),
+    (
+        "workflow.crew_ladder.explore_rate",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    ("workflow.crew_ladder.margin", CREW_LADDER_REMOVED_NOTE),
+    ("workflow.crew_ladder.look_every", CREW_LADDER_REMOVED_NOTE),
+    ("workflow.crew_ladder.max_sample", CREW_LADDER_REMOVED_NOTE),
+    (
+        "workflow.crew_ladder.exclude_types",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_ladder.watch_window",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_ladder.retry_after_days",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_ladder.delivery_quality",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_ladder.quality_grade_margin",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
+    (
+        "workflow.crew_ladder.min_grade_coverage",
+        CREW_LADDER_REMOVED_NOTE,
+    ),
 ];
+
+const CREW_LADDER_REMOVED_NOTE: &str = "ignored: the crew ladder and its standing shadow trials \
+     were removed; route each tier with workflow.<tier>_complexity_crews and delete the \
+     [workflow.crew_ladder] table. This key stops being recognised after 2026-12-07";
 
 const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks, the one pool \
      every sweep-filed task (CI failure, Dependabot and code scanning, merged-head repair) draws \

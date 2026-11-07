@@ -3,7 +3,6 @@ pub mod authorization;
 pub mod auto_task;
 pub mod automation;
 pub mod codebase;
-pub mod crew;
 pub mod decision;
 pub mod drain;
 pub mod evolution;

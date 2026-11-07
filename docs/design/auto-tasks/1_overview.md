@@ -538,7 +538,10 @@ ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
 `design-sync` (shipped by [ORB-18557]), `flaky-test-hunt`, `structure-sweep`,
 `suppression-ratchet` and `workflow-health-audit`. Their names are listed in
 `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
-admission still accepts, and their templates are no longer embedded.
+admission still accepts, and their templates are no longer embedded. ORB-22803 later
+retired `crew-ladder-review` with the crew ladder it reviewed: it moved to
+`RETIRED_DEFAULT_AUTO_TASKS` with its last shipped template embedded again, so
+`orbit workspace sync` removes unedited copies.
 
 Unlike a retired default, a demoted default's existing copy is kept. `orbit
 workspace sync` drops its managed-manifest provenance before reconciliation

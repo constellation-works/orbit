@@ -263,18 +263,6 @@ fn fixture_run(root: &Path) -> FixtureResult {
         .run_delivery_quality_with_source(&f.service, &ForbiddenSource)?;
     assert_eq!(f.adapter.calls.load(Ordering::SeqCst), 0);
     assert!(!root.join("global/state/delivery-quality").exists());
-    for (key, value) in [
-        ("workflow.crew_ladder.delivery_quality", "shadow"),
-        ("workflow.crew_ladder.delivery_quality", "guardrail"),
-        ("workflow.crew_ladder.mode", "propose"),
-        ("workflow.crew_ladder.mode", "auto"),
-    ] {
-        let mut config = orbit_config::ConfigStore::open(
-            orbit_config::ConfigScope::Global,
-            root.join("config-refusals.toml"),
-        )?;
-        assert!(config.set_value(key, value).is_err() || config.snapshot().is_err());
-    }
     f.shadow();
     let profile = f.grade(&unit)?;
     assert_eq!(profile.dimensions.len(), 6);

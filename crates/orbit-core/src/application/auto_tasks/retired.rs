@@ -38,12 +38,22 @@ pub(crate) struct RetiredAutoTask {
 
 /// Retiring a default: drop it from `DEFAULT_AUTO_TASK_FILES`, keep its
 /// last shipped template in place and list it here in the same change.
-pub(crate) const RETIRED_AUTO_TASK_FILES: &[RetiredAutoTask] = &[RetiredAutoTask {
-    name: "blocked-task-triage",
-    template: include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
-    replaced_by: None,
-    superseded_by: "final recovery, which decides every blocked task itself",
-}];
+pub(crate) const RETIRED_AUTO_TASK_FILES: &[RetiredAutoTask] = &[
+    RetiredAutoTask {
+        name: "blocked-task-triage",
+        template: include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
+        replaced_by: None,
+        superseded_by: "final recovery, which decides every blocked task itself",
+    },
+    // [ORB-22803] Demoted in ORB-20704, retired when the crew ladder it
+    // reviewed was removed: its required `orbit.crew.ladder` tool is gone.
+    RetiredAutoTask {
+        name: "crew-ladder-review",
+        template: include_str!("../../../assets/auto_tasks/crew-ladder-review.yaml"),
+        replaced_by: None,
+        superseded_by: "no replacement: the crew ladder it reviewed was removed",
+    },
+];
 
 /// What retiring the replaced defaults found in one auto-task directory.
 #[derive(Debug, Default)]
