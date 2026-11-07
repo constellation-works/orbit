@@ -309,6 +309,7 @@ const SELF_AUTO_TASK_FIELDS: &[Field] = &[
     optional("last_fired", FieldType::Timestamp),
     optional("last_minted", FieldType::Timestamp),
     optional("last_minted_task", FieldType::String),
+    optional("last_succeeded_at", FieldType::Timestamp),
     required("fires_24h", FieldType::Int),
 ];
 

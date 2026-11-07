@@ -14,7 +14,7 @@ use orbit_types::workflow::automation::{
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 use serde::Serialize;
 
-use super::{ConditionDefinition, condition_consumer, condition_refusal};
+use super::{ConditionDefinition, condition_consumer, condition_refusal, facts};
 use crate::OrbitRuntime;
 
 /// Most fires and subjects one status lists.
@@ -130,6 +130,17 @@ pub struct ConditionSelfView {
     pub last_minted: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_minted_task: Option<String>,
+    /// Whether the definition declares a completion contract, so it has an
+    /// accepted-result history that `last_succeeded_at` reads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub completion_contract: bool,
+    /// When the contract last accepted a result; absent when none yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the accepted-result history could not be read, when it could not.
+    /// Unreadable is not "never succeeded".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_unavailable: Option<String>,
     pub fires_24h: i64,
 }
 
@@ -196,7 +207,7 @@ pub(crate) fn condition_status(
             last_fire: None,
             last_skip: None,
             skip_counts: BTreeMap::new(),
-            self_view: self_view(None, now),
+            self_view: self_view(runtime, definition, None, now),
             recent_fires: Vec::new(),
             subjects: Vec::new(),
         });
@@ -255,7 +266,7 @@ pub(crate) fn condition_status(
         last_fire: recent_fires.first().cloned(),
         last_skip: state.last_skip.clone(),
         skip_counts: state.skip_counts.clone(),
-        self_view: self_view(Some(&state), now),
+        self_view: self_view(runtime, definition, Some(&state), now),
         recent_fires,
         subjects: subjects.into_iter().take(LISTED).collect(),
     })
@@ -344,9 +355,24 @@ fn count(
         .count()
 }
 
-fn self_view(state: Option<&ConditionState>, now: DateTime<Utc>) -> ConditionSelfView {
-    let facts = self_facts(state, now);
+fn self_view(
+    runtime: &OrbitRuntime,
+    definition: &ConditionDefinition<'_>,
+    state: Option<&ConditionState>,
+    now: DateTime<Utc>,
+) -> ConditionSelfView {
+    let facts = facts::with_accepted_history(
+        runtime,
+        definition.target.auto_task(),
+        self_facts(state, now),
+    );
     ConditionSelfView {
+        completion_contract: definition
+            .target
+            .auto_task()
+            .is_some_and(|definition| definition.completion.is_some()),
+        last_succeeded_at: facts.last_succeeded_at,
+        last_succeeded_unavailable: facts.last_succeeded_unreadable,
         last_fired: facts.last_fired,
         last_minted: facts.last_minted,
         last_minted_task: facts.last_minted_task,

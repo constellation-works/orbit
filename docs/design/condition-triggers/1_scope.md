@@ -233,7 +233,7 @@ Every expression may also read the following. Nothing else is in the schema.
 | `file` (file scope) | `path`, `root`, `name`, `stem` (name without its final extension), `ext` (lower case, no dot), `size`, `mtime`, `stable` (bool), `fingerprint` | Root rescan |
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
-| `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3) |
+| `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `last_succeeded_at` (timestamp, optional; auto-tasks that declare a completion contract only), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3); `last_succeeded_at` is the `accepted_at` of the definition's latest accepted-result receipt, never task `done`, mint or merge state. No accepted result leaves it absent; an unreadable history makes any clause that reads it unknown (and enabling reports it unavailable), never "never succeeded". |
 
 **Job-composition extension: shipped.**
 The auto-task job step ([auto-task steps in existing jobs](../activity-job/specs/auto-task-step.md))
@@ -537,7 +537,7 @@ module), against the scope's declared environment:
 - each admitted operator and function has its CEL overload signature, with no implicit
   numeric conversion; anything else, `matches()` and map literals included, is refused;
 - an optional field (`task.crew`, `task.parent_id`, `task.origin`, `self.last_fired`,
-  `self.last_minted`, `self.last_minted_task`) is read only where a `has()` test proves
+  `self.last_minted`, `self.last_minted_task`, `self.last_succeeded_at`) is read only where a `has()` test proves
   it present: on the right of `&&`, the right of `||` after `!has(...)`, or a guarded
   `?:` branch;
 - status literals compared with a task's `status`, and `board.by_status` keys, must be

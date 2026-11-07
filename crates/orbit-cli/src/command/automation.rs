@@ -332,14 +332,26 @@ fn tracking_blocks(tracking: &Value) -> Vec<Block> {
         ));
     }
     let own = &tracking["self"];
+    // Shown only for a definition that declares a completion contract; an
+    // unreadable history is never reported as "never".
+    let succeeded = match (
+        own["last_succeeded_at"].as_str(),
+        own["last_succeeded_unavailable"].as_str(),
+    ) {
+        (Some(at), _) => format!(", last succeeded {at}"),
+        (None, Some(why)) => format!(", last succeeded unavailable ({why})"),
+        (None, None) if own["completion_contract"] == true => ", last succeeded never".to_string(),
+        (None, None) => String::new(),
+    };
     lines.push(format!(
-        "Self: last fired {}, last minted {}{}, {} fire(s) in 24h",
+        "Self: last fired {}, last minted {}{}{}, {} fire(s) in 24h",
         own["last_fired"].as_str().unwrap_or("never"),
         own["last_minted"].as_str().unwrap_or("never"),
         own["last_minted_task"]
             .as_str()
             .map(|task| format!(" ({task})"))
             .unwrap_or_default(),
+        succeeded,
         count(&own["fires_24h"]),
     ));
     let mut blocks = vec![Block::text(lines.join("\n"))];
