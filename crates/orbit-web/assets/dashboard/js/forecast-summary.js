@@ -388,9 +388,9 @@ function wholeUsd(value) {
 /// rows (p50 marked on a flat line, shading out to p90, figures beside), with a
 /// freshness label for all the snapshot's figures. Counts and exact cost are
 /// in its tooltip and accessible text. When the adjusted forecast is
-/// unavailable the rows draw the pre-regression baseline, muted and labelled
-/// as such, or there are no rows; the reason and the baseline's caveat stay
-/// in the tooltip and accessible text [ORB-20453].
+/// unavailable the pre-regression baseline rows are muted without a visible
+/// label, or there are no rows; the reason and the baseline's caveat stay in
+/// the tooltip and accessible text [ORB-20453].
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary || Boolean(summary.unavailable);
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
@@ -403,11 +403,10 @@ export function drainBacklogForecastLink(summary) {
     const bars = backlogBarList(summary?.baselineBars, null, "pre-regression baseline");
     if (bars) bars.classList.add("baseline");
     for (const child of [
-      el("span", { class: "drain-section-label", text: "Backlog" }),
-      bars ? el("span", { class: "drain-forecast-meta drain-backlog-forecast-basis", text: "pre-regression baseline" }) : null,
+      bars ? null : el("span", { class: "drain-section-label", text: "Backlog" }),
       bars,
       el("span", { class: "visually-hidden", text: ` ${detail}` }),
-      el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
+      bars ? null : el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
     ]) if (child) link.append(child);
     return link;
   }
