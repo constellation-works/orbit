@@ -159,8 +159,14 @@ pub(super) fn backlog_snapshot_in_mode(
     let mut lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
     // A follower has no local leaf run, and the task population need not show
     // its frozen surface. Reservation expiry does not release that surface.
-    let claims = ClaimHolders::read_for_admission(runtime)
-        .map_err(|error| PassError::store(action, "read execution claims", error))?;
+    // Readiness is an observation, so an unreadable claim ledger leaves its
+    // claim-based conflicts unannotated. Admission must still fail closed
+    // when it cannot establish the surfaces held by live claims.
+    let claims = match read_mode {
+        BacklogReadMode::Observation { .. } => ClaimHolders::read(runtime),
+        BacklogReadMode::Admission => ClaimHolders::read_for_admission(runtime)
+            .map_err(|error| PassError::store(action, "read execution claims", error))?,
+    };
     claims.extend_lock_holders(&mut lock_holders);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
