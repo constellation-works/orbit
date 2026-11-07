@@ -4,38 +4,44 @@
 //! of a task that is already done (a comment, an artifact, a PR sync) must not
 //! resolve them again: a human may have reopened one because the fix was
 //! incomplete. The exception is a target whose side effect is pending or
-//! failed. Final recovery and desktop completion record pending targets with
-//! their decision so a crash or failed read before the post-lock effects leaves
-//! durable retry work. Failures are recorded
+//! failed. Every transition into done commits a pending entry for each named
+//! target, relation or text alike, so a crash or unreadable history before
+//! these post-commit effects leaves durable retry work. Failures are recorded
 //! as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] history entries. Later writes to the
-//! done task retry unfinished targets until a
-//! [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry settles them.
+//! done task retry unfinished targets, with the transition's own landing
+//! evidence, until a [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry settles them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::FrictionLandingOutcome;
-use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
+use orbit_types::task::{
+    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, Task, TaskHistoryEntry,
+    TaskStatus, named_friction_targets, pending_resolves_entries, resolves_relation_targets,
+};
 use serde_json::Value;
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
+use crate::application::task::final_recovery::FINAL_RECOVERY_COMPLETED_EVENT;
 
 const RELATION_RESOLVES: &str = "resolves";
 /// Task history event recording that resolving one `resolves` target failed
 /// after the task reached done. Its note's first line is `target=<id>`.
 pub(crate) const RESOLVES_SIDE_EFFECT_FAILED_EVENT: &str = "resolves_side_effect_failed";
-const RESOLVES_SIDE_EFFECT_PENDING_EVENT: &str = "resolves_side_effect_pending";
 /// Task history event recording that a pending or failed target was settled.
 /// Same note shape as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`].
 pub(crate) const RESOLVES_SIDE_EFFECT_RECOVERED_EVENT: &str = "resolves_side_effect_recovered";
-const TARGET_NOTE_PREFIX: &str = "target=";
 const RESOLVES_LANDING_EVENT: &str = "friction_resolved_on_landing";
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_HISTORY_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Evidence retained on the transition that delivered the task. Later retry
 /// writes use this same commit and PR, never a freshly observed branch head.
@@ -51,7 +57,9 @@ impl OrbitRuntime {
     /// done resolves every target; a write to a task that was already done
     /// only retries targets whose side effect is pending or failed. The write is
     /// already durable, so a failure here is logged and recorded on the task
-    /// for a later retry, never returned to the caller.
+    /// for a later retry, never returned to the caller. Unreadable history
+    /// resolves nothing: without the landing evidence a target could only be
+    /// dropped or resolved with less, and its committed pending entry keeps it.
     pub(crate) fn record_resolves_side_effects(&self, previous_status: TaskStatus, task: &Task) {
         if task.status != TaskStatus::Done {
             return;
@@ -63,37 +71,44 @@ impl OrbitRuntime {
         if previous_status != TaskStatus::Done {
             self.materialize_notice_closures_for_done_task(task.id.as_str());
         }
-        let targets = named_friction_targets(task);
-        if targets.is_empty() {
-            return;
-        }
-        let task_history = match self.get_task_history(&task.id) {
+        let task_history = match self.resolves_task_history(&task.id) {
             Ok(history) => history,
             Err(error) => {
                 tracing::warn!(
                     task_id = %task.id,
                     %error,
-                    "reading pending resolves retries failed"
+                    "reading pending resolves retries failed; the next write retries them"
                 );
-                Vec::new()
+                return;
             }
         };
         let pending = pending_resolves_retries(&task_history);
         let landing = landing_resolution(&task_history);
-        let relations: BTreeSet<&str> = resolves_targets(task).collect();
-        let targets: Vec<&str> = targets
+        let relations: BTreeSet<&str> = resolves_relation_targets(&task.relations).collect();
+        // What is pending stays owed even if the task stopped naming it.
+        let mut named: BTreeSet<String> = pending.keys().cloned().collect();
+        if previous_status != TaskStatus::Done {
+            named.extend(task_friction_targets(task));
+        }
+        // Only a landing authorizes a target named by text alone.
+        let (targets, unauthorized): (Vec<&str>, Vec<&str>) = named
             .iter()
             .map(String::as_str)
-            .filter(|target| landing.is_some() || relations.contains(target))
-            .filter(|target| previous_status != TaskStatus::Done || pending.contains(*target))
+            .partition(|target| landing.is_some() || relations.contains(target));
+        let mut history: Vec<TaskHistoryEntry> = unauthorized
+            .into_iter()
+            .filter(|target| pending.contains_key(*target))
+            .map(|target| {
+                resolves_history_entry(
+                    RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
+                    target,
+                    Some("no landing evidence authorizes a target named only in task text"),
+                )
+            })
             .collect();
-        if targets.is_empty() {
-            return;
-        }
-        let mut history = Vec::new();
         for (target, event) in self.apply_resolves_side_effects(task, &targets, landing.as_ref()) {
             let Some(event) = event else {
-                if pending.contains(target) {
+                if pending.contains_key(target) {
                     history.push(resolves_history_entry(
                         RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
                         target,
@@ -103,10 +118,10 @@ impl OrbitRuntime {
                 continue;
             };
             match &event {
-                // A target that is still pending keeps its earlier entry;
+                // A target already recorded as failed keeps its earlier entry;
                 // repeating it on every write would only grow the history.
                 OrbitEvent::TaskRelationSideEffectFailed { reason, .. }
-                    if !pending.contains(target) =>
+                    if pending.get(target) != Some(&UnfinishedResolve::Failed) =>
                 {
                     history.push(resolves_history_entry(
                         RESOLVES_SIDE_EFFECT_FAILED_EVENT,
@@ -115,7 +130,7 @@ impl OrbitRuntime {
                     ));
                 }
                 OrbitEvent::TaskRelationSideEffectFailed { .. } => {}
-                _ if pending.contains(target) => history.push(resolves_history_entry(
+                _ if pending.contains_key(target) => history.push(resolves_history_entry(
                     RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
                     target,
                     None,
@@ -127,7 +142,7 @@ impl OrbitRuntime {
             {
                 let mut entry = resolves_history_entry(RESOLVES_LANDING_EVENT, target, None);
                 entry.note = Some(format!(
-                    "{TARGET_NOTE_PREFIX}{target}\ncommit={}\npr={}",
+                    "{RESOLVES_TARGET_NOTE_PREFIX}{target}\ncommit={}\npr={}",
                     landing.commit,
                     landing
                         .pr_number
@@ -148,6 +163,16 @@ impl OrbitRuntime {
                 "recording the resolves side-effect outcome on the task failed"
             );
         }
+    }
+
+    fn resolves_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        #[cfg(test)]
+        if FAIL_HISTORY_READ.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected resolves history read failure".to_string(),
+            ));
+        }
+        self.get_task_history(task_id)
     }
 
     fn apply_resolves_side_effects<'a>(
@@ -242,30 +267,14 @@ impl OrbitRuntime {
     }
 }
 
-/// The friction targets of `task`'s `resolves` relations, in relation order.
-fn resolves_targets(task: &Task) -> impl Iterator<Item = &str> {
-    task.relations
-        .iter()
-        .filter(|relation| relation.relation_type == TaskRelationType::Resolves)
-        .map(|relation| relation.target.as_str())
-        .filter(|target| is_valid_friction_id(target))
-}
-
 /// Landing closes every explicitly named local friction. Scan description and
-/// criteria only, not titles, comments, plans or summaries; delimiters keep a
-/// prefix of an unrelated identifier from being interpreted as a target.
-fn named_friction_targets(task: &Task) -> BTreeSet<String> {
-    let mut targets: BTreeSet<String> = resolves_targets(task).map(str::to_string).collect();
-    for text in std::iter::once(task.description.as_str())
-        .chain(task.acceptance_criteria.iter().map(String::as_str))
-    {
-        for token in text.split(|ch: char| ch != '-' && ch != '_' && !ch.is_alphanumeric()) {
-            if is_valid_friction_id(token) {
-                targets.insert(token.to_string());
-            }
-        }
-    }
-    targets
+/// criteria only, not titles, comments, plans or summaries.
+fn task_friction_targets(task: &Task) -> BTreeSet<String> {
+    named_friction_targets(
+        &task.relations,
+        std::iter::once(task.description.as_str())
+            .chain(task.acceptance_criteria.iter().map(String::as_str)),
+    )
 }
 
 fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution> {
@@ -276,6 +285,12 @@ fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution>
         .rev()
         .find(|entry| entry.to_status == Some(TaskStatus::Done))?;
     let note = entry.note.as_deref()?;
+    if entry.event == FINAL_RECOVERY_COMPLETED_EVENT {
+        return Some(LandingResolution {
+            commit: covering_commit_delivery(note)?.to_string(),
+            pr_number: None,
+        });
+    }
     if entry.event == "landing_completed" {
         let value: Value = serde_json::from_str(note).ok()?;
         let resolution = value.get("friction_resolution")?;
@@ -304,21 +319,42 @@ pub(crate) fn pull_request_delivery(note: &str) -> Option<(u64, &str)> {
     Some((pr.parse().ok()?, commit))
 }
 
+/// How far an unfinished target got.
+#[derive(PartialEq)]
+enum UnfinishedResolve {
+    /// Committed with the transition; no attempt has been recorded.
+    Pending,
+    /// An attempt failed and its reason is on the task.
+    Failed,
+}
+
+/// The commit a final recovery's completion note verified on its base, as
+/// `covering commit <sha> is reachable`, retained like an already-landed
+/// handoff's covering commit.
+fn covering_commit_delivery(note: &str) -> Option<&str> {
+    let (_, covering) = note.split_once("covering commit ")?;
+    let (commit, _) = covering.split_once(' ')?;
+    (commit.len() >= 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(commit)
+}
+
 /// Targets whose latest side-effect history entry records unfinished work.
-fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
-    let mut pending = BTreeSet::new();
+fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeMap<String, UnfinishedResolve> {
+    let mut pending = BTreeMap::new();
     for entry in history {
         let Some(target) = entry
             .note
             .as_deref()
             .and_then(|note| note.lines().next())
-            .and_then(|line| line.strip_prefix(TARGET_NOTE_PREFIX))
+            .and_then(|line| line.strip_prefix(RESOLVES_TARGET_NOTE_PREFIX))
         else {
             continue;
         };
         match entry.event.as_str() {
-            RESOLVES_SIDE_EFFECT_PENDING_EVENT | RESOLVES_SIDE_EFFECT_FAILED_EVENT => {
-                pending.insert(target.to_string());
+            RESOLVES_SIDE_EFFECT_PENDING_EVENT => {
+                pending.insert(target.to_string(), UnfinishedResolve::Pending);
+            }
+            RESOLVES_SIDE_EFFECT_FAILED_EVENT => {
+                pending.insert(target.to_string(), UnfinishedResolve::Failed);
             }
             RESOLVES_SIDE_EFFECT_RECOVERED_EVENT => {
                 pending.remove(target);
@@ -329,18 +365,14 @@ fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeSet<String> {
     pending
 }
 
-/// Retry work persisted with a final-recovery or desktop transition into done,
-/// before releasing its task lock or reading the task for the side effects.
+/// Retry work for a write that bypasses the store's history commit: the
+/// desktop completion's own atomic mutation appends these with its transition.
 pub(super) fn pending_resolves_history(task: &Task) -> Vec<TaskHistoryEntry> {
-    resolves_targets(task)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|target| resolves_history_entry(RESOLVES_SIDE_EFFECT_PENDING_EVENT, target, None))
-        .collect()
+    pending_resolves_entries(&task_friction_targets(task), SYSTEM_ACTOR_LABEL, Utc::now())
 }
 
 fn resolves_history_entry(event: &str, target: &str, reason: Option<&str>) -> TaskHistoryEntry {
-    let mut note = format!("{TARGET_NOTE_PREFIX}{target}");
+    let mut note = format!("{RESOLVES_TARGET_NOTE_PREFIX}{target}");
     if let Some(reason) = reason {
         note.push_str("\nreason: ");
         note.push_str(&redact_all(reason));

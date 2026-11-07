@@ -19,7 +19,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState, TASK_ARTIFACT_SCHEMA_VERSION,
-    TASK_EVENTS_FILE_NAME, TaskEventRowV2,
+    TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus, named_friction_targets,
+    pending_resolves_entries,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -359,7 +360,21 @@ impl TaskCommitBoundary {
 
         let mut next_event = next_sequence(&bundle.events, "EV-");
         let mut events = Vec::new();
-        for entry in &params.append_history {
+        // A landing's retry work commits with its transition into done, so
+        // the journal replays both or neither.
+        let pending_resolves = if transition.is_some_and(|(_, to)| to == TaskStatus::Done) {
+            pending_resolves_entries(
+                &named_friction_targets(
+                    &bundle.envelope.relations,
+                    [bundle.description.as_str(), bundle.acceptance.as_str()],
+                ),
+                &params.actor,
+                now,
+            )
+        } else {
+            Vec::new()
+        };
+        for entry in params.append_history.iter().chain(&pending_resolves) {
             events.push(TaskEventRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 event_id: format!("EV-{next_event:04}"),

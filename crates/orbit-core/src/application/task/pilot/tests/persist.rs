@@ -207,6 +207,7 @@ fn overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge() {
                         discovered.wait();
                     }
                     Point::Locked => first_locked.send(()).expect("signal first locks"),
+                    Point::BeforeFindingRejection => {}
                 }
             })));
             let output =
@@ -440,4 +441,150 @@ fn pilot_apply_writes_a_valid_explore_brief_and_drops_an_invalid_one() {
         .expect_err("only the pilot writes the brief")
         .to_string();
     assert!(error.contains("reserved"), "{error}");
+}
+
+fn apply_finding_invalid(runtime: &OrbitRuntime, prepared: &Value) -> Value {
+    let task = &prepared["tasks"][0];
+    let (revision, tree) = proof(prepared);
+    runtime
+        .run_deterministic(
+            "apply_task_pilot_results",
+            &json!({}),
+            &json!({
+                "workspace_path": prepared["workspace_path"],
+                "prepared": prepared,
+                "results": [{
+                    "partition_index": 0,
+                    "observed_revision": revision,
+                    "observed_tree": tree,
+                    "task_ids": [task["task_id"]],
+                    "tasks": [{
+                        "task_id": task["task_id"],
+                        "context_files_before": task["context_files_before"],
+                        "context_files_after": [],
+                        "disposition": "verified_no_diff",
+                        "evidence": "The defect the review describes does not exist.",
+                        "recommended_crew": "opus",
+                        "recommended_complexity": "low",
+                        "assessment_rationale": "README.md was read at the pinned revision.",
+                        "validation_approach": "Inspect the persisted verdict.",
+                        "confidence": "high",
+                        "context_evidence_dropped": [],
+                        "evidence_gaps": [],
+                        "reassessment_triggers": [],
+                        "blocked_by": [],
+                        "adr_conflicts": [],
+                        "utility_warnings": [],
+                        "surface_warnings": [],
+                        "duplicate_of": Value::Null,
+                        "already_landed": Value::Null,
+                        "finding_invalid": { "evidence": "README.md:1 is the fixture line." },
+                    }],
+                }],
+            }),
+            ToolContext::default(),
+        )
+        .expect("apply task pilot")
+}
+
+/// The pilot write commits and releases its locks before the rejection runs.
+/// A task edited or settled in that window keeps its state: the verdict judged
+/// the sealed material, and a fresh read must not bless what replaced it.
+#[test]
+fn a_finding_changed_after_the_pilot_write_is_not_rejected() {
+    #[derive(PartialEq)]
+    enum Change {
+        Edit,
+        Settle,
+        Untouched,
+    }
+    for change in [Change::Edit, Change::Settle, Change::Untouched] {
+        let workspace = workspace(None);
+        let task = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: "README is parsed twice".into(),
+                description: "The review claims README.md is parsed twice.".into(),
+                acceptance_criteria: vec!["README.md is parsed once.".into()],
+                plan: "Inspect the cited source.".into(),
+                status: Some(TaskStatus::Proposed),
+                task_type: Some(orbit_types::task::TaskType::Bug),
+                tags: vec!["code-review".into()],
+                context_files: vec!["file:README.md".into()],
+                ..Default::default()
+            })
+            .expect("add finding");
+        let prepared = prepare(&workspace, &task.id);
+        let paths = workspace.runtime.paths().clone();
+        let id = task.id.clone();
+        let edit = matches!(change, Change::Edit);
+        let settle = matches!(change, Change::Settle);
+        lock_hook::set(Some(Box::new(move |point| {
+            if point != Point::BeforeFindingRejection {
+                return;
+            }
+            let runtime =
+                OrbitRuntime::from_roots(&paths.global_dir, &paths.orbit_dir).expect("runtime");
+            if edit {
+                runtime
+                    .update_task(
+                        &id,
+                        TaskUpdateParams {
+                            description: Some("The review now claims something else.".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("edit the finding");
+            }
+            if settle {
+                runtime
+                    .update_task(
+                        &id,
+                        TaskUpdateParams {
+                            status: Some(TaskStatus::Archived),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("settle the finding");
+            }
+        })));
+        let applied = apply_finding_invalid(&workspace.runtime, &prepared);
+        lock_hook::set(None);
+        let rejection = &applied["tasks"][0]["finding_rejection"];
+        let current = workspace.runtime.get_task(&task.id).expect("task");
+        let verdict = workspace
+            .runtime
+            .finding_verification(&task.id)
+            .expect("read verdict");
+        match change {
+            Change::Untouched => {
+                assert_eq!(rejection["recorded"], true, "{applied}");
+                assert_eq!(current.status, TaskStatus::Rejected);
+                assert!(verdict.is_some());
+                // Replaying the same application records nothing twice.
+                let history = workspace.runtime.get_task_history(&task.id).unwrap();
+                let replay = apply_finding_invalid(&workspace.runtime, &prepared);
+                assert_eq!(
+                    workspace.runtime.get_task_history(&task.id).unwrap(),
+                    history,
+                    "{replay}"
+                );
+                assert_eq!(
+                    workspace.runtime.get_task(&task.id).unwrap().status,
+                    TaskStatus::Rejected
+                );
+            }
+            Change::Edit | Change::Settle => {
+                assert_eq!(rejection["recorded"], false, "{applied}");
+                let expected = if change == Change::Edit {
+                    ("material_changed", TaskStatus::Proposed)
+                } else {
+                    ("status_changed", TaskStatus::Archived)
+                };
+                assert_eq!(rejection["reason"], expected.0, "{applied}");
+                assert_eq!(current.status, expected.1);
+                assert!(verdict.is_none(), "no stale verdict is recorded");
+            }
+        }
+    }
 }

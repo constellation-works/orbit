@@ -4,7 +4,7 @@ use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
     TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
-    task_fields_updated_note,
+    named_friction_targets, pending_resolves_entries, task_fields_updated_note,
 };
 
 /// The `tags_changed` event a write appends when it leaves different tags
@@ -674,8 +674,23 @@ impl TaskV2Store {
             }
             let mut next_event = next_sequence(&bundle.events, "EV-");
             let mut next_comment = next_sequence(&bundle.comments, "C-");
+            // Retry work commits ahead of the transition into done, so no
+            // crash or later read failure can leave done without it.
+            let pending_resolves =
+                if status_transition.is_some_and(|(_, to)| to == TaskStatus::Done) {
+                    pending_resolves_entries(
+                        &named_friction_targets(
+                            &bundle.envelope.relations,
+                            [bundle.description.as_str(), bundle.acceptance.as_str()],
+                        ),
+                        &fields.actor,
+                        now,
+                    )
+                } else {
+                    Vec::new()
+                };
 
-            for entry in &fields.append_history {
+            for entry in fields.append_history.iter().chain(&pending_resolves) {
                 let event = TaskEventRowV2 {
                     schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                     event_id: format!("EV-{next_event:04}"),

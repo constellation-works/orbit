@@ -85,21 +85,24 @@ fn visual_followup_retry_completes_existing_task_evidence() {
             "mock":"mocks/checkout.png","title":"missing action","detail":"absent",
             "severity":"low","verdict":{"verdict":"confirmed","reasoning":"verified"},
             "disposition":"optional","resolution":"unfixed"}]});
-    stores
-        .artifact
-        .upsert_task_artifacts(
-            task,
-            TaskArtifactUpdateParams {
-                actor: "system:fixture".into(),
-                writer: Some(ArtifactWriter::System),
-                upsert_artifacts: vec![TaskArtifact::from_text(
-                    "visual/review.json",
-                    review.to_string(),
-                )],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let restore_review = || {
+        stores
+            .artifact
+            .upsert_task_artifacts(
+                task,
+                TaskArtifactUpdateParams {
+                    actor: "system:fixture".into(),
+                    writer: Some(ArtifactWriter::System),
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "visual/review.json",
+                        review.to_string(),
+                    )],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    restore_review();
     for status in [TaskStatus::Review, TaskStatus::Done] {
         runtime
             .apply_task_automation_update(
@@ -112,6 +115,56 @@ fn visual_followup_retry_completes_existing_task_evidence() {
             .unwrap();
     }
     let before = runtime.list_task_metadata().unwrap().len();
+    // A follow-up settled, or re-scoped, before the interrupted write resumes
+    // earns no confirmation of the finding as filed: the replay succeeds and
+    // leaves its status and history alone.
+    let verified = |id: &str| {
+        runtime
+            .get_task_history(id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "finding_verified")
+            .count()
+    };
+    let edits = [
+        orbit_core::application::task::TaskUpdateParams {
+            status: Some(TaskStatus::Archived),
+            ..Default::default()
+        },
+        orbit_core::application::task::TaskUpdateParams {
+            context_files: Some(vec!["file:README.md".into()]),
+            ..Default::default()
+        },
+    ];
+    for edit in edits {
+        runtime
+            .force_update_task_with_identity(&existing.id, edit, None, None)
+            .unwrap();
+        let moved = runtime.get_task(&existing.id).unwrap().status;
+        runtime
+            .run_deterministic(
+                "visual_landed",
+                &json!({}),
+                &json!({"completed_task_ids":[task],"base":"main"}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(verified(&existing.id), 0);
+        assert_eq!(runtime.get_task(&existing.id).unwrap().status, moved);
+        restore_review();
+        runtime
+            .force_update_task_with_identity(
+                &existing.id,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(TaskStatus::Proposed),
+                    context_files: Some(vec![]),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
     for _ in 0..2 {
         runtime
             .run_deterministic(
@@ -157,21 +210,7 @@ fn visual_followup_retry_completes_existing_task_evidence() {
             "human:fixture".into(),
         )
         .unwrap();
-    stores
-        .artifact
-        .upsert_task_artifacts(
-            task,
-            TaskArtifactUpdateParams {
-                actor: "system:fixture".into(),
-                writer: Some(ArtifactWriter::System),
-                upsert_artifacts: vec![TaskArtifact::from_text(
-                    "visual/review.json",
-                    review.to_string(),
-                )],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    restore_review();
     let result = runtime.run_deterministic(
         "visual_landed",
         &json!({}),

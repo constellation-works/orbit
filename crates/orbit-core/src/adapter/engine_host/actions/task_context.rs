@@ -13,7 +13,7 @@ use serde_json::Value;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 use crate::OrbitRuntime;
-use crate::application::task::context_workspace_root;
+use crate::application::task::{context_workspace_root, finding_fingerprint, is_review_finding};
 use crate::runtime::run_input::singular_task_id_from_input;
 
 /// Ceiling on the number of comments surfaced to an implementing agent.
@@ -405,6 +405,14 @@ fn agent_task_context_json(
         _ => serde_json::Map::new(),
     };
 
+    // An implementer's finding-invalid report echoes what it was given, so a
+    // verdict can only reject the material this prompt carried.
+    if is_review_finding(task) {
+        context.insert(
+            "finding_fingerprint".to_string(),
+            Value::String(finding_fingerprint(task)),
+        );
+    }
     if !task.execution_summary.trim().is_empty() {
         context.insert(
             "execution_summary".to_string(),

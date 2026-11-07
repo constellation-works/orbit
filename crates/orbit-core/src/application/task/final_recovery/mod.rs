@@ -13,6 +13,7 @@ mod revision;
 mod verify;
 
 pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
+pub(in crate::application::task) use apply::FINAL_RECOVERY_COMPLETED_EVENT;
 pub(in crate::application::task) use mechanical::{
     base_red_block_episode, base_red_owner, operator_only_requeue,
 };

@@ -257,10 +257,24 @@ wrong finding is usually rejected by work that already reads its code
 `record_finding_verification` (§5), entering through
 `OrbitRuntime::reject_invalid_finding`: REJECTED with reason
 `premise_wrong`, the evidence as `rejection.detail` and `reasoning`, the
-fingerprint of the task as it stands at the write, and the deciding route's
+fingerprint of the snapshot the route analyzed, and the deciding route's
 `source`, crew (in `crews`, at the task's verification tier) and `run_id`.
 A task that is not a review finding (§1) is refused. A replay of a run's own
-recorded rejection succeeds without a second write.
+recorded rejection of the same material succeeds without a second write.
+
+Every route binds its verdict to what it judged, never to a fresh read at the
+write: `AnalyzedFinding` carries the fingerprint, status and history boundary,
+and §5's locked comparison leaves a task that moved on untouched. A verdict
+also needs a status its route may judge (`in-progress` for an implementer,
+`proposed`, `someday` or `backlog` for the others), so a terminal task is never
+rewritten, whatever status the route observed.
+
+| Route | Fingerprint and status from | History boundary |
+|---|---|---|
+| Dedicated verification | Preparation checkpoint | Preparation checkpoint |
+| Task pilot | The pilot write's sealed receipt (`applied_material`) | That receipt |
+| Implementer | `finding_fingerprint` in the prompt, echoed by the report; always `in-progress` | The write (no verifier runs on an `in-progress` task) |
+| Visual review | The follow-up as filed | The filing step's read |
 
 - **Task pilot.** For a review finding the pilot reads the cited code at
   `source_revision` and may return `finding_invalid: {"evidence": "..."}`
@@ -279,8 +293,8 @@ recorded rejection succeeds without a second write.
 - **Implementer.** A finding that turns out wrong only at pickup, after the
   pilot's revision, is reported by the implementer as `finding-invalid.json`
   (schema in the Orbit skill's task-execution reference): this task, its run
-  or retry lineage, the pinned HEAD as `tested_head`, `reasoning`, and at
-  least one `{location, note}` citing an existing `path:line` there. It
+  or retry lineage, the pinned HEAD as `tested_head`, the prompt's
+  `finding_fingerprint`, `reasoning`, and at least one `{location, note}` citing an existing `path:line` there. It
   changes nothing and runs no workspace gates. On a clean tree at the pinned
   HEAD the `git_commit` step verifies the report and has the host record the
   verdict, then returns the `verified_finding_invalid` checkpoint with

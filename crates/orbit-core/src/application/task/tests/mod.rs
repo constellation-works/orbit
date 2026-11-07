@@ -3,6 +3,7 @@
 mod add;
 mod lifecycle;
 mod paths;
+mod resolves;
 mod transitions;
 
 use std::process::Command;

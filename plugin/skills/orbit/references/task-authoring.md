@@ -55,15 +55,17 @@ in the description or acceptance criteria, preferably also with
 `relations: [{"type":"resolves","target":"<friction-id>"}]`. Targets are
 workspace-local. Landing resolves open or triaged records, preserves their
 original bodies, and appends the task, delivered commit, PR number and time.
-Already-resolved records stay unchanged; the task history records resolutions
-and failed writes for retry.
+Already-resolved records stay unchanged. The move to `done` commits each target
+as owed in the task history, so a failed write or a crash is retried by the
+task's next write with the original delivery evidence.
 
 Treat a criterion such as "Friction <friction-id> is resolved with the merge
 sha" as a landing obligation. The implementer proves the repair and hands it
 off; the owner supplies the merge evidence after delivery. Do not ask a worker
 to obtain a future merge SHA or write the owner's friction corpus. Local and
 already-landed handoffs use the candidate or covering commit; a verified
-no-diff handoff uses its synchronized base. These paths record PR `none`.
+no-diff handoff uses its synchronized base, and a final recovery's completion
+uses the covering commit it verified. These paths record PR `none`.
 Every valid friction ID in the description or criteria is a resolution target,
 including background citations, so mention unrelated reports in comments
 instead. See [friction](friction.md) for workspace ownership and retry rules.

@@ -122,6 +122,13 @@ pub(in super::super) struct AppliedTaskMaterial {
     pub(in super::super) material: Option<(String, String)>,
     pub(in super::super) status_neutral_fingerprint: Option<String>,
     pub(in super::super) material_components: Option<BTreeMap<String, String>>,
+    /// The finding material and status this write left, so a rejection of
+    /// the pilot's judgement binds to them rather than to a later read.
+    /// Receipts written before this was sealed carry neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) finding_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) status: Option<TaskStatus>,
 }
 
 /// One task's promotion decision, by the authority that requested it.

@@ -340,6 +340,7 @@ operator's call):
   "task_id": "<current-task-id>",
   "run_id": "<current-run-id>",
   "tested_head": "<pinned-head-sha>",
+  "finding_fingerprint": "<finding_fingerprint from your task context>",
   "reasoning": "Why the defect as described does not exist at tested_head.",
   "evidence": [
     {"location": "src/path.rs:42", "note": "What this line shows."}
@@ -352,7 +353,9 @@ line at `tested_head`; at least one is required, and every `note` is
 non-empty. The commit step requires a clean worktree at `tested_head` and a
 report from this run or its retry lineage. It then records a REJECTED
 finding verdict (source `implementer`), moves the task to `rejected`, and
-lands nothing. Still write the execution summary with `Outcome: success`,
+lands nothing. The fingerprint binds the report to the finding you judged: if
+the task was edited or left `in-progress` since your prompt, the commit step
+refuses the report and the task keeps its state. Still write the execution summary with `Outcome: success`,
 saying the finding is invalid; a failed outcome refuses the handoff. A
 claimed run cannot reject the owner's task: return `result.blocker` with
 kind `finding_invalid` and the same evidence instead.

@@ -516,6 +516,50 @@ fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write_scenar
     assert_friction_still_open(&runtime, &friction_id);
 }
 
+/// A manual move to done has no landing to authorize a text target: its
+/// relation target resolves, and its text target is settled on the record
+/// rather than left owed forever.
+fn manual_done_settles_a_text_target_without_resolving_it_scenario() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let text = add_test_friction(&runtime);
+    let related = add_test_friction(&runtime);
+    let task = add_task_with_resolves(&runtime, &repo_root, &related, "backlog");
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task,
+                "model": "codex",
+                "description": format!("Background: {text}."),
+            }),
+        )
+        .expect("name the text target");
+    move_backlog_task_to_review(&runtime, &task);
+    runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("complete task");
+    assert_friction_resolved_by(&runtime, &related, &task);
+    assert_friction_still_open(&runtime, &text);
+    let settled = format!("target={text}");
+    assert!(
+        runtime
+            .get_task_history(&task)
+            .expect("task history")
+            .iter()
+            .any(|entry| entry.event == "resolves_side_effect_recovered"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.starts_with(&settled)))
+    );
+}
+
 crate::scenario_table!(
     review_approval_resolves_related_friction_and_surfaces_json_fields,
     review_approval_resolves_related_friction_and_surfaces_json_fields_scenario
@@ -555,4 +599,8 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write,
     a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write_scenario
+);
+crate::scenario_table!(
+    manual_done_settles_a_text_target_without_resolving_it,
+    manual_done_settles_a_text_target_without_resolving_it_scenario
 );

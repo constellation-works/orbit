@@ -50,6 +50,11 @@ impl Verifier for FindingInvalid {
         if report.schema_version != 1 || report.task_id != task.id {
             return Err(Self::refused("report must identify this task"));
         }
+        if report.finding_fingerprint.trim().is_empty() {
+            return Err(Self::refused(
+                "finding_fingerprint must copy task.finding_fingerprint from the prompt judged",
+            ));
+        }
         if report.reasoning.trim().is_empty() {
             return Err(Self::refused(
                 "reasoning must state why the defect does not exist",
