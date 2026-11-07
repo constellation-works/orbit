@@ -29,6 +29,7 @@ base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 fs2.workspace = true
+orbit-clock = { path = "../orbit-clock" }
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }

@@ -11,7 +11,7 @@ doc_role: overview
 type: design
 summary: Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-cli/src/command/clock/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-cli/src/command/clock/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-clock/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-12236]
 ---
@@ -144,7 +144,7 @@ fragmentation this feature exists to end.
 | `orbit clock tick` and compatibility `orbit sweep` CLI entrypoints | `crates/orbit-cli/src/command/clock/tick.rs`, `crates/orbit-cli/src/command/sweep.rs` | Done — [ORB-12237] |
 | `orbit routine` CLI (`list/show/pause/resume/init`) | `crates/orbit-cli/src/command/routine/` | Done — [ORB-10021] |
 | `orbit clock` CLI (`status/pause/enable/repair/set/tick`) | `crates/orbit-cli/src/command/clock/` | Done — [ORB-10720], [ORB-12237] |
-| launchd/systemd unit templates + installer | `crates/orbit-core/assets/clock/` + `crates/orbit-core/src/application/routines/clock/` | Done — [ORB-10021] |
+| launchd/systemd unit templates + installer | `crates/orbit-clock/assets/clock/` + `crates/orbit-clock/src/` (re-exported as `routines::clock`) | Done — [ORB-10021]; own crate since [ORB-22688] |
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | Done — [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
 | Per-user definitions, seeded through init/sync | `crates/orbit-core/src/application/routines/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
 | Replica-local cron GC | `crates/orbit-core/src/application/routines/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |

@@ -62,13 +62,13 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_core::application::routines::clock::settings::validated_clock_settings_path",
+          "orbit_clock::clock_settings::validated_clock_settings_path",
           "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::application::routines::clock::install::validated_sweep_log_path",
+          "orbit_clock::install::validated_sweep_log_path",
           "ReturnValue",
           "path-injection",
           "manual",

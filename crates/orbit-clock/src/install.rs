@@ -16,9 +16,9 @@ use super::status::{
     systemd_unschedulable_error,
 };
 
-const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../../assets/clock/com.orbit.sweep.plist");
-const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../../../../assets/clock/orbit-sweep.service");
-const SYSTEMD_TIMER_TEMPLATE: &str = include_str!("../../../../assets/clock/orbit-sweep.timer");
+const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../assets/clock/com.orbit.sweep.plist");
+const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../assets/clock/orbit-sweep.service");
+const SYSTEMD_TIMER_TEMPLATE: &str = include_str!("../assets/clock/orbit-sweep.timer");
 
 /// Path launchd redirects `orbit clock tick` stdout/stderr to on macOS, and the
 /// file `run_sweep` rotates so it stays bounded on an always-on host. Single

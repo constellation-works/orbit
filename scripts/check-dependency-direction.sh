@@ -23,6 +23,12 @@ allowed_internal_deps() {
       # leaf above the shared mechanism crates and depends on nothing higher.
       echo "orbit-common orbit-types"
       ;;
+    orbit-clock)
+      # The host's sweep clock (clock.toml, unit rendering, install, health).
+      # It names only the shared mechanisms so it compiles beside the
+      # orbit-store chain, not inside the serial orbit-core library [ORB-22688].
+      echo "orbit-common"
+      ;;
     orbit-registry)
       # Registry owns local machine/workspace files. Since ORB-12725 this
       # machine's identity is the `[machine]` table in the global config.toml,
@@ -52,7 +58,8 @@ allowed_internal_deps() {
       echo "orbit-agent orbit-common orbit-engine orbit-exec orbit-store orbit-tools orbit-types"
       ;;
     orbit-automation)
-      echo "orbit-common orbit-store orbit-types"
+      # The sweep pass re-exports the clock's tick budget [ORB-22688].
+      echo "orbit-clock orbit-common orbit-store orbit-types"
       ;;
     orbit-runtime)
       # The runtime kernel sits below Core's use cases. It reaches them only
@@ -65,7 +72,7 @@ allowed_internal_deps() {
       # reads and host probes use Exec in production; sandbox regression tests
       # also compose Core with Exec's `test-support` feature.
       # Its dev-only self dependency enables the `test-support` feature.
-      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-runtime orbit-store orbit-tools orbit-types"
+      echo "orbit-automation orbit-clock orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-runtime orbit-store orbit-tools orbit-types"
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to

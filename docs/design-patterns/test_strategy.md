@@ -538,6 +538,75 @@ cancelled and missing runs separately; the queue before Check and the awaited jo
 within it separately; and cache, scope and CPU strata. This pass claims no change to the
 400-second p90.
 
+A seventeenth pass (ORB-22688) made the first structural cut of the serial `orbit-core`
+library that the sixteenth pass named. The host's sweep clock (`routines/clock`: unit
+rendering and install, pause and resume, cadence, convergence, inspection and health), its
+`clock.toml` settings, the tick budget `TICK_DEADLINE` and the three unit templates moved
+into a new `orbit-clock` crate. It names only `orbit-common`. Core re-exports it at
+`application::routines::clock` and the settings through `application::contracts`, so no
+consumer changed. `orbit-automation` re-exports the tick budget, so the constant still has
+one definition. The 19 clock unit tests moved with their code, unchanged.
+
+Conditions: base `edadacb73` against the same tree with this change, the full selection
+(`cargo test --workspace --lib --bins --tests --examples --no-run` under
+`with-test-build-lint.sh`), CI's incremental-off, debug-0 and strip settings, no compiler
+wrapper, Rust 1.98.1 and nextest 0.9.136, Cargo `-j4` on CPUs 0, 1, 16 and 17 (load
+average 4.4–8.6). Both arms shared one target directory, so dependencies stayed warm and
+identical. Before every trial every workspace member of either arm was cleaned with
+`cargo clean -p`. Each arm had one primer, then three repetitions ran in sequence,
+alternating baseline and candidate.
+
+| Sequential arm | Wall times (s) |
+|---|---|
+| Primers (baseline compiled dependencies too) | baseline 321.1, candidate 176.4 |
+| Unchanged baseline | 179.4, 175.8, 187.2 (median 179.4, spread 11.4) |
+| Candidate | 178.4, 188.1, 176.7 (median 178.4, spread 11.4) |
+
+The 1.0-second median difference is inside the baseline's own 11.4-second spread, so no
+timing gain is claimed. The structural change is in Cargo's unit data. Workspace units went
+from 86 to 88, the `orbit-clock` library and its test harness, and Cargo's JSON shows each
+workspace unit built exactly once, with no duplicate. In each candidate trial, the
+`orbit-clock` library compiled in 0.60–0.64 s, starting at 19.5–21.4 s and ending by 22.0 s.
+That was while `orbit-store` was still compiling (17.5–42.6 s), and well before the
+`orbit-core` library started (55.0–59.9 s). Its harness (1.1–1.9 s) finished by 46.8 s. The
+clock is no longer input to the serial core unit: it moved 4,514 of the core library's
+286,727 source lines (1.6%) and 19 of the 230 tests in its unit-test harness. That is too
+small to show up in the core units:
+
+- **Core library:** 45.2, 47.6 and 55.2 s in the baseline, 46.5, 48.5 and 49.2 s in the
+  candidate.
+- **Core harness:** 68.4, 65.2 and 74.8 s in the baseline, 68.6, 34.8 and 71.3 s in the
+  candidate. Cargo's report starts the 34.8 s harness late (153 s), and that trial was the
+  slowest candidate (188.1 s), so the low figure is not a saving.
+
+`orbit-automation` now waits on `orbit-clock`, but the clock finishes before `orbit-store`,
+which automation already waited for, so the chain gained no serial step. `cargo nextest
+list` over the same selection counted 3,875 tests in both arms: 66 binaries became 67, the
+`orbit-core` library harness went from 230 to 211 tests, and `orbit-clock` held the other
+19, under the same names. The exact-once partition proof, the Linux sandbox gate, the
+always-run crates and the required job names are unchanged. The new crate joins every
+workspace selection through `cargo metadata`. The unit-test baseline records the 19 moved
+identities.
+
+Limits: one modest extraction does not shorten the `orbit-types` → `orbit-core` chain or
+the core harness that ends the build. A wall-time gain would need cuts of this kind on a
+much larger share of the core library and harness, or the larger `Test build` runner. That
+runner remains an operator decision, not part of this leaf.
+
+Operator handoff: after merge, once runs carry this revision, measure the latest 20
+completed `pull_request` `ci.yml` runs under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`:
+
+- Report the full Check job elapsed time, with the nearest-rank p90 against 400 s, the
+  median and the maximum.
+- Report executed, failed, skipped, cancelled and missing runs separately.
+- Report the queue before Check separately from the awaited jobs' queue within it.
+- Report the cache, scope and CPU strata, and keep every gap as uncertainty, never zero.
+
+That measurement is the operator's, not an acceptance gate of this leaf, and no local
+figure here claims the 400-second budget is restored.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ### Build-runner partition delay (2026-10-31)
@@ -746,7 +815,7 @@ Admitted unit tests:
 
 - `crates/orbit-common/src/process/tests/identity.rs::partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup` (criterion 2, I/O fault injection). The production scan accepts directory entries and a stat reader so the table can force entry errors, unreadable and malformed stat records, and ENOENT between enumeration and reading. It proves an observed zombie cannot certify group death when a potentially live PID cannot be inspected, preserving cleanup's SIGKILL escalation, while vanished PIDs do not prevent zombie-only success. Live-member and unavailable-directory controls cover conclusive activity and the existing signal fallback. The public probe cannot force these partial `/proc` failures economically without host permission changes or nondeterministic races; the crate-root process-group test covers a real Linux zombie through that public probe.
 
-- The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,
+- The [launchd enable tests](../../crates/orbit-clock/src/tests/enable.rs) (criterion 2,
   fault injection) drives the enable entry point with launchd selected and failed
   program/state probes. Version outcomes use the inspection probe seam rather
   than executing a fixture binary: healthy, timeout, empty output and unreachable
@@ -756,7 +825,7 @@ Admitted unit tests:
   on Linux cannot force these launchd states.
 
 - The systemd activation matrices in
-  `crates/orbit-core/src/application/routines/clock/tests/enable.rs`
+  `crates/orbit-clock/src/tests/enable.rs`
   (`systemd_enable_accepts_healthy_in_flight_and_finite_timers` and
   `systemd_enable_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger`)
   and `tests/install.rs`

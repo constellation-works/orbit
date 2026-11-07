@@ -10,11 +10,11 @@
 //! itself. There are two exceptions: a port trait that a layer above
 //! application implements, such as `ToolInvocationPort` for the adapter
 //! [ORB-22004] and `TaskBundleMaintenancePort` for bootstrap [ORB-22005]; and
-//! `clock_settings`, which reads and writes the host's `clock.toml` under a root
-//! its caller names, because `automation` needs the cadence below `routines`.
+//! the clock settings, which read and write the host's `clock.toml` under a root
+//! their caller names, because `automation` needs the cadence below `routines`.
+//! They are owned by the `orbit-clock` crate and re-exported here [ORB-22688].
 
 mod claimed_leaf;
-mod clock_settings;
 mod crew_draw;
 mod distributed_gate;
 mod drain_entry;
@@ -32,10 +32,6 @@ mod task_bundle_maintenance;
 mod tool_invocation;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
-pub use clock_settings::{
-    ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
-    save_clock_settings,
-};
 pub(crate) use crew_draw::{
     AutoEffortSubject, BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
     INSPECTION_CREW_UNAVAILABLE, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
@@ -51,6 +47,10 @@ pub(crate) use filing_tags::{
 pub(crate) use host_provider_hold::{HostProviderHold, canonical_provider};
 pub(crate) use jobs::LOCAL_ROUTE_JOB;
 pub use jobs::{ESCALATION_TRIAGE_JOB, FINDING_VERIFICATION_JOB, PULL_DRAIN_JOB};
+pub use orbit_clock::{
+    ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
+    save_clock_settings,
+};
 pub(in crate::application) use pilot::SUPERSEDED_BY_SOURCE;
 pub(crate) use pilot::{PilotFingerprints, PilotTaskReservation};
 pub use precedent_assist::{

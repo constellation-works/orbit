@@ -1,7 +1,8 @@
 //! Host-local clock settings: `clock.toml` and the sweep cadence. `automation`
 //! reads the cadence for a condition hold's continuity limit, and `routines`
 //! owns the clock that installs it, so the settings sit below both
-//! [ORB-22623]. The file is the only state here: no runtime access, and the
+//! [ORB-22623]; `orbit-core` re-exports them from `application::contracts`
+//! [ORB-22688]. The file is the only state here: no runtime access, and the
 //! caller names the global root.
 
 use std::fs;
