@@ -17,7 +17,7 @@ Not fully established. Final recovery on ORB-21251 (2026-11-02T22:07:55Z) report
 
 ## Resolution
 
-Unknown for the cause. The recorded triage options were to send the task back to task-pilot so the host-operational hold returns (`re_pilot`), or requeue again. The task was archived at 2026-11-03T02:14Z; the history read here does not say by whom or why. Do not requeue this signature until a person has prepared the mandate and grant.
+Unknown for the cause. The recorded triage options were to send the task back to task-pilot so the host-operational hold returns (`re_pilot`), or requeue again. The operator (`human:daniel`) archived ORB-21251 at `2026-11-03T02:14Z`; the history records no reason. Do not requeue this signature until a person has prepared the mandate and grant.
 
 ## Fix task
 
