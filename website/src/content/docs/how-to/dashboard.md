@@ -899,8 +899,10 @@ the 1,000-delivery maximum for explicit selections.
 **Work class** is **Change**, **No-diff**, then each auto-task template that
 already has a profile. Change and no-diff split by complexity: **Low**,
 **Medium**, **Hard**, **Xhard**, **Unassessed**, and **Unset**. A template is
-one series and has no complexity. Select a series to hide it; one series
-stays visible.
+one series and has no complexity. Select a series to hide it; one currently
+available series stays visible. Hidden series from another workspace or
+history selection do not prevent toggling the current series. If a selection
+contains only previously hidden series, those series become visible again.
 
 **Units** are **Cores · GiB** or **% of host**. Percent is available when the
 host size is known. In percent, the dashed line is the admit threshold. It
@@ -1478,6 +1480,12 @@ Each row shows the item, its trigger, when it fires next, its last result, and
 one control. Rows are grouped by whether they will fire. **Details** expands
 the longer fields.
 
+Cron labels and trigger previews use a cadence description when the expression
+has a uniform interval, such as `*/15 * * * *` (**every 15 min**). Minute steps
+restart each hour: `*/45 * * * *` fires at minutes 0 and 45, with alternating
+45- and 15-minute gaps, so it keeps its cron expression in routines, jobs and
+auto-tasks.
+
 ### Routines
 
 
@@ -1601,7 +1609,8 @@ workspace:
   controls the mandate's state allows, then a grid with the mandate's facts
   (effective rights and workspaces, crew, cadence, deadline, live cycle) and
   its latest checkpoint. **Exit criteria and history** lists the exit criteria,
-  every grant and narrowing, and the last control.
+  every grant and narrowing, and the last control when present. Optional
+  sections are omitted when absent.
 - **Wake for status**, **Resume** and **Release** run at once. **Pause**,
   **Takeover** and **Stop** run `orbit resident control`, and **Relay** sends a
   direction like `orbit resident relay`: choosing one of them asks for the
@@ -1613,6 +1622,7 @@ workspace:
 Every write needs an [operator session](#authorization) and is audited like
 the matching CLI command. A widening from the dashboard is recorded as your
 answer to a grant request that quotes you, never as a direct grant.
+Applied and refused operation messages clear when you switch host or workspace.
 
 ## Knowledge › Frictions
 
