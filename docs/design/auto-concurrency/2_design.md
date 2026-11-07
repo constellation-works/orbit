@@ -72,13 +72,17 @@ requests one claim per free slot from the owner, and the owner chooses the
 task (`pull_drain/refill/pass.rs`, `pull_drain/drain/refill_pass.rs`).
 
 **The reactive guard.** The resource throttle (`runtime/host_resource/`)
-samples host CPU, memory and disk every 5 s while admission is being
-consulted, and stops 300 s after the last consult.
+samples host CPU, memory, disk and, on Linux, I/O every 5 s while admission is
+being consulted, and stops 300 s after the last consult.
 
-- **Hold.** It holds all admission once a resource stays at or above its high
-  mark (90%) for 10 s, and releases below the resume mark (85%).
+- **Hold.** It holds admission once a resource stays at or above its high
+  mark for 10 s, and releases below the resume mark. A local drain may still
+  admit eligible CPU-light tasks while CPU alone is held and reserved slots
+  remain; memory, disk and I/O pressure hold them too. Pull drains do not use
+  this CPU-light budget and request no new claims while throttled.
 - **CPU-only pressure.** A local drain may still admit up to
-  `cpu_light_leaves` tasks marked CPU-light (`admission/cpu_light.rs`).
+  the remaining `cpu_light_leaves` budget of eligible CPU-light tasks
+  (`admission/cpu_light.rs`).
 - **Fail open.** Unknown readings never hold.
 - **Shared state.** Every drain on the host reads one shared state file,
   `<global>/cache/host-resource-pressure.json`. It holds hysteresis state, not
@@ -988,8 +992,11 @@ Every existing gate still applies, and gap fit only removes candidates:
   expired login draws another pool crew or waits instead of failing each queued
   task on it in turn.
 
-**The resource throttle stays the backstop.** When it holds, nothing is
-admitted, whatever the forecast says. This is what makes it safe to admit
+**The resource throttle stays the backstop.** When it holds, the forecast
+cannot admit work through it: memory, disk and I/O pressure stop admission,
+while a local drain may still admit eligible CPU-light tasks only when CPU
+alone is held and reserved slots remain. Pull drains do not use this budget
+and request no new claims while throttled. This is what makes it safe to admit
 into a host that is busy now but forecast to be quiet when the task's load
 arrives. If the forecast is wrong, real pressure stops further admission.
 
