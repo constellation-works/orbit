@@ -503,7 +503,7 @@ function renderChips(context) {
     const count = chip.querySelector(".chip-count");
     if (!count) continue;
     if (chip.dataset.role === "waiting") {
-      // Always shown, unlike a status count that shows only while its chip is on.
+      // Updated even while its chip is hidden, unlike a status count that clears while its chip is off.
       count.textContent = String(waitingCountNow(context));
     } else {
       count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
