@@ -171,6 +171,63 @@ Nothing reclaims a stuck claim on its own. On the owner's dashboard, open the
 task and use **Recover claim → blocked** or **Recover claim → backlog**; both
 ask for a reason.
 
+## Recover missing settlement evidence
+
+A follower leaf runs on its own host, so the owner's run history never holds
+it. What the owner knows of its job, build, and failing step is the claim's
+`run_evidence` in `orbit run settlements --no-reconcile`. When that evidence
+is `unrecorded`, the claim settled before the owner recorded leaf-run
+evidence, or its follower sent none, and no operator has hydrated it since.
+The owner does not fill the gap by guessing: `unrecorded` is never inferred
+from the owner's runs, from any current build, or from the settlement's text.
+A missing build means the run record held no build.
+
+Run this recovery on the owner, as operator. Agents and claimed workers are
+refused; they read `orbit run settlements --no-reconcile` instead:
+
+```bash
+orbit run settlements-hydrate --follower-workspace orbit --limit 10
+orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>
+orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck
+```
+
+`--follower-workspace` names the workspace on each follower where its leaves
+ran, by name or `ws_*` ID as that host lists it. Narrow the selection with
+`--claim`, `--task`, `--machine` (ID or name), and `--since` (RFC 3339 time or
+duration such as `7d` or `24h`). Without `--recheck` only claims that still
+hold no evidence are visited; `--recheck` also revisits claims that already
+hold evidence, to confirm an identical replay or report a conflict.
+Selection is newest first. `--limit` bounds one run (default 25, at most
+100); the report gives `remaining` and `next_after_claim_id`, which you pass
+back as `--after` to visit the next page. Paging covers unsuccessful outcomes
+too, and an `--after` ID outside the selection is refused.
+
+Each visited claim reports one outcome:
+
+- `hydrated`: the follower's run record was kept as the claim's immutable
+  `hydrated` evidence.
+- `replayed`: the claim already held the same fact; nothing was written.
+- `conflict`: the claim holds different evidence and keeps it; nothing was
+  written.
+- `mismatch`: the follower answered a record that does not belong to this
+  claim's tuple: another run, another machine, not a claimed leaf's job, not
+  this claim's task, not terminal, or an admitting drain that does not pull
+  from this owner.
+- `absent`: the follower answered that it holds no such run. Only this
+  outcome means the evidence is absent there.
+- `unreachable`: the follower could not be asked or did not answer. This is
+  not proof of absent evidence; retry later.
+- `no_leaf_run`: the claim never bound a leaf run, so there is nothing to
+  observe.
+
+Recorded evidence is immutable: an identical replay is accepted, anything else
+is a conflict, and the held fact stands. Hydration starts, retries, and
+cancels no work and changes no task, claim, or run lifecycle; the only write
+is the evidence row.
+
+The full flag list is the `settlements-hydrate` row in the
+[CLI reference](../../reference/cli/#run-inspection).
+
 ## What this is not
 
 - **Not a fleet.** A replica works only while someone runs
