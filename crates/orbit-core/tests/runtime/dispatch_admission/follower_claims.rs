@@ -12,6 +12,21 @@ fn follower_claim_holds_admission_and_readiness_until_released() {
     ) {
         return;
     }
+    assert_follower_claim_holds_admission_until_released(&[]);
+}
+
+#[test]
+fn explicit_no_diff_task_waits_for_follower_claim_until_released() {
+    if !isolated(
+        "dispatch_admission::follower_claims::explicit_no_diff_task_waits_for_follower_claim_until_released",
+    ) {
+        return;
+    }
+    assert_follower_claim_holds_admission_until_released(&["no-diff-expected"]);
+    assert_no_diff_follower_claim_allows_admission(&["no-diff-expected"]);
+}
+
+fn assert_follower_claim_holds_admission_until_released(queued_tags: &[&str]) {
     let (_root, runtime, repo) = runtime();
     write_files(&repo, &["shared.rs", "other.rs"]);
     // The frozen claim is authoritative even when its owner's task envelope
@@ -20,7 +35,12 @@ fn follower_claim_holds_admission_and_readiness_until_released() {
         &runtime,
         Seed::named("follower holder").files(&["other.rs"]),
     );
-    let queued = seed(&runtime, Seed::named("queued").files(&["shared.rs"]));
+    let queued = seed(
+        &runtime,
+        Seed::named("queued")
+            .tags(queued_tags)
+            .files(&["shared.rs"]),
+    );
     let mut claim = seed_follower_claim(&runtime, &holder.id);
     let workspace_id = runtime.workspace_id().unwrap();
     let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
@@ -89,6 +109,22 @@ fn follower_claim_holds_admission_and_readiness_until_released() {
         )),
         vec![queued.id.clone()]
     );
+    if queued_tags.contains(&"no-diff-expected") {
+        let payload: String = connection
+            .query_row(
+                "SELECT payload_json FROM task_coordination_rows
+                 WHERE workspace_id=?1 AND kind='owner-wave-admission-v1' AND row_id=?2",
+                rusqlite::params![workspace_id, queued.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let wave: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            wave["footprint"],
+            json!([]),
+            "admitting no-diff work must not reserve its declared surface"
+        );
+    }
     assert!(admitted(&list_backlog_tasks(&runtime, json!({}))).contains(&queued.id));
     let wave = classify(&runtime, &drain);
     assert!(
@@ -109,6 +145,10 @@ fn no_diff_follower_claim_does_not_hold_admission_or_readiness() {
     ) {
         return;
     }
+    assert_no_diff_follower_claim_allows_admission(&[]);
+}
+
+fn assert_no_diff_follower_claim_allows_admission(queued_tags: &[&str]) {
     let (_root, runtime, repo) = runtime();
     write_files(&repo, &["shared.rs", "other.rs"]);
     let holder = seed(
@@ -117,7 +157,12 @@ fn no_diff_follower_claim_does_not_hold_admission_or_readiness() {
             .tags(&["no-diff-expected"])
             .files(&["other.rs"]),
     );
-    let queued = seed(&runtime, Seed::named("queued").files(&["shared.rs"]));
+    let queued = seed(
+        &runtime,
+        Seed::named("queued")
+            .tags(queued_tags)
+            .files(&["shared.rs"]),
+    );
     // The nonempty frozen footprint overlaps the queued task even though the
     // holder's current declaration does not. The tag still exempts the holder.
     seed_follower_claim(&runtime, &holder.id);

@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
-use orbit_store::contracts::OwnerWaveCandidate;
-use orbit_types::task::{EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
+use orbit_store::contracts::{ExecutionClaim, OwnerWaveCandidate};
+use orbit_types::task::{
+    EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots, is_no_diff_expected,
+};
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
@@ -24,11 +26,11 @@ use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
-/// The tasks a live claim is currently executing [ORB-12500].
-fn live_claim_task_ids(
+/// The claims currently protecting tasks and their frozen surfaces.
+fn live_execution_claims(
     runtime: &OrbitRuntime,
     action: &str,
-) -> Result<std::collections::BTreeSet<String>, DispatchError> {
+) -> Result<Vec<ExecutionClaim>, DispatchError> {
     Ok(runtime
         .inspect_execution_claims()
         .map_err(|error| DispatchError::DeterministicActionFailed {
@@ -38,8 +40,36 @@ fn live_claim_task_ids(
         .into_iter()
         .map(|inspection| inspection.claim)
         .filter(|claim| claim.phase.protects_footprint())
-        .map(|claim| claim.task_id)
         .collect())
+}
+
+fn claim_lock_exclusion(
+    runtime: &OrbitRuntime,
+    task_id: String,
+    footprint: &[String],
+    claim: &ExecutionClaim,
+) -> BacklogTaskExclusion {
+    let conflicts = footprint
+        .iter()
+        .filter(|requested| {
+            claim.footprint.iter().any(|held| {
+                runtime
+                    .footprint_lock_modes()
+                    .selectors_block(requested, held)
+            })
+        })
+        .map(|requested| BacklogTaskConflict {
+            requested_file: requested.clone(),
+            locking_task_id: claim.task_id.clone(),
+        })
+        .collect();
+    BacklogTaskExclusion {
+        id: task_id,
+        reason: BacklogTaskExclusionReason::ContextLockConflict,
+        conflicts,
+        crew: None,
+        detail: Some(claim_detail(claim)),
+    }
 }
 
 pub(crate) fn list_backlog_tasks(
@@ -163,7 +193,11 @@ pub(crate) fn list_backlog_tasks(
         // task a live claim is already executing be dispatched beside itself.
         // Discovery reaches the same rule through the claim footprints
         // `backlog_snapshot` merges into its holders.
-        let claimed_tasks = live_claim_task_ids(runtime, action)?;
+        let live_claims = live_execution_claims(runtime, action)?;
+        let claimed_tasks = live_claims
+            .iter()
+            .map(|claim| claim.task_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         let pilot_preparations = active_pilot_preparations(runtime, action)?;
         // The hierarchy the inherited-only diagnostic reads, materialized only
         // if an override actually names such a root: the explicit path is
@@ -306,6 +340,49 @@ pub(crate) fn list_backlog_tasks(
             }
             tasks.push(task);
         }
+        // No-diff work waits on other holders using its declared surface,
+        // but must not publish that surface as an owner-wave reservation.
+        // Known no-diff claim holders remain exempt; missing metadata does
+        // not exempt a frozen claim footprint.
+        if !live_claims.is_empty() && tasks.iter().any(|task| is_no_diff_expected(&task.tags)) {
+            let no_diff_holders = runtime
+                .stores()
+                .tasks()
+                .task_envelopes_for_ids(&claimed_tasks)
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("read execution claim task metadata: {error}"),
+                })?
+                .into_iter()
+                .filter(|task| is_no_diff_expected(&task.tags))
+                .map(|task| task.id)
+                .collect::<std::collections::BTreeSet<_>>();
+            tasks.retain(|task| {
+                if !is_no_diff_expected(&task.tags) {
+                    return true;
+                }
+                let footprint = lock_context_files_for_task(
+                    task,
+                    runtime.paths().repo_root.as_path(),
+                    runtime.unlocked_context_paths(),
+                );
+                let Some(claim) = live_claims.iter().find(|claim| {
+                    !no_diff_holders.contains(&claim.task_id)
+                        && runtime
+                            .footprint_lock_modes()
+                            .footprints_block(&footprint, &claim.footprint)
+                }) else {
+                    return true;
+                };
+                excluded.push(claim_lock_exclusion(
+                    runtime,
+                    task.id.clone(),
+                    &footprint,
+                    claim,
+                ));
+                false
+            });
+        }
         // Explicit selection still takes the same admission section as an
         // automatic wave. A follower may claim an overlapping footprint while
         // the per-task checks above run; defer it before creating a leaf run.
@@ -314,11 +391,7 @@ pub(crate) fn list_backlog_tasks(
             .iter()
             .map(|task| OwnerWaveCandidate {
                 task_id: task.id.clone(),
-                footprint: if task
-                    .tags
-                    .iter()
-                    .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
-                {
+                footprint: if is_no_diff_expected(&task.tags) {
                     Vec::new()
                 } else {
                     lock_context_files_for_task(
@@ -347,29 +420,13 @@ pub(crate) fn list_backlog_tasks(
             else {
                 continue;
             };
-            let conflicts = candidate
-                .footprint
-                .iter()
-                .filter(|requested| {
-                    claim.footprint.iter().any(|held| {
-                        runtime
-                            .footprint_lock_modes()
-                            .selectors_block(requested, held)
-                    })
-                })
-                .map(|requested| BacklogTaskConflict {
-                    requested_file: requested.clone(),
-                    locking_task_id: claim.task_id.clone(),
-                })
-                .collect();
             tasks.retain(|task| task.id != admission.task_id);
-            excluded.push(BacklogTaskExclusion {
-                id: admission.task_id,
-                reason: BacklogTaskExclusionReason::ContextLockConflict,
-                conflicts,
-                crew: None,
-                detail: Some(claim_detail(&claim)),
-            });
+            excluded.push(claim_lock_exclusion(
+                runtime,
+                admission.task_id,
+                &candidate.footprint,
+                &claim,
+            ));
         }
         (tasks, excluded)
     };
