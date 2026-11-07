@@ -1,4 +1,4 @@
-//! `orbit browser-kit install`: build, upgrade or adopt the kit, then
+//! `orbit config browser-kit install`: build, upgrade or adopt the kit, then
 //! verify it.
 //!
 //! Every step is skipped when the kit already satisfies it, so a hand-built

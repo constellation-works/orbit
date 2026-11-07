@@ -265,7 +265,7 @@ start the task only on a host whose kit is verified, and an owner hands a
 pull-drain claim only to a follower that reports one. Elsewhere the task stays
 in `backlog` as `browser_kit_missing`, with the wait named in readiness,
 `orbit run show` and the dashboard Drain card (`waits for a host with the
-browser kit (ui)`, naming `orbit browser-kit install`), and `orbit doctor`
+browser kit (ui)`, naming `orbit config browser-kit install`), and `orbit doctor`
 warns on a host whose own kit is what the task waits for. The requirement
 combines with `os:` tags and the crew's executor OS: a host must satisfy all
 of them, and the OS wait is named first. Only the exact `ui` tag routes,

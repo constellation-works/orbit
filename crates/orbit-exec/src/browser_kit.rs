@@ -3,11 +3,11 @@
 //!
 //! The kit lives at `~/.local/chromium-deps` (`kit/` holds the npm project
 //! with the pinned `playwright` package, `browsers/` is
-//! `PLAYWRIGHT_BROWSERS_PATH`, `env.sh` is what a check sources). `orbit
+//! `PLAYWRIGHT_BROWSERS_PATH`, `env.sh` is what a check sources). `orbit config
 //! browser-kit` installs and verifies it; the CLI runner reads it here with
 //! filesystem checks only, so inspecting it on every dispatch stays cheap.
 //!
-//! "Verified" means `orbit browser-kit verify` passed its smoke test against
+//! "Verified" means `orbit config browser-kit verify` passed its smoke test against
 //! the Playwright version and browser revision installed now. A kit that was
 //! changed after that pass, or never passed it, is not verified, and workers
 //! receive none of its variables.
@@ -40,11 +40,13 @@ pub const ENV_SCRIPT_ENV: &str = "ORBIT_BROWSER_KIT_ENV";
 /// Every variable the CLI runner injects for a verified kit.
 pub const WORKER_ENV_NAMES: [&str; 3] = [BROWSERS_PATH_ENV, MODULE_ENV, ENV_SCRIPT_ENV];
 
-/// The record `orbit browser-kit verify` writes after its smoke test passes.
+/// The record `orbit config browser-kit verify` writes after its smoke test passes.
 pub const VERIFICATION_FILE: &str = "orbit-kit.json";
 
 /// First line of an `env.sh` Orbit wrote and may rewrite. A file without it
 /// is the operator's and is left alone.
+// Persisted in every env.sh Orbit wrote: the old spelling stays so an existing
+// script is still recognized as managed.
 pub const MANAGED_ENV_SCRIPT_HEADER: &str = "# Managed by `orbit browser-kit`; edits are replaced.";
 
 const HEADLESS_SHELL_DIR_PREFIX: &str = "chromium_headless_shell-";
@@ -167,7 +169,7 @@ impl KitLayout {
     }
 }
 
-/// What `orbit browser-kit verify` recorded when its smoke test passed.
+/// What `orbit config browser-kit verify` recorded when its smoke test passed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KitVerification {
     pub schema_version: u32,

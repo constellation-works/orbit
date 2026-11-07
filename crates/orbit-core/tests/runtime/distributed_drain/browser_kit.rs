@@ -78,7 +78,7 @@ fn ui_claims_go_only_to_a_follower_that_reports_a_verified_kit() {
         kit_wait
             .detail
             .as_deref()
-            .is_some_and(|detail| detail.contains("`orbit browser-kit install`")),
+            .is_some_and(|detail| detail.contains("`orbit config browser-kit install`")),
         "{kit_wait:?}"
     );
     assert_eq!(waiting(&mac_ui).reason.as_deref(), Some("host_os_mismatch"));

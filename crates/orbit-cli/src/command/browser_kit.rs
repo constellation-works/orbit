@@ -1,4 +1,4 @@
-//! `orbit browser-kit` — the headless browser kit workers check UIs with.
+//! `orbit config browser-kit` — the headless browser kit workers check UIs with.
 //!
 //! Each subcommand calls `orbit_cmd::browser_kit` and opens no workspace
 //! runtime: the kit belongs to the host user, not to a repository.
@@ -138,7 +138,7 @@ fn status_text(status: &KitStatus) -> String {
     lines.push(format!("  location:   {}", kit.root.display()));
     if !kit.present {
         lines.push(format!(
-            "  next:       orbit browser-kit install (Playwright {PLAYWRIGHT_VERSION})"
+            "  next:       orbit config browser-kit install (Playwright {PLAYWRIGHT_VERSION})"
         ));
         return lines.join("\n");
     }

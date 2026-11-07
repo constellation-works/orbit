@@ -279,7 +279,7 @@ the intended operator boundary.
 ### Browser sessions
 
 Browser sessions give a browser a cookie-backed credential for this host's
-dashboard. They are separate from the headless browser kit (`orbit browser-kit`),
+dashboard. They are separate from the headless browser kit (`orbit config browser-kit`),
 which renders UI checks for workers. Two global settings control them:
 
 | Key | Default | Bounds | Effect |

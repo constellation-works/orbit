@@ -404,8 +404,15 @@ pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> 
 }
 
 pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<'_>) -> CommandOut {
+    use super::super::config::{ConfigCommand, ConfigSubcommand};
     match command {
-        Commands::BrowserKit(command) => command.execute_without_runtime(),
+        Commands::Config(ConfigCommand {
+            command: ConfigSubcommand::BrowserKit(command),
+        }) => command.execute_without_runtime(),
+        Commands::BrowserKit(command) => {
+            eprintln!("warning: `orbit browser-kit` is deprecated; use `orbit config browser-kit`");
+            command.execute_without_runtime()
+        }
         _ => dispatch_mismatch("BrowserKit"),
     }
 }
@@ -498,6 +505,33 @@ pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> C
         }
         _ => dispatch_mismatch("Web"),
     }
+}
+
+/// The one operation behind `orbit config browser-kit` and its deprecated
+/// `orbit browser-kit` path. Audit rows keep the `browser-kit` command name, so
+/// history reads the same across the move.
+pub(super) fn browser_kit_operation(
+    command: &super::super::browser_kit::BrowserKitCommand,
+) -> CommandOperation {
+    use super::super::browser_kit::BrowserKitSubcommand;
+    let subcommand = match &command.command {
+        BrowserKitSubcommand::Status(_) => "status",
+        BrowserKitSubcommand::Install(_) => "install",
+        BrowserKitSubcommand::Verify(_) => "verify",
+        BrowserKitSubcommand::Remove(_) => "remove",
+    };
+    CommandOperation::new(
+        // The kit belongs to the host user; no workspace is opened.
+        RuntimeNeed::Forbidden,
+        Some(admin_meta(
+            "browser-kit",
+            Some(subcommand),
+            Some("installation"),
+            None,
+        )),
+        None,
+        dispatch_browser_kit,
+    )
 }
 
 pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> CommandOperation {

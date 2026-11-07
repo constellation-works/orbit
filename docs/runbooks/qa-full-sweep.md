@@ -104,7 +104,7 @@ disposable init or another prerequisite step fails, the report keeps that FAIL
 and marks every scenario it blocked `NOT_RUN` with the reason in `stderr`.
 
 For the browser leg, prefer the prepared host kit. Orbit hands a worker
-`ORBIT_BROWSER_KIT_ENV` once `orbit browser-kit install` (or `verify`) has
+`ORBIT_BROWSER_KIT_ENV` once `orbit config browser-kit install` (or `verify`) has
 passed on the host. Source it when set, then pass its module, browser
 directory and optional Linux loader/font inputs explicitly. macOS needs only
 the module and browsers; a loader search path may contain multiple directories
@@ -118,7 +118,7 @@ The worker sandbox permits reads of `~/.local/chromium-deps` on both Linux
 different boundary and is not used by this sweep. See the
 [browser kit reference](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)
 for host preparation and sandbox checks. Do not install into or modify the
-shared kit during a sweep; the generic default's brief tells workers never to run `orbit browser-kit`.
+shared kit during a sweep; the generic default's brief tells workers never to run `orbit config browser-kit`.
 
 ```bash
 browser_args=()

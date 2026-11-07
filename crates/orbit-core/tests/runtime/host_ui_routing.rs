@@ -21,7 +21,7 @@ use tempfile::TempDir;
 
 const REVISION: &str = "1248";
 
-/// Lay out a kit under `home` as `orbit browser-kit install` leaves it, with
+/// Lay out a kit under `home` as `orbit config browser-kit install` leaves it, with
 /// the smoke-test record `verify` writes only when `verified`.
 pub(crate) fn write_kit(home: &Path, verified: bool) {
     let layout = KitLayout::for_home(home);
@@ -187,7 +187,10 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     let ui = task(&linux, "ui", None, &["UI"]);
     let topical = task(&linux, "topical", None, &["dashboard", "ux"]);
     let wait = browser_kit_wait();
-    assert!(wait.contains("`orbit browser-kit install`"), "{wait}");
+    assert!(
+        wait.contains("`orbit config browser-kit install`"),
+        "{wait}"
+    );
 
     let discovered = backlog(&linux);
     assert_eq!(

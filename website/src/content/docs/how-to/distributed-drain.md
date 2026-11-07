@@ -35,7 +35,7 @@ task that fails.
   task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
   running that OS, and waits in the owner's backlog until one asks for work.
   The crew's executor can also restrict its OS. A task tagged `ui` additionally
-  needs a verified browser kit on the executing host (`orbit browser-kit status`).
+  needs a verified browser kit on the executing host (`orbit config browser-kit status`).
   A task's `requires_labels` go only to a machine whose `machine.labels`, plus
   its OS, include every one; the replica declares its labels with each pull, so
   the owner knows them once it has pulled. Owner and replicas must run releases

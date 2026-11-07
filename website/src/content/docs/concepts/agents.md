@@ -722,8 +722,8 @@ them. `margin` takes quality points above 0 and at most 100, default `5`.
 ### Read the ladder
 
 ```bash
-orbit crew ladder
-orbit crew ladder --json
+orbit agents ladder
+orbit agents ladder --json
 ```
 
 The report is read-only. It never starts or concludes a trial; those happen at

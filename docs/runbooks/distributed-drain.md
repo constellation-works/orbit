@@ -281,11 +281,11 @@ A task whose dependency is still open also shows that OS wait in readiness
 backlog task; running or claimed work is not moved.
 
 A task tagged `ui` needs a host whose headless browser kit is verified
-(`orbit browser-kit status`). Each pull request declares whether the
+(`orbit config browser-kit status`). Each pull request declares whether the
 follower's kit is verified (`browser_kit`, read for every request), and the
 owner hands a `ui` task only to a follower that declares one; the owner's own
 drain checks its own kit. The task otherwise stays in the backlog as
-`browser_kit_missing`, with a wait that names `orbit browser-kit install`, in
+`browser_kit_missing`, with a wait that names `orbit config browser-kit install`, in
 the owner's readiness, `orbit run show`, the Drain card and the follower's idle
 receipt (`browser_kit_unavailable`). It combines with `os:` tags: a host must
 satisfy both. Owner and followers must

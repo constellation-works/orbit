@@ -96,6 +96,9 @@ impl Commands {
                     ConfigSubcommand::Set(_) => "set",
                     ConfigSubcommand::Keys(_) => "keys",
                     ConfigSubcommand::Path(_) => "path",
+                    ConfigSubcommand::BrowserKit(command) => {
+                        return browser_kit_operation(command);
+                    }
                 };
                 CommandOperation::new(
                     RuntimeNeed::Required,
@@ -126,27 +129,7 @@ impl Commands {
                     dispatch_host,
                 )
             }
-            Commands::BrowserKit(command) => {
-                use super::super::browser_kit::BrowserKitSubcommand;
-                let subcommand = match &command.command {
-                    BrowserKitSubcommand::Status(_) => "status",
-                    BrowserKitSubcommand::Install(_) => "install",
-                    BrowserKitSubcommand::Verify(_) => "verify",
-                    BrowserKitSubcommand::Remove(_) => "remove",
-                };
-                CommandOperation::new(
-                    // The kit belongs to the host user; no workspace is opened.
-                    RuntimeNeed::Forbidden,
-                    Some(admin_meta(
-                        "browser-kit",
-                        Some(subcommand),
-                        Some("installation"),
-                        None,
-                    )),
-                    None,
-                    dispatch_browser_kit,
-                )
-            }
+            Commands::BrowserKit(command) => browser_kit_operation(command),
             Commands::Migrate(command) => CommandOperation::new(
                 if command.applies() {
                     RuntimeNeed::Required
@@ -574,7 +557,8 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
-            // The crew ladder report is registry-driven like codebase.
+            // The deprecated path of the crew ladder report, registry-driven like
+            // codebase.
             Commands::Crew(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Crew))
             }
@@ -589,6 +573,9 @@ impl Commands {
                 use super::super::agents::AgentsSubcommand;
                 match &command.command {
                     AgentsSubcommand::Operation(invocation) => {
+                        registry_operation(invocation, runtime_dispatch!(Agents))
+                    }
+                    AgentsSubcommand::Ladder(invocation) => {
                         registry_operation(invocation, runtime_dispatch!(Agents))
                     }
                     // The probe submits one canary run per crew, so it opens

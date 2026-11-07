@@ -60,7 +60,7 @@ function isLoopback(urlText) {
 async function loadPlaywright() {
   const modulePath = process.env.PLAYWRIGHT_MODULE;
   if (!modulePath) {
-    fail("browser_kit_missing: PLAYWRIGHT_MODULE is not set; run `orbit browser-kit install` and source the kit's env.sh");
+    fail("browser_kit_missing: PLAYWRIGHT_MODULE is not set; run `orbit config browser-kit install` and source the kit's env.sh");
   }
   const mod = await import(pathToFileURL(modulePath).href);
   const playwright = mod.default ?? mod;
@@ -79,13 +79,13 @@ async function loadPlaywright() {
 
 function loadPngjs(kitProject) {
   if (!kitProject) {
-    fail("browser_kit_missing: the capture request names no kit npm project for the pixel-compare helpers; run `orbit browser-kit install`");
+    fail("browser_kit_missing: the capture request names no kit npm project for the pixel-compare helpers; run `orbit config browser-kit install`");
   }
   try {
     const require = createRequire(path.join(kitProject, "package.json"));
     return require("pngjs").PNG;
   } catch (error) {
-    fail(`browser_kit_missing: the kit's pixel-compare helper pngjs is not installed under ${kitProject}; run \`orbit browser-kit install\` (${error.message})`);
+    fail(`browser_kit_missing: the kit's pixel-compare helper pngjs is not installed under ${kitProject}; run \`orbit config browser-kit install\` (${error.message})`);
   }
 }
 

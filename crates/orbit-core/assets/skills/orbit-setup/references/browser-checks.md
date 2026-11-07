@@ -19,7 +19,7 @@ a verified kit says so in its handoff instead of claiming visual verification.
 The orbit skill's task-execution reference (Screenshots of a UI change) holds
 the full rule.
 
-`orbit browser-kit` builds that kit once per host. Run it as the user who runs
+`orbit config browser-kit` builds that kit once per host. Run it as the user who runs
 workers, on the host, never inside a worker: on Linux Chromium's system
 libraries can need root, which the sandbox forbids (`no new privileges`), and
 a per-run download is slow and puts each run on a different browser build.
@@ -27,10 +27,10 @@ Node and npm must already be on PATH. Chromium is downloaded from Playwright's
 CDN at install time; Orbit does not bundle it.
 
 ```bash
-orbit browser-kit install    # build, upgrade or adopt the kit, then verify it
-orbit browser-kit status     # version, browser revision, libraries, what workers get
-orbit browser-kit verify     # rerun the loopback screenshot smoke test
-orbit browser-kit remove --confirm
+orbit config browser-kit install    # build, upgrade or adopt the kit, then verify it
+orbit config browser-kit status     # version, browser revision, libraries, what workers get
+orbit config browser-kit verify     # rerun the loopback screenshot smoke test
+orbit config browser-kit remove --confirm
 ```
 
 `orbit workspace init` offers the install when the repository has a web UI (a
@@ -63,7 +63,7 @@ ship discovery and `orbit run ship` start it only there, and a pull-drain
 owner hands it only to a follower that reports a verified kit. Admission reads
 the kit on every pass, so a kit installed mid-window counts at the next one.
 Elsewhere the task stays in `backlog` as `browser_kit_missing`, with the wait
-(`waits for a host with the browser kit (ui)`, naming `orbit browser-kit
+(`waits for a host with the browser kit (ui)`, naming `orbit config browser-kit
 install`) in readiness, `orbit run show` and the dashboard Drain card. A kit
 that is installed but not verified, or changed since its last pass, does not
 count. On a single host without a kit, install it there; until then `orbit
@@ -144,7 +144,7 @@ without the kit until verification succeeds again. A failed smoke test
 prints the likely cause:
 a missing `lib*.so` or a Skia/FontConfig crash is a library or font gap, and
 `Executable doesn't exist` means the module and browser revision are out of
-step (`orbit browser-kit install` repairs both). When a worker's check fails
+step (`orbit config browser-kit install` repairs both). When a worker's check fails
 this way, the cause is the kit, not the code under test. Record it as host
 evidence and fix the kit.
 
@@ -179,7 +179,7 @@ A host without a verified kit — none installed, never verified, or changed
 since its last pass — records `not_established` with its reason instead of
 capturing. That record is shown in `orbit run show`, `orbit task show` and
 the PR body, and it is never a pass. Fix the kit with
-`orbit browser-kit install` and `orbit browser-kit verify`, then let a fresh
+`orbit config browser-kit install` and `orbit config browser-kit verify`, then let a fresh
 delivery capture; setting `visual_review.require_established` makes an
 unestablished capture hold the delivery until then.
 
@@ -191,6 +191,6 @@ its handoff instead of accepting it itself.
 
 ## Remove
 
-`orbit browser-kit remove --confirm` deletes `~/.local/chromium-deps`.
+`orbit config browser-kit remove --confirm` deletes `~/.local/chromium-deps`.
 Nothing else on the host refers to it, and workers stop receiving its
 variables. Packages `--with-deps` installed system-wide stay installed.

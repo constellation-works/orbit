@@ -1,7 +1,7 @@
 //! Initialization, managed asset seeding, and forward-only startup migrations.
 
 pub(crate) mod activity;
-/// The host's headless browser kit, shared by `orbit browser-kit`, onboarding
+/// The host's headless browser kit, shared by `orbit config browser-kit`, onboarding
 /// and `orbit doctor`. Exec owns it because the CLI runner reads it too.
 pub mod browser_kit {
     pub use orbit_exec::browser_kit::*;

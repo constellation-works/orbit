@@ -24,7 +24,7 @@ before the subcommand. `audit export` keeps its command-local `--format json|csv
 for the exported file; `--json` selects the output mode independently and
 leaves the existing export confirmation unchanged.
 
-## Environment
+## Setup
 
 | Command | Purpose |
 |---|---|
@@ -38,10 +38,9 @@ leaves the existing export confirmation unchanged.
 | `orbit workspace remove` \| `teardown` | `remove` deregisters a workspace; `teardown` removes Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
 | `orbit host add` \| `list` \| `show` \| `rename` \| `remove` | Register and inspect the remote Orbit hosts this machine reaches over SSH. `add <ssh-target> [--name]` reads the host's machine ID, name and task prefix from the host; `list [--no-probe]` and `show <host>` read reachability, version, pull protocol and workspaces live; `remove --force` drops a host a replica or pull drain still uses. Federated MCP, pull drains and replica worktree GC route to these hosts. |
-| `orbit browser-kit status` \| `install` \| `verify` \| `remove` | Install, verify and remove the headless browser kit that workers use to check UIs. The kit lives in `~/.local/chromium-deps` (Playwright at the version this release pins, plus Chromium's headless shell, downloaded from Playwright's CDN) and needs Node installed. Once `verify` passes, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` and `ORBIT_BROWSER_KIT_ENV`. Run it on the host, as the user who runs workers. |
+| `orbit config browser-kit status` \| `install` \| `verify` \| `remove` | Install, verify and remove the headless browser kit that workers use to check UIs. The kit lives in `~/.local/chromium-deps` (Playwright at the version this release pins, plus Chromium's headless shell, downloaded from Playwright's CDN) and needs Node installed. Once `verify` passes, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` and `ORBIT_BROWSER_KIT_ENV`. Run it on the host, as the user who runs workers. |
 | `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage plugins. See [Install and grant plugins](../../how-to/plugins/) for the install, grant and enable workflow. `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugins' command groups appear under `Plugins:` in `orbit --help`. |
 | `orbit plugin secret set` \| `list` \| `rm` | Manage the secrets a plugin declares in `spec.secrets`. `set <plugin> <name>` reads the value from stdin or a no-echo prompt, never from an argument. `list <plugin>` shows whether each secret is set, never its value. `rm <plugin> <name>` deletes one. |
-| `orbit application consent` \| `rotate` \| `revoke` | Operator only. Approve a consent request (`--input-file`, `--credential-file`) so a Unix service or CLI child can make scoped calls into a workspace, then rotate or revoke it. See [Application consent](../application-consent/). |
 | `orbit migrate` | List pending `.orbit` layout and store migrations; `--confirm` applies them. `--backfill-task-crews` repairs historical crew attribution ([guide](../../how-to/workspace-maintenance/#repair-historical-crew-attribution)). `--adopt-authority <path>` records which home or `--root` protects a workspace that recorded none ([guide](../../how-to/workspace-maintenance/#adopt-a-workspace-that-recorded-no-authority)). |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. `--preflight` checks whether running Orbit processes prevent an upgrade without opening stores, and `--contract` describes the executable admission protocol without opening state. `--local-candidate <PATH> --source-commit <SHA>` installs an operator-attested local build pinned to a full commit, with `--write-candidate-manifest`, then `--candidate-manifest` and `--install-target`. |
 
@@ -53,7 +52,7 @@ A plugin source keeps its plugin in a `.orbit-plugin/` directory that holds
 Plugins install once per machine; a checkout pins the plugins it uses in
 `.orbit/plugins.yaml`, which git ignores with the rest of `.orbit/`.
 
-## Knowledge
+## Work
 
 ### Tasks
 
@@ -93,6 +92,11 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 | `orbit task export` \| `import` \| `reindex` | Export and import portable `tar.zst` task bundles, and rebuild the task index. |
 | `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, check, read, or restore a task snapshot. Nothing publishes automatically. |
 
+With `task show --fields ... --json`, a single field returns its bare JSON value,
+whether read locally or from another host. The `terminal` field stays keyed as
+`{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object
+keyed by the requested field names.
+
 ### Scheduled tasks
 
 Set a task's earliest start with `orbit task update <id> --not-before <time>`;
@@ -112,38 +116,6 @@ The dashboard task detail has the same Scheduled value and actual first start.
 Its editor accepts RFC 3339 with an offset and clears on an empty save. A
 backlog card shows a Scheduled chip while its hold applies. The forecast
 waits for the scheduled instant before admitting the task.
-
-### Decision requests
-
-With `decision_channel.enabled` on (see [Configuration](../config/)), work
-held on a human decision — a blocked task's final-recovery decision card or a
-task-pilot admission hold — raises a decision request. `orbit task show` lists a task's
-open requests in `open_decisions`. An agent can also raise a decision on a task
-assigned to a human crew with `orbit decision raise`.
-
-| Command | Purpose |
-|---|---|
-| `orbit decision list` | List open decision requests. `--gate agent_request\|block_triage\|model_answer_review\|pilot_admission\|proposed_approval\|resident_authority\|review_approval\|script_grant` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
-| `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
-| `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
-| `orbit decision raise --task <id> --question <text> --options <json>` | Raise a multiple-choice decision on a human-crew task. `--options` is a JSON array of `{label, consequence, recommended}` objects with two to four options and exactly one recommended. Each option may set `risk_tier` (`routine`, `reversible`, `irreversible`, `authority` or `spend`); omitted means `unknown`, and any other value is refused. `--topic` is an optional structured topic or corpus rule id. The MCP tool is `orbit.decision.raise`. See [Decisions an agent raises on a human task](../../how-to/decision-channels/#decisions-an-agent-raises-on-a-human-task). |
-| `orbit decision reverse <id>` | Re-open a request that a precedent answered and restore the task status that the precedent recorded. Operator only. No MCP tool. |
-| `orbit decision rule-auto <rule> <on\|off>` | Turn auto on or off for one current corpus rule. The command rewrites that rule's file for you to commit. No MCP tool. |
-| `orbit decision consolidate [--since <YYYY-MM-DD>]` | Propose corpus rule edits from human answers on or after the date. Writes nothing. No MCP tool. |
-| `orbit decision assist enable --readout <task>/<artifact-path> <CATEGORY>` | Enable model answers in one precedent-decision category. `<CATEGORY>` is `<workspace-id>/<gate>` or `<workspace-id>/agent_request/<topic-file>`; `--readout` names a `precedent-decision-readout/1` artifact whose policy digest must equal the live host grant's. Only routine and reversible requests are ever answered. Operator only. No MCP tool. See [Model answers in one category](../../how-to/decision-channels/#model-answers-in-one-category). |
-| `orbit decision assist disable <CATEGORY>` | Disable model answers in one precedent-decision category at once: no further model answer is applied in it, and its open requests wait for a human answer. Operator only. No MCP tool. |
-| `orbit decision assist status` | Show this host's precedent-decision category enablements: effective state, threshold, policy, agreed/total window, readout and ended reason, actor and time. The plain table omits demotion evidence; use `orbit decision assist status --json` to inspect `ended.demotion`, including its trigger, counts and request IDs. No MCP tool. |
-| `orbit decision submit <id> <answer>` | Submit a human's answer through a registered decision channel: `--channel` and that request's `--token` are required; `--note` keeps evidence with it. |
-| `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
-| `orbit decision channel register` \| `list` \| `revoke` \| `rotate-key` | Register, list, revoke and rotate this host's decision channels. |
-
-For channel setup, plugin authentication and token recovery, see
-[Decision channels](../../how-to/decision-channels/).
-
-With `task show --fields ... --json`, a single field returns its bare JSON value,
-whether read locally or from another host. The `terminal` field stays keyed as
-`{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object
-keyed by the requested field names.
 
 ### Friction and search
 
@@ -197,33 +169,6 @@ keeps running leaves. `orbit run show` reports the claim stages.
 | `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it, newest first, with each one's evidence class. Those leaves never appear in the owner's `run history`. `--since <time\|duration>`, `--json`, `--no-reconcile`. |
 | `orbit run settlements-hydrate --follower-workspace <WORKSPACE>` | Operator only, on the owner: read each settled claim's leaf run from its follower and keep it as the claim's immutable evidence (`hydrated`), which `orbit run settlements --no-reconcile` then reports as `run_evidence`. Narrow with `--claim`, `--task`, `--machine` and `--since`; `--recheck` also confirms claims that already hold evidence; `--limit` (default 25, at most 100) with `--after <CLAIM_ID>` pages. Changes no task, claim or run. |
 
-### Leases
-
-| Command | Purpose |
-|---|---|
-| `orbit lease request` / `renew` / `expand` / `release` | Request or manage a workspace path lease. |
-| `orbit lease list` / `show` / `check` / `notices` | Inspect leases, conflicts and notices. |
-| `orbit lease token create` / `list` / `revoke` | Manage scoped listener tokens as the listener user. |
-| `orbit lease listen` | Run the token-only network listener as the listener user. |
-| `orbit notice post` / `close` | Post a fleet notice (incident, maintenance or info), or update or corroborate the open one with the same subject; close one with a reason. Who you post as comes from your session. |
-| `orbit notice list` / `show` | List open fleet notices (or `--status closed`, `expired`, `all`), or show one with its history. |
-| `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
-| `orbit resident relay <task> --quote <words> --source <json>` | Relay a human's words to a resident verbatim as a `resident.answer` comment with provenance (`--request-id`, `--reverses` optional). It wakes the resident and never changes authority: input naming rights, workspaces or status is refused. |
-| `orbit resident control <task> pause\|resume\|stop\|wake\|takeover\|release --reason <why>` | Change whether a resident fires. `wake --status-request` asks for a status checkpoint; `--by-session` records the session acting. Each action is a history entry with the caller; `stop` ends the mandate and moves the assignment to review. |
-| `orbit resident show <task>` / `list` | Show a mandate, its effective authority, grant history, open grant requests, control state and stalled flag, or list mandates (`--all` includes ended ones). |
-| `orbit resident checkpoint <task> --record <json>` | Append the live cycle's `resident.checkpoint` record. It needs a matching live, unexpired cycle and writes nothing for a stale or duplicate record. |
-| `orbit resident metrics [--mandate <task>] [--since <window>] [--baseline <task>]` | Report the resident widening measures over a window: manual interventions, escalation load, reversal rate and crashed-cycle recovery cost, derived read-only from task history, decision requests, checkpoints and audit rows. Per mandate, or across mandates with workspace totals when `--mandate` is omitted. Read [Digest and metrics](../resident-mandates/#digest-and-metrics) for what each measure means and how the window and baseline work. |
-| `orbit resident digest [--since <window>] [--top <n>]` | Show resident state, escalations, vetoes, top pains and open proposals for the bound workspace, with the window's metrics totals. Read-only. See [Digest and metrics](../resident-mandates/#digest-and-metrics). |
-| `orbit evolution add --event <json> [--mandate <task>] [--cycle <cycle>]` | Record an interactive cost event in the bound workspace. Signature events corroborate one non-terminal evolution record; unsigned costs are retained without creating a capability gap. |
-| `orbit evolution list [--state <state>] [--since <instant>]` | List evolution signatures with summed costs, sorted by minutes plus slot minutes. |
-| `orbit evolution show <id>` | Show one evolution record with its occurrences, proposal state, suppression window and all-time aggregates. |
-| `orbit evolution decline <id> [--days <n>]` | Operator-only: suppress proposals for a signature (default 30 days). CLI-only; not listed over MCP. |
-
-The mandate format and the authority rules are described in [Resident mandates](../resident-mandates/).
-
-See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
-listener authentication and examples.
-
 ### Maintenance
 
 | Command | Purpose |
@@ -252,39 +197,38 @@ reported as `skipped:owner_unreachable` (transport failure),
 | `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | List job definitions and the activity each step runs. Run a job by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. See [Activities and Jobs](../../concepts/activities-jobs/). |
 | `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | List, inspect, and run registered tools; manage external tools and MCP plugins; check tool health. `scaffold` is a deprecated alias for `orbit plugin scaffold`. |
 | `orbit script list` \| `show` \| `grant` \| `revoke` \| `history` | Grant and inspect workspace scripts that a job step may run. A script is a manifest under `.orbit/resources/scripts/` whose `entry` names a program file, and a job step selects it with `target: script:<name>`. `grant` consents on this host to the current manifest and entry digests; editing either file makes the grant stale until granted again. A granted script step runs under a sandbox on Linux or macOS, with environment variables limited by its grant. Linux supports the granted network mode; macOS runs offline only. Both support declared inputs and outputs. See [Script steps](../activity-job-yaml/#script-steps) for scratch paths, containment refusals and root probes. |
-| `orbit visual capture --id <ID>` | Capture the working tree beside each of a task's mocks. For each mock it writes `<out>/<mock-name>/mock.png`, `capture.png` and `side-by-side.png`, plus `<out>/rules.json` with the workspace's UI rule results. `--mock <MOCK>` captures one mock artifact instead of all of them. Needs a verified browser kit (`orbit browser-kit install`) and a view manifest in `visual_review.manifests`. The captures are a self-check aid, not evidence of record. See [Visual review configuration](../config/#visual-review). |
-| `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>` | Accept a disputed blocking visual finding in `visual_review.mode = "live"` so the held delivery can land once resumed. Managed runs are refused. See [Visual review configuration](../config/#visual-review). |
 
-### Experiments
+### Fleet notices
 
 | Command | Purpose |
 |---|---|
-| `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define a draft experiment: `--arms` (a JSON array of `{name, control, weight, overlay}` with exactly one control), `--hypothesis`, `--population`, `--primary-metric`, `--guardrails`, `--min-sample`, `--max-days` and `--mode shadow\|live`. Only a draft can be edited; `clone` copies a definition into a new draft. |
-| `orbit experiment start` \| `pause` \| `resume` \| `reweight` \| `conclude` \| `abandon <id>` | Move an experiment through its lifecycle. `start` needs `experiments.enabled` and a free `experiments.max_running` slot; `reweight --weights '{"arm":2}'` or `--retire <arm>` opens a new segment. `conclude --arm <arm>` records the chosen arm, stores the readout at that moment and files one proposed task naming the experiment, arm, verdict and overlay; omitting `--arm` records no winner and files nothing. Concluding changes no configuration or repository file. `pause`, `reweight`, `conclude` and `abandon` require `--reason`. Only an operator may run these. |
-| `orbit experiment delete <id>` | Delete a finished experiment that never applied a treatment. `--reason` is required. Only an operator may run this. |
-| `orbit experiment assign <id> --task <task> --arm <arm>` | Force a nonterminal task into an active arm of a running experiment, shadow or live. The task must have no arm assignment or an `explicit_crew` exclusion for this experiment; that exclusion is replaced. Records `forced: true`; existing arm assignments and other exclusions for the experiment stay sticky, and overlapping surfaces owned by another experiment are refused. Forced assignments are left out of the readout. Operator only. See [Run an experiment](../../how-to/experiments/). |
-| `orbit experiment readout <id>` | Show per-arm outcomes computed now, intention-to-treat with forced assignments left out and counted: `n`, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes, crew mix, each arm's difference from control post-stratified by complexity, guardrail status, a sample-ratio chi-square against the weights (verdict withheld below p = 0.001), and overlay-digest drift. A failed sample-ratio check or any treatment arm below `experiments.min_delivered_rate` (default `0.9`) sets the verdict to `withheld`; the delivery-rate rule applies before the horizon, even when its primary comparison would otherwise be `winner` or `no difference`. With no withhold, the verdict is `collecting` until every arm reaches `--min-sample` or `--max-days` passes, then `winner <arm>`, `no difference`, or `inconclusive`. `--metric <metric>` reports only that metric; the verdict is still read on the primary metric and guardrails. The shape carries `schema_version`. Read-only; agents may call `orbit.experiment.readout`. |
-| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show`, `orbit.experiment.list`, and `orbit.experiment.readout`. |
+| `orbit notice post` / `close` | Post a fleet notice (incident, maintenance or info), or update or corroborate the open one with the same subject; close one with a reason. Who you post as comes from your session. |
+| `orbit notice list` / `show` | List open fleet notices (or `--status closed`, `expired`, `all`), or show one with its history. |
 
 ## Observe
 
 | Command | Purpose |
 |---|---|
-| `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
-| `orbit codebase analytics` | Rank repository paths by how often done tasks regressed at a recorded site under them, how often the tasks that declared them widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together, and list the paths in several rankings. A done task counts as regressed under a path only where a `regression_from` link to it records a defect site (`regression.sites`) under that path, not against its whole footprint. A regressed task none of whose links record a site counts under no path; the Regressions ranking reports it as `unsited`. Its denominator is the done tasks that declared the path or were sited under it, so a task whose site names a path it never declared adds that task there. Each rate shows its numerator and denominator. `--window 7d\|30d\|90d\|all` (default `90d`), `--min-support <N>` (smallest denominator a ranked row needs, default 15) and `--rollup file\|dir\|crate`. The table shows each ranking's top rows; `--json` is the dashboard's Codebase payload. The MCP tool `orbit.codebase.analytics` returns the same. |
-| `orbit codebase show <path>` | One path's rate, numerator, denominator and place in every ranking, with the task IDs behind each numerator (refused requesters for lock contention, and the requesters behind each coupled pair). The Regressions ranking also lists the defect sites recorded under the path with the regressed tasks that name each, and counts the regressed tasks that declared the path but record no site. Takes the same selection flags; the path is a key at the chosen rollup. The MCP tool is `orbit.codebase.show`. |
-| `orbit codebase related <path>` | List files that usually change alongside one repository file, from tasks that landed together. `--window 7d\|30d\|90d\|all` (default `30d`), `--min-support <N>` (shared landed tasks, default 15) and `--top <N>` (1–100, default 10). |
-| `orbit agents scorecard --role <role>` | Rank one agent role's crews and models: `orchestrators` (by tasks' `orchestrator` attribution, with `model unknown`), `implementers`, `reviewers` or `pilots`. Each term's count per 100 units of the role's work is weighted and summed, then pulled down toward the fleet average when above it; the table shows rank (`below` under the minimum support), crew, model, units, score and each term's count, then the weights. A role not computed yet says so. `--window 1h\|24h\|7d\|30d\|90d\|all\|last50\|last200\|last500\|last1000` (default `30d`; `all` is served as 90 days; `lastN` reaches back to the start of the newest N delivery attempts within the 90-day scan, whatever their age) and `--min-support <N>` (the units a row needs before it is ranked, default 10). Each call scans once and reports `cache_ttl_seconds: 0`. `--json` is the dashboard's `/api/agents/<role>/scorecard` payload; the MCP tool `orbit.agents.scorecard` returns the same. Implementers only: `--by-type` splits rows by task type within each complexity tier; `--by-type --shadow` (for example `orbit agents scorecard --role implementers --by-type --shadow`) compares recorded draw shares with the shares the crew-performance factor would have given, and `--shadow` requires `--by-type`; `--per-task` exports one row per implemented task (use `--json` for the machine-readable export) and cannot be combined with `--by-type` or `--shadow`. |
-| `orbit agents show --role <role> --crew <crew>` | One row's terms, each with its weight, count, rate and contribution, and the tasks behind every count with the records that made it. `--model <model>` picks the row when the crew has several. Takes the same selection flags; the MCP tool is `orbit.agents.show` (the row's model is `row_model` there). |
-| `orbit agents vision-probe` | Check that each crew's model sees images: run the canary per crew outside any delivery, one `image_input_probe_pipeline` run each, and print one row per crew with its executor, declared mode, result and any visual hold. `--crew <NAME>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images; without it, every enabled crew is probed and a crew that cannot take images is reported as a row. `--timeout-seconds <SECONDS>` bounds the wait (default `900`). Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. Declare `image_input` on an executor only after its probe passes. See [Image input](../executor-yaml/#image-input). |
-| `orbit crew ladder` | The crew ladder (`workflow.crew_ladder`): for each complexity tier, its pool, its floor (the cheapest rung that is an enabled, weighted member of the pool), the candidate rung below it, and its shadow trial with status and would-be count (tasks assigned to the candidate arm), or the reason it has none (`mode_off`, `tier_not_listed`, `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`, `experiments_disabled`, `max_running`, or `pending` until the next delivery admission). Read-only; `--json` is the payload of the MCP tool `orbit.crew.ladder`. The keys are under `workflow.crew_ladder.*` in [Configuration](../config/). How the ladder and its trials work is in [Crew ladder](../../concepts/agents/#crew-ladder). |
-| `orbit orchestrator scorecard` \| `show <name>` | Deprecated aliases of `orbit agents scorecard\|show --role orchestrators`, removed in the next release. They print a note naming the replacement to stderr; `--json` and the `orbit.orchestrator.*` tools carry it as `deprecation`. |
 | `orbit attention` | List what waits on an operator, read-only: pilot holds and warnings, blocked, failed or stuck runs, open decisions, review waits, red CI, stale claims, untriaged frictions, open notices, stalled residents and unhealthy hosts. `--all`, `--workspace` and `--host` choose what is read; `--kind` and `--exclude-kind` choose kinds; `--severity`, `--status`, `--tag`, `--task` and `--crew` filter items. `--since` takes the cursor from an earlier read, so you see only new or changed items. See [Find what needs attention](../../how-to/attention/). |
+| `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
 | `orbit doctor` | Check workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). Rows are ordered by severity: errors, warnings, ok, info, then skipped. The failure and warning count is written to stderr before the report, so it appears above a terminal table without becoming a plain stdout record; plain output remains tab-separated rows and JSON remains the full unfiltered array. `--problems` limits the human report to errors and warnings. Terminal tables are followed by full non-ok findings, with messages and `Fix:` actions wrapped to the sink width and ordered errors, warnings, then skipped. Truncated tables with findings point to `--format plain` or `--json`; all-ok output has no findings or hint. The `--fix-*` flags are opt-in repairs, and `--remove-graph` removes retired graph state from this worktree and the shared workspace. `--confirm` authorizes the destructive repairs, such as `--fix-orphan-task-stores`. |
 | `orbit doctor admission-receipts [--compact]` | Show owner admission receipt counts and logical payload bytes, with claim-mutation receipts reported separately. `--compact` replaces idle receipts, landed claim receipts and receipts of failed or revoked claims without a preserved PR with permanent tombstones keeping the machine ID, request ID and input digest; a tombstoned request is refused on replay and never admits again. Failed and revoked claims with a preserved PR keep full receipts for later external-merge settlement, even if no handoff was accepted. Claimed, running, handed-off and repair-pending claims keep full receipts; a missing claim also keeps its receipt. |
 | `orbit doctor providers` | Show each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. |
 | `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
+
+## Analytics
+
+| Command | Purpose |
+|---|---|
+| `orbit agents scorecard --role <role>` | Rank one agent role's crews and models: `orchestrators` (by tasks' `orchestrator` attribution, with `model unknown`), `implementers`, `reviewers` or `pilots`. Each term's count per 100 units of the role's work is weighted and summed, then pulled down toward the fleet average when above it; the table shows rank (`below` under the minimum support), crew, model, units, score and each term's count, then the weights. A role not computed yet says so. `--window 1h\|24h\|7d\|30d\|90d\|all\|last50\|last200\|last500\|last1000` (default `30d`; `all` is served as 90 days; `lastN` reaches back to the start of the newest N delivery attempts within the 90-day scan, whatever their age) and `--min-support <N>` (the units a row needs before it is ranked, default 10). Each call scans once and reports `cache_ttl_seconds: 0`. `--json` is the dashboard's `/api/agents/<role>/scorecard` payload; the MCP tool `orbit.agents.scorecard` returns the same. Implementers only: `--by-type` splits rows by task type within each complexity tier; `--by-type --shadow` (for example `orbit agents scorecard --role implementers --by-type --shadow`) compares recorded draw shares with the shares the crew-performance factor would have given, and `--shadow` requires `--by-type`; `--per-task` exports one row per implemented task (use `--json` for the machine-readable export) and cannot be combined with `--by-type` or `--shadow`. |
+| `orbit agents show --role <role> --crew <crew>` | One row's terms, each with its weight, count, rate and contribution, and the tasks behind every count with the records that made it. `--model <model>` picks the row when the crew has several. Takes the same selection flags; the MCP tool is `orbit.agents.show` (the row's model is `row_model` there). |
+| `orbit agents vision-probe` | Check that each crew's model sees images: run the canary per crew outside any delivery, one `image_input_probe_pipeline` run each, and print one row per crew with its executor, declared mode, result and any visual hold. `--crew <NAME>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images; without it, every enabled crew is probed and a crew that cannot take images is reported as a row. `--timeout-seconds <SECONDS>` bounds the wait (default `900`). Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. Declare `image_input` on an executor only after its probe passes. See [Image input](../executor-yaml/#image-input). |
+| `orbit agents ladder` | The crew ladder (`workflow.crew_ladder`): for each complexity tier, its pool, its floor (the cheapest rung that is an enabled, weighted member of the pool), the candidate rung below it, and its shadow trial with status and would-be count (tasks assigned to the candidate arm), or the reason it has none (`mode_off`, `tier_not_listed`, `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`, `experiments_disabled`, `max_running`, or `pending` until the next delivery admission). Read-only; `--json` is the payload of the MCP tool `orbit.crew.ladder`. The keys are under `workflow.crew_ladder.*` in [Configuration](../config/). How the ladder and its trials work is in [Crew ladder](../../concepts/agents/#crew-ladder). |
+| `orbit orchestrator scorecard` \| `show <name>` | Deprecated aliases of `orbit agents scorecard\|show --role orchestrators`, removed in the next release. They print a note naming the replacement to stderr; `--json` and the `orbit.orchestrator.*` tools carry it as `deprecation`. |
+| `orbit codebase analytics` | Rank repository paths by how often done tasks regressed at a recorded site under them, how often the tasks that declared them widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together, and list the paths in several rankings. A done task counts as regressed under a path only where a `regression_from` link to it records a defect site (`regression.sites`) under that path, not against its whole footprint. A regressed task none of whose links record a site counts under no path; the Regressions ranking reports it as `unsited`. Its denominator is the done tasks that declared the path or were sited under it, so a task whose site names a path it never declared adds that task there. Each rate shows its numerator and denominator. `--window 7d\|30d\|90d\|all` (default `90d`), `--min-support <N>` (smallest denominator a ranked row needs, default 15) and `--rollup file\|dir\|crate`. The table shows each ranking's top rows; `--json` is the dashboard's Codebase payload. The MCP tool `orbit.codebase.analytics` returns the same. |
+| `orbit codebase show <path>` | One path's rate, numerator, denominator and place in every ranking, with the task IDs behind each numerator (refused requesters for lock contention, and the requesters behind each coupled pair). The Regressions ranking also lists the defect sites recorded under the path with the regressed tasks that name each, and counts the regressed tasks that declared the path but record no site. Takes the same selection flags; the path is a key at the chosen rollup. The MCP tool is `orbit.codebase.show`. |
+| `orbit codebase related <path>` | List files that usually change alongside one repository file, from tasks that landed together. `--window 7d\|30d\|90d\|all` (default `30d`), `--min-support <N>` (shared landed tasks, default 15) and `--top <N>` (1–100, default 10). |
 
 ## Scheduler
 
@@ -318,3 +262,81 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace
 scope, Operations controls, and authorization. See
 [Connect Your Agent](../../how-to/mcp-integration/) for the agent tool surface.
+
+## Advanced
+
+### Applications
+
+| Command | Purpose |
+|---|---|
+| `orbit application consent` \| `rotate` \| `revoke` | Operator only. Approve a consent request (`--input-file`, `--credential-file`) so a Unix service or CLI child can make scoped calls into a workspace, then rotate or revoke it. See [Application consent](../application-consent/). |
+
+### Decision requests
+
+With `decision_channel.enabled` on (see [Configuration](../config/)), work
+held on a human decision — a blocked task's final-recovery decision card or a
+task-pilot admission hold — raises a decision request. `orbit task show` lists a task's
+open requests in `open_decisions`. An agent can also raise a decision on a task
+assigned to a human crew with `orbit decision raise`.
+
+| Command | Purpose |
+|---|---|
+| `orbit decision list` | List open decision requests. `--gate agent_request\|block_triage\|model_answer_review\|pilot_admission\|proposed_approval\|resident_authority\|review_approval\|script_grant` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
+| `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
+| `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
+| `orbit decision raise --task <id> --question <text> --options <json>` | Raise a multiple-choice decision on a human-crew task. `--options` is a JSON array of `{label, consequence, recommended}` objects with two to four options and exactly one recommended. Each option may set `risk_tier` (`routine`, `reversible`, `irreversible`, `authority` or `spend`); omitted means `unknown`, and any other value is refused. `--topic` is an optional structured topic or corpus rule id. The MCP tool is `orbit.decision.raise`. See [Decisions an agent raises on a human task](../../how-to/decision-channels/#decisions-an-agent-raises-on-a-human-task). |
+| `orbit decision reverse <id>` | Re-open a request that a precedent answered and restore the task status that the precedent recorded. Operator only. No MCP tool. |
+| `orbit decision rule-auto <rule> <on\|off>` | Turn auto on or off for one current corpus rule. The command rewrites that rule's file for you to commit. No MCP tool. |
+| `orbit decision consolidate [--since <YYYY-MM-DD>]` | Propose corpus rule edits from human answers on or after the date. Writes nothing. No MCP tool. |
+| `orbit decision assist enable --readout <task>/<artifact-path> <CATEGORY>` | Enable model answers in one precedent-decision category. `<CATEGORY>` is `<workspace-id>/<gate>` or `<workspace-id>/agent_request/<topic-file>`; `--readout` names a `precedent-decision-readout/1` artifact whose policy digest must equal the live host grant's. Only routine and reversible requests are ever answered. Operator only. No MCP tool. See [Model answers in one category](../../how-to/decision-channels/#model-answers-in-one-category). |
+| `orbit decision assist disable <CATEGORY>` | Disable model answers in one precedent-decision category at once: no further model answer is applied in it, and its open requests wait for a human answer. Operator only. No MCP tool. |
+| `orbit decision assist status` | Show this host's precedent-decision category enablements: effective state, threshold, policy, agreed/total window, readout and ended reason, actor and time. The plain table omits demotion evidence; use `orbit decision assist status --json` to inspect `ended.demotion`, including its trigger, counts and request IDs. No MCP tool. |
+| `orbit decision submit <id> <answer>` | Submit a human's answer through a registered decision channel: `--channel` and that request's `--token` are required; `--note` keeps evidence with it. |
+| `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
+| `orbit decision channel register` \| `list` \| `revoke` \| `rotate-key` | Register, list, revoke and rotate this host's decision channels. |
+
+For channel setup, plugin authentication and token recovery, see
+[Decision channels](../../how-to/decision-channels/).
+
+### Experiments
+
+| Command | Purpose |
+|---|---|
+| `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define a draft experiment: `--arms` (a JSON array of `{name, control, weight, overlay}` with exactly one control), `--hypothesis`, `--population`, `--primary-metric`, `--guardrails`, `--min-sample`, `--max-days` and `--mode shadow\|live`. Only a draft can be edited; `clone` copies a definition into a new draft. |
+| `orbit experiment start` \| `pause` \| `resume` \| `reweight` \| `conclude` \| `abandon <id>` | Move an experiment through its lifecycle. `start` needs `experiments.enabled` and a free `experiments.max_running` slot; `reweight --weights '{"arm":2}'` or `--retire <arm>` opens a new segment. `conclude --arm <arm>` records the chosen arm, stores the readout at that moment and files one proposed task naming the experiment, arm, verdict and overlay; omitting `--arm` records no winner and files nothing. Concluding changes no configuration or repository file. `pause`, `reweight`, `conclude` and `abandon` require `--reason`. Only an operator may run these. |
+| `orbit experiment delete <id>` | Delete a finished experiment that never applied a treatment. `--reason` is required. Only an operator may run this. |
+| `orbit experiment assign <id> --task <task> --arm <arm>` | Force a nonterminal task into an active arm of a running experiment, shadow or live. The task must have no arm assignment or an `explicit_crew` exclusion for this experiment; that exclusion is replaced. Records `forced: true`; existing arm assignments and other exclusions for the experiment stay sticky, and overlapping surfaces owned by another experiment are refused. Forced assignments are left out of the readout. Operator only. See [Run an experiment](../../how-to/experiments/). |
+| `orbit experiment readout <id>` | Show per-arm outcomes computed now, intention-to-treat with forced assignments left out and counted: `n`, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes, crew mix, each arm's difference from control post-stratified by complexity, guardrail status, a sample-ratio chi-square against the weights (verdict withheld below p = 0.001), and overlay-digest drift. A failed sample-ratio check or any treatment arm below `experiments.min_delivered_rate` (default `0.9`) sets the verdict to `withheld`; the delivery-rate rule applies before the horizon, even when its primary comparison would otherwise be `winner` or `no difference`. With no withhold, the verdict is `collecting` until every arm reaches `--min-sample` or `--max-days` passes, then `winner <arm>`, `no difference`, or `inconclusive`. `--metric <metric>` reports only that metric; the verdict is still read on the primary metric and guardrails. The shape carries `schema_version`. Read-only; agents may call `orbit.experiment.readout`. |
+| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show`, `orbit.experiment.list`, and `orbit.experiment.readout`. |
+
+### Leases, residents and evolution
+
+| Command | Purpose |
+|---|---|
+| `orbit lease request` / `renew` / `expand` / `release` | Request or manage a workspace path lease. |
+| `orbit lease list` / `show` / `check` / `notices` | Inspect leases, conflicts and notices. |
+| `orbit lease token create` / `list` / `revoke` | Manage scoped listener tokens as the listener user. |
+| `orbit lease listen` | Run the token-only network listener as the listener user. |
+| `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
+| `orbit resident relay <task> --quote <words> --source <json>` | Relay a human's words to a resident verbatim as a `resident.answer` comment with provenance (`--request-id`, `--reverses` optional). It wakes the resident and never changes authority: input naming rights, workspaces or status is refused. |
+| `orbit resident control <task> pause\|resume\|stop\|wake\|takeover\|release --reason <why>` | Change whether a resident fires. `wake --status-request` asks for a status checkpoint; `--by-session` records the session acting. Each action is a history entry with the caller; `stop` ends the mandate and moves the assignment to review. |
+| `orbit resident show <task>` / `list` | Show a mandate, its effective authority, grant history, open grant requests, control state and stalled flag, or list mandates (`--all` includes ended ones). |
+| `orbit resident checkpoint <task> --record <json>` | Append the live cycle's `resident.checkpoint` record. It needs a matching live, unexpired cycle and writes nothing for a stale or duplicate record. |
+| `orbit resident metrics [--mandate <task>] [--since <window>] [--baseline <task>]` | Report the resident widening measures over a window: manual interventions, escalation load, reversal rate and crashed-cycle recovery cost, derived read-only from task history, decision requests, checkpoints and audit rows. Per mandate, or across mandates with workspace totals when `--mandate` is omitted. Read [Digest and metrics](../resident-mandates/#digest-and-metrics) for what each measure means and how the window and baseline work. |
+| `orbit resident digest [--since <window>] [--top <n>]` | Show resident state, escalations, vetoes, top pains and open proposals for the bound workspace, with the window's metrics totals. Read-only. See [Digest and metrics](../resident-mandates/#digest-and-metrics). |
+| `orbit evolution add --event <json> [--mandate <task>] [--cycle <cycle>]` | Record an interactive cost event in the bound workspace. Signature events corroborate one non-terminal evolution record; unsigned costs are retained without creating a capability gap. |
+| `orbit evolution list [--state <state>] [--since <instant>]` | List evolution signatures with summed costs, sorted by minutes plus slot minutes. |
+| `orbit evolution show <id>` | Show one evolution record with its occurrences, proposal state, suppression window and all-time aggregates. |
+| `orbit evolution decline <id> [--days <n>]` | Operator-only: suppress proposals for a signature (default 30 days). CLI-only; not listed over MCP. |
+
+The mandate format and the authority rules are described in [Resident mandates](../resident-mandates/).
+
+See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
+listener authentication and examples.
+
+### Visual capture
+
+| Command | Purpose |
+|---|---|
+| `orbit visual capture --id <ID>` | Capture the working tree beside each of a task's mocks. For each mock it writes `<out>/<mock-name>/mock.png`, `capture.png` and `side-by-side.png`, plus `<out>/rules.json` with the workspace's UI rule results. `--mock <MOCK>` captures one mock artifact instead of all of them. Needs a verified browser kit (`orbit config browser-kit install`) and a view manifest in `visual_review.manifests`. The captures are a self-check aid, not evidence of record. See [Visual review configuration](../config/#visual-review). |
+| `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>` | Accept a disputed blocking visual finding in `visual_review.mode = "live"` so the held delivery can land once resumed. Managed runs are refused. See [Visual review configuration](../config/#visual-review). |
