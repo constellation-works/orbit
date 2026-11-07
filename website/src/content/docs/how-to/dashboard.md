@@ -1937,8 +1937,19 @@ choice list, toggle, number field, or chip list. Each row saves on its own.
   rows are read-only.
 
 **Crews** shows one row per crew with its provider, model, effort, tags, and
-source layer. The crew named by `workflow.default_crew` is marked. You can
-add, edit, and delete crews inline, with two refusals:
+source layer. The crew named by `workflow.default_crew` is marked. Use the
+filter to narrow the list by name, provider, model, effort, tags, or
+description: every whitespace-separated term must appear somewhere in the
+crew. Typing a new filter returns to the first six matches. The list shows
+the first 6 matching crews. The status line reads `Showing x of y crews`
+(`x of y matching crews` while filtered), and the header counts `N defined`
+(`M of N defined` while filtered). Use **Show N more** to reveal six more (or
+the rest when fewer remain), **Show all N** to reveal every match, and **Show
+fewer** to collapse back to the first 6. When nothing matches, the list reads
+`No crew matches "…"`. Below 900px wide, each row keeps its name, provider,
+model, and actions on screen and moves Limit, Effort, Tags / fallbacks,
+Layer, and Used by behind the row's **Details** toggle (**Hide details**
+closes it again). You can add, edit, and delete crews inline, with two refusals:
 
 - You cannot delete a crew that key still names.
 - A file that defines any `[crews.*]` table must resolve
