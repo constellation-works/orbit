@@ -100,8 +100,10 @@ A step holds, and times out at its expiry, until each of these is in place:
   agent run does not exercise the adapter launch;
 - `python3` is available and every declared manifest input is in the checkout:
   the inventory, QA harness, its `check_npm_package.py` helper, macOS check script
-  and macOS workflow. The input tree preserves their repository paths so native
-  source digests and required execution commands are checked against candidate files;
+  and macOS workflow. Each file is mounted directly under `$ORBIT_SCRIPT_IN` using
+  its plain basename (for example, `ci-macos.yml`). The adapter maps these flat
+  mounts to the repository paths recorded in native evidence, so source digests
+  and required execution commands are checked against the declared candidate files;
 - the required Mac, Linux, browser and other capability evidence exists for this revision;
 - accepted-result history is readable. Orbit reports a corrupt file rather than treating
   it as empty, and leaves it in place for inspection.

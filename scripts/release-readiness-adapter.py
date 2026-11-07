@@ -95,7 +95,7 @@ def load_inventory():
     root = os.environ.get("ORBIT_SCRIPT_IN")
     if not root:
         unavailable("inventory-unavailable", "no inventory file was mounted for the adapter")
-    path = Path(root) / "scripts" / QA_INVENTORY
+    path = Path(root) / QA_INVENTORY
     try:
         raw = path.read_bytes()
         return json.loads(raw), hashlib.sha256(raw).hexdigest()
@@ -129,14 +129,22 @@ def judge_qa_results(inventory, report, candidate_id):
         if capability == "macos":
             # Use the harness's complete certificate and native-execution
             # contract, against declared candidate files rather than report labels.
-            repo = Path(os.environ["ORBIT_SCRIPT_IN"])
+            inputs = Path(os.environ["ORBIT_SCRIPT_IN"])
+            source_files = {
+                path: inputs / Path(path).name
+                for path in (
+                    "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
+                    "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
+                )
+            }
             try:
-                validate_native = runpy.run_path(str(repo / "scripts/test-qa-full-sweep.py"))[
+                validate_native = runpy.run_path(str(inputs / "test-qa-full-sweep.py"))[
                     "validate_hosted_macos_evidence"]
                 candidate = {"head": report["candidate"]["source_revision"],
                              "status": report["source_state"]["status"]}
                 for row in rows:
-                    validate_native(row.get("native_evidence", {}), scenario, candidate, repo)
+                    validate_native(row.get("native_evidence", {}), scenario, candidate,
+                                    inputs, source_files=source_files)
             except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
                 unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
         if capability == "linux" and report.get("environment", {}).get("os") != "Linux" and not all(

@@ -109,18 +109,17 @@ class NativeReadinessRegression(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(dir=scratch, prefix="readiness-native-")
         cls.addClassCleanup(cls.temp.cleanup)
         cls.inputs = Path(cls.temp.name)
-        # Mirror the manifest's input tree, without access to the checkout cwd.
+        # Mirror the sandbox's flat input mounts, without the checkout cwd.
         manifest = yaml.safe_load((ROOT / "examples/release-readiness/scripts/release-readiness.yaml").read_text())
         for entry in manifest["spec"]["files"]["inputs"]:
             target = cls.inputs / entry["as"]
-            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / entry["from"], target)
-        inventory_bytes = (cls.inputs / "scripts/qa-full-sweep-inventory.json").read_bytes()
+        inventory_bytes = (cls.inputs / "qa-full-sweep-inventory.json").read_bytes()
         inventory = json.loads(inventory_bytes)
         cls.native_scenario = next(s for s in inventory["scenarios"] if s.get("capability") == "macos")
         harness = runpy.run_path(str(ROOT / "scripts/test-qa-full-sweep.py"))
         execution = []
-        for command in harness["native_required_commands"](cls.inputs):
+        for command in harness["native_required_commands"](ROOT):
             target = "unittests src/lib.rs (target/debug/deps/native-fixture)"
             if "--test" in command:
                 name = command[command.index("--test") + 1]
@@ -143,14 +142,14 @@ class NativeReadinessRegression(unittest.TestCase):
                          "run_attempt": "1",
                          "workflow_ref": "owner/orbit/.github/workflows/ci-macos.yml@refs/heads/agent-main",
                          "workflow_sha": REVISION},
-            "source_identity": {p: hashlib.sha256((cls.inputs / p).read_bytes()).hexdigest()
+            "source_identity": {p: hashlib.sha256((cls.inputs / Path(p).name).read_bytes()).hexdigest()
                                 for p in IDENTITY_PATHS},
             "execution": execution,
         }
         # The positive fixture meets the existing native contract independently.
         harness["validate_hosted_macos_evidence"](
             copy.deepcopy(cls.native), cls.native_scenario,
-            {"head": REVISION, "status": []}, cls.inputs)
+            {"head": REVISION, "status": []}, ROOT)
         report = {
             "schema_version": 2, "candidate": {"id": CANDIDATE, "source_revision": REVISION},
             "source_state": {"status": []}, "environment": {"os": "Linux"}, "decision": "PASS",
