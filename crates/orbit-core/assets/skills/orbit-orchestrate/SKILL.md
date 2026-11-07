@@ -105,6 +105,7 @@ implementation with the old candidate discarded. See
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
+| Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
 | Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |
 | Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
 | Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
