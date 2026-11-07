@@ -31,4 +31,4 @@ spec:
 # Typed acceptance pins the integration SHA and rechecks prior receipts at prep
 # admission (identity, source, age and unresolved findings). No merge is needed
 # for accepted no-diff evidence. Busy/no-release prep probes are not accepted.
-# No reuse_when: historical result reuse is not implemented; checks are fresh.
+# Deliberately no `reuse_when`: this composition omits `reuse_when` so every execution obtains fresh checks.
