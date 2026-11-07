@@ -348,7 +348,7 @@ The two-column desktop layout stacks below 900px, and routine/clock metadata col
 The **Tasks dock** is the home of **Drain**, **Locks held** and **Log**.
 It stays beside the task list and gives way to an open task. Below 1000px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
-(`#tasks?dock=…`, from the rail's **Drain** item, a Drain, Locks held or Log
+(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Locks held or Log
 link, or the bottom log bar) shows the dock in place of the list at that width:
 its tabs sit under a **Back to tasks** control, which drops only `dock=` from the
 hash, keeping the list's filters. Any Tasks route without `dock=` shows the list
@@ -393,9 +393,11 @@ its notices show again when the list returns. Static group hints stay with their
 cards, and the create composer's feedback stays in the composer. Host
 readings live only in the rail's Host block.
 
-The rail's **Drain** item sits under Tasks at every width and links to
-`#tasks?dock=drain` without changing the host or workspace. An idle drain shows
-no reading; a live one shows a dot and words on every view: `3/5` slots in use,
+The rail's **Drain** item sits under Tasks only at 1000px and narrower, where the
+dock stands in for the list. Above 1000px it is hidden, because the dock beside
+the list already holds Drain. The item links to `#tasks?dock=drain` without
+changing the host or workspace. An idle drain shows no reading; a live one shows
+a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
 other view from the fleet read. In All workspaces mode the status
