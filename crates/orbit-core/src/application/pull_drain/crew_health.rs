@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
+use orbit_types::identity::{resolve_crew, same_crew_family};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewPoolExclusion};
 use serde_json::Value;
@@ -51,19 +52,19 @@ pub(crate) fn record_pool_crew_health(
         for name in members {
             let reason = unset
                 .iter()
-                .find(|unset| unset.crew == name)
+                .find(|unset| same_crew_family(&unset.crew, &name))
                 .map(|unset| unset.describe())
                 .or_else(|| {
                     exclusions
                         .iter()
-                        .find(|entry| entry.crew == name)
+                        .find(|entry| same_crew_family(&entry.crew, &name))
                         .map(|entry| entry.reason.clone())
                 })
                 .or_else(|| {
-                    crews.get(&name).and_then(|crew| {
+                    resolve_crew(&name, crews).ok().and_then(|crew| {
                         if !crew.enabled {
                             Some("crew is disabled on this host".to_string())
-                        } else if allowed.is_some_and(|allowed| !allowed.permits(crew)) {
+                        } else if allowed.is_some_and(|allowed| !allowed.permits(&crew)) {
                             Some("crew is outside this drain's allowed window".to_string())
                         } else {
                             None

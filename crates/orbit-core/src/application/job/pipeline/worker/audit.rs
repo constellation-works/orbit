@@ -84,10 +84,10 @@ impl OrbitRuntime {
     /// output to audit; the worker log is where that process wrote its own
     /// stderr, and it is the only place the cause exists.
     ///
-    /// `Ok(None)` means no such file exists (the ordinary case for a run that
-    /// reached step execution). `Some` with `content: None` means the file
-    /// exists but its content could not be recovered (unreadable or empty);
-    /// the caller still has the path to name where to look by hand.
+    /// `Ok(None)` means the path is not a regular file, including when it is
+    /// absent. An error opening an existing file returns `Err(OrbitError::Io)`.
+    /// After a successful open, `Ok(Some(...))` retains the path; `content: None`
+    /// means the tail could not be read or yielded no content or diagnostics.
     pub fn read_pipeline_worker_log(
         &self,
         run_id: &str,

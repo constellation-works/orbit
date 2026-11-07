@@ -98,10 +98,13 @@ fn a_drain_without_a_worker_credential_excludes_claude_crews_and_names_the_fix()
         "the remediation is named once per submission"
     );
 
-    // A window that names a Claude crew alongside one it can run keeps the
-    // runnable one only.
-    admit(&runtime, &["writer".to_string(), "reviewers".to_string()]);
-    assert_eq!(drain_input(&runtime)["allowed_crews"], json!(["reviewers"]));
+    for writer in ["writer", "writer@high"] {
+        admit(&runtime, &[writer.into(), "reviewers@high".into()]);
+        assert_eq!(
+            drain_input(&runtime)["allowed_crews"],
+            json!(["reviewers@high"])
+        );
+    }
 }
 
 #[test]
@@ -152,21 +155,23 @@ fn an_allow_crew_naming_only_claude_crews_is_refused_with_the_remediation() {
     let _env = orbit_common::test_env::unset(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     let (_root, runtime) = open(ShipMode::Pr, CONFIG, true);
 
-    let refusal = match submit(&runtime, &["writer".to_string()]) {
-        Err(OrbitError::InvalidInput(message)) => message,
-        other => panic!("expected an invalid-input refusal, got {other:?}"),
-    };
-    assert!(
-        refusal.contains("--allow-crew") && refusal.contains(REMEDY_MARK),
-        "{refusal}"
-    );
-    assert!(
-        runtime
-            .list_job_runs(JobRunListParams::default())
-            .unwrap()
-            .is_empty(),
-        "a refused window persists no run"
-    );
+    for writer in ["writer", "writer@high"] {
+        let refusal = match submit(&runtime, &[writer.to_string()]) {
+            Err(OrbitError::InvalidInput(message)) => message,
+            other => panic!("expected an invalid-input refusal, got {other:?}"),
+        };
+        assert!(
+            refusal.contains("--allow-crew") && refusal.contains(REMEDY_MARK),
+            "{refusal}"
+        );
+        assert!(
+            runtime
+                .list_job_runs(JobRunListParams::default())
+                .unwrap()
+                .is_empty(),
+            "a refused window persists no run"
+        );
+    }
 }
 
 #[test]
@@ -191,8 +196,10 @@ fn a_worker_credential_in_the_drain_environment_leaves_the_window_unchanged() {
     assert_eq!(remedy_warnings(&runtime), 0);
 
     // Naming a Claude crew is allowed too, as it was before the check.
-    admit(&runtime, &["writer".to_string()]);
-    assert_eq!(drain_input(&runtime)["allowed_crews"], json!(["writer"]));
+    for writer in ["writer", "writer@high"] {
+        admit(&runtime, &[writer.into()]);
+        assert_eq!(drain_input(&runtime)["allowed_crews"], json!([writer]));
+    }
 }
 
 #[test]
@@ -204,23 +211,25 @@ fn a_pull_drain_without_a_worker_credential_refuses_a_claude_only_window_before_
     }
     let _env = orbit_common::test_env::unset(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     let (_root, runtime) = open(ShipMode::Pr, CONFIG, false);
-    let allowed = ["writer".to_string()];
+    for writer in ["writer", "writer@high"] {
+        let allowed = [writer.to_string()];
 
-    let refusal = match runtime.submit_workspace_pull_run(
-        WorkspacePullRequest {
-            selector: "owner-machine/ws_claude_credential",
-            for_seconds: Some(60),
-            max_active_leaf_runs: None,
-            allowed_crews: &allowed,
-            actor: None,
-        },
-        JobRunTrigger::cli(),
-    ) {
-        Err(OrbitError::InvalidInput(message)) => message,
-        other => panic!("expected an invalid-input refusal, got {other:?}"),
-    };
-    assert!(
-        refusal.contains("--allow-crew") && refusal.contains(REMEDY_MARK),
-        "{refusal}"
-    );
+        let refusal = match runtime.submit_workspace_pull_run(
+            WorkspacePullRequest {
+                selector: "owner-machine/ws_claude_credential",
+                for_seconds: Some(60),
+                max_active_leaf_runs: None,
+                allowed_crews: &allowed,
+                actor: None,
+            },
+            JobRunTrigger::cli(),
+        ) {
+            Err(OrbitError::InvalidInput(message)) => message,
+            other => panic!("expected an invalid-input refusal, got {other:?}"),
+        };
+        assert!(
+            refusal.contains("--allow-crew") && refusal.contains(REMEDY_MARK),
+            "{refusal}"
+        );
+    }
 }
