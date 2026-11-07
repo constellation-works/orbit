@@ -517,12 +517,14 @@ function routineCatalogue(payload, routines, workspaceId) {
   // Focus the first enabled, visible control of the open editor. A cron-only
   // editor disables its Trigger select, and a pending save disables every
   // control, so with none available focus the editor itself, not the page.
-  const focusEditor = () => {
+  // A filter keystroke must focus only the panel: later query characters must
+  // not type into a cron input or activate a Trigger select's type-ahead.
+  const focusEditor = ({ focusControl = true } = {}) => {
     const editor = groups.querySelector(".schedule-editor");
     if (!editor) return;
     const control = [...editor.querySelectorAll("input, select, button")]
       .find((node) => !node.disabled && node.checkVisibility());
-    if (control) control.focus();
+    if (focusControl && control) control.focus();
     else {
       editor.tabIndex = -1;
       editor.focus();
@@ -614,8 +616,9 @@ function routineCatalogue(payload, routines, workspaceId) {
     if (routineList.query.trim()) routineList.pausedOpen = true;
     const typing = document.activeElement === search;
     paintGroups();
-    // Filtering onto a page that shows an open editor disables the field: hand focus to the editor.
-    if (typing && search.disabled) focusEditor();
+    // Revealing an editor locks the filter mid-query. Park focus on its panel
+    // until the operator deliberately tabs or clicks into an editing control.
+    if (typing && search.disabled) focusEditor({ focusControl: false });
   });
   clear.addEventListener("click", () => {
     search.value = "";
