@@ -352,9 +352,12 @@ writes that instant into it. Until a writable open records it, text written
 from 2026-10-12 on is not a decision.
 
 An `--approve-proposed` drain and the CI sweep share the pilot promotion
-rule. Each `blocked_by`, `adr_conflicts`, `contract_conflicts`, or deterministic
-`validation_tool_warnings` finding holds promotion; `contract_conflicts` entries
-carry no `holds_promotion` field and cannot opt out. A criterion that contradicts
+rule. Each `blocked_by`, `adr_conflicts`, `contract_conflicts`,
+`start_prerequisites`, or deterministic `validation_tool_warnings` finding holds
+promotion. `start_prerequisites` entries retain evidence of explicit unresolved
+start conditions and clear on a fresh pilot assessment after authoritative
+rescope or satisfaction. These entries and `contract_conflicts` carry no
+`holds_promotion` field and cannot opt out. A criterion that contradicts
 the pinned code or contract is reported there, never as a surface or utility
 finding. Surface and utility findings use
 `{"text":"finding and evidence","holds_promotion":true}` for a defect or validation
