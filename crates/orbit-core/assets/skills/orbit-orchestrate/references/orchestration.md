@@ -420,15 +420,6 @@ Two of its answers separate contention from capacity:
   `context_lock_conflict`. Before any agent of that run that may edit, the run
   takes the task's own footprint locks, waiting while another task holds them,
   so two writers never share a file.
-- `unverified_review_finding` means the workspace sets
-  `review.verify_findings = true` and a review-filed bug has no CONFIRMED
-  verdict for its current material. Claim and evidence-selector edits require
-  verification again; comment-only edits retain confirmation. Legacy verdicts
-  without a finding fingerprint also remain held. Run
-  `finding_verification_pipeline` on it, or change its type
-  or remove its review tag to accept it without verification, or set
-  `review.verify_findings = false` to stop gating findings; `detail` gives
-  the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
   no `context_files` and has no `no-diff-expected` tag in a run with more than
   one slot. It would hold no file lock, so it waits for the task pilot, then
@@ -493,7 +484,7 @@ requirements, admission's `pilot_assessment_stale` hold need not wait for a new
 assessment: adding `no-pilot` (the dashboard Readiness card's "Skip pilot", or
 `orbit task update <id> --tag <current tags>,no-pilot`, since `--tag` replaces
 the list) makes drain, `orbit run ship` and pull admission ignore pilot
-assessment state. Unverified review findings, readiness gaps, context locks,
+assessment state. Readiness gaps, context locks,
 dependencies and delivery holds still apply; removing the tag restores the
 gate. On a task with a pilot receipt or a pending pilot this is operator
 authority: a managed agent's `orbit.task.update` adding the tag is refused, and

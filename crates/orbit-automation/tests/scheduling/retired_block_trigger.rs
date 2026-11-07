@@ -1,14 +1,15 @@
-//! A routine file on the retired `block_escalated` trigger — the shape the
-//! seeded `blocked-task-triage-<workspace>` routine carried — loads inert
-//! with a migration message instead of failing the loader, and a pilot-warning
-//! routine on the same target job still loads.
+//! Routine files on the retired `block_escalated` and `pilot_warnings_held`
+//! triggers — the shapes the seeded `blocked-task-triage-<workspace>` and
+//! `pilot-warning-triage-<workspace>` routines carried — load inert with a
+//! migration message instead of failing the loader, although their target
+//! job still ships for manual triage [ORB-22844].
 
 use std::fs;
 
 use orbit_automation::routines::loader::{
-    ROUTINES_DIR, RoutineCatalogLookup, RoutineSource, collect_routines,
-    is_retired_block_trigger_reason,
+    ROUTINES_DIR, RoutineCatalogLookup, RoutineSource, collect_routines, retired_trigger_of_reason,
 };
+use orbit_types::workflow::automation::members::StateTriggerKind;
 use tempfile::tempdir;
 
 const BLOCK_ROUTINE: &str = "\
@@ -83,22 +84,36 @@ fn a_blocked_task_triage_routine_file_loads_inert_with_a_migration_message() {
     );
 
     assert!(collection.errors.is_empty(), "{:?}", collection.errors);
-    assert_eq!(
+    assert!(
+        collection.routines.is_empty(),
+        "neither routine stays live: {:?}",
         collection
             .routines
             .iter()
             .map(|routine| routine.definition.name.as_str())
-            .collect::<Vec<_>>(),
-        ["pilot-warning-triage-polaris"],
-        "only the pilot-warning routine stays live"
+            .collect::<Vec<_>>()
     );
-    assert_eq!(collection.retired.len(), 1, "{:?}", collection.retired);
-    let retired = &collection.retired[0];
-    assert_eq!(retired.name, "blocked-task-triage-polaris");
+    let mut retired = collection
+        .retired
+        .iter()
+        .map(|retired| (retired.name.as_str(), retired))
+        .collect::<Vec<_>>();
+    retired.sort_by_key(|(name, _)| *name);
+    let [(block_name, block), (pilot_name, pilot)] = retired[..] else {
+        panic!("both routines retire: {:?}", collection.retired);
+    };
+    assert_eq!(block_name, "blocked-task-triage-polaris");
     assert!(
-        is_retired_block_trigger_reason(&retired.reason)
-            && retired.reason.contains("final recovery"),
+        retired_trigger_of_reason(&block.reason) == Some(StateTriggerKind::BlockEscalated)
+            && block.reason.contains("final recovery"),
         "the reason names the retirement and where blocked tasks go now: {}",
-        retired.reason
+        block.reason
+    );
+    assert_eq!(pilot_name, "pilot-warning-triage-polaris");
+    assert!(
+        retired_trigger_of_reason(&pilot.reason) == Some(StateTriggerKind::PilotWarningsHeld)
+            && pilot.reason.contains("Triage action"),
+        "the reason names the retirement and the manual triage that remains: {}",
+        pilot.reason
     );
 }

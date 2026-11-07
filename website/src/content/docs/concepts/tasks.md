@@ -241,7 +241,8 @@ or `unclassified`, and `escape` is one of `no_test`, `test_not_selected`,
 scale review findings use — `critical`, `high`, `medium`, `low` or `nit` — and a
 new classified link without one is refused. Every link reads back with
 `severity_source`: `filer` (set by the writer, the default), `verified`
-(finding verification confirmed or adjusted it), `operator` (an operator
+(finding verification confirmed or adjusted it, on links recorded before that
+job was removed), `operator` (an operator
 override), `backfill` (a backfill of older links) or `default` (stored before
 severity existed; reads as `medium`). Read a task's relations back with
 `orbit task show "$TASK_ID" --fields relations`.

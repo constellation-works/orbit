@@ -142,8 +142,8 @@ every action; current implementation and parked status are recorded above.
 Existing instruction anchors for the later candidates are
 [friction curation](../../../crates/orbit-core/assets/auto_tasks/friction-curation.yaml),
 [escape-to-guard](../../../crates/orbit-core/assets/auto_tasks/escape-to-guard.yaml),
-[finding verification](../../../crates/orbit-core/assets/activities/verify_finding.yaml),
-and the task-pilot and authoring instructions above.
+the task-pilot `finding_invalid` route (the `verify_finding` activity was removed in
+[ORB-22844]), and the task-pilot and authoring instructions above.
 
 ### Proposed consumer: delivery-quality grading
 

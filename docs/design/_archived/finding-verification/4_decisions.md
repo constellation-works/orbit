@@ -1,22 +1,32 @@
 ---
 title: Finding Verification — Decisions
 owner: claude
-last_updated: 2026-10-29
+last_updated: 2026-11-07
 last_validated: 2026-11-05
-status: Accepted
+status: Deprecated
 feature: finding-verification
 doc_role: decisions
 type: design
 summary: Why finding verification is its own job rather than a task-pilot phase, why the verdict lives in task history, and why verifier crews come from the complexity pools.
 tags: [finding-verification, review, automation]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
 related_features: [automation-triggers, review-gate]
 related_artifacts: [ORB-15662]
 ---
 
 # Finding Verification — Decisions
 
-Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
+Retired in [ORB-22844] (2026-11-07): the `finding_verification` routine was removed with
+its `finding_verification_pipeline` job and the `prepare_finding_verification`,
+`verify_finding` and `apply_finding_verification` activities. No verifier crew judges review
+findings any more, and the `unverified_review_finding` hold on approval, promotion and drain
+admission is gone. `finding_unverified` loads as a retired trigger kind that observes nothing,
+and `review.verify_findings` loads with a deprecation warning and is ignored until 2026-12-07.
+The default rejection routes stay: the task pilot's `finding_invalid` result and an
+implementer's `finding-invalid.json` still reject an invalid review finding with a REJECTED
+verdict, recorded as `finding_rejected` history and shown by `orbit task show`. Verdicts the
+removed job wrote still load. The text below is the record of the design as it stood.
+
+Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
 
 ## A separate job, not a task-pilot phase
 

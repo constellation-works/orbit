@@ -61,11 +61,13 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `condition` | Due on a subject edge (true for `for_minutes`, held until `rearm`), owner only, under a durable fire identity. | Durable condition state per consumer; `orbit automation explain` shows arm state, holds, stalls and fires. |
 | `preparation_eligible` | Proposed/backlog task has never had an applied pilot assessment. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
-| `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
-| `pilot_warnings_held` | Proposed task whose latest applied task-pilot assessment holds promotion on warning findings, with no trusted operator decision and no triage marker for that assessment ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)). | Per-assessment `pilot_warning_triaged` marker. |
+| `finding_unverified` | Retired [ORB-22844]: still parses, observes nothing, and the loader skips a routine that uses it ([archived finding verification](../_archived/finding-verification/2_design.md)). | None. |
+| `pilot_warnings_held` | Retired [ORB-22844] ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)): still parses, and the loader skips a routine that uses it. | None. |
 | `block_escalated` | Retired ([§6.2](#62-retired-escalated-blocks-block_escalated)): still parses on a persisted definition, but the loader skips a routine that uses it. | None. |
 
-The last five are the state-transition/eligibility vocabulary. They are not
+The last five are the state-transition/eligibility vocabulary; only
+`preparation_eligible` (with `resident_due`, [resident orchestrator](../resident-orchestrator/2_design.md))
+still schedules work. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
 change must not invoke a model. Evaluation returns a stable reason code, such as
 `not_due`, `threshold_reached`, `debouncing` or `fresh_unready`, with source
@@ -529,9 +531,13 @@ separate grant; populated selectors or a successful wrapper are insufficient.
 
 A pilot warning finding (an unenforced prerequisite, a conflict, or a holding
 surface, utility or validation-tool warning) withholds a proposed task's
-promotion until an operator decides it. Without this trigger such a hold waits
-for someone to notice it. `pilot_warnings_held` targets
-`job:escalation_triage_pipeline` and reads each hold once:
+promotion until an operator decides it. The `pilot_warnings_held` trigger and
+its seeded `pilot_warning_triage` routine are retired [ORB-22844]: a definition
+on the kind loads as retired and names the dashboard's Triage action
+(`POST /tasks/{id}/triage`), which still runs `escalation_triage_pipeline` for
+one held task. The pipeline, decision and trust rules below are that lane's.
+The membership, exit and timing rules record how the trigger read each hold
+once:
 
 - **Membership.** A `proposed` task is a member while the shared promotion
   predicate (the one drain approvals and the CI sweep apply, and task show
@@ -545,21 +551,20 @@ for someone to notice it. `pilot_warnings_held` targets
   records a task-pilot admission decision on that assessment, when it leaves
   `proposed` (an approval to backlog included), or when a
   `pilot_warning_triaged` history marker names its `operation_id`.
-- **Timing.** The seeded `pilot_warning_triage` routine ships `enabled: false`
+- **Timing.** The seeded `pilot_warning_triage` routine shipped `enabled: false`
   with debounce 2 minutes, max-wait 10 minutes, at most 50 candidates and
-  batches of 5 that share one stored crew.
+  batches of 5 that share one stored crew, until it was retired.
 - **Pipeline.** `prepare_escalation_triage` pins the source revision,
   re-checks each claimed member and draws one triager per task from
   `workflow.purpose_crews.pilot_warning_triage` when it is set and holds an
   inspection-capable member (recorded as `purpose:pilot_warning_triage`),
-  else from the hard tier through the finding-verifier draw, passing over
+  else from the hard tier, passing over
   the crew that wrote the assessment (the pilot run's frozen draw) while the
   pool offers another, else the inspection-capable default crew. It
   partitions the tasks by crew, at most five per partition.
   `triage_escalation` then reads each hold at the pinned revision. There is
-  no apply step: members settle applied from their markers, and a member the
-  run left unmarked fails `no_triage_marker` and is retried within the
-  routine's budget.
+  no apply step: a task settles from its marker, and one the run left
+  unmarked fails `no_triage_marker`.
 - **Decision.** The triager calls `orbit.task.block_triage` with
   `subject: "pilot_warning"`. `candidates` lists the qualifying holds and why
   each other held task is excluded. `propose` records two or three options with

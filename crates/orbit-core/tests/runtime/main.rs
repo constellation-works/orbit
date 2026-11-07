@@ -81,7 +81,6 @@ mod experiment_readout;
 mod final_recovery;
 mod final_recovery_cards;
 mod final_recovery_mechanical;
-mod finding_verification;
 mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
@@ -120,7 +119,6 @@ mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
 mod reviewable_lines;
-mod rule_findings_sweep;
 mod sandbox_off;
 mod scheduled_tasks;
 #[cfg(unix)]

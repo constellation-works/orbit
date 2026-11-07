@@ -60,7 +60,7 @@ pub(crate) fn claim(
     Ok(Some(active))
 }
 
-/// Refuse a deterministic pilot, finding-verification or escalation-triage
+/// Refuse a deterministic pilot or escalation-triage
 /// step whose state claim belongs to another run.
 ///
 /// The step's input carries the claim at its root or under `prepared`. A step

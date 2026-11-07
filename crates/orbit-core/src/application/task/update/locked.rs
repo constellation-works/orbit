@@ -298,16 +298,6 @@ impl OrbitRuntime {
                 )));
             }
         }
-        // The finding check above read the edits as supplied; judge the
-        // material as it will be stored, since normalization can turn a
-        // differently spelled tag into a review-finding tag.
-        if let Some(target) = requested_status
-            && gate_authority == StatusAuthority::Lifecycle
-            && matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday)
-            && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
-        {
-            self.ensure_promoted_finding_verified(&task, &params)?;
-        }
         // A plain blocked/review-to-backlog move on an attributed surface applies
         // the same publication authentication as `orbit task requeue`:
         // refuse before writing what the next run would refuse, and record

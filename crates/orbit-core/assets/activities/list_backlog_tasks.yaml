@@ -45,12 +45,6 @@ spec:
     A task tagged `ui` on a host whose headless browser kit is not verified
     is withheld as `browser_kit_missing`, after any `host_os_mismatch`, with
     `detail` naming `orbit config browser-kit install`. The kit is read every pass.
-    A review-filed bug (type `bug`, tagged `code-review`,
-    `delivery-code-review`, `security-review` or `qa-sweep`)
-    without a CONFIRMED verdict from `finding_verification_pipeline` is withheld as
-    `unverified_review_finding`, with `detail` naming the job to run. A
-    CONFIRMED verdict, or an operator retyping or retagging the task, clears
-    it.
     Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
@@ -188,7 +182,6 @@ spec:
                 - pilot_already_landed
                 - operator_validation_handoff
                 - native_os_required
-                - unverified_review_finding
                 - pr_forge_remote_missing
                 - awaiting_footprint
                 - awaiting_exclusive_slot

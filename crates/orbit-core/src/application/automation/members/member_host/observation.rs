@@ -5,17 +5,15 @@ use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberHost, MemberPage};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskListFilter;
-use orbit_types::task::{TaskEnvelopeV2, TaskStatus, TaskType};
+use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
 use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind, bundle_crew};
 use serde_json::json;
 
 use super::super::super::preparation;
 use super::super::Host;
-use super::host::{already_preparing, already_triaging, already_verifying, incident_crew};
+use super::host::{already_preparing, incident_crew};
 use crate::application::automation::SourceCache;
-use crate::application::task::escalation_triage_steps::PilotWarningCandidacy;
 use crate::application::task::pilot;
-use crate::application::task::{finding_fingerprint, needs_verification};
 
 /// Statuses the shared per-request snapshot carries: every status any state
 /// trigger observes (`Host::observed_statuses`), including `review` for
@@ -45,8 +43,6 @@ impl Host<'_> {
         let filter = TaskListFilter {
             scan_before,
             statuses: Some(self.observed_statuses()),
-            task_type: (self.trigger.kind == StateTriggerKind::FindingUnverified)
-                .then_some(TaskType::Bug),
             ..Default::default()
         };
         // With a shared cache, one snapshot of the workspace's observed
@@ -128,25 +124,10 @@ impl Host<'_> {
                 }
                 _ => preparation::active_task_pilot_preparations(self.runtime)?,
             },
-            StateTriggerKind::FindingUnverified => match self.inspection_cache {
-                Some(cache) if self.dry_run => {
-                    cache.preparations(&workspace_key, "finding_verification", || {
-                        preparation::active_finding_verifications(self.runtime)
-                    })?
-                }
-                _ => preparation::active_finding_verifications(self.runtime)?,
-            },
-            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
-                match self.inspection_cache {
-                    Some(cache) if self.dry_run => {
-                        cache.preparations(&workspace_key, "escalation_triage", || {
-                            preparation::active_escalation_triages(self.runtime)
-                        })?
-                    }
-                    _ => preparation::active_escalation_triages(self.runtime)?,
-                }
-            }
             StateTriggerKind::ExecutionFailed
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld
+            | StateTriggerKind::BlockEscalated
             | StateTriggerKind::DecisionRequested
             | StateTriggerKind::ResidentDue => BTreeMap::new(),
         };
@@ -222,54 +203,10 @@ impl Host<'_> {
                         crew: bundle_crew(task.crew.as_deref()),
                     });
                 }
-                StateTriggerKind::FindingUnverified => {
-                    // Only a finding still owed a verdict is a member; a
-                    // confirmed one, or another bug, is not withheld either.
-                    let history = self.runtime.get_task_history(&task.id)?;
-                    if !needs_verification(&task, &history) {
-                        continue;
-                    }
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_verifying(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        fingerprint: finding_fingerprint(&task),
-                        source: source.clone(),
-                        evidence: json!({"task_id":task.id}),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
-                StateTriggerKind::PilotWarningsHeld => {
-                    // Only an assessment that still holds on warnings and
-                    // awaits triage is a member, keyed by its receipt so
-                    // each assessment is read once.
-                    let PilotWarningCandidacy::Qualifies(held) =
-                        self.runtime.pilot_warning_candidacy_of(&task)?
-                    else {
-                        continue;
-                    };
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_triaging(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        evidence: json!({"task_id":task.id, "operation_id":held.operation_id}),
-                        fingerprint: held.operation_id,
-                        source: source.clone(),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
-                // Retired trigger: observes nothing.
-                StateTriggerKind::BlockEscalated => continue,
+                // Retired triggers: observe nothing.
+                StateTriggerKind::BlockEscalated
+                | StateTriggerKind::FindingUnverified
+                | StateTriggerKind::PilotWarningsHeld => continue,
                 // Observed by `observe_resident_page`, never per task here.
                 StateTriggerKind::ResidentDue => continue,
                 StateTriggerKind::DecisionRequested => {

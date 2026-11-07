@@ -91,8 +91,7 @@ becomes true for a subject (`condition`); see
   seeding policy can omit any of these defaults. A workspace seeded while
   `worktree-gc` or `task-pilot` shipped disabled keeps its existing `enabled`
   value. Other routine defaults, including task publication, store GC, CI and
-  dependency-alert sweeps, UX rules, finding verification, pilot-warning triage,
-  resident-cycle, and evolution-pass, seed disabled.
+  dependency-alert sweeps, and resident-cycle, seed disabled.
 
 Routine files and scheduler state are per machine; git does not share them.
 

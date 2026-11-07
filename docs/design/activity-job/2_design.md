@@ -925,15 +925,14 @@ requirements are normalized in the task store and freeze once the task enters
 
 The seeded agent loops (`agent_implement`,
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
-`review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
-`verify_finding`) declare `tool_disallow_list`. They refuse registered
+`review_reconciliation_review`, `step_failure_recovery` and `task_pilot`)
+declare `tool_disallow_list` (`verify_finding` did too until [ORB-22844] removed it). They refuse registered
 control-plane mutations. Task writes (`orbit.task.add`,
 `orbit.task.update` and `orbit.task.artifact.put`) are refused by
 `final_recovery`,
-`review_reconciliation_review`, `task_pilot` and `verify_finding`. Friction
+`review_reconciliation_review` and `task_pilot`. Friction
 writes (`orbit.friction.add` and `orbit.friction.update`) are refused by
-`review_reconciliation_review`, `task_pilot`
-and `verify_finding`; `final_recovery` does not refuse them. Their
+`review_reconciliation_review` and `task_pilot`; `final_recovery` does not refuse them. Their
 `proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
 no tool for run cancellation, plugin administration, config mutation, or
 crew/workspace mutation; those operations retain their separate governance.
@@ -1001,8 +1000,8 @@ shipped non-implementers, still fails `RequiredToolAdmission` when the
 disallow list covers a requirement. The failure names the tool and the
 activity. The shipped non-implementers are
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
-`review_reconciliation_review`, `step_failure_recovery`, `task_pilot`,
-`triage_escalation` and `verify_finding`. For those, a
+`review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
+`triage_escalation`. For those, a
 covered requirement is dropped from `requested_tools` and recorded as a note
 on the resolution and on `ToolAllowlistHarnessDelegated`
 (`omitted_requirement_notes`). It stays out of `effective_tools`. A custom

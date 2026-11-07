@@ -480,11 +480,9 @@ export function renderReview(body, payload, context) {
   nodes.push(section('Timing', [timing].filter(Boolean), context));
   nodes.push(section('Reviewer pool', ['workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].map((k) => map.get(k)).filter(Boolean), context));
   nodes.push(section('Before landing', ['review.minutes','review.before_landing_hosts','review.baseline_commands'].map((k) => map.get(k)).filter(Boolean), context, { inactive: timingOff }));
-  nodes.push(section('Finding verification', ['review.verify_findings'].map((k) => map.get(k)).filter(Boolean), context));
-  const link = el('a', { class: 'config-action ghost', text: 'finding_verification routine in Automation' }); link.href = '#operations/routines';
   const diag = el('a', { class: 'config-action ghost', text: 'Full review diagnostics' }); diag.href = '#diagnostics';
-  nodes.push(el('div', { class: 'topic-links' }, [link, diag]));
-  const rest = flatten(payload).filter((r) => topicOf(r.key) === 'review' && !['review.timing','review.minutes','review.before_landing_hosts','review.baseline_commands','review.verify_findings','workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].includes(r.key));
+  nodes.push(el('div', { class: 'topic-links' }, [diag]));
+  const rest = flatten(payload).filter((r) => topicOf(r.key) === 'review' && !['review.timing','review.minutes','review.before_landing_hosts','review.baseline_commands','workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].includes(r.key));
   if (rest.length) nodes.push(section('Other review keys', rest, context));
   finish(body, payload, context, nodes);
 }

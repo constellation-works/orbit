@@ -507,8 +507,8 @@ A state trigger watches tasks, waits out a short debounce, and starts its job. I
 | `kind` | Required `target` | What it watches |
 |---|---|---|
 | `preparation_eligible` | `job:task_pilot_pipeline` | Proposed or backlog tasks that need a task-pilot assessment. The seeded task-pilot routine. |
-| `finding_unverified` | `job:finding_verification_pipeline` | Review-filed bugs with no verification verdict. |
-| `pilot_warnings_held` | `job:escalation_triage_pipeline` | Proposed tasks whose latest task-pilot assessment holds promotion on warnings. |
+| `finding_unverified` | Retired | Kept so an old file still loads. Its job, `finding_verification_pipeline`, was removed [ORB-22844], so a routine on this kind is skipped as retired and observes nothing. |
+| `pilot_warnings_held` | Retired | Kept so an old file still loads. Scheduled pilot-warning triage was removed [ORB-22844], so a routine on this kind is skipped as retired. Triage a held task from the dashboard's Triage action, which still runs `escalation_triage_pipeline`. |
 | `resident_due` | `job:resident_cycle_pipeline` | Active resident mandates whose watched state changed, or whose heartbeat or deadline came, once their cadence floor allows and no cycle is live. One member per mandate; `batch_size` must be 1. The seeded `resident-cycle-<workspace>` routine, disabled. |
 | `block_escalated` | Retired | Kept so an old file still loads. Final recovery decides blocked tasks now, so a routine on this kind is skipped as retired. |
 | `decision_requested` | `job:decision_request_pipeline` | Tasks with an open decision request that has not been notified, one member per open request. The job is the decision channel's notification job; a routine on this kind needs it installed. |
@@ -518,67 +518,13 @@ A state trigger watches tasks, waits out a short debounce, and starts its job. I
 
 `freshness` overrides [workflow.task_pilot_freshness](../config/#settable-keys) for that routine only. `material_fields` is a non-empty list drawn from `title`, `description`, `criteria`, `plan`, `selectors`, `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, and `instructions`. `source_sensitivity` is `ignore`, `context_files`, or `any`. An absent key keeps the config value, then the built-in default (title, description, criteria, plan, and selectors; branch moves ignored). Changing resolved eligibility or freshness does not automatically re-pilot a task that already has an assessment. Use `orbit task repilot` to request another pilot.
 
-The finding, pilot-warning, and blocked-task routines each put at most `batch_size` due members that share one stored crew into one run. Do not add a second routine of the same kind: each enabled routine fires.
+A state routine puts at most `batch_size` due members that share one stored crew into one run. Do not add a second routine of the same kind: each enabled routine fires.
 
 `kind: execution_failed` and a target of `job:auto_task_scheduler_pipeline` are retired. The clock evaluates auto-tasks directly, so there is no scheduler routine to enable. `orbit workspace sync` retires a seeded copy of a retired routine. A file you wrote yourself is left in place and skipped; delete it, or point `target` at a job `orbit job list` still shows.
 
-### Opt in to finding verification
+### Retired routines: finding verification, pilot-warning triage, evolution pass and UX rules
 
-Init writes `.orbit/routines/finding_verification.yaml`, named `finding-verification-<workspace>`, with `enabled: false`. Set `enabled: true` in that file, or use its switch under **Automation**. Leave the description, target, and trigger as seeded so sync can still refresh the file.
-
-```yaml
-enabled: false
-trigger:
-  state:
-    kind: finding_unverified
-    owner_machine: hm_example
-    branch: main
-    debounce_minutes: 2
-    max_wait_minutes: 10
-    max_items: 50
-    batch_size: 5
-    retries: 1
-    deadline_minutes: 90
-target: job:finding_verification_pipeline
-policy:
-  timeout_minutes: 90
-  overlap: forbid
-  retries:
-    max: 1
-    backoff_minutes: 5
-```
-
-`hm_example` and `main` stand in for the machine id and base branch init already wrote. Copying this block into a second file creates a second routine.
-
-Enabled, the routine finds each review-filed bug (type `bug`, tagged `code-review`, `delivery-code-review`, `security-review`, or `qa-sweep`) that still has no verification verdict and is in `proposed`, `someday`, or `backlog`. After the debounce, or the max wait, it submits one batch. Approval, promotion, and drain admission keep refusing that bug until the job records a confirmed verdict. A recorded verdict drops the task from observation. Editing the finding's title, description, criteria, tags, type, or selectors releases a failed claim so it can be verified again. An explicit `orbit run job finding_verification_pipeline` does not use this gate.
-
-### Opt in to pilot-warning triage
-
-The seeded file is `.orbit/routines/pilot_warning_triage.yaml`, named `pilot-warning-triage-<workspace>`, disabled. The safe opt-in is `enabled: true` on that file.
-
-```yaml
-enabled: false
-trigger:
-  state:
-    kind: pilot_warnings_held
-    owner_machine: hm_example
-    branch: main
-    debounce_minutes: 2
-    max_wait_minutes: 10
-    max_items: 50
-    batch_size: 5
-    retries: 1
-    deadline_minutes: 90
-target: job:escalation_triage_pipeline
-policy:
-  timeout_minutes: 90
-  overlap: forbid
-  retries:
-    max: 1
-    backoff_minutes: 5
-```
-
-Enabled, it finds each `proposed` task whose latest applied task-pilot assessment holds promotion on warnings, once that hold has settled or waited out. The run only proposes: it does not approve, promote, clear a hold, or edit the task. An operator's approval, or a later task-pilot admission decision, ends membership. A material edit that produces a new holding assessment is a new member. An explicit `orbit run job escalation_triage_pipeline` does not use this gate.
+The seeded `finding_verification.yaml`, `pilot_warning_triage.yaml`, `evolution_pass.yaml` and `ux-rules.yaml` routines were removed [ORB-22844], with the `finding_verification_pipeline`, `evolution_pass_pipeline` and `ux_rules_pipeline` jobs. `orbit workspace sync` retires a seeded copy. A file you wrote yourself still loads, but a routine on `finding_unverified` or `pilot_warnings_held`, or one targeting a removed job, is skipped as retired; delete it. Review-filed bugs are no longer held for verification; the task pilot or the implementer still rejects one whose defect does not exist. A task held on pilot warnings can still be triaged from the dashboard's Triage action, which runs `escalation_triage_pipeline`.
 
 ### Blocked tasks: final recovery decides
 

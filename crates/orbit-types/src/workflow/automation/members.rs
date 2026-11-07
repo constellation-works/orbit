@@ -19,10 +19,16 @@ pub enum StateTriggerKind {
     /// deserialize; its target job is retired, so no new work dispatches
     /// through it.
     ExecutionFailed,
-    /// A review-filed bug finding that carries no verification verdict yet.
+    /// Retired with finding verification [ORB-22844]: a review-filed bug
+    /// finding that carried no verification verdict. Retained so persisted
+    /// member state and existing definitions still deserialize; its target
+    /// job is retired (`RETIRED_ROUTINE_JOBS`) and it observes no members.
     FindingUnverified,
-    /// A `proposed` task whose latest applied task-pilot assessment holds
-    /// promotion on warning findings, not yet triaged for that assessment.
+    /// Retired with scheduled pilot-warning triage [ORB-22844]: a `proposed`
+    /// task whose applied task-pilot assessment held promotion on warnings.
+    /// Retained so persisted member state and existing definitions still
+    /// deserialize; the routine loader skips a definition on it as retired
+    /// and it observes no members. Manual triage still runs its job.
     PilotWarningsHeld,
     /// Retired: blocked-task triage no longer exists, because final recovery
     /// is the single decider for a blocked task. Retained so persisted member

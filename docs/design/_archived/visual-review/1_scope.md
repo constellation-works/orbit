@@ -37,7 +37,7 @@ actually shipped: a mock is attached to the task, and the implementer builds to 
 version compares the implementation with the mock first, and gives the implementer the same
 comparison while it works. Before/after review of changes without mocks is a later phase
 (§ Phasing, phase 7; [2_design.md §13](./2_design.md#13-later-beforeafter-review-without-mocks)).
-The same day Daniel put [UX rules](../../ux-rules/1_scope.md) first: scheduled, executable UI
+The same day Daniel put [UX rules](../ux-rules/1_scope.md) first: scheduled, executable UI
 and CLI rules that replace most of the manual `ux-review-*` passes. UX rules introduce the
 view manifest and the capture driver's browser settings, and their UI rules are this
 design's deterministic checks, so this design builds on them.
@@ -55,7 +55,7 @@ client as protocol image blocks, bounded at 1 MiB each
 the task's evidence ref ([ORB-18351]). `orbit browser-kit` builds and verifies a pinned
 headless Chromium per host, and `ui` tasks are admitted only on hosts whose kit is verified
 ([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Review findings
-are verified by a second crew ([finding verification](../../finding-verification/2_design.md)),
+are verified by a second crew ([finding verification](../finding-verification/2_design.md)),
 and the shared severity scale `critical | high | medium | low | nit` with weights 8, 4, 2, 1
 and 0.25 was added by [ORB-19304]. Experiments assign tasks to arms and read outcomes out
 per arm ([experiments](../../experiments/1_scope.md)).
@@ -123,7 +123,7 @@ The mechanisms, each specified in [2_design.md](./2_design.md):
 | Capture | Deterministic Playwright capture from the browser kit at the mock's width and theme, frozen clock, animations and caret off, bundled fonts, double capture with a pixel diff. Metadata in a system-written `visual/capture.json`. | [§4](./2_design.md#4-capture) |
 | Implementer self-check | `orbit visual capture` renders the working tree's view for each mock and writes the mock, the capture and a side-by-side image to scratch, so the implementer sees its build next to the mock while it works. Not evidence of record. | [§5](./2_design.md#5-the-implementers-self-check) |
 | Hosts and claims | `verify-mock-ui` routes like `ui`, to kit hosts. A host without a verified kit records `not_established` with a reason, never a pass. Claimed shadow leaves return system-attributed images; claimed live PR leaves negotiate schema 1 and return an owner-verifiable final-candidate resolution bundle. Older or incompatible claims remain held ([ORB-20264], [ORB-21963]). | [§6](./2_design.md#6-hosts-claimed-and-remote-runs) |
-| Checks | The workspace's [UX rules](../../ux-rules/1_scope.md) for `ui`, run on the candidate captures before any model call, plus capture-only checks (render timeout, setup failure, instability). | [§7](./2_design.md#7-deterministic-checks) |
+| Checks | The workspace's [UX rules](../ux-rules/1_scope.md) for `ui`, run on the candidate captures before any model call, plus capture-only checks (render timeout, setup failure, instability). | [§7](./2_design.md#7-deterministic-checks) |
 | Comparison review | Each mock beside its capture, the declared deviations, the check findings, the precedence rule and fixed questions; one finding per difference, anchored to regions in both images. | [§8](./2_design.md#8-the-comparison-review) |
 | Image delivery | Images are staged as files and reach the model through the executor's declared `image_input`. A canary image proves the model saw them. A crew without the declaration is refused before launch. | [§9](./2_design.md#9-image-delivery-per-provider) |
 | Budgets | Caps on mocks, images, estimated image tokens and findings, checked before dispatch. | [§10](./2_design.md#10-budgets) |

@@ -3,9 +3,7 @@ title: "Scope: UX rules"
 owner: claude
 last_updated: 2026-11-07
 last_validated: 2026-11-05
-status: Draft
-stage: building
-next: "Apply ORB-19976's operator handoff so UX reviews consume routine results"
+status: Deprecated
 feature: ux-rules
 doc_role: scope
 type: design
@@ -14,6 +12,15 @@ tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit]
 ---
 
 # Scope: UX rules
+
+Retired in [ORB-22844] (2026-11-07): the `ux-rules` routine was removed with its
+`ux_rules_pipeline` job, the `prepare_rule_findings` and `file_rule_findings` activities, the
+rule-findings filer and the `step.mjs` script adapter. Nothing runs the rules on a schedule or
+files tasks from them, and no `ux_rules_runner` script grant is needed. `ux_rules.*` loads with
+a deprecation warning and is ignored until 2026-12-07. `scripts/ux-rules/run.mjs` and the rules
+stay as a hand-run QA and development tool: the QA full sweep's ux-measurement-browser scenario
+and the dashboard visual-manifest coverage test use them. The text below is the record of the
+design as it stood.
 
 Status: phases 1-3 delivered the CLI runner in [ORB-19974], UI rules in
 [ORB-19975], and the filer and disabled routine in [ORB-19976]. [ORB-20565]
@@ -26,7 +33,7 @@ measurement waits for script steps' network phase; CLI and fixture-mode UI
 runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
 on a list of rules ... break it down into rules, and automate the validation", and the same
 for the CLI. The view manifest and capture settings it uses were originally defined by
-the visual review design, now archived ([visual review](../_archived/visual-review/1_scope.md));
+the visual review design, now archived ([visual review](../visual-review/1_scope.md));
 visual review was removed in [ORB-22807], and ux-rules keeps the manifest and capture driver.
 
 Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
@@ -47,9 +54,9 @@ Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
 
 Both store a findings table as `ux-review.json` and compare it with the previous pass. The
 browser kit pins one Playwright build per Orbit release
-([browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Jobs already
+([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Jobs already
 pair a collecting step with a deterministic filing step (`dependabot_alert_sweep_pipeline`:
-`collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../script-steps/1_scope.md)
+`collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../../script-steps/1_scope.md)
 (phases 1-2 landed: a granted workspace script runs on Linux with no network) let a job run
 a granted workspace script and read its JSON stdout.
 
@@ -126,7 +133,7 @@ export async function check(ctx) {        // ctx.page: Playwright page at the ta
   returns stdout, stderr, the exit code and, for PTY targets, the rendered screen at a
   verified width.
 - **Targets.** UI targets are views from the view manifest
-  (format originally defined in [visual review §3](../_archived/visual-review/2_design.md#3-the-view-manifest)) × widths × the
+  (format originally defined in [visual review §3](../visual-review/2_design.md#3-the-view-manifest)) × widths × the
   view's themes and states. CLI targets are argv lists, or `"*"` for every command the
   binary lists, × widths for PTY rules.
 - **Results.** `pass`, `fail` with measurements and evidence (a screenshot or a captured
@@ -164,7 +171,7 @@ Seeded from the two prompts. Each line is one rule.
 | cli | `mcp-cli-parity` | A CLI command and its MCP tool agree on required inputs and defaults. |
 
 Later rules extend this seed set, and thresholds are tuned as rules are built; the built
-rules and their current measurements are listed in [scripts/ux-rules/README.md](../../../scripts/ux-rules/README.md).
+rules and their current measurements are listed in [scripts/ux-rules/README.md](../../../../scripts/ux-rules/README.md).
 
 Rules that need the live data shape (the backlog-forecast unavailable reasons) are written
 against API-shaped fixtures rendered in the browser, like the existing dashboard browser
@@ -174,11 +181,11 @@ Delivered follow-ups extend this seed set:
 
 | Capability | Current source | Delivery |
 |------------|----------------|----------|
-| Text occlusion, overflow, wrapping, padding, leading and typography measurements | [ui/](../../../scripts/ux-rules/ui/), [README rule table](../../../scripts/ux-rules/README.md) | [ORB-20528] added text rules; [ORB-20536] added narrow-prose detection and experiment-detail coverage |
-| Durable screenshots on findings after script scratch cleanup | [step.mjs](../../../scripts/ux-rules/step.mjs), [rule_findings.rs](../../../crates/orbit-core/src/application/sweep_filing/rule_findings.rs) | [ORB-20867] connected bounded evidence transport to the filer |
-| Producer-declared defect groups and compact, lossless reporting | [lib/filing-report.mjs](../../../scripts/ux-rules/lib/filing-report.mjs), [rule_groups.rs](../../../crates/orbit-core/src/application/sweep_filing/rule_groups.rs) | [ORB-21111] grouped proven shared defects; [ORB-21236] reconciled this scope's filing contract |
-| Content-based short-help comparison | [cli/short-help-shorter.mjs](../../../scripts/ux-rules/cli/short-help-shorter.mjs) | [ORB-21634] stopped treating layout padding as extra help content |
-| Notices view and dashboard route coverage | [views.toml](../../../crates/orbit-web/visual/views.toml), [dashboard_assets.rs](../../../crates/orbit-web/tests/http_api/dashboard_assets.rs) | [ORB-21637] added Notices fixtures and a route-coverage guard |
+| Text occlusion, overflow, wrapping, padding, leading and typography measurements | [ui/](../../../../scripts/ux-rules/ui/), [README rule table](../../../../scripts/ux-rules/README.md) | [ORB-20528] added text rules; [ORB-20536] added narrow-prose detection and experiment-detail coverage |
+| Durable screenshots on findings after script scratch cleanup | `step.mjs`, `rule_findings.rs` | [ORB-20867] connected bounded evidence transport to the filer |
+| Producer-declared defect groups and compact, lossless reporting | [lib/filing-report.mjs](../../../../scripts/ux-rules/lib/filing-report.mjs), `rule_groups.rs` | [ORB-21111] grouped proven shared defects; [ORB-21236] reconciled this scope's filing contract |
+| Content-based short-help comparison | [cli/short-help-shorter.mjs](../../../../scripts/ux-rules/cli/short-help-shorter.mjs) | [ORB-21634] stopped treating layout padding as extra help content |
+| Notices view and dashboard route coverage | [views.toml](../../../../crates/orbit-web/visual/views.toml), [dashboard_assets.rs](../../../../crates/orbit-web/tests/http_api/dashboard_assets.rs) | [ORB-21637] added Notices fixtures and a route-coverage guard |
 
 ### The runner
 
@@ -203,7 +210,7 @@ node scripts/ux-rules/run.mjs --surface cli --orbit "$(command -v orbit)" \
 - **CLI in scratch.** CLI rules run against a fresh `orbit init` under the output
   directory, with `--root` pointing at a scratch Orbit root, never the live store.
 - **Determinism.** UI contexts use the capture driver's settings, originally defined in
-  [visual review §4.2](../_archived/visual-review/2_design.md#42-determinism): fixed viewport and
+  [visual review §4.2](../visual-review/2_design.md#42-determinism): fixed viewport and
   device scale, `reducedMotion`, animations off, UTC and `en-US`. PTY rules set the width
   through the PTY and record the width the renderer reported, not `COLUMNS` alone.
 - **Output.** `ux-rules.json` plus evidence files:
@@ -326,7 +333,7 @@ policy: {timeout_minutes: 60, overlap: forbid}
 
 `ux_rules_pipeline`, delivered by [ORB-19976] and extended by [ORB-21111], has
 three steps: `prepare_rule_findings` reads tracked owners, a
-[script step](../script-steps/1_scope.md) (`script:ux_rules_runner`) runs the
+[script step](../../script-steps/1_scope.md) (`script:ux_rules_runner`) runs the
 runner for each configured surface, and `file_rule_findings` files its output.
 [ORB-20565] supplied the adapter and manifest template; an operator copies the
 template, substitutes host paths and grants the script. It uses script
@@ -404,7 +411,7 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
    (**scripts/ux-rules/run.mjs**), results schema, PTY driver and CLI rules are
    landed. The operator prompt handoff for `ux-review-cli` remains pending.
 2. **UI rules and the view manifest — delivered by [ORB-19975].** The view manifest format and Orbit's dashboard and
-   website manifests (format originally defined in [visual review §3](../_archived/visual-review/2_design.md#3-the-view-manifest)),
+   website manifests (format originally defined in [visual review §3](../visual-review/2_design.md#3-the-view-manifest)),
    the capture driver's browser-context settings, and the UI rule set, including the
    forecast fixture rule are landed. The operator prompt handoff for
    `ux-review-ui` remains pending.

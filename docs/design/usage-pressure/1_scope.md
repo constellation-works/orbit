@@ -132,7 +132,7 @@ spend**, from the same provider-limit observations that gating reads.
 2. **Creation still draws.** The creation draw keeps its role: OS routing, `runs_on`, and a crew
    to show before the task runs. It uses pressure too, but admission makes the final choice.
 3. **Other pool draws share the seam.** Activity pools, review crew pools, finding-verification
-   partitions and agent explore all call `weighted_draw`. They take the same multiplier through
+   partitions (removed in [ORB-22844]) and agent explore all call `weighted_draw`. They take the same multiplier through
    one helper applied after limit narrowing, so no draw site computes pressure on its own.
 4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
    follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible

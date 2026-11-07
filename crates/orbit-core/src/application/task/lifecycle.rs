@@ -192,15 +192,6 @@ pub(crate) fn ensure_status_change_allowed(
         )?;
     }
 
-    // Promotion is refused while the task is an unverified review finding,
-    // judged on the finding material this update leaves it with. A caller
-    // that normalizes the edits afterwards judges them again as stored.
-    if matches!(from, TaskStatus::Proposed | TaskStatus::Someday)
-        && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
-    {
-        runtime.ensure_promoted_finding_verified(task, params)?;
-    }
-
     match target {
         TaskStatus::InProgress if in_progress_transition_requires_plan(from) => {
             let plan = params.plan.as_deref().unwrap_or(task.plan.as_str());

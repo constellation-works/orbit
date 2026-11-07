@@ -670,6 +670,10 @@ capability records cost against an evolution signature. Both can apply to one ev
 
 ### 11.3 The evolution pass
 
+Removed in [ORB-22844]: the routine, `evolution_pass_pipeline` and its rank, draft and apply
+activities are gone, and nothing files evolution proposal tasks automatically. The ledger and the
+digest (§11.4) stay. This section records the pass as it was designed.
+
 A seeded, default-disabled weekly routine, `evolution-pass-<workspace>`. It is separate from the
 residents and shaped like the architecture and prompt audits.
 
@@ -690,8 +694,8 @@ residents and shaped like the architecture and prompt audits.
 ### 11.4 The manager digest
 
 `orbit resident digest` is a derived view. It lists residents and their state, open escalations,
-reversible decisions awaiting veto, the top pains by summed cost with their evidence counts, and the
-evolution pass's open proposals. The manager surfaces it to the human weekly, at the start of a
+reversible decisions awaiting veto, the top pains by summed cost with their evidence counts, and
+open evolution proposals (filed by the pass before its removal). The manager surfaces it to the human weekly, at the start of a
 manager session, or on request. Constellation's session-brief hook can inject it, as it does `orbit
 attention`.
 
@@ -706,8 +710,10 @@ problem well.
 
 ### 11.6 Against busywork
 
-A proposal needs a measured cost and recurrence before it is filed. Defaults, in
-`[resident.evolution]`:
+A proposal needed a measured cost and recurrence before the pass filed it. Defaults, in
+`[resident.evolution]`. Since [ORB-22844] only `window_days` (the digest window) and
+`decline_suppress_days` apply; the other five load with a deprecation warning and are ignored
+until 2026-12-07:
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -192,10 +192,6 @@ impl OrbitRuntime {
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 
-            if task.status == TaskStatus::Proposed {
-                self.ensure_finding_verified(&task)?;
-            }
-
             result = Some(match task.status {
                 TaskStatus::Proposed => self.with_mutation(|| {
                     let task = self.stores().task_records().update(

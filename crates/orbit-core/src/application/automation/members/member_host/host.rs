@@ -16,7 +16,6 @@ use serde_json::json;
 use super::super::super::pins;
 use super::super::Host;
 use crate::OrbitRuntime;
-use crate::application::task::VERIFIABLE_STATUSES;
 use crate::application::task::escalation_triage_steps::{PilotWarningCandidacy, triaged_at};
 
 impl MemberHost for Host<'_> {
@@ -345,10 +344,10 @@ impl Host<'_> {
         match self.trigger.kind {
             StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
             StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
-            StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
-            StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
             // Retired: no member is ever observed.
-            StateTriggerKind::BlockEscalated => Vec::new(),
+            StateTriggerKind::BlockEscalated
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld => Vec::new(),
             // An open request can hold a task at any gate: blocked
             // (block triage), backlog (pilot admission), proposed or
             // review (approvals).
@@ -583,14 +582,6 @@ impl Host<'_> {
             superseded,
         }))
     }
-}
-
-/// A temporary hold diagnostic names every durable run the operator can inspect.
-pub(super) fn already_verifying(run_ids: &BTreeSet<String>) -> String {
-    format!(
-        "already_verifying: {}",
-        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
-    )
 }
 
 /// Whether a task is still an escalation triage member, and as what.

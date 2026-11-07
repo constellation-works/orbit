@@ -27,7 +27,7 @@ where they are used.
 | Cost event | One `costs[]` entry: a workaround, manual step, retry or wait, with its cost and wished-for capability ([evolution-ledger](../specs/evolution-ledger.md#cost-event)) |
 | Cycle | One run of `resident_cycle_pipeline`: observe, one agent loop, finalize ([2_design.md §5](../2_design.md#5-the-cycle)) |
 | Escalation | A question the resident must not decide, raised as a decision request ([2_design.md §8](../2_design.md#8-escalation)) |
-| Evolution pass | The scheduled routine that turns evolution records above threshold into `proposed` tasks ([evolution-ledger](../specs/evolution-ledger.md#evolution-pass)) |
+| Evolution pass | The scheduled routine that turned evolution records above threshold into `proposed` tasks; removed in [ORB-22844] ([evolution-ledger](../specs/evolution-ledger.md#evolution-pass-removed)) |
 | Evolution record | Per-signature record of a recurring capability gap, separate from friction ([evolution-ledger](../specs/evolution-ledger.md#evolution-record)) |
 | Fire | The clock tick at which a mandate is due and a cycle starts ([2_design.md §4.2](../2_design.md#42-fires)) |
 | Grant request | A `resident_authority` decision request raised when a non-operator asks to widen authority ([mandate-and-authority](../specs/mandate-and-authority.md#widening)) |

@@ -37,20 +37,16 @@ impl PilotSteps {
         kind: StateTriggerKind,
     ) -> Result<Self, AutomationError> {
         let (prepare, apply, follow_up, follow_up_count) = match kind {
-            StateTriggerKind::FindingUnverified => (
-                "prepare_finding_verification",
-                "apply_finding_verification",
-                "apply_escalations",
-                "escalation_count",
-            ),
             StateTriggerKind::PreparationEligible | StateTriggerKind::ExecutionFailed => (
                 "prepare_task_pilot",
                 "apply_task_pilot_results",
                 "apply_repairs",
                 "repair_count",
             ),
-            // Settled from triage markers, never from an apply checkpoint.
-            StateTriggerKind::PilotWarningsHeld
+            // Settled from triage markers, never from an apply checkpoint;
+            // a retired finding-verification run settles the same way.
+            StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld
             | StateTriggerKind::BlockEscalated
             | StateTriggerKind::DecisionRequested
             | StateTriggerKind::ResidentDue => {

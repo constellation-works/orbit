@@ -3,20 +3,28 @@ title: Finding Verification — Overview
 owner: claude
 last_updated: 2026-11-07
 last_validated: 2026-11-05
-status: Implemented
-stage: shipped
-next: "—"
+status: Deprecated
 feature: finding-verification
 doc_role: overview
 type: design
 summary: Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission.
 tags: [finding-verification, review, automation, admission]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/application/task/finding_verification_steps/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml", "crates/orbit-core/assets/activities/*finding*.yaml", "crates/orbit-core/assets/routines/finding_verification.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
 related_artifacts: [ORB-15662]
 ---
 
 # Finding Verification — Overview
+
+Retired in [ORB-22844] (2026-11-07): the `finding_verification` routine was removed with
+its `finding_verification_pipeline` job and the `prepare_finding_verification`,
+`verify_finding` and `apply_finding_verification` activities. No verifier crew judges review
+findings any more, and the `unverified_review_finding` hold on approval, promotion and drain
+admission is gone. `finding_unverified` loads as a retired trigger kind that observes nothing,
+and `review.verify_findings` loads with a deprecation warning and is ignored until 2026-12-07.
+The default rejection routes stay: the task pilot's `finding_invalid` result and an
+implementer's `finding-invalid.json` still reject an invalid review finding with a REJECTED
+verdict, recorded as `finding_rejected` history and shown by `orbit task show`. Verdicts the
+removed job wrote still load. The text below is the record of the design as it stood.
 
 Review jobs file what they believe are defects as `bug` tasks. A review can be
 wrong: the code may not behave as claimed, the defect may already be fixed, or
@@ -66,16 +74,16 @@ first is far cheaper, and it gives the operator the evidence either way.
 
 | Concern | File | Task |
 |---------|------|------|
-| Verdict schema, record, gate predicate, crew draw | [finding_verification.rs](../../../crates/orbit-core/src/application/task/finding_verification.rs) | [ORB-15662] |
-| Prepare and apply actions | [application/task/finding_verification_steps/](../../../crates/orbit-core/src/application/task/finding_verification_steps/) | [ORB-15662] |
-| Job | [finding_verification_pipeline.yaml](../../../crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml) | [ORB-15662] |
-| Verifier activity | [verify_finding.yaml](../../../crates/orbit-core/assets/activities/verify_finding.yaml) | [ORB-15662] |
-| State trigger (`finding_unverified`) | [observation.rs](../../../crates/orbit-core/src/application/automation/members/member_host/observation.rs) | [ORB-15662] |
-| Seeded routine (disabled) | [finding_verification.yaml](../../../crates/orbit-core/assets/routines/finding_verification.yaml) | [ORB-15662] |
-| Admission hold | [pilot/admission/backlog.rs](../../../crates/orbit-core/src/application/task/pilot/admission/backlog.rs) | [ORB-15662] |
-| Guarded start checks normalized finding material before writes | [transitions/start.rs](../../../crates/orbit-core/src/application/task/transitions/start.rs) | [ORB-20390] |
-| Pilot `finding_invalid` result and its rejection | [task_pilot.yaml](../../../crates/orbit-core/assets/activities/task_pilot.yaml), [pilot/apply/invalid_finding.rs](../../../crates/orbit-core/src/application/task/pilot/apply/invalid_finding.rs) | [ORB-19635] |
-| Implementer `finding-invalid.json` report | [commit/finding_invalid.rs](../../../crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs) | [ORB-19635] |
+| Verdict schema, record, gate predicate, crew draw | [finding_verification.rs](../../../../crates/orbit-core/src/application/task/finding_verification.rs) | [ORB-15662] |
+| Prepare and apply actions | `application/task/finding_verification_steps/` | [ORB-15662] |
+| Job | `finding_verification_pipeline.yaml` | [ORB-15662] |
+| Verifier activity | `verify_finding.yaml` | [ORB-15662] |
+| State trigger (`finding_unverified`) | [observation.rs](../../../../crates/orbit-core/src/application/automation/members/member_host/observation.rs) | [ORB-15662] |
+| Seeded routine (disabled) | `finding_verification.yaml` | [ORB-15662] |
+| Admission hold | [pilot/admission/backlog.rs](../../../../crates/orbit-core/src/application/task/pilot/admission/backlog.rs) | [ORB-15662] |
+| Guarded start checks normalized finding material before writes | [transitions/start.rs](../../../../crates/orbit-core/src/application/task/transitions/start.rs) | [ORB-20390] |
+| Pilot `finding_invalid` result and its rejection | [task_pilot.yaml](../../../../crates/orbit-core/assets/activities/task_pilot.yaml), [pilot/apply/invalid_finding.rs](../../../../crates/orbit-core/src/application/task/pilot/apply/invalid_finding.rs) | [ORB-19635] |
+| Implementer `finding-invalid.json` report | [commit/finding_invalid.rs](../../../../crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs) | [ORB-19635] |
 
 ## Task References
 

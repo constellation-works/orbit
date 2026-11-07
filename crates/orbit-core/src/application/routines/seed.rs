@@ -14,9 +14,9 @@
 //!   otherwise seed the same names on one host [ORB-12107].
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
-//!   the seeded `task_pilot`, `finding_verification`,
-//!   `pilot_warning_triage` and `resident_cycle` definitions render this host's registered
-//!   machine id and the workspace's registered base branch [ORB-12745].
+//!   the seeded `task_pilot` and `resident_cycle` definitions render this
+//!   host's registered machine id and the workspace's registered base branch
+//!   [ORB-12745].
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
 //! same workspace name write byte-identical cron definitions, and differ only
@@ -64,20 +64,8 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/task_pilot.yaml"),
     ),
     (
-        "finding_verification",
-        include_str!("../../../assets/routines/finding_verification.yaml"),
-    ),
-    (
-        "pilot_warning_triage",
-        include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
-    ),
-    (
         "resident_cycle",
         include_str!("../../../assets/routines/resident_cycle.yaml"),
-    ),
-    (
-        "evolution_pass",
-        include_str!("../../../assets/routines/evolution_pass.yaml"),
     ),
     (
         "worktree_gc",
@@ -91,10 +79,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         "store_gc",
         include_str!("../../../assets/routines/store_gc.yaml"),
     ),
-    (
-        "ux-rules",
-        include_str!("../../../assets/routines/ux-rules.yaml"),
-    ),
 ];
 
 /// Default routines a prior release seeded that this Orbit no longer ships,
@@ -105,10 +89,11 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
 ///
 /// Retiring a default: move its template here and, when its target job went
 /// with it, add that job to `RETIRED_ROUTINE_JOBS` in the same change. A
-/// default whose job still ships (`blocked_task_triage` targeted
-/// `escalation_triage_pipeline`, which now serves pilot warnings only) is
-/// retired by its trigger kind instead: the loader skips a state routine on
-/// the retired `block_escalated` trigger.
+/// default whose job still ships (`blocked_task_triage` and
+/// `pilot_warning_triage` targeted `escalation_triage_pipeline`, which now
+/// serves the dashboard's manual triage only) is retired by its trigger kind
+/// instead: the loader skips a state routine on a retired trigger
+/// (`block_escalated`, `pilot_warnings_held`).
 pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "auto_task_scheduler",
@@ -129,6 +114,22 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "crew_performance_refresh",
         include_str!("../../../assets/routines/retired/crew_performance_refresh.yaml"),
+    ),
+    (
+        "evolution_pass",
+        include_str!("../../../assets/routines/retired/evolution_pass.yaml"),
+    ),
+    (
+        "ux-rules",
+        include_str!("../../../assets/routines/retired/ux-rules.yaml"),
+    ),
+    (
+        "finding_verification",
+        include_str!("../../../assets/routines/retired/finding_verification.yaml"),
+    ),
+    (
+        "pilot_warning_triage",
+        include_str!("../../../assets/routines/retired/pilot_warning_triage.yaml"),
     ),
 ];
 

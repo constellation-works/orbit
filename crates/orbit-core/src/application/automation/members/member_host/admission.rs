@@ -5,9 +5,8 @@ use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind};
 
 use super::super::super::preparation;
 use super::super::Host;
-use super::host::{Escalation, already_preparing, already_triaging, already_verifying};
+use super::host::{Escalation, already_preparing, already_triaging};
 use crate::application::task::pilot;
-use crate::application::task::{finding_fingerprint, needs_verification};
 
 impl Host<'_> {
     pub(super) fn admission_for(
@@ -88,41 +87,14 @@ impl Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
-        if self.trigger.kind == StateTriggerKind::FindingUnverified {
-            let active = self.cached_preparations("finding_verification", || {
-                preparation::active_finding_verifications(self.runtime)
-            })?;
-            for id in &member.task_ids {
-                let task = match self.cached_task(id) {
-                    Ok(task) => task,
-                    Err(OrbitError::NotFound {
-                        kind: NotFoundKind::Task,
-                        ..
-                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
-                    Err(error) => return Err(error.into()),
-                };
-                // Deletion can also happen between reading the task and its history.
-                let history = match self.runtime.get_task_history(id) {
-                    Ok(history) => history,
-                    Err(OrbitError::NotFound {
-                        kind: NotFoundKind::Task,
-                        ..
-                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
-                    Err(error) => return Err(error.into()),
-                };
-                if !needs_verification(&task, &history) {
-                    return Ok(MemberAdmission::Retire(
-                        "finding_verified_or_ineligible".into(),
-                    ));
-                }
-                if let Some(run_ids) = active.get(id) {
-                    return Ok(MemberAdmission::Withhold(already_verifying(run_ids)));
-                }
-                if finding_fingerprint(&task) != member.fingerprint {
-                    return Ok(MemberAdmission::Retire("material_changed".into()));
-                }
-            }
-            return Ok(MemberAdmission::Admit);
+        // Retired with finding verification and scheduled pilot-warning
+        // triage [ORB-22844]: a member claimed before the upgrade is
+        // released, never admitted.
+        if matches!(
+            self.trigger.kind,
+            StateTriggerKind::FindingUnverified | StateTriggerKind::PilotWarningsHeld
+        ) {
+            return Ok(MemberAdmission::Retire("trigger_retired".into()));
         }
 
         if self.trigger.kind == StateTriggerKind::ResidentDue {

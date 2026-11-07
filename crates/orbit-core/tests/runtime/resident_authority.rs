@@ -801,7 +801,6 @@ fn evolution_corroboration_and_suppression(
     mandate_id: &str,
     original: &Value,
 ) {
-    use orbit_types::record::EvolutionState;
     let id = original["id"].as_str().unwrap();
     let proposal = runtime
         .add_task(TaskAddParams {
@@ -835,7 +834,6 @@ fn evolution_corroboration_and_suppression(
         .is_err(),
         "friction resolves relations cannot target evolution"
     );
-    runtime.propose_evolution_record(id, &proposal.id).unwrap();
     let denied = call(
         runtime,
         "orbit.evolution.decline",
@@ -844,23 +842,33 @@ fn evolution_corroboration_and_suppression(
     );
     assert!(denied.is_err(), "only the operator may suppress proposals");
     runtime.decline_evolution_record(id, 30).unwrap();
-    assert!(runtime.propose_evolution_record(id, &proposal.id).is_err());
+    let in_state = |state: &str| {
+        call(
+            runtime,
+            "orbit.evolution.list",
+            json!({ "state": state }),
+            &operator(),
+        )
+        .unwrap()["count"]
+            .clone()
+    };
+    assert_eq!(in_state("declined"), 1);
     add(9, 0, mandate_id);
-    assert!(
-        runtime.propose_evolution_record(id, &proposal.id).is_err(),
+    assert_eq!(
+        in_state("declined"),
+        1,
         "19 minutes must not double a 10 minute baseline"
     );
     add(0, 1, mandate_id);
-    let reopened = runtime.propose_evolution_record(id, &proposal.id).unwrap();
     assert_eq!(
-        reopened.state,
-        EvolutionState::Proposed,
-        "minutes plus slot minutes reaching twice the decline baseline permits a proposal"
+        in_state("open"),
+        1,
+        "minutes plus slot minutes reaching twice the decline baseline reopens the record"
     );
     let all = call(
         runtime,
         "orbit.evolution.list",
-        json!({"state":"proposed"}),
+        json!({"state":"open"}),
         &operator(),
     )
     .unwrap();

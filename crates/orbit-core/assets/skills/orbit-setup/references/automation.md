@@ -119,7 +119,7 @@ shipped disabled keeps its `enabled` value. The `host-health` auto-task is the o
 auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of the two starts enabled only when
 the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
-`task-pilot`, `finding-verification`, `pilot-warning-triage` and `resident-cycle`
+`task-pilot` and `resident-cycle`
 are state-triggered and additionally resolve this host's
 machine id as `trigger.state.owner_machine` and the registered base branch as
 `trigger.state.branch`; a second host registering the same workspace seeds
@@ -130,65 +130,18 @@ on this host.
 |---|---|---|---|
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
-| `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
-| `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a triager (from `workflow.purpose_crews.pilot_warning_triage`, else the hard tier) reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
-| `evolution-pass` | Mondays 05:17 host-local | `evolution_pass_pipeline` | Disabled by default; ranks capability gaps above every `[resident.evolution]` threshold, drafts at most `max_proposals` design tasks, attaches cycle/cost evidence and links records. A read-only agent drafts; deterministic application creates only `proposed` tasks. Never approves, promotes or builds. Inspect the manager view with `orbit resident digest --json`. |
 | `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
-| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. Grant the script with `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` ([Workspace scripts](#workspace-scripts)). With no grant or no surfaces it does no work. |
 
-### UX rules checks
-
-The seeded `ux-rules` routine runs `ux_rules_pipeline` daily and is disabled by
-default. It runs `ux_rules.runner` once for each surface in `ux_rules.surfaces`.
-The `file_rule_findings` activity groups producer-declared defects across target variants before the task cap, retaining every member and screenshot. Unannotated results keep one open task per `rule_fingerprint`. New failures become proposed bug tasks; existing open owners receive new evidence. Every known group member must appear and pass before a repair comment, without changing status. Terminal tasks remain historical and never suppress a new active finding. The pipeline's first step, `prepare_rule_findings`, reads the groups open owners track so the runner reports them in full while it only counts untracked passing observations; raw observations travel as gzip archive parts among the script's 64 declared outputs. The runner script manifest must be granted
-with `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` before the routine can do work. With
-no grant or an empty `surfaces` list, the run does no work. Enable the routine
-deliberately after configuration; see [Turning the scheduler on](#turning-the-scheduler-on).
-
-Set workspace values in the `[ux_rules]` table or with
-`orbit config set ux_rules.<key> <value>`. For example:
-
-```toml
-[ux_rules]
-surfaces = ["cli"]
-file_at = "medium"
-disabled = []
-max_new_tasks = 10
-ui_base_url = "http://127.0.0.1:7878"
-```
-
-- `surfaces` selects the checks to run, such as `"cli"` and `"ui"`; an empty
-  list disables the work.
-- `file_at` is the lowest result severity to file (`critical`, `high`,
-  `medium`, `low` or `nit`). Results below it are recorded only.
-- `disabled` lists rule IDs to run but record without filing.
-- `max_new_tasks` caps new task filings per run; higher-severity results are
-  filed first.
-- `ui_base_url` is the address of the live UI measured by UI rules. A
-  network-none script step cannot reach a dashboard on loopback, so a live UI
-  needs the runner's fixture mode.
-
-`file_rule_findings` is the routine's deterministic filing step, not a config
-key: it deduplicates by `rule_fingerprint` and keeps one open task for each
-finding. The `ux_rules.max_new_tasks` cap and the `file_at` and `disabled`
-filters control which new results it files.
-
-Verify the effective settings and grant, then inspect a recorded routine run:
-
-```bash
-orbit config show --all
-orbit script show ux_rules_runner
-orbit routine list
-orbit routine show <routine-name>
-orbit run show <run-id>
-```
-
-The script must report `grant state: granted`. The routine's recent fires show
-the run ID; `orbit run show` reports its result counts and filing-step output.
+The `finding-verification`, `evolution-pass`, `ux-rules` and `pilot-warning-triage`
+routines were removed. `orbit workspace sync` retires a workspace's seeded copies,
+and a definition that still targets one of their jobs, or the `pilot_warnings_held` trigger,
+loads as retired and never fires. Triage a task held on pilot warnings from the dashboard's
+Triage action, which still runs `escalation_triage_pipeline`. `scripts/ux-rules/run.mjs` stays
+as a hand-run QA tool; see its README.
 
 ## Built in: final recovery of blocked tasks
 
@@ -259,8 +212,8 @@ decision channel. The answer records a comment naming the option and note,
 applies the rewrite, runs the action, moves the task out of `blocked` and closes
 the request in one operation. An answer attributed to an agent or other
 automation is refused. A proposed task held by pilot warnings gets the same
-card from `pilot-warning-triage` (approve, re-pilot or rewrite); that triager
-only proposes and never approves, promotes or edits the task itself.
+card from pilot-warning triage (approve, re-pilot or rewrite), started from the
+dashboard's Triage action; that triager only proposes and never approves, promotes or edits the task itself.
 
 The seeded `blocked-task-triage` routine and its `block_escalated` trigger are
 retired. `orbit workspace sync` removes an unedited copy; an existing
@@ -617,8 +570,6 @@ orbit script history <name>        # recent attempts, newest first, refusals inc
    after an edit is the staleness above; grant again to accept the edited files.
 3. After a run, `orbit script history <name>` lists each attempt, including the
    refused ones.
-
-For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths in its `interpreter`/`args` and `read_roots` (no `env_pass`: it needs none). Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
 
 ## Tuning which tasks task-pilot prepares
 

@@ -1,18 +1,15 @@
-//! Verification of review-filed defect findings before they are promoted.
+//! Verdicts on review-filed defect findings.
 //!
 //! A review job files what it believes is a defect as a `bug` task tagged with
-//! the review that found it. When the workspace sets `[review]
-//! verify_findings = true`, the task may not be approved, promoted to
-//! `backlog` nor admitted by a drain until `finding_verification_pipeline`
-//! records a CONFIRMED verdict for it; with the setting off (the default)
-//! verification state does not gate it. Either way, a REJECTED verdict moves
-//! it to `rejected` with its evidence. The trusted record is the `finding_verified` history entry the
-//! verification actor writes; its comment is the human-readable copy that
-//! `orbit task show` prints. With the job opt-in, a finding is usually
-//! rejected by the work that already reads its code: the task pilot's
-//! `finding_invalid` result, or an implementer's `finding-invalid.json`
-//! report ([`OrbitRuntime::reject_invalid_finding`]). The design is
-//! `docs/design/finding-verification/2_design.md`.
+//! the review that found it. The work that already reads its code may judge
+//! the finding absent: the task pilot's `finding_invalid` result, or an
+//! implementer's `finding-invalid.json` report
+//! ([`OrbitRuntime::reject_invalid_finding`]). That REJECTED verdict moves the
+//! task to `rejected` with its evidence. The trusted record is the
+//! `finding_verified` history entry the verification actor writes; its comment
+//! is the human-readable copy that `orbit task show` prints. Records the
+//! retired `finding_verification_pipeline` wrote ([ORB-22844]) keep loading:
+//! their verdict, crews and run id are read as before.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -21,15 +18,13 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::identity::{Crew, agent_family_from_cli, infer_agent_family_from_model};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    self, DefectSeverity, SeveritySource, SourceLocationEmptyComponents, SourceLocationParseError,
-    Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskRelation, TaskRelationType,
-    TaskStatus, TaskType,
+    DefectSeverity, SeveritySource, Task, TaskComment, TaskComplexity, TaskHistoryEntry,
+    TaskRelation, TaskRelationType, TaskStatus, TaskType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::TaskRecordUpdateParams;
-use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::contracts::FINDING_VERIFICATION_JOB;
 use crate::application::contracts::InspectionPool;
@@ -43,8 +38,6 @@ const FINDING_VERIFIED_EVENT: &str = "finding_verified";
 const FINDING_REJECTED_EVENT: &str = "finding_rejected";
 /// First line of the verdict comment; the verdict follows in lowercase.
 const COMMENT_HEADER: &str = "finding-verification:";
-/// The hold classification and admission reason of an unverified finding.
-pub(crate) const UNVERIFIED_REVIEW_FINDING: &str = "unverified_review_finding";
 /// Version of [`FindingVerification`] persisted in history.
 pub const FINDING_VERIFICATION_SCHEMA_VERSION: u32 = 1;
 
@@ -58,7 +51,7 @@ pub const REVIEW_FINDING_TAGS: [&str; 4] = [
 
 /// Statuses in which a finding is verified and held: those before promotion
 /// and the backlog a drain admits from.
-pub(crate) const VERIFIABLE_STATUSES: [TaskStatus; 3] = [
+const VERIFIABLE_STATUSES: [TaskStatus; 3] = [
     TaskStatus::Proposed,
     TaskStatus::Someday,
     TaskStatus::Backlog,
@@ -71,46 +64,6 @@ pub fn is_review_finding(task: &Task) -> bool {
             .tags
             .iter()
             .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.trim()))
-}
-
-/// Whether `task` still needs a verdict: a review finding in a verifiable
-/// status whose latest verdict is not CONFIRMED for its current material.
-pub(crate) fn needs_verification(task: &Task, history: &[TaskHistoryEntry]) -> bool {
-    is_review_finding(task)
-        && VERIFIABLE_STATUSES.contains(&task.status)
-        && !latest_verification(history).is_some_and(|record| {
-            record.verdict == FindingVerdict::Confirmed
-                && record.finding_fingerprint.as_deref() == Some(&finding_fingerprint(task))
-        })
-}
-
-/// `task` with the finding material a promoting write `params` leaves it
-/// with: title, description, criteria, context, tags and type. The status
-/// stays the stored one, so the verifiable-status predicate still judges
-/// the preview; previewing the target status would release the hold.
-/// Callers pass the edits as the write stores them (normalized), so a tag
-/// spelled differently cannot read as a non-finding here and a finding there.
-pub(crate) fn promoted_finding_preview(task: &Task, params: &TaskUpdateParams) -> Task {
-    let mut promoted = task.clone();
-    if let Some(title) = &params.title {
-        promoted.title.clone_from(title);
-    }
-    if let Some(description) = &params.description {
-        promoted.description.clone_from(description);
-    }
-    if let Some(criteria) = &params.acceptance_criteria {
-        promoted.acceptance_criteria.clone_from(criteria);
-    }
-    if let Some(context_files) = &params.context_files {
-        promoted.context_files.clone_from(context_files);
-    }
-    if let Some(tags) = &params.tags {
-        promoted.tags.clone_from(tags);
-    }
-    if let Some(task_type) = params.task_type {
-        promoted.task_type = task_type;
-    }
-    promoted
 }
 
 /// What a verdict judges: the finding as filed. A state trigger claims a
@@ -212,31 +165,6 @@ pub struct FindingEvidence {
     pub note: String,
 }
 
-impl FindingEvidence {
-    /// The repository-relative path and 1-based line `location` names.
-    pub(crate) fn path_and_line(&self) -> Result<(&str, u32), String> {
-        task::parse_source_location::<u32>(&self.location, SourceLocationEmptyComponents::Reject)
-            .map_err(|error| match error {
-                SourceLocationParseError::MissingSeparator => {
-                    format!("evidence location {:?} is not `path:line`", self.location)
-                }
-                SourceLocationParseError::InvalidLine => format!(
-                    "evidence location {:?} has no positive line number",
-                    self.location
-                ),
-                SourceLocationParseError::InvalidPath => format!(
-                    "evidence location {:?} is not a repository-relative path",
-                    self.location
-                ),
-            })
-    }
-
-    /// Whether `location` is the evidence form this schema admits.
-    fn well_formed(&self) -> Result<(), String> {
-        self.path_and_line().map(|_| ())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingRejection {
     pub reason: RejectionReason,
@@ -247,82 +175,6 @@ pub struct FindingRejection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_of: Option<String>,
     pub detail: String,
-}
-
-/// What one verifier returned for one task. The host owns the revision, the
-/// crew and the tier, so none of them are part of it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerifierReport {
-    pub task_id: String,
-    pub verdict: FindingVerdict,
-    pub confidence: VerdictConfidence,
-    #[serde(default)]
-    pub evidence: Vec<FindingEvidence>,
-    pub reasoning: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reproduction: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<DefectSeverity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rejection: Option<FindingRejection>,
-}
-
-impl VerifierReport {
-    /// The structural contract of a verdict. A CONFIRMED verdict cites at
-    /// least one `path:line` evidence location and rates severity; a REJECTED one
-    /// names its reason, with the fixing commit or the duplicate task it
-    /// needs.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.reasoning.trim().is_empty() {
-            return Err("reasoning must not be empty".into());
-        }
-        for evidence in &self.evidence {
-            evidence.well_formed()?;
-        }
-        match self.verdict {
-            FindingVerdict::Confirmed => {
-                if self.evidence.is_empty() {
-                    return Err("a CONFIRMED verdict must cite `path:line` evidence".into());
-                }
-                if self.severity.is_none() {
-                    return Err("a CONFIRMED verdict must rate severity".into());
-                }
-                if self.rejection.is_some() {
-                    return Err("a CONFIRMED verdict carries no rejection".into());
-                }
-            }
-            FindingVerdict::Rejected => {
-                let rejection = self
-                    .rejection
-                    .as_ref()
-                    .ok_or("a REJECTED verdict must name its rejection")?;
-                if rejection.detail.trim().is_empty() {
-                    return Err("rejection detail must not be empty".into());
-                }
-                let named = |value: &Option<String>| {
-                    value
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty())
-                };
-                if rejection.reason == RejectionReason::AlreadyFixed && !named(&rejection.fixed_at)
-                {
-                    return Err("an `already_fixed` rejection must name `fixed_at`".into());
-                }
-                if rejection.reason == RejectionReason::Duplicate && !named(&rejection.duplicate_of)
-                {
-                    return Err("a `duplicate` rejection must name `duplicate_of`".into());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Whether this verdict is re-verified by the next tier's pool: a
-    /// REJECTED verdict from the low tier, or any low-confidence verdict.
-    pub(crate) fn escalates_from(&self, tier: TaskComplexity) -> bool {
-        self.confidence == VerdictConfidence::Low
-            || (self.verdict == FindingVerdict::Rejected && tier == TaskComplexity::Low)
-    }
 }
 
 /// One verifier's contribution to a recorded verdict.
@@ -369,45 +221,6 @@ pub struct FindingVerification {
 }
 
 impl FindingVerification {
-    /// The record for `report`, the deciding verifier's, after `crews`.
-    pub(crate) fn decided(
-        report: &VerifierReport,
-        crews: Vec<VerifierVerdict>,
-        verified_sha: &str,
-        finding_fingerprint: Option<&str>,
-        base_branch: &str,
-        run_id: Option<&str>,
-    ) -> Self {
-        Self {
-            schema_version: FINDING_VERIFICATION_SCHEMA_VERSION,
-            source: VerdictSource::Verification,
-            verdict: report.verdict,
-            confidence: report.confidence,
-            verified_sha: verified_sha.to_string(),
-            finding_fingerprint: finding_fingerprint.map(ToOwned::to_owned),
-            base_branch: base_branch.to_string(),
-            severity: report.severity,
-            evidence: report
-                .evidence
-                .iter()
-                .map(|evidence| FindingEvidence {
-                    location: evidence.location.trim().to_string(),
-                    note: redact_all(&evidence.note),
-                })
-                .collect(),
-            reasoning: redact_all(&report.reasoning),
-            reproduction: report.reproduction.as_deref().map(redact_all),
-            rejection: report.rejection.clone().map(|rejection| FindingRejection {
-                detail: redact_all(&rejection.detail),
-                ..rejection
-            }),
-            escalated: crews.len() > 1,
-            crews,
-            run_id: run_id.map(ToOwned::to_owned),
-            verified_at: Utc::now(),
-        }
-    }
-
     fn comment(&self) -> Result<String, OrbitError> {
         let record = serde_json::to_string_pretty(self)
             .map_err(|error| OrbitError::Execution(format!("encode verdict: {error}")))?;
@@ -534,34 +347,6 @@ pub(crate) fn verified_since(history: &[TaskHistoryEntry], boundary: usize) -> b
     latest_verification(history.get(boundary..).unwrap_or_default()).is_some()
 }
 
-/// A review finding that may not be promoted or admitted yet.
-pub(crate) struct UnverifiedFindingHold {
-    task_id: String,
-    latest: Option<FindingVerdict>,
-}
-
-impl UnverifiedFindingHold {
-    pub(crate) fn of(task: &Task, history: &[TaskHistoryEntry]) -> Option<Self> {
-        needs_verification(task, history).then(|| Self {
-            task_id: task.id.clone(),
-            latest: latest_verification(history).map(|record| record.verdict),
-        })
-    }
-
-    pub(crate) fn detail(&self) -> String {
-        let latest = match self.latest {
-            Some(FindingVerdict::Rejected) => {
-                " Its latest verdict is REJECTED; it was reopened without a new verification."
-            }
-            _ => "",
-        };
-        format!(
-            "Unverified review finding: a review-filed bug is promoted or admitted only after `{FINDING_VERIFICATION_JOB}` records a CONFIRMED verdict for it.{latest} Run `orbit run job {FINDING_VERIFICATION_JOB} --input 'task_ids=[\"{}\"]'`, or enable the seeded `finding_verification.yaml` routine to verify it automatically. To accept the finding without verification, change its type from `bug` or remove its review tag; to stop gating review findings in this workspace, run `orbit config set review.verify_findings false`.",
-            self.task_id
-        )
-    }
-}
-
 /// How a verdict write ended.
 pub(crate) enum VerdictWrite {
     /// Recorded; the task now has this status.
@@ -582,24 +367,15 @@ pub(crate) struct VerifierAssignment {
     pub(crate) eligible_pool: Vec<orbit_types::workflow::ActivityCrewPoolMember>,
 }
 
-/// The tier a task is first verified at: its complexity, with an unassessed
-/// task verified as medium, the complexity review findings are filed with.
-pub(crate) fn verification_tier(task: &Task) -> TaskComplexity {
+/// The tier a verdict's crew is recorded at: the task's complexity, with an
+/// unassessed task recorded as medium, the complexity review findings are
+/// filed with.
+fn verification_tier(task: &Task) -> TaskComplexity {
     match task.complexity {
         Some(TaskComplexity::Low) => TaskComplexity::Low,
         Some(TaskComplexity::Hard) => TaskComplexity::Hard,
         Some(TaskComplexity::XHard) => TaskComplexity::XHard,
         Some(TaskComplexity::Medium | TaskComplexity::Unassessed) | None => TaskComplexity::Medium,
-    }
-}
-
-/// The tier that re-verifies a verdict from `tier`; none above `xhard`.
-pub(crate) fn next_tier(tier: TaskComplexity) -> Option<TaskComplexity> {
-    match tier {
-        TaskComplexity::Low => Some(TaskComplexity::Medium),
-        TaskComplexity::Medium | TaskComplexity::Unassessed => Some(TaskComplexity::Hard),
-        TaskComplexity::Hard => Some(TaskComplexity::XHard),
-        TaskComplexity::XHard => None,
     }
 }
 
@@ -662,85 +438,6 @@ impl OrbitRuntime {
             tier,
             eligible_pool: draw.eligible_pool,
         }))
-    }
-
-    /// The first verifier for `task`: its tier's pool or the next one up
-    /// with an inspection-capable crew, else the default crew when it can
-    /// inspect, as task creation falls back. With none, preparation fails
-    /// with `inspection_crew_unavailable` before any verifier launches.
-    pub(crate) fn first_finding_verifier(
-        &self,
-        task: &Task,
-    ) -> Result<VerifierAssignment, OrbitError> {
-        let tier = verification_tier(task);
-        let filer = task.created_by.as_deref().unwrap_or_default();
-        if let Some(assignment) = self.draw_finding_verifier(task, tier, &[filer])? {
-            return Ok(assignment);
-        }
-        let crew = self.inspection_default_crew(tier)?;
-        Ok(VerifierAssignment {
-            crew: crew.name,
-            tier,
-            eligible_pool: Vec::new(),
-        })
-    }
-
-    /// Whether this workspace gates review findings on verification
-    /// (`[review] verify_findings`, default off). Read from the config files
-    /// on each check rather than from the settings this runtime opened with,
-    /// so a dashboard toggle or `orbit config set` applies to a running drain,
-    /// clock or dashboard without a restart.
-    pub(crate) fn verifies_review_findings(&self) -> Result<bool, OrbitError> {
-        let roots = orbit_config::ConfigRoots::new(self.global_root(), self.shared_root());
-        Ok(orbit_config::ResolvedConfig::load(&roots)?
-            .snapshot
-            .review_verify_findings)
-    }
-
-    /// The hold that keeps `task` from promotion and from admission while it
-    /// is a review finding without a CONFIRMED verdict and the workspace
-    /// opted into [`Self::verifies_review_findings`]. Config and history are
-    /// read only for a review finding in a verifiable status.
-    pub(crate) fn unverified_finding_hold(
-        &self,
-        task: &Task,
-    ) -> Result<Option<UnverifiedFindingHold>, OrbitError> {
-        self.unverified_finding_hold_in(task, &|| self.get_task_history(&task.id))
-    }
-
-    /// [`Self::unverified_finding_hold`] reading history through `history`.
-    pub(crate) fn unverified_finding_hold_in(
-        &self,
-        task: &Task,
-        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
-    ) -> Result<Option<UnverifiedFindingHold>, OrbitError> {
-        if !is_review_finding(task)
-            || !VERIFIABLE_STATUSES.contains(&task.status)
-            || !self.verifies_review_findings()?
-        {
-            return Ok(None);
-        }
-        Ok(UnverifiedFindingHold::of(task, &history()?))
-    }
-
-    /// Refuse to promote `task` while [`Self::unverified_finding_hold`] holds it.
-    pub(crate) fn ensure_finding_verified(&self, task: &Task) -> Result<(), OrbitError> {
-        match self.unverified_finding_hold(task)? {
-            Some(hold) => Err(OrbitError::InvalidInput(hold.detail())),
-            None => Ok(()),
-        }
-    }
-
-    /// Refuse a write that promotes `task` out of `proposed` or `someday`
-    /// while the finding material it would leave is an unverified review
-    /// finding: a non-finding turned into one, or a confirmed finding whose
-    /// material the same write changes [`promoted_finding_preview`].
-    pub(crate) fn ensure_promoted_finding_verified(
-        &self,
-        task: &Task,
-        params: &TaskUpdateParams,
-    ) -> Result<(), OrbitError> {
-        self.ensure_finding_verified(&promoted_finding_preview(task, params))
     }
 
     /// The latest verdict recorded for `task_id`.

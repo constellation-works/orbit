@@ -63,9 +63,6 @@ impl OrbitRuntime {
                     }
                     return Err(OrbitError::InvalidInput(hold.detail()));
                 }
-                Some(super::super::PilotAdmissionHold::UnverifiedFinding(hold)) => {
-                    return Err(OrbitError::InvalidInput(hold.detail()));
-                }
                 // Only a backlog task is judged against this host: a claimed
                 // `in-progress` one was admitted to its executor's OS.
                 Some(super::super::PilotAdmissionHold::NativeOs(hold))

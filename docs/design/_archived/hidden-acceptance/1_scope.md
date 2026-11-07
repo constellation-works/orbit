@@ -22,7 +22,7 @@ defects without repairing them. [Automation triggers](../../automation-triggers/
 provide the `deliveries_landed` schedule that `delivery-code-review` uses for
 after-landing review. The [plugin standard](../../plugins/1_scope.md) lets a plugin ship
 tools, auto-tasks, jobs and a private `{{plugin_state}}` directory from one manifest.
-[Finding verification](../../finding-verification/1_overview.md) establishes that a review-filed
+[Finding verification](../finding-verification/1_overview.md) establishes that a review-filed
 defect is confirmed before it becomes work. This scope builds on all four and changes
 none of their contracts.
 

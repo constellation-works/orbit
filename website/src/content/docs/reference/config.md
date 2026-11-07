@@ -712,6 +712,17 @@ after which they are reported as unknown settings; delete the `[visual_review]`
 table and that pool from the `config.toml` that sets them. A `verify-mock-ui`
 tag is an ordinary tag, and `mocks/` and `visual/` are ordinary artifact names.
 
+The evolution pass, ux-rules and finding-verification routines have been
+removed. `resident.evolution.min_occurrences`, `min_distinct_cycles`,
+`min_distinct_mandates`, `min_cost_minutes` and `max_proposals`, every
+`[ux_rules]` key (`surfaces`, `runner`, `ui_base_url`, `max_new_tasks`,
+`file_at`, `disabled`) and `review.verify_findings` load with a deprecation
+warning and have no effect. They are recognised until 2026-12-07, after which
+they are reported as unknown settings; delete them from the `config.toml` that
+sets them. `resident.evolution.window_days` and `decline_suppress_days` still
+apply to the evolution ledger, `scripts/ux-rules/run.mjs` can still be run by
+hand, and a review-filed bug is approved and promoted like any other task.
+
 Explorer delegation has been removed. Existing `workflow.explore.*` and
 `workflow.purpose_crews.explorer` settings load with a deprecation warning
 and have no effect; remove them with `orbit doctor --fix-retired-config-keys`,
@@ -872,13 +883,8 @@ readouts remain readable.
 | `attention.source_timeout_seconds` | integer · **Default:** `10`<br>Per-source read budget in seconds. Valid range: 1–3600. Read back with `orbit config get attention.source_timeout_seconds --json`. |
 | `attention.fanout_budget_seconds` | integer · **Default:** `20`<br>Cross-host read budget in seconds; consumed by federation. Valid range: 1–3600. Read back with `orbit config get attention.fanout_budget_seconds --json`. |
 | `attention.per_workspace_item_cap` | integer · **Default:** `200`<br>Maximum attention candidates per workspace, highest severity first. Valid range: 1–10000. Read back with `orbit config get attention.per_workspace_item_cap --json`. |
-| `resident.evolution.window_days` | integer · **Default:** `14`<br>Days of cost occurrences used by the pass and default manager digest (1–3650). |
-| `resident.evolution.min_occurrences` | integer · **Default:** `3`<br>Minimum occurrences in the window; every threshold must be met (1–1,000,000). |
-| `resident.evolution.min_distinct_cycles` | integer · **Default:** `3`<br>Minimum distinct resident cycles in the window (1–1,000,000). |
-| `resident.evolution.min_distinct_mandates` | integer · **Default:** `1`<br>Minimum distinct mandates in the window (1–1,000,000). |
-| `resident.evolution.min_cost_minutes` | integer · **Default:** `60`<br>Minimum summed minutes plus slot minutes in the window (1–1,000,000,000). |
-| `resident.evolution.max_proposals` | integer · **Default:** `3`<br>Maximum design proposals per weekly evolution pass (1–100); always filed proposed for human approval. |
-| `resident.evolution.decline_suppress_days` | integer · **Default:** `30`<br>Days a declined evolution proposal is suppressed, unless its window cost doubles (1–3650). |
+| `resident.evolution.window_days` | integer · **Default:** `14`<br>Days of evolution-ledger cost the default manager digest reads and a decline measures (1–3650). |
+| `resident.evolution.decline_suppress_days` | integer · **Default:** `30`<br>Days a record stays declined after its evolution proposal is rejected, unless its window cost doubles (1–3650). |
 | `seeding.routines` | string or array&lt;string&gt; · **Default:** `all`<br>Which of Orbit's shipped default routines this workspace seeds: `"all"`, `"none"`, or a list of their file stems (`["worktree_gc", "store_gc"]`). A list seeds exactly those names, so a default a later release adds is not seeded. An unknown name fails config load with the name. `orbit workspace init`, `--force` re-init, `orbit workspace sync` and the seeding `orbit init` runs after an upgrade all honour it. Narrowing it retires a left-out default Orbit seeded and you never edited; an edited copy moves to `.orbit/.retired-managed/`. Widening it seeds the default again on the next sync. |
 | `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by auto-task name (`["doc-duties", "qa-sweep"]`). An opt-out you recorded with `orbit auto-task delete` is kept while the policy leaves the default out. |
 | `experiments.config_keys` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Config keys an experiment arm's `config` overlay may set. Starting an experiment whose arm sets any other key is refused. |
@@ -921,12 +927,6 @@ readouts remain readable.
 | `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |
 | `worktree.parked_reclaim_after_hours` | **Advanced.** integer · **Default:** `336`<br>Hours a task must stay parked in `someday`, counted from that status change, before worktree GC removes a terminal run's worktree serving it (0–876000). A live worker, an unsettled claim or a Git worktree lock keeps it. A clean worktree whose run branch holds commits no other ref reaches and `origin` lacks stays, branch included, as `skipped:unpublished_commits`. |
 | `security_alert_sweep.min_severity` | **Advanced.** string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
-| `ux_rules.surfaces` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Surfaces the ux-rules routine runs (for example `ui` and `cli`); empty disables it. |
-| `ux_rules.runner` | **Advanced.** string · **Default:** `scripts/ux-rules/run.mjs`<br>Workspace-relative rule runner the ux-rules script step runs and filed tasks name in their reproduce command. |
-| `ux_rules.ui_base_url` | **Advanced.** string · **Default:** `http://127.0.0.1:7878`<br>Live dashboard URL the ux-rules runner measures for UI surfaces. |
-| `ux_rules.max_new_tasks` | **Advanced.** integer · **Default:** `10`<br>Most new tasks one rule-findings filing run creates, highest severity first. |
-| `ux_rules.file_at` | **Advanced.** string · **Default:** `low`<br>Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
-| `ux_rules.disabled` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Rule ids whose results are recorded only, not filed; the runner still runs them. |
 | `jobs.failure_streak_warn` | integer · **Default:** `5`<br>Consecutive failed runs of one job at which the dashboard warns that it is failing; 0 turns the warning off. |
 | `review.timing` | string · **Default:** `off`<br>When automatic review runs before landing, by a fresh reviewer that fixes what it finds: `off`; `before_pr` holds PR creation for the review; `before_landing` opens the PR first, reviews it while hosted CI runs, and merges only the head the review settled, leaving the PR open with the task in `review` on any outcome but an approve. Refused for local-only delivery. A run keeps the value it was submitted with. Replaces the deprecated `review.before_pr` and `review.before_landing` booleans, which still load (both `true` fails the load: there is one review layer before landing). |
 | `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Owner policy for the distributed drain: machine ids (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. The owner resolves it for the caller's machine when a follower probes or pulls, and the claim captures the result. Orbit fails to load config while `review.timing` is `before_pr` and the list is non-empty. The machine label is chosen by the caller, so this is policy, not a security boundary. |
@@ -936,7 +936,6 @@ readouts remain readable.
 | `review.selective_before_landing.paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Positive repository-relative globs matched against old and new names in the complete pinned diff; a stated list replaces the lower layer's. |
 | `review.selective_before_landing.unknown_risk` | **Advanced.** string · **Default:** `review`<br>When the risk predicate has no usable estimate: `review` or `skip`. Never applies to an unreadable path diff. |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. The list is captured when a delivery or claim is admitted. |
-| `review.verify_findings` | **Advanced.** bool · **Default:** `false`<br>Review findings must be verified before approval. When on, a review-filed bug (tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) is refused at approval and promotion and kept out of drains until `finding_verification_pipeline` confirms it. When off, verification state is ignored. Read each time the gate is checked; toggle it with `orbit config set` or the dashboard's Settings › Effective switch. Turning it on does not enable the `finding_verification` routine. |
 
 Agent stdout/stderr relay uses `~/.orbit/state/logs/orbit-agent.jsonl` with a separate 200 MiB archive budget and 50 MiB file limit. Its output cannot evict operational events from `orbit.jsonl`. A full agent queue blocks the relay instead of dropping lines; the operational feed can still drop a line when its own queue is full. The dashboard log dock, `/api/log`, `/api/log/stream`, and `orbit log tail` merge the two active feeds; per-run captures remain available separately. `runtime.log_retention_days` applies to both feeds. Size limits still take precedence over age when either feed's own budget is exhausted; seven days of operational history requires its non-relay volume to fit the operational budget.
 
