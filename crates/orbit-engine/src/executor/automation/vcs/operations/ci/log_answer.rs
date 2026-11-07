@@ -12,7 +12,7 @@ use orbit_tools::github_cli::{self, SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use super::ci::CiJobObservation;
+use super::jobs::CiJobObservation;
 
 /// Where the log bytes came from. An answer without a recognizable source is
 /// a legacy shape, not an unknown source: `None` on the answer is absent,

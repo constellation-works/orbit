@@ -17,10 +17,10 @@ use orbit_tools::github_cli;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 
-use super::DEFAULT_TIMEOUT_MS;
-use super::ci_log_answer::CiJobLogAnswer;
-use super::input::{required_string, valid_expected_remote_sha};
-use super::process::execute_with_transient_retry;
+use super::super::DEFAULT_TIMEOUT_MS;
+use super::super::input::{required_string, valid_expected_remote_sha};
+use super::super::process::execute_with_transient_retry;
+use super::log_answer::CiJobLogAnswer;
 
 /// Parsed job identity for bounded diagnostics; incomplete identities remain
 /// incomplete, with the same serialized optional fields as historical notes.
@@ -337,7 +337,9 @@ const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" 
 /// `commit`, with its conclusion and first failed step. Base ancestry reads
 /// retain completed successful pushes on the accepted base or its descendants;
 /// the candidate rerun supplies the other half of attribution evidence.
-pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let commit = required_string(input, "commit")?;
     let workspace_path = Path::new(required_string(input, "workspace_path")?);
     if !valid_expected_remote_sha(Some(commit)) {
@@ -430,12 +432,12 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 continue;
             }
             let sha = run["head_sha"].as_str().unwrap_or_default();
-            if !super::super::git::git_command_success(
+            if !super::super::super::git::git_command_success(
                 workspace_path,
                 &["merge-base", "--is-ancestor", commit, sha],
             )
             .unwrap_or(false)
-                || !super::super::git::git_command_success(
+                || !super::super::super::git::git_command_success(
                     workspace_path,
                     &["merge-base", "--is-ancestor", sha, tip],
                 )
@@ -578,7 +580,9 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
 /// failed primary read, is the provider's typed throttling answer. Complete command evidence or bounded
 /// failure regions accompany the display with their source; callers must bind
 /// them to the provider's failed job and step before recovery.
-pub(super) fn ci_job_log(input: &Value) -> Result<CiJobLogAnswer, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
+    input: &Value,
+) -> Result<CiJobLogAnswer, OrbitError> {
     let run_id = required_string(input, "run_id")?;
     let job_id = required_string(input, "job_id")?;
     let workspace_path = required_string(input, "workspace_path")?;
@@ -588,7 +592,7 @@ pub(super) fn ci_job_log(input: &Value) -> Result<CiJobLogAnswer, OrbitError> {
     .in_directory(workspace_path);
     let deadline = input
         .get("deadline_ms")
-        .map(|_| super::super::completion_deadline::Deadline::from_input(input))
+        .map(|_| super::super::super::completion_deadline::Deadline::from_input(input))
         .transpose()?;
     let read = github_cli::read_run_log_guarded(
         &requests,
@@ -603,104 +607,10 @@ pub(super) fn ci_job_log(input: &Value) -> Result<CiJobLogAnswer, OrbitError> {
         },
     )?;
     if let Some(deadline) = deadline {
-        super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
+        super::super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;
     }
     Ok(CiJobLogAnswer::from_read(read))
-}
-
-/// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
-/// failure at most once, and a retried request could queue a second rerun.
-pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
-    let run_id = required_string(input, "run_id")?;
-    let workspace_path = required_string(input, "workspace_path")?;
-    if !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid private automation VCS workflow run id '{run_id}'"
-        )));
-    }
-    if let Some(expected) = input.get("plan") {
-        let plan: orbit_types::workflow::CiRerunPlan = serde_json::from_value(expected.clone())
-            .map_err(|_| super::prerequisite::unreadable("CI retry reservation"))?;
-        if plan.run_id.to_string() != run_id {
-            return Err(super::prerequisite::unreadable("CI retry action run"));
-        }
-        let refreshed = super::ci_rerun::ci_rerun_plan(
-            &json!({"workspace_path":workspace_path,"pr":plan.pr_number,"head_sha":plan.head_sha,"head_branch":plan.head_branch,"base_branch":plan.base_branch,"accepted_base":plan.accepted_base,"run_id":plan.run_id,"roots":plan.roots,"deadline_ms":input["deadline_ms"]}),
-        )?;
-        let refreshed: orbit_types::workflow::CiRerunPlan =
-            serde_json::from_value(refreshed["plan"].clone())
-                .map_err(|_| super::prerequisite::unreadable("refreshed CI retry plan"))?;
-        if refreshed != plan {
-            return Err(super::prerequisite::unreadable(
-                "CI retry authorization changed before send",
-            ));
-        }
-    }
-    let deadline = input
-        .get("prerequisite")
-        .or_else(|| input.get("plan"))
-        .map(|_| super::super::completion_deadline::Deadline::from_input(input))
-        .transpose()?;
-    if let Some(deadline) = deadline {
-        deadline.remaining()?;
-    }
-    if let Some(evidence) = input.get("prerequisite") {
-        let expected: orbit_types::workflow::PrInfrastructureEvidence =
-            serde_json::from_value(evidence.clone())
-                .map_err(|_| super::prerequisite::unreadable("rerun reservation"))?;
-        if expected.run_id.to_string() != run_id {
-            return Err(super::prerequisite::unreadable("rerun run identity"));
-        }
-        let observed = super::prerequisite::observe(
-            &json!({"workspace_path":workspace_path,"evidence":expected,"deadline_ms":input["deadline_ms"]}),
-        )?;
-        if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
-            || observed["status"] != "completed"
-            || observed["conclusion"] != "failure"
-        {
-            return Err(super::prerequisite::unreadable(
-                "attempt advanced before mutation",
-            ));
-        }
-        let refreshed = super::prerequisite::evidence(
-            &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch,"deadline_ms":input["deadline_ms"]}),
-        )?;
-        let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
-            serde_json::from_value(refreshed["evidence"].clone())
-                .map_err(|_| super::prerequisite::unreadable("refreshed prerequisite"))?;
-        if refreshed != expected {
-            return Err(super::prerequisite::unreadable(
-                "evidence changed before mutation",
-            ));
-        }
-    }
-    let timeout_ms = match deadline {
-        Some(deadline) => deadline.remaining()?,
-        None => DEFAULT_TIMEOUT_MS,
-    };
-    let result = super::process::run_vcs_process(
-        "gh",
-        vec![
-            "run".to_string(),
-            "rerun".to_string(),
-            run_id.to_string(),
-            "--failed".to_string(),
-        ],
-        Some(Path::new(workspace_path)),
-        timeout_ms,
-    )?;
-    if input.get("prerequisite").is_some()
-        && !result.success
-        && !result.timed_out
-        && ["(HTTP 401)", "(HTTP 403)"]
-            .iter()
-            .any(|status| result.stderr.trim_end().ends_with(status))
-    {
-        return Ok(json!({"refusal":"credential_or_permission","diagnostic":result.stderr}));
-    }
-    let result = super::process::succeeded(result, "workflow rerun")?;
-    Ok(json!({ "stdout": result.stdout, "stderr": result.stderr }))
 }
 
 fn projected_ci_json(
