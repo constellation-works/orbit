@@ -1,8 +1,8 @@
 ---
 title: "Human decision channel — Design"
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 feature: human-decision-channel
 doc_role: design
@@ -206,7 +206,8 @@ scan reads it again. A bundle the store cannot stamp is read every time.
 Corruption the store writes, such as a removed artifact blob, also moves the
 stamp and still warns. An out-of-band in-place edit to a file published by
 rename stays unseen until the bundle's next write. The first scan after a
-process starts reads every bundle.
+process starts reads every bundle. [ORB-21835] bounds this decision-list scanning
+for the Tasks waiting count.
 
 ## 3. Delegated-human authority
 
@@ -765,6 +766,7 @@ The channel-side ones are:
 
 ## Task References
 
+- [ORB-21835] — bounds decision-list scanning for the Tasks waiting count.
 - [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
 - [ORB-21091] — proposes per-answer risk tier and a stored category on decision requests.
